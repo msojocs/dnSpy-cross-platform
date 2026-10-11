@@ -141,7 +141,10 @@ public sealed class WorkspaceEditOptionsTests : IDisposable {
 		var types = await manager.GetChildrenAsync(new NodeRequest(workspaceId, @namespace.Id), TestContext.Current.CancellationToken);
 		var exception = Assert.Single(types.Nodes, node => node.Label == "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(workspaceId, exception.Id), TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(members.Nodes, node => node.Kind == "method" && node.Label.StartsWith("get_Code", StringComparison.Ordinal));
+		var codeProperty = Assert.Single(members.Nodes, node => node.Kind == "property" && node.Label == "Code");
+		// The getter is an accessor of that property, so dnSpy lists it under the property rather than here.
+		var propertyMembers = await manager.GetChildrenAsync(new NodeRequest(workspaceId, codeProperty.Id), TestContext.Current.CancellationToken);
+		var getCode = Assert.Single(propertyMembers.Nodes, node => node.Kind == "method" && node.Label.StartsWith("get_Code", StringComparison.Ordinal));
 
 		var options = await manager.GetOptionsAsync(
 			new GetNodeOptionsRequest(workspaceId, NodeOptionKinds.Method, getCode.Id),

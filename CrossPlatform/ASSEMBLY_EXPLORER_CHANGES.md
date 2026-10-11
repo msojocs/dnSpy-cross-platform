@@ -104,3 +104,63 @@ protected override IEnumerable<DocumentTreeNodeData> CreateChildren() {
 2. **Type References节点** - 显示模块引用的外部类型
 
 这些可以在后续根据需要进行完善。
+
+### 6. ✅ 类型下的「基类和接口」「派生类型」分组
+
+**文件**: `backend/dnSpy.Backend.Core/WorkspaceManager.cs`、`frontend/src/renderer/src/components/AssemblyExplorer.tsx`
+
+参考 WPF 的 `TypeNodeImpl` / `BaseTypeFolderNodeImpl` / `DerivedTypesFolderNodeImpl` / `BaseTypeNodeImpl` / `DerivedTypeNodeImpl`，每个类型节点现在先挂两个文件夹，再挂成员：
+
+1. **Base Type and Interfaces**（基类和接口，`basetypefolder`）
+2. **Derived Types**（派生类型，`derivedtypesfolder`）
+3. 嵌套类型、字段、属性、事件、方法（顺序不变）
+
+新增 `NodeKind`：`BaseTypeFolder`、`BaseType`、`DerivedTypesFolder`、`DerivedType`。
+
+与 WPF 一致的语义：
+- 两个文件夹总是惰性加载并显示展开箭头，即使为空（WPF 的 `LazyLoading = true`）。
+- 派生类型按 `DerivedTypesFinder.QuickCheck` 短路：接口或非 sealed 类型才会去找派生类型，sealed 类型的「派生类型」文件夹没有展开箭头。
+- 基类型行用 `CSharpTypeName` 拼名（嵌套类型写成 `Outer.Inner`，与反编译输出一致），显示名是短名（如 `object`），提示里保留全名，并带 `@` 元数据令牌。
+- 基类型行自身也有基类型（可选链继续下行）。
+- 派生类型跨所有已加载模块查找，用 `SigComparer` 比较（与 WPF 的匹配方式一致），类型索引按 `stateId` 缓存。
+- 双击这两个文件夹不打开文档（它们是标题而非文档）；双击基类型/派生类型行则像类型行一样打开注释文档，内容是这些类型的全名注释行。
+
+## 验证方法（类型分组）
+
+1. 打开 `DebugTarget.dll`，展开 `Program`：
+   - 前两行是 `Base Type and Interfaces`、`Derived Types`
+   - 展开「Base Type and Interfaces」→ `object @…`
+   - `Program` 是 static（sealed），其「Derived Types」的展开箭头为禁用
+2. 展开接口 `IWorker`：其「Derived Types」可展开，里面有 `Worker @…`
+3. 展开 `Worker`：其「Base Type and Interfaces」里有 `object` 与 `Program.IWorker`（接口图标）
+
+对应测试：
+- 后端 `WorkspaceManagerTests.TypeChildren_StartWithTheBaseTypeAndDerivedTypesFolders`、`DerivedTypes_FindATypeInAnotherOpenModule`
+- 前端 `AssemblyExplorer.test.tsx`（令牌与翻译）、`AssemblyExplorerContextMenu.test.tsx`（文件夹不打开文档）
+- e2e `app.spec.ts` › `the type hierarchy groups`
+
+### 7. ✅ 属性/事件的访问器合到成员下面（get/set 合起来展示）
+
+**文件**: `backend/dnSpy.Backend.Core/WorkspaceManager.cs`、`frontend/src/renderer/src/App.tsx`、`frontend/src/renderer/src/app-store.ts`
+
+参考 WPF 的 `TypeNodeImpl.CreateChildren`（`hash = TypeDef.GetPropertyAndEventMethods()`，然后用 `!hash.Contains(m)` 过滤方法列表）+ `PropertyNodeImpl` / `EventNodeImpl`（访问器作为自己的子节点），类型的成员列表里不再直接出现访问器方法：
+
+1. 类型的方法列表过滤掉所有被属性或事件拥有的方法（`GetPropertyAndEventMethods`：属性的 `GetMethods`/`SetMethods`/`OtherMethods`，事件的 `AddMethod`/`RemoveMethod`/`InvokeMethod`/`OtherMethods`）。
+2. 属性节点下依次列 `GetMethods`、`SetMethods`、`OtherMethods`；事件节点下依次列 `AddMethod`、`RemoveMethod`、`InvokeMethod`、`OtherMethods`（顺序与 WPF 一致）。
+3. 只有真的拥有访问器的属性/事件才有展开箭头（`HasAccessorMethods`）；`C# { get; }` 编译出的 getter 正是一个访问器，因此 `RpcException.Code` 现在带箭头，它下面才是 `get_Code()`。
+4. `GetNodePath` 在链上补上拥有访问器的属性/事件，这样「转到令牌」「F12 跳转」在前端展开的是属性行，getter 行才会出现（否则客户端会拿着一个树上还不存在的行去选中）。
+
+访问器行本身的节点 id、标签、令牌都没变，只是挂到了成员下面；因此 `Edit Method`、`Add Method Breakpoint`、十六进制命令等仍然按节点 id 工作，行为不变。
+
+有一处必须跟着改：**「Add Class Breakpoint」**。WPF 的命令走的是 `type.Methods`（`ClassBreakpointCommands.cs`），而属性/事件的访问器也在 `type.Methods` 里；本移植的命令为了拿到带参数列表的方法名，改成读树上的行，所以现在除了类型自己的方法行，还要把属性/事件行下面的访问器行一并读进来（`addClassBreakpoint` 会先 `loadChildren` 每个属性/事件行再收集）。不补这一步，getter 就不再被类断点覆盖。
+
+唯一需要跟着改的前端逻辑是创建类命令的宿主类型：`ownerTypeIdOf` 原来只往上看一层，访问器的上一层是属性而不是类型，现在改为沿 `parents` 链一直走到最近的类型祖先（`nodesByIdOf` 提供每一层的 kind）。`buildSession` 也复用这个查找函数。
+
+已知与 WPF 的差异（未做，非本次范围）：
+- WPF 在**属性行**上右键也有 `Add Method Breakpoint`（它的 `GetMethodReferences` 会把 `PropertyDef` 展开成 get/set），本移植的该命令只出现在方法行上。
+- 类型下**成员组的顺序**与 WPF 相反：WPF 的 `TypeNodeImpl.CreateChildren` 是 方法 → 属性 → 事件 → 字段 → 嵌套类型，本移植沿用既有顺序 嵌套类型 → 字段 → 属性 → 事件 → 方法（`GetPropertyAndEventMethods` 的过滤对两者都成立，只是排布不同）。本次按要求只做「访问器合到成员下面」，未动这个顺序。
+
+对应测试：
+- 后端 `WorkspaceManagerTests.AccessorsAreListedUnderTheMemberThatDeclaresThem`、`EventAccessorsAreListedUnderTheEvent`（夹具程序集里没有事件，这条自己写一个带事件的模块）、`NodePath_LeadsFromTheRootToTheNodeItself`
+- 前端 `app-store.test.ts` › `ownerTypeIdOf`、`class breakpoints`（访问器也要被类断点覆盖）
+- e2e：凡是点 `get_Code()` 的用例都先展开它的属性行（`expandPropertyRow`）；`go to token` 那条不展开，验证 `GetNodePath` 自己把属性行打开

@@ -261,6 +261,30 @@ describe('class breakpoints', () => {
     expect(useAppStore.getState().output.at(-1)).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 2, name: 'Console' }))
   })
 
+  it('breaks on the accessors the tree nests under a property, as type.Methods holds them too', async () => {
+    const property: TreeNode = { ...row('System.Int32 Ns.Type::Code', 'property'), hasChildren: true }
+    const getter = row('System.Int32 Ns.Type::get_Code()', 'method')
+    const setter = row('System.Void Ns.Type::set_Code(System.Int32)', 'method')
+    const constructor = row('System.Void Ns.Type::.ctor()', 'method')
+    getChildren.mockReset().mockImplementation(async (_workspaceId: string, nodeId: string) => ({
+      nodes: nodeId === 'n-type' ? [property, constructor] : [getter, setter],
+    }))
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: { ...window.dnSpy, getChildren, setFunctionBreakpoints },
+    })
+
+    await useAppStore.getState().addClassBreakpoint(typeNode)
+
+    // dnSpy walks `type.Methods`, which holds the getter and the setter as well as the constructor, so
+    // the property's own row has to be read down to them.
+    expect(useAppStore.getState().functionBreakpoints.map((breakpoint) => breakpoint.name)).toEqual([
+      'Ns.Type..ctor',
+      'Ns.Type.get_Code',
+      'Ns.Type.set_Code',
+    ])
+  })
+
   it('leaves a breakpoint that is already there alone, and counts two overloads as the one name they share', async () => {
     install([
       row('System.Int32 Ns.Type::Get()', 'method'),
@@ -348,25 +372,39 @@ describe('collapseTreeViewNodes', () => {
 describe('ownerTypeIdOf', () => {
   const node = (id: string, kind: string): TreeNode => ({ id, label: id, kind, hasChildren: false })
   const parents = { ns: 'module', type: 'ns', method: 'type', field: 'type', property: 'type', event: 'type' }
+  const nodesById = new Map(
+    [['module', 'module'], ['ns', 'namespace'], ['type', 'type'], ['method', 'method'], ['field', 'field'], ['property', 'property'], ['event', 'event']]
+      .map(([id, kind]): [string, TreeNode] => [id, node(id, kind)]),
+  )
 
   it('is the node itself for a selected type', () => {
-    expect(ownerTypeIdOf(parents, node('type', 'type'))).toBe('type')
+    expect(ownerTypeIdOf(nodesById, parents, node('type', 'type'))).toBe('type')
   })
 
-  it.each(['method', 'field', 'property', 'event'])('is the parent type for a selected %s', (kind) => {
-    expect(ownerTypeIdOf(parents, node(kind, kind))).toBe('type')
+  it.each(['method', 'field', 'property', 'event'])('is the declaring type for a selected %s', (kind) => {
+    expect(ownerTypeIdOf(nodesById, parents, node(kind, kind))).toBe('type')
+  })
+
+  it('is the declaring type for an accessor nested under its property', () => {
+    const nested = new Map(nodesById)
+    nested.set('get_code', node('get_code', 'method'))
+    expect(ownerTypeIdOf(nested, { ...parents, get_code: 'property' }, node('get_code', 'method'))).toBe('type')
   })
 
   it.each(['namespace', 'module', 'referencesgroup', 'resource'])('has no owner for a %s', (kind) => {
-    expect(ownerTypeIdOf(parents, node('other', kind))).toBeUndefined()
+    expect(ownerTypeIdOf(nodesById, parents, node('other', kind))).toBeUndefined()
   })
 
   it('has no owner with nothing selected', () => {
-    expect(ownerTypeIdOf(parents, undefined)).toBeUndefined()
+    expect(ownerTypeIdOf(nodesById, parents, undefined)).toBeUndefined()
   })
 
   it('has no owner for a member the tree never linked to a parent', () => {
-    expect(ownerTypeIdOf({}, node('method', 'method'))).toBeUndefined()
+    expect(ownerTypeIdOf(nodesById, {}, node('method', 'method'))).toBeUndefined()
+  })
+
+  it('has no owner for a member whose listed ancestors hold no type', () => {
+    expect(ownerTypeIdOf(nodesById, { method: 'namespace' }, node('method', 'method'))).toBeUndefined()
   })
 })
 

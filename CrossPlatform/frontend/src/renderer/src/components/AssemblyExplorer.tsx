@@ -71,12 +71,19 @@ export const NodeIcon = ({ icon, expanded = false }: { icon?: string; expanded?:
 }
 
 // The kinds whose row names a type after the colon, and the ones dnSpy's NodeFormatter appends a raw
-// metadata token to — the metadata rows inside a module: types, members and assembly references. The
-// document rows dnSpy builds a file node out of write no token (its assembly and module nodes pass
-// showToken: false and its PE/ELF/unknown documents write the file name alone), and neither do namespaces,
-// the group folders or resources.
+// metadata token to — the metadata rows inside a module: types, members, assembly references and the
+// type hierarchy rows, which name a metadata type reference each. The document rows dnSpy builds a file
+// node out of write no token (its assembly and module nodes pass showToken: false and its
+// PE/ELF/unknown documents write the file name alone), and neither do namespaces, the group folders or
+// resources.
 const KINDS_WITH_RETURN_TYPE = new Set(['method', 'field', 'property', 'event'])
-const KINDS_WITH_TOKEN = new Set(['type', 'assemblyreference', ...KINDS_WITH_RETURN_TYPE])
+const KINDS_WITH_TOKEN = new Set(['type', 'assemblyreference', 'basetype', 'derivedtype', ...KINDS_WITH_RETURN_TYPE])
+
+/**
+ * The group folders dnSpy labels from its resource table rather than from the node. Their labels are
+ * translated here; a type's own hierarchy rows wear the name of the type they name, and are left alone.
+ */
+const GROUP_FOLDER_KINDS = new Set(['referencesgroup', 'resourcesgroup', 'typereferencesgroup', 'basetypefolder', 'derivedtypesfolder'])
 
 const formatMetadataToken = (token: number): string =>
   `@${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
@@ -101,7 +108,7 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: Exp
   const selectNode = useAppStore((state) => state.selectNode)
   const rowRef = useRef<HTMLDivElement>(null)
   const { t } = useLanguage()
-  const label = node.kind === 'referencesgroup' ? t('Assembly References') : node.kind === 'resourcesgroup' ? t('Resources') : node.label
+  const label = GROUP_FOLDER_KINDS.has(node.kind) ? t(node.label) : node.label
 
   // A row the app selected on its own — a reference followed in the editor, a bookmark, a step — can be
   // anywhere in a long tree, so it is brought into sight the way dnSpy's tree scrolls a selected node
@@ -114,7 +121,7 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: Exp
 
   const open = (): void => {
     selectNode(node)
-    if (node.kind !== 'referencesgroup' && node.kind !== 'resourcesgroup')
+    if (!GROUP_FOLDER_KINDS.has(node.kind))
       onOpenNode(node)
   }
 

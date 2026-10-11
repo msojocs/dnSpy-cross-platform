@@ -1858,7 +1858,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   // simply never matches at launch, which is the same outcome as dnSpy's `IsAbstract || Body is null` skip.
   addClassBreakpoint: async (node) => {
     await get().loadChildren(node)
-    const methods = (get().children[node.id] ?? []).filter((child) => child.kind === 'method')
+    const members = get().children[node.id] ?? []
+    // `type.Methods` is what dnSpy walks, and that holds a property's getter and setter too — the rows
+    // the tree nests under the property, which is why the members below them are read as well.
+    const accessorOwners = members.filter((member) => member.kind === 'property' || member.kind === 'event')
+    for (const owner of accessorOwners)
+      await get().loadChildren(owner)
+    const methods = [
+      ...members,
+      ...accessorOwners.flatMap((owner) => get().children[owner.id] ?? []),
+    ].filter((member) => member.kind === 'method')
     // A method name here is the declaring type plus the method, with no parameter list, so two overloads
     // answer to the same breakpoint; the engine breaks in whichever of them it binds the name to.
     const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
@@ -3214,13 +3223,7 @@ export type SessionSource = Pick<AppState,
  * depth so replaying it in order always finds the parent it needs.
  */
 export function buildSession(state: SessionSource): SavedSession {
-  const nodesById = new Map<string, TreeNode>()
-  for (const root of state.roots)
-    nodesById.set(root.id, root)
-  for (const list of Object.values(state.children)) {
-    for (const child of list)
-      nodesById.set(child.id, child)
-  }
+  const nodesById = nodesByIdOf(state.roots, state.children)
 
   // The key a node is recorded under, and the parent above it. Roots have no parent entry, which is
   // exactly where the walk stops.
@@ -3776,19 +3779,43 @@ const setNamespaceEdit = async (get: StoreGet, set: StoreSet, node: TreeNode, ne
 /** Node kinds that can only live inside a type. */
 const MEMBER_KINDS = new Set(['method', 'field', 'property', 'event'])
 
+/** Every node the tree has listed, by id. A walk up the parent chain needs the kinds of what it passes. */
+export function nodesByIdOf(roots: TreeNode[], children: Record<string, TreeNode[]>): Map<string, TreeNode> {
+  const nodes = new Map<string, TreeNode>()
+  for (const root of roots)
+    nodes.set(root.id, root)
+  for (const list of Object.values(children))
+    for (const node of list)
+      nodes.set(node.id, node)
+  return nodes
+}
+
 /**
  * The type a create-member command acts on. dnSpy offers those commands for a selected type *or* any
- * member of one (the CanExecute is "the node is a TypeNode or its parent is"), so the owner is the
- * node itself when it is a type and its parent otherwise. Undefined for anything else — a namespace,
- * a reference, or no selection at all.
+ * member of one, and a member's owner is the type that declares it — whatever the tree nests it under,
+ * so a getter listed beneath its property still resolves to the type that holds both. Undefined for
+ * anything else — a namespace, a reference, or no selection at all.
  */
-export const ownerTypeIdOf = (parents: Record<string, string>, node: TreeNode | undefined): string | undefined => {
+export const ownerTypeIdOf = (
+  nodesById: Map<string, TreeNode>,
+  parents: Record<string, string>,
+  node: TreeNode | undefined,
+): string | undefined => {
   if (!node)
     return undefined
   if (node.kind === 'type')
     return node.id
-  const parentId = parents[node.id]
-  return parentId !== undefined && MEMBER_KINDS.has(node.kind) ? parentId : undefined
+  if (!MEMBER_KINDS.has(node.kind))
+    return undefined
+  for (let id = parents[node.id]; id !== undefined; id = parents[id]) {
+    const ancestor = nodesById.get(id)
+    if (ancestor?.kind === 'type')
+      return id
+    // A node the tree has not listed — a member reached by its identity before its owner was expanded.
+    if (ancestor === undefined || !MEMBER_KINDS.has(ancestor.kind))
+      return undefined
+  }
+  return undefined
 }
 
 const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommitResponse): Promise<void> => {

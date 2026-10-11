@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
 import type { DecompilerLanguage, TreeNode } from '../../shared/protocol'
-import { enableSessionPersistence, loadSession, methodBreakpointName, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
+import { enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { loadAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
@@ -325,6 +325,8 @@ export const App = (): React.JSX.Element => {
   const hexPasteMethodBody = useAppStore((state) => state.hexPasteMethodBody)
   const treeChildren = useAppStore((state) => state.children)
   const treeParents = useAppStore((state) => state.parents)
+  const treeRoots = useAppStore((state) => state.roots)
+  const treeNodesById = useMemo(() => nodesByIdOf(treeRoots, treeChildren), [treeRoots, treeChildren])
   const openDocument = useAppStore((state) => state.openDocument)
   const expandNode = useAppStore((state) => state.expandNode)
   const loadChildren = useAppStore((state) => state.loadChildren)
@@ -694,7 +696,7 @@ export const App = (): React.JSX.Element => {
    * context menu is the exception, running them off the reference under the caret instead.
    */
   const createMember = (kind: CreatedKind, nested = false, node: TreeNode | undefined = selectedNode): void => {
-    const ownerNodeId = kind === 'type' && !nested ? node?.id : ownerTypeIdOf(treeParents, node)
+    const ownerNodeId = kind === 'type' && !nested ? node?.id : ownerTypeIdOf(treeNodesById, treeParents, node)
     if (ownerNodeId !== undefined)
       setEditNode({ kind, ownerNodeId, nested })
   }

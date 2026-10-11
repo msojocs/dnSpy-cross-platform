@@ -49,7 +49,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 
 		var rpcException = Assert.Single(namespaceChildren.Nodes, n => n.Label == "RpcException");
 		var rpcMembers = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(rpcMembers.Nodes, member => member.Label == "get_Code()");
+		var getCode = await FindAccessorAsync(opened.WorkspaceId, rpcMembers.Nodes, "Code", "get_Code()");
 		var getCodeDocument = await manager.DecompileAsync(
 			new DecompileRequest(opened.WorkspaceId, getCode.Id, DecompilerLanguage.CSharp),
 			TestContext.Current.CancellationToken);
@@ -75,6 +75,86 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			TestContext.Current.CancellationToken);
 		Assert.Equal("visual-basic", visualBasic.Language);
 		Assert.Contains("Class RpcException", visualBasic.Text, StringComparison.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// A type's row hangs the two folders dnSpy's tree puts there — "Base Type and Interfaces" and
+	/// "Derived Types" — ahead of its members. The base type folder lists the base type and then every
+	/// interface, each a metadata row; the derived types folder lists the types that derive from it, and
+	/// a sealed type is not even offered one.
+	/// </summary>
+	[Fact]
+	public async Task TypeChildren_StartWithTheBaseTypeAndDerivedTypesFolders() {
+		var path = Path.Combine(AppContext.BaseDirectory, "DebugTarget.dll");
+		Assert.True(File.Exists(path), $"The debuggee was not copied to the test output: {path}");
+		var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+		var program = await FindTypeAsync(opened.WorkspaceId, "DebugTarget", "Program");
+		var nested = await ChildrenAsync(opened.WorkspaceId, program.Id);
+
+		// Program's nested types — the interface and the class that implements it — are members like any
+		// other, so they sit after the two folders.
+		var worker = Assert.Single(nested, node => node.Kind == "type" && node.Label == "Worker");
+		var workerChildren = await ChildrenAsync(opened.WorkspaceId, worker.Id);
+		Assert.Equal("basetypefolder", workerChildren[0].Kind);
+		Assert.Equal("Base Type and Interfaces", workerChildren[0].Label);
+		Assert.True(workerChildren[0].HasChildren);
+		Assert.Equal("derivedtypesfolder", workerChildren[1].Kind);
+		Assert.Equal("Derived Types", workerChildren[1].Label);
+		// Worker is sealed, so nothing can derive from it and its folder is not offered at all.
+		Assert.False(workerChildren[1].HasChildren);
+		Assert.Contains(workerChildren.Skip(2), node => node.Kind == "method" && node.Label == "Work()");
+
+		// The base type row names the type the decompiler writes ("object") while the tooltip keeps the
+		// full name, and it carries the reference's metadata token. The interface follows the base type,
+		// its own name spelled the way the decompiler spells a nested type.
+		var workerBaseTypes = await ChildrenAsync(opened.WorkspaceId, workerChildren[0].Id);
+		Assert.Equal("basetype", workerBaseTypes[0].Kind);
+		Assert.Equal("object", workerBaseTypes[0].Label);
+		Assert.Equal("System.Object", workerBaseTypes[0].Description);
+		Assert.Equal("class", workerBaseTypes[0].Icon);
+		Assert.NotNull(workerBaseTypes[0].MetadataToken);
+		Assert.True(workerBaseTypes[0].HasChildren);
+		var implemented = Assert.Single(workerBaseTypes, node => node.Label == "Program.IWorker");
+		Assert.Equal("basetype", implemented.Kind);
+		Assert.Equal("interface", implemented.Icon);
+
+		// The interface resolves to the type this workspace already holds, so expanding it walks that
+		// type's own base type and interfaces — the interface has neither, so the walk ends there.
+		Assert.Empty(await ChildrenAsync(opened.WorkspaceId, implemented.Id));
+
+		// The interface's own derived types folder finds the class that implements it, and both the folder
+		// and the row decompile to a comment naming it, as dnSpy's NodeDecompiler writes them.
+		var iface = Assert.Single(nested, node => node.Kind == "type" && node.Label == "IWorker");
+		var ifaceChildren = await ChildrenAsync(opened.WorkspaceId, iface.Id);
+		var derivedTypes = Assert.Single(ifaceChildren, node => node.Kind == "derivedtypesfolder");
+		Assert.True(derivedTypes.HasChildren);
+		var derived = Assert.Single(await ChildrenAsync(opened.WorkspaceId, derivedTypes.Id), node => node.Kind == "derivedtype");
+		Assert.Equal("Worker", derived.Label);
+		Assert.Equal("DebugTarget.Program/Worker", derived.Description);
+		Assert.Equal("class", derived.Icon);
+		Assert.NotNull(derived.MetadataToken);
+		Assert.False(derived.HasChildren);
+		Assert.Equal($"// DebugTarget.Program/Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derived.Id));
+		Assert.Equal($"// DebugTarget.Program/Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derivedTypes.Id));
+	}
+
+	/// <summary>
+	/// The derived types search spans every module the workspace holds, which is what dnSpy's finder does:
+	/// a type in one open assembly derives from an interface in another and the interface's folder names it.
+	/// </summary>
+	[Fact]
+	public async Task DerivedTypes_FindATypeInAnotherOpenModule() {
+		var opened = await manager.OpenAsync(
+			new OpenWorkspaceRequest([typeof(HelloRequest).Assembly.Location, typeof(WorkspaceManager).Assembly.Location]),
+			TestContext.Current.CancellationToken);
+
+		var resolver = await FindTypeInModuleAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "dnSpy.Backend.Contracts", "IDebugSymbolResolver");
+		var children = await ChildrenAsync(opened.WorkspaceId, resolver.Id);
+		var derivedTypes = Assert.Single(children, node => node.Kind == "derivedtypesfolder");
+
+		var derived = Assert.Single(await ChildrenAsync(opened.WorkspaceId, derivedTypes.Id), node => node.Kind == "derivedtype");
+		Assert.Equal("WorkspaceManager", derived.Label);
+		Assert.Equal("dnSpy.Backend.Core.WorkspaceManager", derived.Description);
 	}
 
 	/// <summary>
@@ -127,7 +207,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var rpcMembers = await ChildrenAsync(opened.WorkspaceId, rpcException.Id);
-		var getCodeNode = Assert.Single(rpcMembers, member => member.Label == "get_Code()");
+		var getCodeNode = await FindAccessorAsync(opened.WorkspaceId, rpcMembers, "Code", "get_Code()");
 		Assert.Equal(unchecked((int)getCode.MDToken.Raw), getCodeNode.MetadataToken);
 		Assert.Equal("int", getCodeNode.ReturnType);
 		var codeProperty = Assert.Single(rpcMembers, member => member.Kind == "property" && member.Label == "Code");
@@ -430,7 +510,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var opened = await OpenContractsAssemblyAsync();
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var rpcMembers = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
-		var getCodeNode = Assert.Single(rpcMembers.Nodes, member => member.Label == "get_Code()");
+		var getCodeNode = await FindAccessorAsync(opened.WorkspaceId, rpcMembers.Nodes, "Code", "get_Code()");
 
 		// The statement table of a method document is decompiled from the method alone, so the line it reports is
 		// the line the client will see once it opens that same method as a document.
@@ -605,7 +685,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var moduleId = Assert.Single(opened.Modules).Id;
 		var type = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, type.Id), TestContext.Current.CancellationToken);
-		var methodNode = Assert.Single(members.Nodes, node => node.Kind == "method" && node.Label == "get_Code()");
+		var methodNode = await FindAccessorAsync(opened.WorkspaceId, members.Nodes, "Code", "get_Code()");
 
 		var target = await manager.ResolveHexTargetAsync(
 			new HexTargetRequest(opened.WorkspaceId, methodNode.Id),
@@ -901,7 +981,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var members = await manager.GetChildrenAsync(
 			new NodeRequest(opened.WorkspaceId, rpcException.Id),
 			TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(members.Nodes, node => node.Label == "get_Code()");
+		var getCode = await FindAccessorAsync(opened.WorkspaceId, members.Nodes, "Code", "get_Code()");
 		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
 
 		await manager.QueueMethodBodyAsync(new ReplaceMethodBodyRequest(
@@ -940,7 +1020,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var opened = await OpenContractsAssemblyAsync();
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(members.Nodes, node => node.Label == "get_Code()");
+		var getCode = await FindAccessorAsync(opened.WorkspaceId, members.Nodes, "Code", "get_Code()");
 		var body = await manager.GetMethodBodyAsync(
 			new MethodBodyRequest(opened.WorkspaceId, getCode.Id),
 			TestContext.Current.CancellationToken);
@@ -1100,7 +1180,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var opened = await OpenContractsAssemblyAsync();
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(members.Nodes, node => node.Label == "get_Code()");
+		var getCode = await FindAccessorAsync(opened.WorkspaceId, members.Nodes, "Code", "get_Code()");
 		var before = await manager.DecompileAsync(
 			new DecompileRequest(opened.WorkspaceId, getCode.Id, DecompilerLanguage.IL),
 			TestContext.Current.CancellationToken);
@@ -2838,14 +2918,93 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var @namespace = Assert.Single(await ChildrenAsync(opened.WorkspaceId, module.Id), node => node.Kind == "namespace");
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
-		var getCode = Assert.Single(members.Nodes, node => node.Label == "get_Code()");
+		var codeProperty = Assert.Single(members.Nodes, node => node.Kind == "property" && node.Label == "Code");
+		var getCode = await FindAccessorAsync(opened.WorkspaceId, members.Nodes, "Code", "get_Code()");
 
 		var path = await manager.GetNodePathAsync(
 			new NodeRequest(opened.WorkspaceId, getCode.Id),
 			TestContext.Current.CancellationToken);
 
-		Assert.Equal(new[] { "assembly", "module", "namespace", "type", "method" }, path.Nodes.Select(node => node.Kind));
-		Assert.Equal(new[] { assembly.Id, module.Id, @namespace.Id, rpcException.Id, getCode.Id }, path.Nodes.Select(node => node.Id));
+		// The chain runs through the property the getter belongs to, since that is the row a client has to
+		// open before the method's own row exists.
+		Assert.Equal(new[] { "assembly", "module", "namespace", "type", "property", "method" }, path.Nodes.Select(node => node.Kind));
+		Assert.Equal(new[] { assembly.Id, module.Id, @namespace.Id, rpcException.Id, codeProperty.Id, getCode.Id }, path.Nodes.Select(node => node.Id));
+	}
+
+	/// <summary>
+	/// A property's accessors are the property's rows, not the type's: dnSpy shows get and set under the
+	/// property they belong to, so the type lists one row for a property rather than one per accessor.
+	/// </summary>
+	[Fact]
+	public async Task AccessorsAreListedUnderTheMemberThatDeclaresThem() {
+		var opened = await OpenContractsAssemblyAsync();
+		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
+		var members = await ChildrenAsync(opened.WorkspaceId, rpcException.Id);
+
+		Assert.DoesNotContain(members, node => node.Label.StartsWith("get_Code", StringComparison.Ordinal));
+		Assert.DoesNotContain(members, node => node.Label.StartsWith("get_DataValue", StringComparison.Ordinal));
+
+		var code = Assert.Single(members, node => node.Kind == "property" && node.Label == "Code");
+		Assert.True(code.HasChildren);
+
+		var getter = Assert.Single(await ChildrenAsync(opened.WorkspaceId, code.Id), node => node.Label == "get_Code()");
+		Assert.Equal("method", getter.Kind);
+		Assert.Equal("int", getter.ReturnType);
+	}
+
+	/// <summary>
+	/// An event's accessors are nested the same way, and in the order dnSpy lists them: the adder, then the
+	/// remover, then the raiser. No fixture assembly declares an event, so this one writes its own.
+	/// </summary>
+	[Fact]
+	public async Task EventAccessorsAreListedUnderTheEvent() {
+		var path = WriteModuleWithEvent();
+		try {
+			var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+			var type = await FindTypeAsync(opened.WorkspaceId, "Fixture", "Holder");
+			var members = await ChildrenAsync(opened.WorkspaceId, type.Id);
+
+			Assert.DoesNotContain(members, node => node.Label.StartsWith("add_Changed", StringComparison.Ordinal));
+			Assert.DoesNotContain(members, node => node.Label.StartsWith("remove_Changed", StringComparison.Ordinal));
+			Assert.DoesNotContain(members, node => node.Label.StartsWith("raise_Changed", StringComparison.Ordinal));
+
+			var changed = Assert.Single(members, node => node.Kind == "event" && node.Label == "Changed");
+			Assert.True(changed.HasChildren);
+			Assert.Equal(
+				new[] { "add_Changed(EventHandler)", "remove_Changed(EventHandler)", "raise_Changed(EventHandler)" },
+				(await ChildrenAsync(opened.WorkspaceId, changed.Id)).Select(node => node.Label));
+		}
+		finally {
+			File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// A module holding one event and the three accessor methods it names.
+	/// </summary>
+	static string WriteModuleWithEvent() {
+		var module = new ModuleDefUser("EventFixture.dll");
+		var handler = new ClassSig(new TypeRefUser(module, "System", "EventHandler", new AssemblyRefUser("System.Runtime")));
+		var signature = MethodSig.CreateInstance(handler, handler);
+		var type = new TypeDefUser("Fixture", "Holder");
+		module.Types.Add(type);
+
+		var add = module.UpdateRowId(new MethodDefUser("add_Changed", signature));
+		var remove = module.UpdateRowId(new MethodDefUser("remove_Changed", signature));
+		var raise = module.UpdateRowId(new MethodDefUser("raise_Changed", signature));
+		foreach (var method in new[] { add, remove, raise })
+			type.Methods.Add(method);
+
+		var @event = module.UpdateRowId(new EventDefUser("Changed", handler.ToTypeDefOrRef()) {
+			AddMethod = add,
+			RemoveMethod = remove,
+			InvokeMethod = raise,
+		});
+		type.Events.Add(@event);
+
+		var path = Path.Combine(Path.GetTempPath(), $"dnspy-event-{Guid.NewGuid():N}.dll");
+		module.Write(path);
+		return path;
 	}
 
 	/// <summary>
@@ -2996,11 +3155,20 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		return Assert.Single(types.Nodes, node => node.Label == typeName);
 	}
 
+	/// <summary>
+	/// An accessor row, which dnSpy files under the property that declares it rather than beside it: the
+	/// type's own children hold the property node, and the getter or setter is a child of that.
+	/// </summary>
+	async Task<TreeNodeDto> FindAccessorAsync(string workspaceId, IReadOnlyList<TreeNodeDto> typeChildren, string propertyLabel, string accessorLabel) {
+		var property = Assert.Single(typeChildren, node => node.Kind == "property" && node.Label == propertyLabel);
+		return Assert.Single(await ChildrenAsync(workspaceId, property.Id), node => node.Label == accessorLabel);
+	}
+
 	/// <summary>The one-liner getter the hex write commands are pointed at: <c>RpcException.get_Code()</c>.</summary>
 	async Task<TreeNodeDto> FindRpcExceptionGetterAsync(string workspaceId) {
 		var type = await FindTypeAsync(workspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(workspaceId, type.Id), TestContext.Current.CancellationToken);
-		return Assert.Single(members.Nodes, node => node.Kind == "method" && node.Label == "get_Code()");
+		return await FindAccessorAsync(workspaceId, members.Nodes, "Code", "get_Code()");
 	}
 
 	/// <summary>Writes one byte patch the way the hex commands do: in its own transaction, then committed.</summary>

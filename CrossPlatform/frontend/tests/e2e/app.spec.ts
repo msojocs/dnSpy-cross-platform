@@ -120,6 +120,15 @@ const expandModule = async (scope: Locator | Page = page): Promise<void> => {
   await expandRow(scope.locator('.tree-row[data-kind="module"]').first())
 }
 
+/** A property's getter and setter are rows under the property that declares them, the way dnSpy nests an
+ * accessor beneath its member — so a getter is only on screen once the property row itself is open. The
+ * row wears the label its type is written after, and the token its own table row gives it. */
+const expandPropertyRow = async (label: RegExp): Promise<Locator> => {
+  const row = page.locator('.tree-row[data-kind="property"]').filter({ hasText: label })
+  await expandRow(row)
+  return row
+}
+
 interface Box {
   x: number
   y: number
@@ -387,6 +396,7 @@ test.describe('the workspace shell', () => {
     await openAssemblyAndNamespace()
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
     await getCode.dblclick()
 
@@ -478,6 +488,7 @@ test.describe('the workspace shell', () => {
 
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
@@ -554,6 +565,7 @@ test.describe('the workspace shell', () => {
 
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ }).locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
@@ -660,6 +672,7 @@ test.describe('the workspace shell', () => {
     await openAssemblyAndNamespace()
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
     await getCode.click()
 
@@ -742,6 +755,7 @@ test.describe('the workspace shell', () => {
     // land as an edit the user can undo.
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
@@ -853,6 +867,7 @@ test.describe('the workspace shell', () => {
     await openAssemblyAndNamespace()
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
@@ -1054,6 +1069,7 @@ test.describe('the workspace shell', () => {
     await namespaceRow.locator('.tree-expander').click()
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
     await rpcException.locator('.tree-expander').click()
+    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     // The tree row keeps focus, so the F9 handler is not suppressed by the editor guard.
     await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
 
@@ -1128,6 +1144,53 @@ const openDebugTarget = async (): Promise<void> => {
   await expect(namespaceRow).toBeVisible()
   await namespaceRow.locator('.tree-expander').click()
 }
+
+// dnSpy's tree hangs two folders under every type — the base type and interfaces it is built out of, and the
+// types derived from it — and the rows inside them obey the rest of the tree's rules: a folder is a heading
+// rather than a document, a base type row names the type the decompiler would write and wears its token, and
+// a type no subtype can come from carries no expander on its Derived Types folder.
+test.describe('the type hierarchy groups', () => {
+  test.beforeEach(async () => { await launchApp(debugTargetPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  /** The hierarchy folder belonging to a type row — the tree is a flat row list, so its own follow it. */
+  const folderOf = (row: Locator, kind: 'basetypefolder' | 'derivedtypesfolder'): Locator =>
+    row.locator(`xpath=following-sibling::div[@data-kind="${kind}"][1]`)
+
+  test('lists a type\'s base types and the types derived from it', async () => {
+    await openDebugTarget()
+    const programRow = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^Program @02000002$/ })
+    await programRow.locator('.tree-expander').click()
+
+    // The two folders come first, under the type and above its members.
+    await expect(page.locator('.tree-row[data-kind="basetypefolder"], .tree-row[data-kind="derivedtypesfolder"]'))
+      .toHaveText(['Base Type and Interfaces', 'Derived Types'])
+
+    // A static class is sealed, so nothing can be derived from it: dnSpy's quick check leaves that folder
+    // without an expander, while the base types it is built from are still listed, one row per type.
+    await expect(folderOf(programRow, 'derivedtypesfolder').locator('.tree-expander')).toBeDisabled()
+    await folderOf(programRow, 'basetypefolder').locator('.tree-expander').click()
+    await expect(page.locator('.tree-row[data-kind="basetype"]')).toHaveText([/^object @0[0-9A-F]{7}$/])
+
+    // An interface is derived from by the class beside it: the row wears the derived type's name and its
+    // token, and the interface's own folder takes an expander because a subtype could still be added.
+    const workerInterface = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^IWorker @/ })
+    await workerInterface.locator('.tree-expander').click()
+    const derivedFolder = folderOf(workerInterface, 'derivedtypesfolder')
+    await expect(derivedFolder.locator('.tree-expander')).toBeEnabled()
+    await derivedFolder.locator('.tree-expander').click()
+    await expect(page.locator('.tree-row[data-kind="derivedtype"]')).toHaveText([/^Worker @/])
+
+    // The class names its interface among its base types, spelled the way the decompiler spells a nested
+    // type, and the row wears the interface icon rather than the class one.
+    const workerClass = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^Worker @/ })
+    await workerClass.locator('.tree-expander').click()
+    await folderOf(workerClass, 'basetypefolder').locator('.tree-expander').click()
+    const implemented = page.locator('.tree-row[data-kind="basetype"]').filter({ hasText: 'Program.IWorker' })
+    await expect(implemented).toHaveText([/^Program\.IWorker @[0-9A-F]{8}$/])
+    await expect(implemented.locator('.tree-icon')).toHaveClass(/icon-interface/)
+  })
+})
 
 // Line breakpoints need the debuggee inside the workspace, and so do function breakpoints: the engine resolves
 // both through the workspace's decompiled statement map rather than through PDBs on disk.

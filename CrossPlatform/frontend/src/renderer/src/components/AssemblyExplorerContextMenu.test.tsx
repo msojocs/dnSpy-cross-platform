@@ -359,7 +359,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
   })
 
   it('leaves the group folders alone, since they name no document of their own', () => {
-    for (const kind of ['referencesgroup', 'resourcesgroup'])
+    for (const kind of ['referencesgroup', 'resourcesgroup', 'typereferencesgroup', 'basetypefolder', 'derivedtypesfolder'])
       expect(menuKeys(richContext({ id: 'g', kind, label: 'Assembly References', hasChildren: true }))).not.toContain('open-in-new-tab')
   })
 })

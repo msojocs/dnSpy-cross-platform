@@ -951,6 +951,9 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 		// user opens. Keep the grouping for the current edit state so expanding a namespace does not rescan
 		// every top-level TypeDef in a large module. The state id changes on every edit/reload.
 		readonly Dictionary<string, NamespaceIndex> namespaceIndexes = new(StringComparer.Ordinal);
+		// The type hierarchy nodes resolve a base type's reference against the open modules, so a module's
+		// types are indexed by full name once per edit state — the same lifetime the namespace index has.
+		readonly Dictionary<string, TypeIndex> typeIndexes = new(StringComparer.Ordinal);
 		readonly Dictionary<string, NodeEntry> nodes = new(StringComparer.Ordinal);
 		readonly Dictionary<string, string> nodeIdsByKey = new(StringComparer.Ordinal);
 		readonly Dictionary<string, EditTransaction> transactions = new(StringComparer.Ordinal);
@@ -1191,6 +1194,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				nodes.Remove(id);
 			}
 			namespaceIndexes.Remove(module.Path);
+			typeIndexes.Remove(module.Path);
 			// The resolver holds the module's file open, and nothing reads it once the module is gone.
 			if (referenceResolvers.Remove(module.Path, out var resolver))
 				resolver?.Dispose();
@@ -1314,6 +1318,12 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				NodeKind.ResourcesGroup => GetResourceChildren(node),
 				NodeKind.Resource => GetEmbeddedResourceChildren(node),
 				NodeKind.Type => GetTypeChildren(node),
+				NodeKind.Property => GetPropertyChildren(node),
+				NodeKind.Event => GetEventChildren(node),
+				NodeKind.BaseTypeFolder => GetBaseTypeChildren(node),
+				NodeKind.BaseType => GetBaseTypeNodeChildren(node),
+				NodeKind.DerivedTypesFolder => GetDerivedTypesChildren(node),
+				NodeKind.DerivedType => GetDerivedTypeNodeChildren(node),
 				_ => Array.Empty<NodeEntry>(),
 			};
 			return new TreeNodesResponse(children.Select(ToDto).ToArray());
@@ -1338,6 +1348,11 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			if (node.Kind is NodeKind.Assembly or NodeKind.PEDocument or NodeKind.ElfDocument or NodeKind.UnknownDocument)
 				return [node];
 			if (node.AsModuleEntry is not { } module)
+				return [];
+			// A type hierarchy node hangs off the type whose chain it lists, and that type is not named by
+			// its own value — a base type holds the reference, a derived type holds a type that may live in
+			// another module. No chain from a root can be assembled from the node here.
+			if (node.Kind is NodeKind.BaseTypeFolder or NodeKind.BaseType or NodeKind.DerivedTypesFolder or NodeKind.DerivedType)
 				return [];
 			// An open module owns the module node hanging off its assembly root, which is the node
 			// LoadModulesAsync created. A module reached through an assembly reference has no root of its
@@ -1385,6 +1400,11 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			}
 			foreach (var type in types)
 				chain.Add(GetMemberNode(type, module));
+			// An accessor method hangs off the property or event that owns it — dnSpy's PropertyNodeImpl
+			// and EventNodeImpl list their accessors as children — so a chain down to one walks through
+			// that member, which is the row the caller has to open before the method's own row exists.
+			if (node.Value is MethodDef accessor && FindOwningPropertyOrEvent(accessor) is { } owner)
+				chain.Add(GetMemberNode(owner, module));
 			// The last declaring type is the node itself when the node is a type.
 			if (node.Kind != NodeKind.Type)
 				chain.Add(node);
@@ -1773,12 +1793,270 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			var type = (TypeDef)node.Value;
 			var moduleEntry = node.AsModuleEntry!;
 			var result = new List<NodeEntry>();
+			// dnSpy's TypeNodeImpl yields the two hierarchy folders ahead of the members, and they are
+			// always there whether or not the type has a base type or a subtype.
+			result.Add(GetOrAddNode($"{node.Key}:basetypes", NodeKind.BaseTypeFolder, type, moduleEntry));
+			result.Add(GetOrAddNode($"{node.Key}:derivedtypes", NodeKind.DerivedTypesFolder, type, moduleEntry));
 			result.AddRange(type.NestedTypes.OrderBy(t => t.Name.String, StringComparer.OrdinalIgnoreCase).Select(t => GetMemberNode(t, moduleEntry)));
 			result.AddRange(type.Fields.OrderBy(f => f.Name.String, StringComparer.OrdinalIgnoreCase).Select(f => GetMemberNode(f, moduleEntry)));
 			result.AddRange(type.Properties.OrderBy(p => p.Name.String, StringComparer.OrdinalIgnoreCase).Select(p => GetMemberNode(p, moduleEntry)));
 			result.AddRange(type.Events.OrderBy(e => e.Name.String, StringComparer.OrdinalIgnoreCase).Select(e => GetMemberNode(e, moduleEntry)));
-			result.AddRange(type.Methods.OrderBy(m => m.Name.String, StringComparer.OrdinalIgnoreCase).ThenBy(m => m.MethodSig?.Params.Count ?? 0).Select(m => GetMemberNode(m, moduleEntry)));
+			// A property's or an event's accessor methods are not listed beside the member they implement:
+			// dnSpy keeps them under it, so the tree shows one row per member instead of "Code" followed by
+			// a loose "get_Code()" that repeats it.
+			var accessors = GetPropertyAndEventMethods(type);
+			result.AddRange(type.Methods
+				.Where(m => !accessors.Contains(m))
+				.OrderBy(m => m.Name.String, StringComparer.OrdinalIgnoreCase)
+				.ThenBy(m => m.MethodSig?.Params.Count ?? 0)
+				.Select(m => GetMemberNode(m, moduleEntry)));
 			return result;
+		}
+
+		/// <summary>
+		/// Every method a type's properties and events own, which is dnSpy's
+		/// <c>Extensions.GetPropertyAndEventMethods</c>. The type's own method list is filtered through it:
+		/// those methods are the accessors shown under the member that declares them.
+		/// </summary>
+		static HashSet<MethodDef> GetPropertyAndEventMethods(TypeDef type) {
+			var methods = new HashSet<MethodDef>();
+			foreach (var property in type.Properties) {
+				foreach (var method in property.GetMethods)
+					methods.Add(method);
+				foreach (var method in property.SetMethods)
+					methods.Add(method);
+				foreach (var method in property.OtherMethods)
+					methods.Add(method);
+			}
+			foreach (var @event in type.Events) {
+				if (@event.AddMethod is { } add)
+					methods.Add(add);
+				if (@event.RemoveMethod is { } remove)
+					methods.Add(remove);
+				if (@event.InvokeMethod is { } invoke)
+					methods.Add(invoke);
+				foreach (var method in @event.OtherMethods)
+					methods.Add(method);
+			}
+			return methods;
+		}
+
+		/// <summary>
+		/// The property or event a method is an accessor of, or null when the method is an ordinary one.
+		/// dnSpy files an accessor under the member it implements rather than under the type, and this is
+		/// what walks a chain from a type down to such a method.
+		/// </summary>
+		static IMDTokenProvider? FindOwningPropertyOrEvent(MethodDef method) {
+			if (method.DeclaringType is not { } type)
+				return null;
+			foreach (var property in type.Properties) {
+				if (OwnsAccessor(property, method))
+					return property;
+			}
+			foreach (var @event in type.Events) {
+				if (OwnsAccessor(@event, method))
+					return @event;
+			}
+			return null;
+		}
+
+		static bool OwnsAccessor(PropertyDef property, MethodDef method) =>
+			property.GetMethods.Contains(method) || property.SetMethods.Contains(method) || property.OtherMethods.Contains(method);
+
+		static bool OwnsAccessor(EventDef @event, MethodDef method) =>
+			@event.AddMethod == method || @event.RemoveMethod == method || @event.InvokeMethod == method || @event.OtherMethods.Contains(method);
+
+		/// <summary>
+		/// The methods dnSpy's PropertyNodeImpl lists under a property: the getters, then the setters, then
+		/// any other method the property owns.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetPropertyChildren(NodeEntry node) {
+			var property = (PropertyDef)node.Value;
+			var moduleEntry = node.AsModuleEntry!;
+			var result = new List<NodeEntry>();
+			result.AddRange(property.GetMethods.Select(m => GetMemberNode(m, moduleEntry)));
+			result.AddRange(property.SetMethods.Select(m => GetMemberNode(m, moduleEntry)));
+			result.AddRange(property.OtherMethods.Select(m => GetMemberNode(m, moduleEntry)));
+			return result;
+		}
+
+		/// <summary>
+		/// The methods dnSpy's EventNodeImpl lists under an event, in its order: the adder, the remover,
+		/// the raiser, then any other method the event owns.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetEventChildren(NodeEntry node) {
+			var @event = (EventDef)node.Value;
+			var moduleEntry = node.AsModuleEntry!;
+			var result = new List<NodeEntry>();
+			if (@event.AddMethod is { } add)
+				result.Add(GetMemberNode(add, moduleEntry));
+			if (@event.RemoveMethod is { } remove)
+				result.Add(GetMemberNode(remove, moduleEntry));
+			if (@event.InvokeMethod is { } invoke)
+				result.Add(GetMemberNode(invoke, moduleEntry));
+			result.AddRange(@event.OtherMethods.Select(m => GetMemberNode(m, moduleEntry)));
+			return result;
+		}
+
+		/// <summary>Whether a property or an event owns any accessor method at all — a member without one
+		/// has nothing to expand, the way dnSpy's node shows no expander when it has no children.</summary>
+		static bool HasAccessorMethods(NodeEntry node) => node.Value switch {
+			PropertyDef property => property.GetMethods.Count != 0 || property.SetMethods.Count != 0 || property.OtherMethods.Count != 0,
+			EventDef @event => @event.AddMethod is not null || @event.RemoveMethod is not null || @event.InvokeMethod is not null || @event.OtherMethods.Count != 0,
+			_ => false,
+		};
+
+
+		/// <summary>
+		/// The "Base Type and Interfaces" folder under a type: the base type first, then every interface,
+		/// in the order dnSpy's BaseTypeFolderNodeImpl yields them.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetBaseTypeChildren(NodeEntry node) {
+			var type = (TypeDef)node.Value;
+			var moduleEntry = node.AsModuleEntry!;
+			var result = new List<NodeEntry>();
+			if (type.BaseType is not null)
+				result.Add(GetBaseTypeNode(node, type.BaseType, true, moduleEntry));
+			foreach (var iface in type.Interfaces)
+				result.Add(GetBaseTypeNode(node, iface.Interface, false, moduleEntry));
+			return result;
+		}
+
+		/// <summary>
+		/// A base type node expands the way dnSpy's BaseTypeNodeImpl does: into that type's own base type
+		/// and interfaces. The type is resolved across the open modules first, so a base type the workspace
+		/// holds keeps walking; one it does not resolve has no chain and stays a leaf.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetBaseTypeNodeChildren(NodeEntry node) {
+			var moduleEntry = node.AsModuleEntry!;
+			var resolved = ResolveTypeForHierarchy(((BaseTypeValue)node.Value).TypeDefOrRef);
+			if (resolved is null)
+				return [];
+			var result = new List<NodeEntry>();
+			if (resolved.BaseType is not null)
+				result.Add(GetBaseTypeNode(node, resolved.BaseType, true, moduleEntry));
+			foreach (var iface in resolved.Interfaces)
+				result.Add(GetBaseTypeNode(node, iface.Interface, false, moduleEntry));
+			return result;
+		}
+
+		/// <summary>
+		/// The "Derived Types" folder under a type: every type in the open modules that derives from it,
+		/// which is what dnSpy's DerivedTypesFinder searches for. A sealed class can never have one, and
+		/// the folder then holds nothing at all.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetDerivedTypesChildren(NodeEntry node) {
+			var type = (TypeDef)node.Value;
+			if (!CanHaveDerivedTypes(type))
+				return [];
+			return FindDerivedTypes(node, type);
+		}
+
+		/// <summary>
+		/// A derived type node expands into the types derived from it, the same search dnSpy's
+		/// DerivedTypeNodeImpl runs for its own node.
+		/// </summary>
+		IReadOnlyList<NodeEntry> GetDerivedTypeNodeChildren(NodeEntry node) {
+			var type = (TypeDef)node.Value;
+			return CanHaveDerivedTypes(type) ? FindDerivedTypes(node, type) : [];
+		}
+
+		NodeEntry GetBaseTypeNode(NodeEntry parent, ITypeDefOrRef type, bool isBaseType, ModuleEntry moduleEntry) =>
+			GetOrAddNode(
+				$"{parent.Key}:basetype:{type.MDToken.Raw:X8}",
+				NodeKind.BaseType,
+				new BaseTypeValue(type, isBaseType),
+				moduleEntry);
+
+		IReadOnlyList<NodeEntry> FindDerivedTypes(NodeEntry parent, TypeDef type) {
+			var moduleEntry = parent.AsModuleEntry!;
+			var comparer = new SigComparer();
+			var result = new List<NodeEntry>();
+			foreach (var module in OrderedModules()) {
+				foreach (var candidate in module.Module.GetTypes()) {
+					if (candidate == type)
+						continue;
+					if (!DerivesFrom(type, candidate, comparer))
+						continue;
+					result.Add(GetOrAddNode(
+						$"{parent.Key}:derived:{module.Path}:{candidate.MDToken.Raw:X8}",
+						NodeKind.DerivedType,
+						candidate,
+						moduleEntry));
+				}
+			}
+			return result;
+		}
+
+		/// <summary>dnSpy's DerivedTypesFinder.QuickCheck: only an interface or a non-sealed type can be
+		/// derived from, so a sealed class never opens the search.</summary>
+		static bool CanHaveDerivedTypes(TypeDef type) => type.IsInterface || !type.IsSealed;
+
+		/// <summary>
+		/// Whether a candidate derives from the type: an interface is implemented, a class is extended.
+		/// The comparison is <see cref="SigComparer"/>'s, the one dnSpy's finder uses, so the base or
+		/// interface seen from another module matches the type this one declares.
+		/// </summary>
+		static bool DerivesFrom(TypeDef type, TypeDef candidate, SigComparer comparer) {
+			if (type.IsInterface) {
+				foreach (var iface in candidate.Interfaces) {
+					if (comparer.Equals(type, GetScopeType(iface.Interface)))
+						return true;
+				}
+				return false;
+			}
+			return candidate.BaseType is { } baseType && comparer.Equals(type, GetScopeType(baseType));
+		}
+
+		/// <summary>A TypeSpec is a signature, not the type itself; its scope type is the type it is built
+		/// on, which is what a comparison — or an icon — needs. dnSpy's Extensions.GetScopeType.</summary>
+		static ITypeDefOrRef GetScopeType(ITypeDefOrRef type) {
+			if (type is TypeSpec typeSpec) {
+				var signature = typeSpec.TypeSig.RemovePinnedAndModifiers();
+				if (signature is GenericInstSig generic)
+					return generic.GenericType?.TypeDefOrRef ?? type;
+				if (signature is TypeDefOrRefSig typeDefOrRef)
+					return typeDefOrRef.TypeDefOrRef ?? type;
+			}
+			return type;
+		}
+
+		/// <summary>
+		/// Resolves a base or interface reference to the type it names, preferring the modules the
+		/// workspace holds over dnlib's resolver so a type in an open module resolves to that very
+		/// definition — the one the tree shows. A type from a module nobody opened may still resolve
+		/// through the assembly resolver; when it does not, the node is a leaf and shows a plain icon.
+		/// </summary>
+		TypeDef? ResolveTypeForHierarchy(ITypeDefOrRef type) {
+			if (type is TypeDef typeDef)
+				return typeDef;
+			var scope = GetScopeType(type);
+			if (scope is TypeDef scopeDef)
+				return scopeDef;
+			var name = scope.FullName;
+			foreach (var module in OrderedModules()) {
+				if (GetTypeIndex(module).TryGetValue(name, out var found))
+					return found;
+			}
+			try {
+				return scope.ResolveTypeDef();
+			}
+			catch {
+				return null;
+			}
+		}
+
+		/// <summary>Every type a module declares, nested ones included, by full name. Built once per
+		/// workspace state and shared by every hierarchy node, the way the namespace index is.</summary>
+		IReadOnlyDictionary<string, TypeDef> GetTypeIndex(ModuleEntry module) {
+			if (typeIndexes.TryGetValue(module.Path, out var cached) && cached.StateId == stateId)
+				return cached.Types;
+			var types = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
+			foreach (var type in module.Module.GetTypes())
+				types[type.FullName] = type;
+			var index = new TypeIndex(stateId, types);
+			typeIndexes[module.Path] = index;
+			return index.Types;
 		}
 
 		// ILSpy owns its metadata and syntax tree. Only preparing the snapshot and publishing references
@@ -1849,6 +2127,10 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			cancellationToken.ThrowIfCancellationRequested();
 			if (node.Kind == NodeKind.ResourceEntry)
 				return DecompileResourceEntry(node, cancellationToken);
+			// A type hierarchy node has no code in any language: dnSpy's NodeDecompiler writes a comment
+			// per row whatever decompiler is chosen, so the language request does not change the document.
+			if (node.Kind is NodeKind.BaseTypeFolder or NodeKind.BaseType or NodeKind.DerivedTypesFolder or NodeKind.DerivedType)
+				return new DecompileResponse(GetDocumentTitle(node), "csharp", FormatTypeHierarchyComments(node), Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
 			return request.Language switch {
 				DecompilerLanguage.CSharp => DecompileCSharp(node, cancellationToken),
 				DecompilerLanguage.IL => DecompileIL(node),
@@ -1889,6 +2171,31 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			".cs" => "csharp",
 			".vb" => "visual-basic",
 			_ => "plaintext",
+		};
+
+		/// <summary>
+		/// The document a node of the type hierarchy shows — what dnSpy's NodeDecompiler writes for one: a
+		/// comment per row. A folder lists what its rows name, and a row names itself.
+		/// </summary>
+		string FormatTypeHierarchyComments(NodeEntry node) {
+			var builder = new StringBuilder();
+			var children = node.Kind switch {
+				NodeKind.BaseTypeFolder => GetBaseTypeChildren(node),
+				NodeKind.DerivedTypesFolder => GetDerivedTypesChildren(node),
+				_ => null,
+			};
+			if (children is null)
+				builder.AppendLine($"// {HierarchyFullName(node)}");
+			else
+				foreach (var child in children)
+					builder.AppendLine($"// {HierarchyFullName(child)}");
+			return builder.ToString();
+		}
+
+		static string HierarchyFullName(NodeEntry node) => node.Value switch {
+			BaseTypeValue value => value.TypeDefOrRef.FullName,
+			TypeDef type => type.FullName,
+			_ => GetLabel(node),
 		};
 
 		DecompileResponse DecompileCSharp(NodeEntry node, CancellationToken cancellationToken) {
@@ -3372,6 +3679,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			referenceResolvers.Clear();
 			referencePaths.Clear();
 			namespaceIndexes.Clear();
+			typeIndexes.Clear();
 			nodes.Clear();
 			nodeIdsByKey.Clear();
 			transactions.Clear();
@@ -3656,8 +3964,13 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 		// The token the WPF tree appends as "@06000004" — every node whose value is a metadata row
 		// (assemblies, modules, assembly references, types and members); namespaces, the group folders,
 		// resources and the PE/ELF structures get none, same as dnSpy's NodeFormatter.
-		static int? GetMetadataToken(NodeEntry node) =>
-			node.Value is IMDTokenProvider provider ? unchecked((int)provider.MDToken.Raw) : null;
+		static int? GetMetadataToken(NodeEntry node) => node.Value switch {
+			// A base type row carries the reference it names, so the token is that reference's row — what
+			// dnSpy's NodeFormatter writes for the node.
+			BaseTypeValue value => unchecked((int)value.TypeDefOrRef.MDToken.Raw),
+			IMDTokenProvider provider => unchecked((int)provider.MDToken.Raw),
+			_ => null,
+		};
 
 		// The type a member's row names after the colon — through the C# decompiler's spelling, the
 		// way dnSpy's tree writes it ("int", "Task<int>"). dnSpy writes it for methods, fields,
@@ -3688,8 +4001,17 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			NodeKind.Resource => ((Resource)node.Value).Name,
 			NodeKind.ResourceEntry => ((ResourceEntryValue)node.Value).Name,
 			NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event => GetMemberDisplayName((IMDTokenProvider)node.Value),
+			// dnSpy spells a base type the way the decompiler writes it — "object", "IEnumerable<int>" —
+			// while a derived type is a definition the tree names as it names any other type.
+			NodeKind.BaseTypeFolder => "Base Type and Interfaces",
+			NodeKind.DerivedTypesFolder => "Derived Types",
+			NodeKind.BaseType => GetBaseTypeLabel(((BaseTypeValue)node.Value).TypeDefOrRef),
+			NodeKind.DerivedType => GetMemberDisplayName((TypeDef)node.Value),
 			_ => node.Kind.ToString(),
 		};
+
+		static string GetBaseTypeLabel(ITypeDefOrRef type) =>
+			CSharpTypeName.Of(null, type) ?? type.Name.String;
 
 		static string GetPeStructureLabel(NodeEntry node) {
 			var value = (PeStructureValue)node.Value;
@@ -3739,29 +4061,33 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			NodeKind.Type => ((TypeDef)node.Value).FullName,
 			NodeKind.Method => ((MethodDef)node.Value).FullName,
 			NodeKind.Field => ((FieldDef)node.Value).FullName,
+			NodeKind.BaseType => ((BaseTypeValue)node.Value).TypeDefOrRef.FullName,
+			NodeKind.DerivedType => ((TypeDef)node.Value).FullName,
 			_ => null,
 		};
 
 		bool HasChildren(NodeEntry node) => node.Kind switch {
 			NodeKind.Assembly or NodeKind.Module or NodeKind.PE or NodeKind.Namespace or NodeKind.TypeReferencesGroup or NodeKind.ReferencesGroup or NodeKind.ResourcesGroup => true,
+			// The two hierarchy folders dnSpy lists under every type, and the base type rows inside them,
+			// are lazy-loading nodes: they are shown with an expander whether or not they turn out to hold
+			// anything, which is what dnSpy's BaseTypeFolderNodeImpl and BaseTypeNodeImpl set up.
+			NodeKind.Type or NodeKind.BaseTypeFolder or NodeKind.BaseType => true,
+			// A sealed class can never have a derived type, so the search is not even offered; every other
+			// type opens it (dnSpy's DerivedTypesFinder.QuickCheck).
+			NodeKind.DerivedTypesFolder or NodeKind.DerivedType => CanHaveDerivedTypes((TypeDef)node.Value),
 			// A PE document has the PE node, the way dnSpy's does wherever the image was read from a file.
 			NodeKind.PEDocument => node.Module is PeOnlyModuleEntry,
+			// A property or an event holds the accessor methods dnSpy files under it, and nothing else.
+			NodeKind.Property or NodeKind.Event => HasAccessorMethods(node),
 			// An ELF document has the node its headers hang off, and that node always has the file header.
 			NodeKind.ElfDocument => node.Module is ElfFileEntry,
 			NodeKind.Elf => true,
 			NodeKind.AssemblyReference => HasAssemblyReferenceChildren(node),
 			NodeKind.Resource => node.Value is EmbeddedResource resource && resource.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase),
-			NodeKind.Type => HasTypeChildren((TypeDef)node.Value),
 			_ => false,
 		};
 
-		static bool HasTypeChildren(TypeDef type) => type.NestedTypes.Count != 0
-			|| type.Fields.Count != 0
-			|| type.Properties.Count != 0
-			|| type.Events.Count != 0
-			|| type.Methods.Count != 0;
-
-		static string GetIcon(NodeEntry node) => node.Kind switch {
+		string GetIcon(NodeEntry node) => node.Kind switch {
 			// WPF uses different images for the assembly container and its module. An executable
 			// gets the small gold overlay used by AssemblyExe.
 			NodeKind.Assembly => IsExecutable(node) ? "assembly-exe" : "assembly",
@@ -3777,15 +4103,29 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			NodeKind.Namespace => "namespace",
 			NodeKind.TypeReferencesGroup => "reference",
 			NodeKind.ReferencesGroup or NodeKind.AssemblyReference => "reference",
-			NodeKind.ResourcesGroup => "folder",
+			NodeKind.ResourcesGroup or NodeKind.BaseTypeFolder or NodeKind.DerivedTypesFolder => "folder",
 			NodeKind.Resource or NodeKind.ResourceEntry => "resource",
-			NodeKind.Type => ((TypeDef)node.Value).IsInterface ? "interface" : ((TypeDef)node.Value).IsEnum ? "enum" : "class",
+			NodeKind.Type => TypeIcon((TypeDef)node.Value),
+			// dnSpy shows a base type with the image of the type it resolves to, and falls back to the
+			// class or interface image when it cannot resolve one. A derived type is always a definition
+			// the workspace read out of a module, so its own image is right there.
+			NodeKind.BaseType => GetBaseTypeIcon(node),
+			NodeKind.DerivedType => TypeIcon((TypeDef)node.Value),
 			NodeKind.Method => "method",
 			NodeKind.Field => "field",
 			NodeKind.Property => "property",
 			NodeKind.Event => "event",
 			_ => "item",
 		};
+
+		static string TypeIcon(TypeDef type) => type.IsInterface ? "interface" : type.IsEnum ? "enum" : "class";
+
+		string GetBaseTypeIcon(NodeEntry node) {
+			var value = (BaseTypeValue)node.Value;
+			return ResolveTypeForHierarchy(value.TypeDefOrRef) is { } resolved
+				? TypeIcon(resolved)
+				: value.IsBaseType ? "class" : "interface";
+		}
 
 		static bool IsExecutable(NodeEntry node) => node.Value switch {
 			AssemblyDef assembly => assembly.ManifestModule is { } module && (module.Characteristics & dnlib.PE.Characteristics.Dll) == 0,
@@ -4097,6 +4437,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			referenceResolvers.Clear();
 			referencePaths.Clear();
 			namespaceIndexes.Clear();
+			typeIndexes.Clear();
 			nodes.Clear();
 			nodeIdsByKey.Clear();
 			codeStatementsByNode.Clear();
@@ -4295,6 +4636,12 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 		/// <summary>
 		sealed record NamespaceValue(string Name, IReadOnlyList<TypeDef> Types);
 		sealed record NamespaceIndex(string StateId, IReadOnlyDictionary<string, IReadOnlyList<TypeDef>> Groups);
+		/// <summary>A module's types by full name, for resolving a base type reference the workspace holds.</summary>
+		sealed record TypeIndex(string StateId, IReadOnlyDictionary<string, TypeDef> Types);
+		/// <summary>A row in the "Base Type and Interfaces" folder. <paramref name="IsBaseType"/> is what
+		/// dnSpy keeps to pick the icon when the reference cannot be resolved to a type definition: the
+		/// base type shows the class image and an interface shows the interface one.</summary>
+		sealed record BaseTypeValue(ITypeDefOrRef TypeDefOrRef, bool IsBaseType);
 		sealed record ResourceEntryValue(string Name, object? Value, string TypeName);
 		sealed record MetadataReference(DecompilerMetadataFile Metadata, System.Reflection.Metadata.Handle Handle);
 		/// <summary>
@@ -4439,6 +4786,12 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			Resource,
 			ResourceEntry,
 			Type,
+			// The two folders dnSpy hangs off every type — its base type and interfaces, and the types
+			// derived from it — and the rows inside them.
+			BaseTypeFolder,
+			BaseType,
+			DerivedTypesFolder,
+			DerivedType,
 			Method,
 			Field,
 			Property,

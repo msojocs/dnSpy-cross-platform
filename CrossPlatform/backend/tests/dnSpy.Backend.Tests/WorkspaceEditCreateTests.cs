@@ -172,7 +172,10 @@ public sealed class WorkspaceEditCreateTests : IDisposable {
 			TestContext.Current.CancellationToken);
 		await manager.CommitEditAsync(new EditTransactionRequest(workspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
 
-		var renamed = Assert.Single(await MembersAsync(workspaceId, type.Id), node => node.Id == member.Id);
+		// The accessor lives under the property that declares it, and renaming the method does not move the
+		// property, so the renamed row is read from the property's children.
+		var property = Assert.Single(await MembersAsync(workspaceId, type.Id), node => node.Kind == "property" && node.Label == "Code");
+		var renamed = Assert.Single(await ChildrenAsync(workspaceId, property.Id), node => node.Id == member.Id);
 		Assert.StartsWith("Renamed", renamed.Label, StringComparison.Ordinal);
 		// The node itself is the same row throughout: an edit changes what a row says, not which row it is.
 		var after = await manager.GetOptionsAsync(
@@ -182,7 +185,7 @@ public sealed class WorkspaceEditCreateTests : IDisposable {
 		Assert.Equal(before.Method?.MethodSig?.Display, after.Method?.MethodSig?.Display);
 
 		await manager.UndoAsync(new WorkspaceRequest(workspaceId), TestContext.Current.CancellationToken);
-		var restored = Assert.Single(await MembersAsync(workspaceId, type.Id), node => node.Id == member.Id);
+		var restored = Assert.Single(await ChildrenAsync(workspaceId, property.Id), node => node.Id == member.Id);
 		Assert.Equal(member.Label, restored.Label);
 	}
 
@@ -351,9 +354,15 @@ public sealed class WorkspaceEditCreateTests : IDisposable {
 
 	Task<IReadOnlyList<TreeNodeDto>> MembersAsync(string workspaceId, string typeNodeId) => ChildrenAsync(workspaceId, typeNodeId);
 
-	/// <summary>One method of the type, which is the `Code` property's getter in the fixture the tests use.</summary>
-	async Task<TreeNodeDto> FindMethodAsync(string workspaceId, string typeNodeId) =>
-		Assert.Single(await MembersAsync(workspaceId, typeNodeId), node => node.Label.StartsWith("get_Code", StringComparison.Ordinal));
+	/// <summary>
+	/// One method of the type, which is the `Code` property's getter in the fixture the tests use. dnSpy
+	/// files an accessor under the property that declares it, so the row hangs off the property node rather
+	/// than off the type.
+	/// </summary>
+	async Task<TreeNodeDto> FindMethodAsync(string workspaceId, string typeNodeId) {
+		var property = Assert.Single(await MembersAsync(workspaceId, typeNodeId), node => node.Kind == "property" && node.Label == "Code");
+		return Assert.Single(await ChildrenAsync(workspaceId, property.Id), node => node.Label.StartsWith("get_Code", StringComparison.Ordinal));
+	}
 
 	async Task<TreeNodeDto> FindTypeAsync(string workspaceId, string fullName) {
 		var module = await FindModuleAsync(workspaceId);

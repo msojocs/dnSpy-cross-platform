@@ -309,6 +309,11 @@ const zhCN: Record<string, string> = {
   'Instruction': '指令',
   'None': '无',
   'Assembly References': '程序集引用',
+  // The module and type group folders of the assembly explorer (dnSpy.Resources.zh-CN.resx:
+  // TypeReferencesFolder, BaseTypeFolder, DerivedTypes).
+  'Type References': '类型引用',
+  'Base Type and Interfaces': '基类和接口',
+  'Derived Types': '派生类型',
   'PE Headers': 'PE 头',
   'Metadata Tables': '元数据表',
   'Table': '表',

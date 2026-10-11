@@ -188,10 +188,11 @@ const methodBreakpointTarget = (ctx: AssemblyExplorerMenuContext): string | unde
   ctx.node.kind === 'method' ? methodBreakpointName(ctx.node.description) : undefined
 
 /**
- * The group folders that hold a module's references and resources. They name no document of their own, so
- * the commands that open one — "Open in New Tab", the hex group's reader — leave them alone.
+ * The group folders that hold a module's references and resources, or a type's base types and subtypes.
+ * They name no document of their own, so the commands that open one — "Open in New Tab", the hex group's
+ * reader — leave them alone.
  */
-const isGroupFolder = kindIs('referencesgroup', 'resourcesgroup', 'typereferencesgroup')
+const isGroupFolder = kindIs('referencesgroup', 'resourcesgroup', 'typereferencesgroup', 'basetypefolder', 'derivedtypesfolder')
 
 const deleteNode = (ctx: AssemblyExplorerMenuContext): void => ctx.onDeleteNode?.(ctx.node)
 

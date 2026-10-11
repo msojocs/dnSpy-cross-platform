@@ -71,10 +71,12 @@ export const NodeIcon = ({ icon, expanded = false }: { icon?: string; expanded?:
 }
 
 // The kinds whose row names a type after the colon, and the ones dnSpy's NodeFormatter appends a raw
-// metadata token to — members, assemblies, modules and assembly references, but not namespaces, the
-// group folders, resources or the PE/ELF structures.
+// metadata token to — the metadata rows inside a module: types, members and assembly references. The
+// document rows dnSpy builds a file node out of write no token (its assembly and module nodes pass
+// showToken: false and its PE/ELF/unknown documents write the file name alone), and neither do namespaces,
+// the group folders or resources.
 const KINDS_WITH_RETURN_TYPE = new Set(['method', 'field', 'property', 'event'])
-const KINDS_WITH_TOKEN = new Set(['type', 'assembly', 'module', 'assemblyreference', ...KINDS_WITH_RETURN_TYPE])
+const KINDS_WITH_TOKEN = new Set(['type', 'assemblyreference', ...KINDS_WITH_RETURN_TYPE])
 
 const formatMetadataToken = (token: number): string =>
   `@${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`

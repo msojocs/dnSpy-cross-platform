@@ -100,6 +100,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	/// The tree DTO hands the client the raw pieces dnSpy's NodeFormatter composes a row out of — the
 	/// metadata token of anything that is a metadata row, and the type a member's row names after the
 	/// colon — while the label itself stays the bare name that bookmarks and output messages quote.
+	/// The document rows carry their token too, since dnSpy's document nodes expose one to the commands
+	/// that copy it, even though the row itself writes no token for a document or a namespace.
 	/// </summary>
 	[Fact]
 	public async Task TreeNodes_CarryTokenAndReturnTypeForTheClientToFormatRowsWith() {
@@ -110,7 +112,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var opened = await OpenContractsAssemblyAsync();
 		var roots = await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
 		var assembly = Assert.Single(roots.Nodes);
-		Assert.True(assembly.MetadataToken.HasValue, "The assembly row should carry its token like dnSpy's tree does.");
+		Assert.True(assembly.MetadataToken.HasValue, "The assembly node exposes its token to the copy-token command even though its row writes none.");
 
 		var moduleNode = Assert.Single(await ChildrenAsync(opened.WorkspaceId, assembly.Id), node => node.Kind == "module");
 		Assert.True(moduleNode.MetadataToken.HasValue);

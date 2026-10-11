@@ -50,23 +50,29 @@ it('appends the token only where dnSpy writes one', () => {
   const namespaceNode: TreeNode = { id: 'n', kind: 'namespace', label: 'dnSpy.Backend.Contracts', hasChildren: true }
   // A group row is no metadata row, so a token must not leak into it even if one arrived.
   const group: TreeNode = { id: 'g', kind: 'referencesgroup', label: 'Assembly References', hasChildren: true, metadataToken: 0x1 }
+  // The document rows — the assembly and the module read out of a file — keep the file name they wear and
+  // no token, like dnSpy's assembly and module nodes.
+  const assemblyRow: TreeNode = { id: 'a', kind: 'assembly', label: 'dnSpy.Backend.Contracts (1.0.0.0)', hasChildren: true, metadataToken: 0x20000001 }
+  const moduleRow: TreeNode = { id: 'mo', kind: 'module', label: 'dnSpy.Backend.Contracts.dll', hasChildren: true, metadataToken: 0x1 }
   expect(composeTreeRowText(type.label, type, true)).toBe('HelloRequest @02000002')
   expect(composeTreeRowText(reference.label, reference, true)).toBe('dnSpy.Backend.Contracts @23000001')
   expect(composeTreeRowText(namespaceNode.label, namespaceNode, true)).toBe('dnSpy.Backend.Contracts')
   expect(composeTreeRowText(group.label, group, true)).toBe('Assembly References')
+  expect(composeTreeRowText(assemblyRow.label, assemblyRow, true)).toBe('dnSpy.Backend.Contracts (1.0.0.0)')
+  expect(composeTreeRowText(moduleRow.label, moduleRow, true)).toBe('dnSpy.Backend.Contracts.dll')
 })
 
 it('re-reads the token option when it is saved', () => {
-  useAppStore.setState({ roots: [{ ...assembly, metadataToken: 0x20000001 }] })
+  useAppStore.setState({ roots: [{ id: 't', kind: 'type', label: 'Example', hasChildren: false, metadataToken: 0x02000001 }] })
   render(<AssemblyExplorer commands={explorerCommands()} />)
-  expect(screen.getByText('Example @20000001')).toBeInTheDocument()
+  expect(screen.getByText('Example @02000001')).toBeInTheDocument()
 
   act(() => saveAppOptions({ ...loadAppOptions(), assemblyExplorer: { ...loadAppOptions().assemblyExplorer, showToken: false } }))
   expect(screen.getByText('Example')).toBeInTheDocument()
-  expect(screen.queryByText('Example @20000001')).not.toBeInTheDocument()
+  expect(screen.queryByText('Example @02000001')).not.toBeInTheDocument()
 
   act(() => saveAppOptions({ ...loadAppOptions(), assemblyExplorer: { ...loadAppOptions().assemblyExplorer, showToken: true } }))
-  expect(screen.getByText('Example @20000001')).toBeInTheDocument()
+  expect(screen.getByText('Example @02000001')).toBeInTheDocument()
 })
 
 // A row the app selected on its own — the node of a document that just came to the front — can be

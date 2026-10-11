@@ -70,12 +70,30 @@ const launchPackagedApplication = async (assemblyPath: string): Promise<Packaged
   return { browser, page, process: application, processId, userDataDirectory }
 }
 
+/**
+ * How long one of these tests gets. A packaged application is a real installation rather than a source
+ * tree, so its first launch pays for Electron reading its archive off the disk and for the bundled .NET
+ * backend JITing for the first time — the readiness check alone is allowed 30 s of that (the expect
+ * timeout in the playwright config), and what is left has to cover the navigation the test does and
+ * taking the application down again.
+ */
+const packagedTestTimeoutMs = 60_000
+
 const closePackagedApplication = async (application: PackagedApplication | undefined): Promise<void> => {
   if (!application)
     return
-  await application.browser.close()
-  await stopProcessId(application.processId)
+  // The application is stopped before the connection is dropped, not after. `browser.close()` on a
+  // connection made with `connectOverCDP` does not ask the application to quit: it closes the debugging
+  // socket and waits for the other end to finish the WebSocket closing handshake, which a peer that is
+  // slow to answer can leave it waiting out for the socket's close timeout, 30 s, with the application
+  // still running. Killing the process group first collapses that socket, so the disconnect usually
+  // returns at once — and where the operating system does not hand that collapse to the socket, the
+  // disconnect is bounded rather than waited on, because the application is gone by then either way. The
+  // group is signalled before the pid because `stopProcess` does nothing once the main process has
+  // exited, and it is the group signal that takes the renderers and the backend down with it.
   await stopProcess(application.process)
+  await stopProcessId(application.processId)
+  await disconnect(application.browser)
   // The children of a detached Electron process are not all reaped the moment the main one exits, and
   // on Windows a renderer still holding the profile makes this throw rather than wait. Retrying lets
   // the profile go rather than failing a test that already passed.
@@ -84,6 +102,7 @@ const closePackagedApplication = async (application: PackagedApplication | undef
 
 test('packaged application starts its bundled backend and discovers the debugger', async () => {
   test.skip(!executable, 'DNSPY_PACKAGED_EXECUTABLE is not set.')
+  test.setTimeout(packagedTestTimeoutMs)
   let application: PackagedApplication | undefined
   try {
     application = await launchPackagedApplication(contractsAssemblyPath)
@@ -118,6 +137,7 @@ test('packaged application starts its bundled backend and discovers the debugger
 
 test('packaged application debugs a program it launches', async () => {
   test.skip(!executable, 'DNSPY_PACKAGED_EXECUTABLE is not set.')
+  test.setTimeout(packagedTestTimeoutMs)
   let application: PackagedApplication | undefined
   try {
     application = await launchPackagedApplication(debugTargetPath)
@@ -190,6 +210,27 @@ const connectToApplication = async (port: number): Promise<Browser> => {
     }
   }
   throw lastError instanceof Error ? lastError : new Error('The packaged application did not expose its renderer debugging endpoint.')
+}
+
+/**
+ * How long the disconnect below may take. The application has already been killed when it runs, so this
+ * is housekeeping rather than shutdown, and the budget belongs to the test rather than to the socket.
+ */
+const disconnectTimeoutMs = 5_000
+
+/**
+ * Drops the connection to the application without letting the answer decide the test. Closing a
+ * connection made with `connectOverCDP` is a request to the other end rather than a shutdown of it, and
+ * a peer that has just been killed leaves the socket to the operating system: the closing handshake is
+ * then answered promptly on one platform, late or not at all on another, and the call itself rejects
+ * once the connection is already gone. All of those are the teardown of a process that is no longer
+ * there, none of them says anything about the application the test just exercised, and waiting one of
+ * them out or letting the rejection out of `closePackagedApplication` would fail a test whose
+ * assertions have already passed.
+ */
+const disconnect = async (browser: Browser): Promise<void> => {
+  const closed = browser.close().catch(() => {})
+  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, disconnectTimeoutMs))])
 }
 
 const stopProcessId = async (processId: number | undefined): Promise<void> => {

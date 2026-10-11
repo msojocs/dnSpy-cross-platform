@@ -227,6 +227,9 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.EditReplaceResource:
 				await workspaces.QueueResourceAsync(DeserializeParams<ReplaceResourceRequest>(request), cancellationToken).ConfigureAwait(false);
 				return new { queued = true };
+			case RpcMethods.EditConvertModule:
+				await workspaces.QueueConvertModuleAsync(DeserializeParams<ConvertModuleRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
 			case RpcMethods.EditHexPatch:
 				await workspaces.QueueHexPatchAsync(DeserializeParams<HexPatchRequest>(request), cancellationToken).ConfigureAwait(false);
 				return new { queued = true };
@@ -249,6 +252,16 @@ internal sealed class JsonRpcServer {
 				return await workspaces.ReloadAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceSortAssemblies:
 				return await workspaces.SortAssembliesAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceRemoveModule:
+				return await workspaces.RemoveModuleAsync(DeserializeParams<NodeRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleGetSpecialNode:
+				return await workspaces.GetSpecialNodeAsync(DeserializeParams<SpecialNodeRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.TreeFindByToken:
+				return await workspaces.FindByTokenAsync(DeserializeParams<FindByTokenRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceGetData:
+				return await workspaces.GetResourceDataAsync(DeserializeParams<ResourceDataRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceLoadDependencies:
+				return await workspaces.LoadDependenciesAsync(DeserializeParams<LoadDependenciesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptEvaluate:
 				return await scripts.EvaluateAsync(DeserializeParams<ScriptEvaluateRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptReset:

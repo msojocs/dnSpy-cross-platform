@@ -60,6 +60,35 @@ export interface TreeNodesResponse {
   nodes: TreeNode[]
 }
 
+/** Which of a module's two notable members a "Go to ..." command navigates to — the backend's
+ *  `SpecialNodeKinds`. */
+export type SpecialNodeKind = 'entryPoint' | 'globalCctor'
+
+/** The node dnSpy's "Go to Entry Point" and "Go to Global Cctor" navigate to. Null when the module has
+ *  no such member: an assembly with no entry point, or one with no global static constructor. */
+export interface SpecialNodeResponse {
+  nodeId: string | null
+}
+
+/** The node a metadata token names — dnSpy's "Go to Token". Null when the token names no row the tree
+ *  shows, which is the same answer as a token the module has no row for. */
+export interface FindByTokenResponse {
+  nodeId: string | null
+}
+
+/** What is left after an assembly is removed, plus the ids of the tree nodes that went with it — what a
+ *  client needs to drop the documents and the selection it was holding by node id. */
+export interface RemoveModuleResponse {
+  removedNodeIds: string[]
+  roots: TreeNode[]
+}
+
+/** The bytes one resource node holds, and the name a Save dialog should suggest for them. */
+export interface ResourceDataResponse {
+  name: string
+  base64Data: string
+}
+
 export type DecompilerLanguage = 'cSharp' | 'visualBasic' | 'il' | 'ilWithCSharp'
 
 export interface TextSpan {
@@ -863,6 +892,29 @@ export interface DnSpyApi {
   reloadWorkspace(workspaceId: string): Promise<OpenWorkspaceResponse>
   /** Reorders the root nodes by name and answers with the tree in its new order — dnSpy's Sort Assemblies. */
   sortAssemblies(workspaceId: string): Promise<TreeNodesResponse>
+  /** Removes one assembly from the tree — dnSpy's Remove Assembly — and answers with what is left. */
+  removeModule(workspaceId: string, nodeId: string): Promise<RemoveModuleResponse>
+  /**
+   * The module's entry point, or the static constructor of its global type — dnSpy's "Go to Entry
+   * Point" and "Go to Global Cctor". The node names which module to look in; any node inside it does.
+   */
+  getSpecialNode(workspaceId: string, nodeId: string, kind: SpecialNodeKind): Promise<SpecialNodeResponse>
+  /** The node a metadata token names, for dnSpy's "Go to Token". The token may carry its `0x`. */
+  findByToken(workspaceId: string, nodeId: string, token: string): Promise<FindByTokenResponse>
+  /**
+   * Opens the assemblies a module's references name — dnSpy's Load Dependencies. The recursive form
+   * follows the closure instead of stopping at the module's own references.
+   */
+  loadDependencies(workspaceId: string, nodeId: string, recursive: boolean): Promise<AddModulesResponse>
+  /** Shows a file in the desktop's file manager — dnSpy's Open Containing Folder. */
+  showItemInFolder(path: string): Promise<void>
+  /**
+   * Writes one resource node's bytes to a file the user picks, and answers with the path it wrote — or
+   * nothing when the dialog was cancelled. `raw` asks for the resource's own bytes rather than the value
+   * a .resources entry decodes to; the port holds no separate serialized form, so both write the same
+   * bytes today, and the flag is kept because dnSpy's two commands differ.
+   */
+  saveResource(workspaceId: string, nodeId: string, raw: boolean): Promise<string | undefined>
   getRoots(workspaceId: string): Promise<TreeNodesResponse>
   getChildren(workspaceId: string, nodeId: string): Promise<TreeNodesResponse>
   getNode(workspaceId: string, nodeId: string): Promise<TreeNode>
@@ -909,6 +961,9 @@ export interface DnSpyApi {
   /** Replaces a method body with the stub the backend derives from the method's signature. */
   queueMethodBodyStub(workspaceId: string, transactionId: string, methodNodeId: string): Promise<void>
   replaceResourceFromFile(workspaceId: string, transactionId: string, resourceNodeId: string): Promise<boolean>
+  /** Turns the module into an assembly or back — dnSpy's two Convert commands. `toAssembly` picks the
+   * direction; nothing is written until the transaction is committed. */
+  convertModule(workspaceId: string, transactionId: string, nodeId: string, toAssembly: boolean): Promise<void>
   commitEdit(workspaceId: string, transactionId: string): Promise<EditCommitResponse>
   rollbackEdit(workspaceId: string, transactionId: string): Promise<void>
   undoEdit(workspaceId: string): Promise<EditCommitResponse>

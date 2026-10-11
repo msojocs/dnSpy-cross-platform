@@ -9,8 +9,16 @@ let userDataDirectory: string
 let savePath: string
 let saveCodePath: string
 let importBookmarksPath: string
+let showInFolderPath: string
+let saveResourcePath: string
 const contractsAssemblyPath = path.resolve(import.meta.dirname, '../../../backend/dnSpy.Backend.Contracts/bin/Debug/net10.0/dnSpy.Backend.Contracts.dll')
 const debugTargetPath = path.resolve(import.meta.dirname, '../../../backend/tests/DebugTarget/bin/Debug/net10.0/DebugTarget.dll')
+// The one fixture with embedded resources: a WPF project's generated .g.resources, plus the .baml stream
+// inside it. Saving needs something to save, which neither of the other two assemblies has.
+const bamlTargetPath = path.resolve(import.meta.dirname, '../../../backend/tests/BamlTarget/bin/Debug/net10.0-windows/BamlTarget.dll')
+// The one fixture that references another assembly sitting beside it in its own output directory, which is
+// what Load Dependencies needs to have anything to resolve.
+const coreAssemblyPath = path.resolve(import.meta.dirname, '../../../backend/dnSpy.Backend.Core/bin/Debug/net10.0/dnSpy.Backend.Core.dll')
 
 // A session only survives if the profile does, so a restore test launches twice against one directory
 // rather than letting every launch start from a fresh one.
@@ -29,6 +37,8 @@ const launchApp = async (assemblies: string, options: LaunchOptions = {}): Promi
   savePath = path.join(userDataDirectory, 'saved-module.dll')
   saveCodePath = path.join(userDataDirectory, 'saved-code.cs')
   importBookmarksPath = path.join(userDataDirectory, 'bookmarks-to-import.json')
+  showInFolderPath = path.join(userDataDirectory, 'show-in-folder.txt')
+  saveResourcePath = path.join(userDataDirectory, 'saved-resource.bin')
   application = await electron.launch({
     args: ['.', '--no-sandbox', `--user-data-dir=${userDataDirectory}`, ...(options.extraArgs ?? [])],
     cwd: path.resolve(import.meta.dirname, '../..'),
@@ -40,6 +50,8 @@ const launchApp = async (assemblies: string, options: LaunchOptions = {}): Promi
       DNSPY_E2E_SAVE_PATH: savePath,
       DNSPY_E2E_SAVE_CODE_PATH: saveCodePath,
       DNSPY_E2E_OPEN_TEXT_FILE: importBookmarksPath,
+      DNSPY_E2E_SHOW_IN_FOLDER_PATH: showInFolderPath,
+      DNSPY_E2E_SAVE_RESOURCE_PATH: saveResourcePath,
     },
   })
   page = await application.firstWindow()
@@ -444,7 +456,7 @@ test.describe('the workspace shell', () => {
     await expect(page.getByRole('table', { name: 'Metadata Tables' })).toContainText('TypeDef')
 
     await moduleRow.click({ button: 'right' })
-    await page.getByRole('menuitem', { name: 'Hex View' }).click()
+    await page.getByRole('menuitem', { name: 'Open Hex Editor' }).click()
     await expect(page.locator('.hex-content')).toContainText('4D 5A')
 
     const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^dnSpy\.Backend\.Contracts$/ })
@@ -477,6 +489,171 @@ test.describe('the workspace shell', () => {
     await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save As' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
+  })
+
+  test('opens the tree context menu with the WPF commands for the row that was clicked', async () => {
+    await openAssemblyAndNamespace()
+
+    // dnSpy builds this menu from the tree's selection, and a right click selects the row before the menu
+    // opens, so a type offers the type's own commands: the delete, the six creates, the editor, the token
+    // copies, the shared hex group, the one debugger command a type can name — everything its methods are
+    // — and the three outer ones. A row is read by its label span, since the shortcut beside it is part of
+    // the item's own text.
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+    const helloType = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @02000005$/ })
+    await helloType.click({ button: 'right' })
+    await expect(menu.locator('.document-tab-menu-label')).toHaveText([
+      'Open in New Tab',
+      'Delete HelloRequest',
+      'Create Type...',
+      'Create Nested Type...',
+      'Create Method...',
+      'Create Field...',
+      'Create Property...',
+      'Create Event...',
+      'Edit Type...',
+      'Load Dependencies',
+      'Load Dependencies Recursively',
+      'Go to Token...',
+      'Copy MD Token',
+      'Copy Full Name',
+      'Open Hex Editor',
+      'Add Class Breakpoint',
+      'Analyze',
+      'Search MSDN',
+      'Sort Assemblies',
+    ])
+
+    // The entries are not only labels: this one runs, and on the node the click landed on.
+    await menu.getByRole('menuitem', { name: /^Edit Type\.\.\./ }).click()
+    const editType = page.getByRole('dialog', { name: 'Edit Type' })
+    await expect(editType.getByLabel('Name', { exact: true })).toHaveValue('HelloRequest')
+    await page.keyboard.press('Escape')
+    await expect(editType).not.toBeVisible()
+
+    // A module swaps the member commands for its own: the remove, the one create, the two "Go to ..."
+    // navigations, the module's own token, and the three documents and folders it can open.
+    await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
+    await expect(menu.locator('.document-tab-menu-label')).toHaveText([
+      'Open in New Tab',
+      'Remove dnSpy.Backend.Contracts.dll',
+      'Convert Assembly to NetModule',
+      'Create Type...',
+      'Load Dependencies',
+      'Load Dependencies Recursively',
+      'Go to Entry Point',
+      'Go to Global Cctor',
+      'Go to Token...',
+      'Copy MD Token',
+      'Open Hex Editor',
+      'Module Information',
+      'Open Containing Folder',
+      'Sort Assemblies',
+    ])
+    await page.keyboard.press('Escape')
+
+    // A method adds the IL edits and the breakpoint, and its delete is named after it.
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ }).locator('.tree-expander').click()
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
+    await getCode.click({ button: 'right' })
+    await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
+    const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
+    expect(methodLabels).toEqual(expect.arrayContaining([
+      'Delete get_Code()',
+      'Create Nested Type...',
+      'Create Method...',
+      'Edit Method...',
+      'Edit Method Body...',
+      'Replace Method Body with stub...',
+      'Copy Full Name',
+      'Show Method Body in Hex Editor',
+      'Add Method Breakpoint',
+      'Analyze',
+    ]))
+    await page.keyboard.press('Escape')
+  })
+
+  test('breaks on every method of the type the class breakpoint was asked for', async () => {
+    await openAssemblyAndNamespace()
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+
+    // The type's methods are not in the tree until the row is expanded, and the command is expected to read
+    // them itself — so the row is left exactly as the assembly opened it, collapsed.
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    await rpcException.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: 'Add Class Breakpoint' }).click()
+
+    await showBreakpoints()
+    const rows = page.locator('.breakpoint-row')
+    // Every method of the type is broken on, named the way a function breakpoint names a method: the
+    // declaring type in full, then the method. The constructor and the property's getter are both here.
+    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException..ctor' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException.get_Code' })).toHaveCount(1)
+
+    // The output says what was added, and a second run adds nothing: the names are already there.
+    const count = await rows.count()
+    expect(count).toBeGreaterThan(1)
+    await showOutput()
+    const output = page.getByRole('tabpanel', { name: 'Output' })
+    await expect(output).toContainText(/Added \d+ breakpoint\(s\) for RpcException\./)
+    await rpcException.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: 'Add Class Breakpoint' }).click()
+    await expect(output).toContainText('RpcException has no method left to break on.')
+    await expect(rows).toHaveCount(count)
+  })
+
+  test('runs the tree menu commands that reach the module file and the token box', async () => {
+    await openAssemblyAndNamespace()
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+    const moduleRow = page.locator('.tree-row[data-kind="module"]').first()
+
+    // Open Containing Folder hands the module's own file to the shell, which is stubbed here to record it.
+    await moduleRow.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: /^Open Containing Folder/ }).click()
+    await expect.poll(() => existsSync(showInFolderPath) ? readFileSync(showInFolderPath, 'utf8') : '').toBe(contractsAssemblyPath)
+
+    // Go to Token reads the row it was opened on as the module the token is looked up in, so the box is
+    // opened from a type row and answers for that type's module.
+    const helloType = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @02000005$/ })
+    await helloType.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: /^Go to Token\.\.\./ }).click()
+    const tokenDialog = page.getByRole('dialog', { name: 'Go to Token' })
+    // A token the module has no row for is not a token the tree can go to, and the box says so and stays up.
+    await tokenDialog.getByLabel('Token').fill('0x0600FFFF')
+    await tokenDialog.getByRole('button', { name: 'OK' }).click()
+    await expect(tokenDialog.locator('.modal-error')).toBeVisible()
+    // The token the method row is pinned with selects that row, opening the type above it on the way.
+    await tokenDialog.getByLabel('Token').fill('0x060008CC')
+    await tokenDialog.getByRole('button', { name: 'OK' }).click()
+    await expect(tokenDialog).toBeHidden()
+    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })).toHaveAttribute('aria-selected', 'true')
+
+    // Remove Assembly takes the row and every row under it, and the tree is left with nothing on it.
+    await moduleRow.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: /^Remove dnSpy\.Backend\.Contracts\.dll/ }).click()
+    await expect(page.getByText('No assemblies loaded')).toBeVisible()
+    await expect(page.locator('.tree-row')).toHaveCount(0)
+  })
+
+  test('converts the assembly to a net module and undoes it', async () => {
+    await openAssemblyAndNamespace()
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+    const root = page.locator('.tree-row[data-kind="assembly"]').first()
+    await expect(root).toContainText('dnSpy.Backend.Contracts (1.0.0.0)')
+
+    await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: 'Convert Assembly to NetModule', exact: true }).click()
+
+    // The row above the module named the assembly; with the assembly detached there is nothing left for it
+    // to name, so it falls back to the module's own file name.
+    await expect(root).toContainText('dnSpy.Backend.Contracts.dll')
+    await expect(root).not.toContainText('(1.0.0.0)')
+
+    // It is a queued edit like any other, and undo is what puts the assembly back — which also leaves the
+    // workspace unmodified, so the window closes without a prompt.
+    await page.getByRole('menuitem', { name: 'Edit' }).click()
+    await page.getByRole('menuitem', { name: /^Undo/ }).click()
+    await expect(root).toContainText('dnSpy.Backend.Contracts (1.0.0.0)')
   })
 
   test('writes a method body from the hex editor and undoes the bytes', async () => {
@@ -1479,6 +1656,101 @@ test.describe('the code viewer context menu', () => {
       expect(labels).not.toContain(absent)
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
+  })
+})
+
+// "Go to Entry Point" needs a module that has one. The contracts library the other suites open is a library
+// and has none, which is why this one is on the debuggee.
+test.describe('the tree navigation commands', () => {
+  test.beforeEach(async () => { await launchApp(debugTargetPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  test('brings the module entry point into view from the module row', async () => {
+    await openDebugTarget()
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+    await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: /^Go to Entry Point/ }).click()
+    // The entry point is a member of a type the tree has not opened, so the reveal opens the chain above it
+    // and the row is what gets selected, not just the node.
+    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^Main\(string\[\]\)/ })).toHaveAttribute('aria-selected', 'true')
+  })
+})
+
+// Save Resource writes a node's bytes to a file the user picks. The picker is stubbed out and the file
+// named up front, the way the other save commands' tests do it.
+test.describe('saving a resource', () => {
+  test.beforeEach(async () => { await launchApp(bamlTargetPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  test('writes the bytes of the resource the menu was opened on', async () => {
+    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
+    await expect(page.getByRole('treeitem').first()).toContainText('BamlTarget')
+    await expandModule()
+    await expandRow(page.locator('.tree-row[data-kind="resourcesgroup"]').first())
+    const generated = page.locator('.tree-row[data-kind="resource"]').filter({ hasText: /\.g\.resources$/ })
+    await expect(generated).toBeVisible()
+
+    const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
+    await generated.click({ button: 'right' })
+    await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
+    await menu.getByRole('menuitem', { name: /^Save / }).click()
+
+    // The bytes written are the manifest resource's own: a .resources stream opens with its magic. dnSpy's
+    // two Save commands differ in what a .resources entry decodes to, not in what the resource holds.
+    await expect.poll(() => existsSync(saveResourcePath) ? readFileSync(saveResourcePath).subarray(0, 4).toString('hex') : '').toBe('cecaefbe')
+  })
+})
+
+// Load Dependencies needs a module whose references resolve to files on this machine. The contracts library
+// the main suite opens has almost none; the core assembly's are all beside it, and the resolver finds them
+// through its own deps.json.
+test.describe('loading an assembly\'s dependencies', () => {
+  test.beforeEach(async () => { await launchApp(coreAssemblyPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  test('opens the assemblies the module references name', async () => {
+    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
+    await expect(page.locator('.tree-row[data-kind="assembly"]').first()).toContainText('dnSpy.Backend.Core')
+    await expandModule()
+    const moduleRow = page.locator('.tree-row[data-kind="module"]').first()
+    await expect(moduleRow).toContainText('dnSpy.Backend.Core.dll')
+    await expect(page.locator('.tree-row[data-kind="assembly"]')).toHaveCount(1)
+
+    // Every assembly the module's references resolve to is opened, so the reference rows stop being dead
+    // ends. Which files that is depends on the machine the suite runs on — the resolver reads the module's
+    // own deps.json — so the test pins the one that always resolves, the contracts assembly beside this
+    // fixture, and leaves the size of the rest of the closure alone.
+    await moduleRow.click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Assembly Explorer' })
+      .getByRole('menuitem', { name: 'Load Dependencies', exact: true }).click()
+
+    const assemblies = page.locator('.tree-row[data-kind="assembly"]')
+    await expect(assemblies.filter({ hasText: /dnSpy\.Backend\.Contracts/ })).toBeVisible()
+    expect(await assemblies.count()).toBeGreaterThan(1)
+    await showOutput()
+    await expect(page.getByRole('tabpanel', { name: 'Output' })).toContainText(/Loaded \d+ dependency module\(s\)\./)
+
+    // The recursive form walks on from there: the assemblies the module's references name, and theirs. How
+    // far that reaches again depends on the machine, so the run is pinned by its message, not by a size.
+    const lines = page.locator('.output-pane > div')
+    const base = await lines.count()
+    await moduleRow.click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Assembly Explorer' })
+      .getByRole('menuitem', { name: 'Load Dependencies Recursively', exact: true }).click()
+    await expect(lines).toHaveCount(base + 1)
+    await expect(lines.last()).toContainText(/Loaded \d+ dependency module\(s\)\.|No dependencies were found/)
+    // An assembly that got in on the way is not opened a second time under a name of its own.
+    const labels = await assemblies.locator('.tree-label').allTextContents()
+    expect(new Set(labels).size).toBe(labels.length)
+
+    // The same two commands are on the Edit menu, where dnSpy registers them as well, and there they act on
+    // the tree's selection — an assembly root names the same module the row below it does. The closure is
+    // open by the time they run, so the command says so, and the message names the root it ran on.
+    await assemblies.first().click()
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Load Dependencies', exact: true }).click()
+    await expect(lines).toHaveCount(base + 2)
+    await expect(lines.last()).toContainText(/No dependencies were found for dnSpy\.Backend\.Core/)
   })
 })
 

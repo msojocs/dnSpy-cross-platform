@@ -1553,6 +1553,410 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.Null((await Find(path, 0)).NodeId);
 	}
 
+	/// <summary>
+	/// "Go to Token" reads what a user typed the way the tree and the copy commands write it: the token may
+	/// carry its "0x" or not, and the table it names picks the row. A token the module has no row for names
+	/// nothing; text that is not a token at all is an error rather than a silent miss.
+	/// </summary>
+	[Fact]
+	public async Task FindByToken_ResolvesATypedTokenToItsRow() {
+		var opened = await OpenContractsAssemblyAsync();
+		var getter = await FindRpcExceptionGetterAsync(opened.WorkspaceId);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var token = typeof(RpcException).GetProperty(nameof(RpcException.Code))!.GetGetMethod()!.MetadataToken;
+
+		async Task<FindByTokenResponse> Find(string text) => await manager.FindByTokenAsync(
+			new FindByTokenRequest(opened.WorkspaceId, module.Id, text),
+			TestContext.Current.CancellationToken);
+
+		// Both spellings of the same token land on the same row, and a type's row is reachable the same way.
+		Assert.Equal(getter.Id, (await Find($"0x{token:X8}")).NodeId);
+		Assert.Equal(getter.Id, (await Find($"{token:X8}")).NodeId);
+		var type = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
+		Assert.Equal(type.Id, (await Find("0x02000076")).NodeId);
+
+		// A row the tree does not show and a token past the end of the table both name nothing.
+		Assert.Null((await Find("0x0600FFFF")).NodeId);
+
+		var refused = await Assert.ThrowsAsync<RpcException>(() => Find("not a token"));
+		Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
+	}
+
+	[Fact]
+	public async Task FindByToken_RefusesANodeThatIsNotInAManagedAssembly() {
+		var path = Path.Combine(Path.GetTempPath(), $"dnspy-unknown-{Guid.NewGuid():N}");
+		await File.WriteAllBytesAsync(
+			path,
+			[0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, ..new byte[32]],
+			TestContext.Current.CancellationToken);
+		try {
+			var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+			var root = Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes);
+
+			var refused = await Assert.ThrowsAsync<RpcException>(() => manager.FindByTokenAsync(
+				new FindByTokenRequest(opened.WorkspaceId, root.Id, "0x06000001"),
+				TestContext.Current.CancellationToken));
+			Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
+		}
+		finally {
+			File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// The entry point and the global type's static constructor are ordinary members, so the two "Go to ..."
+	/// commands answer with the node the tree would give them. Neither is listed until it is asked for, and
+	/// the answer is the id, not the row — the client reveals it the way it reveals any other node.
+	/// </summary>
+	[Fact]
+	public async Task GetSpecialNode_AnswersWithTheEntryPointAndTheGlobalCctor() {
+		var path = Path.Combine(AppContext.BaseDirectory, "DebugTarget.dll");
+		Assert.True(File.Exists(path), $"The debuggee was not copied to the test output: {path}");
+		var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+
+		async Task<SpecialNodeResponse> Special(string kind) => await manager.GetSpecialNodeAsync(
+			new SpecialNodeRequest(opened.WorkspaceId, module.Id, kind),
+			TestContext.Current.CancellationToken);
+
+		var entryPoint = await Special(SpecialNodeKinds.EntryPoint);
+		Assert.NotNull(entryPoint.NodeId);
+		Assert.Equal(
+			"Main(string[])",
+			(await manager.GetNodeAsync(new NodeRequest(opened.WorkspaceId, entryPoint.NodeId!), TestContext.Current.CancellationToken)).Label);
+
+		// The fixture's [ModuleInitializer] is what the module's global type ctor calls, so the module has one.
+		var globalCctor = await Special(SpecialNodeKinds.GlobalCctor);
+		Assert.NotNull(globalCctor.NodeId);
+		Assert.Contains(
+			"cctor",
+			(await manager.GetNodeAsync(new NodeRequest(opened.WorkspaceId, globalCctor.NodeId!), TestContext.Current.CancellationToken)).Label,
+			StringComparison.OrdinalIgnoreCase);
+
+		var unknown = await Assert.ThrowsAsync<RpcException>(() => Special("nowhere"));
+		Assert.Equal(ErrorCodes.InvalidParams, unknown.Code);
+	}
+
+	[Fact]
+	public async Task GetSpecialNode_AnswersNothingForAModuleWithoutTheMember() {
+		var opened = await OpenContractsAssemblyAsync();
+		var module = await FindModuleAsync(opened.WorkspaceId);
+
+		async Task<SpecialNodeResponse> Special(string kind) => await manager.GetSpecialNodeAsync(
+			new SpecialNodeRequest(opened.WorkspaceId, module.Id, kind),
+			TestContext.Current.CancellationToken);
+
+		// A record library is neither an executable nor one with a global type of its own.
+		Assert.Null((await Special(SpecialNodeKinds.EntryPoint)).NodeId);
+		Assert.Null((await Special(SpecialNodeKinds.GlobalCctor)).NodeId);
+	}
+
+	/// <summary>
+	/// Remove Assembly takes the whole document: the assembly root, its module row, and every row the tree
+	/// had listed under them — whichever of those rows the command was run on. The ids it dropped come back
+	/// so the client can close the tabs still showing them.
+	/// </summary>
+	[Fact]
+	public async Task RemoveModule_TakesTheAssemblyAndEveryRowUnderIt() {
+		// Each row of the assembly names the same document, so the command answers the same way from all of
+		// them: the assembly root, the module row, and a member row under it.
+		var opened = await OpenContractsAssemblyAsync();
+		var getter = await FindRpcExceptionGetterAsync(opened.WorkspaceId);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var assembly = Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes);
+		foreach (var node in new[] { assembly, module, getter }) {
+			var removed = await manager.RemoveModuleAsync(
+				new NodeRequest(opened.WorkspaceId, node.Id),
+				TestContext.Current.CancellationToken);
+
+			// Everything the tree had listed for the module is in the answer, including the row that was
+			// clicked, and the tree is left with nothing on it.
+			Assert.Contains(getter.Id, removed.RemovedNodeIds);
+			Assert.Contains(node.Id, removed.RemovedNodeIds);
+			Assert.Empty(removed.Roots);
+			// Nothing names the rows it dropped any more, and the same file opens cleanly again.
+			await Assert.ThrowsAsync<RpcException>(() => manager.GetNodeAsync(
+				new NodeRequest(opened.WorkspaceId, getter.Id),
+				TestContext.Current.CancellationToken));
+			opened = await OpenContractsAssemblyAsync();
+			getter = await FindRpcExceptionGetterAsync(opened.WorkspaceId);
+			module = await FindModuleAsync(opened.WorkspaceId);
+			assembly = Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes);
+		}
+	}
+
+	/// <summary>
+	/// An unmanaged file has no assembly document to remove, so the command is refused rather than silently
+	/// dropping whatever row it was run on.
+	/// </summary>
+	[Fact]
+	public async Task RemoveModule_RefusesAFileThatIsNotAManagedAssembly() {
+		var path = Path.Combine(Path.GetTempPath(), $"dnspy-unknown-{Guid.NewGuid():N}");
+		await File.WriteAllBytesAsync(
+			path,
+			[0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, ..new byte[32]],
+			TestContext.Current.CancellationToken);
+		try {
+			var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+			var root = Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes);
+
+			var refused = await Assert.ThrowsAsync<RpcException>(() => manager.RemoveModuleAsync(
+				new NodeRequest(opened.WorkspaceId, root.Id),
+				TestContext.Current.CancellationToken));
+			Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
+			// It is still there, and nothing was dropped on the way out.
+			Assert.Equal(root.Id, Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes).Id);
+		}
+		finally {
+			File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// Save Resource asks a resource node for its bytes, and the name the dialog suggests comes back with
+	/// them. The bytes are read out of the module the workspace holds, so an edit that has not been saved
+	/// yet is what would be written.
+	/// </summary>
+	[Fact]
+	public async Task GetResourceData_AnswersWithTheResourceBytesAndItsName() {
+		var opened = await manager.OpenAsync(
+			new OpenWorkspaceRequest([typeof(WorkspaceManagerTests).Assembly.Location]),
+			TestContext.Current.CancellationToken);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var resources = Assert.Single(
+			(await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, module.Id), TestContext.Current.CancellationToken)).Nodes,
+			node => node.Kind == "resourcesgroup");
+		var resource = Assert.Single(
+			(await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, resources.Id), TestContext.Current.CancellationToken)).Nodes,
+			node => node.Label.EndsWith("sample-resource.txt", StringComparison.Ordinal));
+
+		var data = await manager.GetResourceDataAsync(
+			new ResourceDataRequest(opened.WorkspaceId, resource.Id),
+			TestContext.Current.CancellationToken);
+
+		Assert.EndsWith("sample-resource.txt", data.Name, StringComparison.Ordinal);
+		// The bytes are the fixture's own, which the test project embeds from its Fixtures folder.
+		var name = Assert.Single(typeof(WorkspaceManagerTests).Assembly.GetManifestResourceNames(), name => name.EndsWith("sample-resource.txt", StringComparison.Ordinal));
+		using var stream = typeof(WorkspaceManagerTests).Assembly.GetManifestResourceStream(name)!;
+		using var buffer = new MemoryStream();
+		await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+		Assert.Equal(buffer.ToArray(), Convert.FromBase64String(data.Base64Data));
+
+		// A node that holds no resource refuses rather than writing out something that is not one.
+		var other = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Tests", nameof(WorkspaceManagerTests));
+		var refused = await Assert.ThrowsAsync<RpcException>(() => manager.GetResourceDataAsync(
+			new ResourceDataRequest(opened.WorkspaceId, other.Id),
+			TestContext.Current.CancellationToken));
+		Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
+	}
+
+	/// <summary>
+	/// Load Dependencies opens the assemblies the module's references name, so the reference rows stop being
+	/// dead ends. Running it again is a no-op: everything it would load is in the tree by then.
+	/// </summary>
+	[Fact]
+	public async Task LoadDependencies_OpensTheAssembliesTheModulesReferencesName() {
+		var opened = await manager.OpenAsync(
+			new OpenWorkspaceRequest([typeof(WorkspaceManager).Assembly.Location]),
+			TestContext.Current.CancellationToken);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var request = new LoadDependenciesRequest(opened.WorkspaceId, module.Id, Recursive: false);
+
+		var loaded = await manager.LoadDependenciesAsync(request, TestContext.Current.CancellationToken);
+
+		// The core assembly's references are files that sit beside it: dnlib and the contracts assembly.
+		var names = loaded.Modules.Select(entry => entry.Name).ToArray();
+		Assert.Contains("dnlib", names);
+		Assert.Contains("dnSpy.Backend.Contracts", names);
+		Assert.True(loaded.Modules.Count > opened.Modules.Count, "the tree should have grown");
+
+		// Every one of them is a document now, and asking a second time adds nothing because it is all open.
+		var again = await manager.LoadDependenciesAsync(request, TestContext.Current.CancellationToken);
+		Assert.Equal(loaded.Modules.Count, again.Modules.Count);
+		Assert.Equal(
+			loaded.Modules.Count,
+			(await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes.Count);
+	}
+
+	/// <summary>
+	/// The recursive form walks the closure: every assembly it opens has its own references followed too. A
+	/// reference that leads back to something already walked is not followed twice, which is what keeps a
+	/// cycle between two assemblies from turning the walk into an endless one.
+	/// </summary>
+	[Fact]
+	public async Task LoadDependencies_WalksTheWholeClosureWhenAskedRecursively() {
+		var opened = await manager.OpenAsync(
+			new OpenWorkspaceRequest([typeof(WorkspaceManager).Assembly.Location]),
+			TestContext.Current.CancellationToken);
+		var module = await FindModuleAsync(opened.WorkspaceId);
+
+		var loaded = await manager.LoadDependenciesAsync(
+			new LoadDependenciesRequest(opened.WorkspaceId, module.Id, Recursive: true),
+			TestContext.Current.CancellationToken);
+
+		// The closure is at least what the module's own references are, and no assembly appears twice.
+		var names = loaded.Modules.Select(entry => entry.Name).ToArray();
+		Assert.Contains("dnlib", names);
+		Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+		Assert.Equal(
+			names.Length,
+			(await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes.Count);
+	}
+
+	/// <summary>
+	/// A file the workspace holds as a PE image rather than a managed assembly has no reference table to walk,
+	/// so the command is refused instead of quietly doing nothing.
+	/// </summary>
+	[Fact]
+	public async Task LoadDependencies_RefusesAFileThatIsNotAManagedAssembly() {
+		var path = Path.Combine(Path.GetTempPath(), $"dnspy-unknown-{Guid.NewGuid():N}");
+		await File.WriteAllBytesAsync(
+			path,
+			[0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, ..new byte[32]],
+			TestContext.Current.CancellationToken);
+		try {
+			var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+			var root = Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes);
+
+			var refused = await Assert.ThrowsAsync<RpcException>(() => manager.LoadDependenciesAsync(
+				new LoadDependenciesRequest(opened.WorkspaceId, root.Id, Recursive: true),
+				TestContext.Current.CancellationToken));
+			Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
+		}
+		finally {
+			File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// Convert Assembly to NetModule detaches the assembly's only module, and the row that named the assembly
+	/// is the same row afterwards — it falls back to naming the file, since there is nothing else left to
+	/// name. Undo puts the assembly back, definition and label alike.
+	/// </summary>
+	[Fact]
+	public async Task ConvertModule_DetachesTheOnlyModuleAndUndoPutsItBack() {
+		var opened = await OpenContractsAssemblyAsync();
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var assembly = Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes);
+		Assert.StartsWith("dnSpy.Backend.Contracts (", assembly.Label, StringComparison.Ordinal);
+		Assert.Equal("dnSpy.Backend.Contracts.dll", module.Label);
+
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueConvertModuleAsync(
+			new ConvertModuleRequest(opened.WorkspaceId, transaction.TransactionId, module.Id, ToAssembly: false),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		// The module row still names the file; the row above it now has no assembly to name and says so by
+		// falling back to the module's own name.
+		var converted = Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes);
+		Assert.Equal(assembly.Id, converted.Id);
+		Assert.Equal("dnSpy.Backend.Contracts.dll", converted.Label);
+		Assert.Equal("dnSpy.Backend.Contracts.dll", (await manager.GetNodeAsync(
+			new NodeRequest(opened.WorkspaceId, module.Id),
+			TestContext.Current.CancellationToken)).Label);
+
+		await manager.UndoAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		var restored = Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes);
+		Assert.Equal(assembly.Label, restored.Label);
+
+		// Redo goes back to the net module, so the operation is the same one either way round.
+		await manager.RedoAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		Assert.Equal("dnSpy.Backend.Contracts.dll", Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes).Label);
+	}
+
+	/// <summary>
+	/// Convert NetModule to Assembly gives a module that has none a fresh assembly definition named after
+	/// its file — the file's name without the extension a module may end in — and the root row starts naming
+	/// the assembly instead of the file.
+	/// </summary>
+	[Fact]
+	public async Task ConvertModule_GivesANetModuleAnAssemblyNamedAfterItsFile() {
+		var path = Path.Combine(Path.GetTempPath(), $"dnspy-netmodule-{Guid.NewGuid():N}.netmodule");
+		// A net module is written without an assembly manifest, which is what makes it one.
+		var netModule = new ModuleDefUser("Probe.netmodule", Guid.NewGuid(), new AssemblyRefUser("System.Runtime"));
+		netModule.Kind = ModuleKind.NetModule;
+		netModule.Write(path);
+		try {
+			var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+			var root = Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes);
+			// With no assembly to name, the row falls back to the module's file name.
+			Assert.Equal("Probe.netmodule", root.Label);
+			var module = await FindModuleAsync(opened.WorkspaceId);
+
+			var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+			await manager.QueueConvertModuleAsync(
+				new ConvertModuleRequest(opened.WorkspaceId, transaction.TransactionId, root.Id, ToAssembly: true),
+				TestContext.Current.CancellationToken);
+			await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+			Assert.Equal("Probe (0.0.0.0)", Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes).Label);
+			// The module row is untouched by any of this: it names the file it always did.
+			Assert.Equal("Probe.netmodule", (await manager.GetNodeAsync(
+				new NodeRequest(opened.WorkspaceId, module.Id),
+				TestContext.Current.CancellationToken)).Label);
+
+			await manager.UndoAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+			Assert.Equal("Probe.netmodule", Assert.Single((await manager.GetRootsAsync(
+				new WorkspaceRequest(opened.WorkspaceId),
+				TestContext.Current.CancellationToken)).Nodes).Label);
+		}
+		finally {
+			File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// Each direction refuses what it does not apply to rather than quietly doing nothing, and a refusal
+	/// leaves the tree exactly as it was.
+	/// </summary>
+	[Fact]
+	public async Task ConvertModule_RefusesTheDirectionThatDoesNotApply() {
+		var opened = await OpenContractsAssemblyAsync();
+		var module = await FindModuleAsync(opened.WorkspaceId);
+		var root = Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes);
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+
+		// The contracts assembly is an assembly already, so there is nothing for the other direction to give
+		// it — and a row that is not a managed module has no module kind to write at all.
+		foreach (var nodeId in new[] { module.Id, root.Id }) {
+			var refused = await Assert.ThrowsAsync<RpcException>(() => manager.QueueConvertModuleAsync(
+				new ConvertModuleRequest(opened.WorkspaceId, transaction.TransactionId, nodeId, ToAssembly: true),
+				TestContext.Current.CancellationToken));
+			Assert.Equal(ErrorCodes.EditValidationFailed, refused.Code);
+		}
+
+		Assert.Equal(root.Label, Assert.Single((await manager.GetRootsAsync(
+			new WorkspaceRequest(opened.WorkspaceId),
+			TestContext.Current.CancellationToken)).Nodes).Label);
+	}
+
 	[Fact]
 	public async Task AddModules_AppendsToTheOpenWorkspaceWithoutDisturbingIt() {
 		var opened = await OpenContractsAssemblyAsync();

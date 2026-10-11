@@ -1,5 +1,4 @@
-import { memo, useEffect, useRef } from 'react'
-import { showPopupMenu, type IPopupMenuItem, type PopupMenuEntry } from 'flexlayout-react'
+import { memo, useCallback, useEffect, useRef } from 'react'
 import {
   Binary,
   Box,
@@ -25,12 +24,24 @@ import type { TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { useAppOptions } from './app-options'
+import { hasEmptyNamespaceSibling, showAssemblyExplorerContextMenu, type AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 
 interface AssemblyExplorerProps {
+  /**
+   * The commands the tree's rows run: the shell owns them, because a dialog, a tool window or a new tab
+   * belongs to the shell rather than to the tree. The object is rebuilt on every shell render so its
+   * callbacks close over the newest handlers, which is why the rows read it through a ref.
+   */
+  commands: AssemblyExplorerCommands
+}
+
+/** What one memoized row needs: its place in the tree, and the two commands a click can run. */
+interface ExplorerRowProps {
+  node: TreeNode
+  depth: number
+  showToken: boolean
   onOpenNode(node: TreeNode): void
-  onAnalyzeNode(node: TreeNode): void
-  onShowHex(node: TreeNode): void
-  onShowModuleInfo(node: TreeNode): void
+  onContextMenu(node: TreeNode, position: { x: number; y: number }, returnFocusTo?: HTMLElement): void
 }
 
 /** The tree's icon for a node, shared with the dialogs that show the same tree — the type picker. */
@@ -59,8 +70,6 @@ export const NodeIcon = ({ icon, expanded = false }: { icon?: string; expanded?:
   }
 }
 
-const contextMenuItem = (key: string, label: string, onSelect: () => void): IPopupMenuItem => ({ key, label, onSelect })
-
 // The kinds whose row names a type after the colon, and the ones dnSpy's NodeFormatter appends a raw
 // metadata token to — members, assemblies, modules and assembly references, but not namespaces, the
 // group folders, resources or the PE/ELF structures.
@@ -81,7 +90,7 @@ export const composeTreeRowText = (label: string, node: TreeNode, showToken: boo
   return `${label}${typeSuffix}${tokenSuffix}`
 }
 
-const TreeRow = memo(({ node, depth, showToken, onOpenNode, onAnalyzeNode, onShowHex, onShowModuleInfo }: AssemblyExplorerProps & { node: TreeNode; depth: number; showToken: boolean }): React.JSX.Element => {
+const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: ExplorerRowProps): React.JSX.Element => {
   const children = useAppStore((state) => state.children[node.id])
   const expanded = useAppStore((state) => state.expanded[node.id] ?? false)
   const loading = useAppStore((state) => state.loadingNodes[node.id] ?? false)
@@ -129,23 +138,9 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onAnalyzeNode, onSho
         onContextMenu={(event) => {
           event.preventDefault()
           event.stopPropagation()
-          selectNode(node)
-          const items: PopupMenuEntry[] = []
-          if (['type', 'method', 'field', 'property', 'event'].includes(node.kind))
-            items.push(contextMenuItem('analyze', t('Analyzer'), () => onAnalyzeNode(node)))
-          if (node.kind === 'module') {
-            items.push(contextMenuItem('hex', t('Hex View'), () => onShowHex(node)))
-            items.push(contextMenuItem('module-info', t('Module Information'), () => onShowModuleInfo(node)))
-          }
-          if (items.length === 0)
-            return
-          showPopupMenu({
-            anchor: { x: event.clientX, y: event.clientY },
-            returnFocusTo: event.currentTarget,
-            title: t('Assembly Explorer'),
-            items,
-            onClose: () => undefined,
-          })
+          // `currentTarget` is only readable while the event is being dispatched, and the menu is built
+          // after a round trip, so the focus target is taken from the event here rather than by the menu.
+          onContextMenu(node, { x: event.clientX, y: event.clientY }, event.currentTarget)
         }}
       >
         <button
@@ -164,16 +159,43 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onAnalyzeNode, onSho
         <span className="tree-label">{composeTreeRowText(label, node, showToken)}</span>
       </div>
       {expanded && children?.map((child) => (
-        <TreeRow key={child.id} node={child} depth={depth + 1} showToken={showToken} onOpenNode={onOpenNode} onAnalyzeNode={onAnalyzeNode} onShowHex={onShowHex} onShowModuleInfo={onShowModuleInfo} />
+        <TreeRow key={child.id} node={child} depth={depth + 1} showToken={showToken} onOpenNode={onOpenNode} onContextMenu={onContextMenu} />
       ))}
     </>
   )
 })
 
-export const AssemblyExplorer = ({ onOpenNode, onAnalyzeNode, onShowHex, onShowModuleInfo }: AssemblyExplorerProps): React.JSX.Element => {
+export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX.Element => {
   const roots = useAppStore((state) => state.roots)
   const showToken = useAppOptions().assemblyExplorer.showToken
   const { t } = useLanguage()
+  // The shell rebuilds `commands` every render, but a memoized row must not see the object change: the two
+  // props the rows take read it through a ref, so they keep one identity for as long as the tree lives.
+  const commandsRef = useRef(commands)
+  commandsRef.current = commands
+  const openNode = useCallback((node: TreeNode): void => commandsRef.current.onOpenNode(node), [])
+
+  /**
+   * dnSpy builds the tree menu from the *selected* node, and a right click selects the row before the menu
+   * opens. The hex group answers for that node, and the backend resolves its target once the selection has
+   * changed — which happens after this handler returns — so the answer is asked for here rather than read
+   * from whatever the previous selection left behind.
+   */
+  const openMenu = useCallback((node: TreeNode, position: { x: number; y: number }, returnFocusTo?: HTMLElement): void => {
+    void (async () => {
+      const store = useAppStore.getState()
+      store.selectNode(node)
+      await store.resolveHexTarget(node)
+      const state = useAppStore.getState()
+      showAssemblyExplorerContextMenu({
+        ...commandsRef.current,
+        t,
+        node,
+        hexTarget: state.hexTarget,
+        hasEmptyNamespaceSibling: hasEmptyNamespaceSibling(node, state.children, state.parents),
+      }, position, { returnFocusTo })
+    })()
+  }, [t])
 
   if (roots.length === 0)
     return <div className="pane-empty">{t('No assemblies loaded')}</div>
@@ -181,7 +203,7 @@ export const AssemblyExplorer = ({ onOpenNode, onAnalyzeNode, onShowHex, onShowM
   return (
     <div className="assembly-tree" role="tree" aria-label={t('Assembly Explorer')}>
       {roots.map((root) => (
-        <TreeRow key={root.id} node={root} depth={0} showToken={showToken} onOpenNode={onOpenNode} onAnalyzeNode={onAnalyzeNode} onShowHex={onShowHex} onShowModuleInfo={onShowModuleInfo} />
+        <TreeRow key={root.id} node={root} depth={0} showToken={showToken} onOpenNode={openNode} onContextMenu={openMenu} />
       ))}
     </div>
   )

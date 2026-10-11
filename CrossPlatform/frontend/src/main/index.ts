@@ -31,6 +31,7 @@ const nativeMessages = {
     resourceTooLarge: '资源文件不能超过 64 MiB。',
     saveModuleAs: '模块另存为',
     saveCode: '保存代码',
+    saveResource: '保存资源',
     codeFiles: '代码文件',
     openBookmarks: '导入书签',
     openBreakpoints: '导入断点',
@@ -50,6 +51,7 @@ const nativeMessages = {
     resourceTooLarge: 'Resource files are limited to 64 MiB.',
     saveModuleAs: 'Save Module As',
     saveCode: 'Save Code',
+    saveResource: 'Save Resource',
     codeFiles: 'Code Files',
     openBookmarks: 'Import Bookmarks',
     openBreakpoints: 'Import Breakpoints',
@@ -375,9 +377,13 @@ const registerIpc = (): void => {
   })
   ipcMain.handle('workspace:open', (_event, paths: string[]) => requireBackend().invoke('workspace/open', { paths }))
   ipcMain.handle('workspace:addModules', (_event, workspaceId: string, paths: string[]) => requireBackend().invoke('workspace/addModules', { workspaceId, paths }))
+  ipcMain.handle('workspace:loadDependencies', (_event, workspaceId: string, nodeId: string, recursive: boolean) => requireBackend().invoke('workspace/loadDependencies', { workspaceId, nodeId, recursive }))
   ipcMain.handle('workspace:close', (_event, workspaceId: string) => requireBackend().invoke('workspace/close', { workspaceId }))
   ipcMain.handle('workspace:reload', (_event, workspaceId: string) => requireBackend().invoke('workspace/reload', { workspaceId }))
   ipcMain.handle('workspace:sortAssemblies', (_event, workspaceId: string) => requireBackend().invoke('workspace/sortAssemblies', { workspaceId }))
+  ipcMain.handle('workspace:removeModule', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('workspace/removeModule', { workspaceId, nodeId }))
+  ipcMain.handle('module:specialNode', (_event, workspaceId: string, nodeId: string, kind: string) => requireBackend().invoke('module/getSpecialNode', { workspaceId, nodeId, kind }))
+  ipcMain.handle('tree:findByToken', (_event, workspaceId: string, nodeId: string, token: string) => requireBackend().invoke('tree/findByToken', { workspaceId, nodeId, token }))
   ipcMain.handle('tree:roots', (_event, workspaceId: string) => requireBackend().invoke('tree/getRoots', { workspaceId }))
   // A tree request can wait for a whole-assembly decompile because both operations use the
   // workspace's serialized model. Give it the same deadline as decompilation so a valid request
@@ -441,6 +447,7 @@ const registerIpc = (): void => {
     })
     return true
   })
+  ipcMain.handle('edit:convertModule', (_event, workspaceId: string, transactionId: string, nodeId: string, toAssembly: boolean) => requireBackend().invoke('edit/convertModule', { workspaceId, transactionId, nodeId, toAssembly }))
   ipcMain.handle('edit:replaceMethodBodyWithStub', (_event, workspaceId: string, transactionId: string, methodNodeId: string) => requireBackend().invoke('edit/replaceMethodBodyWithStub', { workspaceId, transactionId, methodNodeId }))
   ipcMain.handle('edit:commit', (_event, workspaceId: string, transactionId: string) => requireBackend().invoke('edit/commit', { workspaceId, transactionId }))
   ipcMain.handle('edit:rollback', (_event, workspaceId: string, transactionId: string) => requireBackend().invoke('edit/rollback', { workspaceId, transactionId }))
@@ -643,6 +650,37 @@ const registerIpc = (): void => {
     }
   })
   ipcMain.handle('app:processId', () => process.pid)
+  // The desktop's file manager is a process of its own that this app cannot observe, so — like the save
+  // dialogs — a test-driven run writes down the path it was asked to show instead of opening anything.
+  ipcMain.handle('app:showItemInFolder', (_event, target: string) => {
+    if (typeof target !== 'string' || target.length === 0)
+      throw new TypeError('A file path is required.')
+    if (!app.isPackaged && process.env.DNSPY_E2E_SHOW_IN_FOLDER_PATH) {
+      writeFileSync(process.env.DNSPY_E2E_SHOW_IN_FOLDER_PATH, target, 'utf8')
+      return
+    }
+    shell.showItemInFolder(target)
+  })
+  // Save Resource writes one node's bytes out, so it needs a destination the backend knows nothing about.
+  // The bytes come from the workspace (an unsaved edit is what gets saved) and the file is written here.
+  ipcMain.handle('edit:saveResource', async (_event, workspaceId: string, nodeId: string) => {
+    const resource = await requireBackend().invoke<{ name: string; base64Data: string }>('resource/getData', { workspaceId, nodeId })
+    const data = Buffer.from(resource.base64Data, 'base64')
+    // A test cannot drive the native picker, so it names the file up front, the way the save dialogs do.
+    if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_RESOURCE_PATH) {
+      await writeFile(process.env.DNSPY_E2E_SAVE_RESOURCE_PATH, data)
+      return process.env.DNSPY_E2E_SAVE_RESOURCE_PATH
+    }
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: nativeText().saveResource,
+      defaultPath: path.basename(resource.name) || 'resource.bin',
+      filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
+    })
+    if (result.canceled || !result.filePath)
+      return undefined
+    await writeFile(result.filePath, data)
+    return result.filePath
+  })
   ipcMain.handle('app:setLocale', (_event, locale: UiLocale) => {
     if (locale === 'en' || locale === 'zh-CN')
       uiLocale = locale

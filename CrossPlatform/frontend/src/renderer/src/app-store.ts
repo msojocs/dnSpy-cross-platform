@@ -29,6 +29,7 @@ import type {
   ReferenceResult,
   ScriptOutputEntry,
   SearchResult,
+  SpecialNodeKind,
   TextSpan,
   TreeNode,
 } from '../../shared/protocol'
@@ -322,6 +323,39 @@ interface AppState {
   /** Reorders the tree's root nodes by name — dnSpy's Sort Assemblies. */
   sortAssemblies(): Promise<boolean>
   /**
+   * Removes one assembly from the tree — dnSpy's Remove Assembly — and answers with the document ids it
+   * took with it, so the shell can close the tabs still showing them. Everything the client held by node
+   * id for that assembly is dropped here; nothing else can name those ids again.
+   */
+  removeModule(node: TreeNode): Promise<string[]>
+  /**
+   * Brings the module's entry point, or the static constructor of its global type, into view — dnSpy's
+   * two "Go to ..." commands. Answers false when the module has no such member.
+   */
+  goToSpecialNode(node: TreeNode, kind: SpecialNodeKind): Promise<boolean>
+  /** Brings the node a metadata token names into view — dnSpy's "Go to Token". Answers false when the
+   *  token names no row the tree shows. */
+  goToToken(node: TreeNode, token: string): Promise<boolean>
+  /**
+   * Writes one resource node's bytes to a file the user picks — dnSpy's Save Resource. `raw` picks the
+   * command that was run; both write the bytes the workspace holds. Answers false when the dialog was
+   * cancelled or the write failed.
+   */
+  saveResource(node: TreeNode, raw: boolean): Promise<boolean>
+  /**
+   * Opens every assembly the module's references name — dnSpy's Load Dependencies. `recursive` follows the
+   * closure instead of stopping at the module's own references. Nothing is edited, so the dirty flag and
+   * the undo stack are left alone and the tree simply grows by the assemblies that were not open before.
+   * Answers false when nothing new could be resolved, or when the lookup failed.
+   */
+  loadDependencies(node: TreeNode, recursive: boolean): Promise<boolean>
+  /**
+   * Turns an assembly into a net module — dnSpy's Convert Assembly to NetModule. The assembly definition is
+   * detached and the module row's own label is all that is left above it. A queued edit, so Undo is the way
+   * back and nothing is written until the module is saved.
+   */
+  convertModule(node: TreeNode): Promise<boolean>
+  /**
    * Reads the tree's roots again. Following a reference into a module the workspace did not hold opens
    * that module, so the backend's root list grows without the client having asked it to.
    */
@@ -357,6 +391,11 @@ interface AppState {
   addFunctionBreakpoint(name: string): Promise<void>
   removeFunctionBreakpoint(name: string): Promise<void>
   toggleFunctionBreakpoint(name: string): Promise<void>
+  /**
+   * Adds a function breakpoint for every method of a type — dnSpy's "Add Class Breakpoint", which puts
+   * one breakpoint at the entry of each method of the type the row names.
+   */
+  addClassBreakpoint(node: TreeNode): Promise<void>
   setFunctionBreakpointEnabled(name: string, enabled: boolean): Promise<void>
   /** Attaches a condition, hit count, filter, trace and labels; `undefined` clears them all. */
   setFunctionBreakpointSettings(name: string, settings: BreakpointSettings | undefined): Promise<void>
@@ -1318,6 +1357,158 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  removeModule: async (node) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return []
+    try {
+      const response = await window.dnSpy.removeModule(workspaceId, node.id)
+      const removed = new Set(response.removedNodeIds)
+      set((state) => {
+        // Everything the client holds by node id for the assembly that went: its documents, and the
+        // records the tree kept for its rows. The ids are never handed out again, so leaving any of them
+        // behind would be a leak that could never be named, not a row that could come back.
+        const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
+          Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
+        const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
+        return {
+          roots: response.roots,
+          documents: withoutRemoved(state.documents),
+          children: withoutRemoved(state.children),
+          parents: withoutRemoved(state.parents),
+          expanded: withoutRemoved(state.expanded),
+          loadingNodes: withoutRemoved(state.loadingNodes),
+          // dnSpy leaves the tree on another document rather than on nothing at all.
+          selectedNode: selectionWent ? response.roots[0] : state.selectedNode,
+          hexTarget: selectionWent ? undefined : state.hexTarget,
+        }
+      })
+      return response.removedNodeIds
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Remove failed: {message}', { message }))
+      return []
+    }
+  },
+
+  goToSpecialNode: async (node, kind) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    try {
+      const response = await window.dnSpy.getSpecialNode(workspaceId, node.id, kind)
+      if (!response.nodeId)
+        return false
+      await get().revealNode(response.nodeId)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return false
+    }
+  },
+
+  goToToken: async (node, token) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    const response = await window.dnSpy.findByToken(workspaceId, node.id, token)
+    if (!response.nodeId)
+      return false
+    await get().revealNode(response.nodeId)
+    return true
+  },
+
+  saveResource: async (node, raw) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    try {
+      const path = await window.dnSpy.saveResource(workspaceId, node.id, raw)
+      // A cancelled dialog is not a failure, and dnSpy says nothing about it either.
+      if (!path)
+        return false
+      get().appendOutput(t('Saved {name} to {path}.', { name: node.label, path }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Save failed: {message}', { message }))
+      return false
+    }
+  },
+
+  /**
+   * Turns an assembly into a net module — dnSpy's Convert Assembly to NetModule. The module's definition
+   * survives; what goes is the assembly wrapping it, so this is a queued edit and Undo is the way back.
+   * The row that named the assembly falls back to naming the file, which is why the roots are read again
+   * rather than patched. The other direction is not offered by this port's tree: dnSpy shows it on a module
+   * document standing on its own, and a module here always hangs off an assembly row.
+   */
+  convertModule: async (node) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.convertModule(workspaceId, transactionId, node.id, false)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      get().appendOutput(t('Converted {name} to a net module.', { name: node.label }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Convert failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  loadDependencies: async (node, recursive) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    // Counted by difference because the response lists every module the workspace holds, not just the ones
+    // that arrived, exactly as opening assemblies does.
+    const previousModules = get().modules
+    set({ busy: true, error: undefined })
+    try {
+      const added = await window.dnSpy.loadDependencies(workspaceId, node.id, recursive)
+      const roots = await window.dnSpy.getRoots(workspaceId)
+      set((state) => {
+        const known = new Set(state.roots.map((root) => root.id))
+        return {
+          modules: added.modules,
+          roots: roots.nodes,
+          // The first root the tree did not have before is one of the assemblies that just arrived; when
+          // nothing could be resolved the selection stays on the row the command was run on.
+          selectedNode: roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode,
+        }
+      })
+      const count = added.modules.length - previousModules.length
+      if (count > 0)
+        get().appendOutput(t('Loaded {count} dependency module(s).', { count }))
+      else
+        get().appendOutput(t('No dependencies were found for {name}.', { name: node.label }))
+      return count > 0
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Load failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
   refreshRoots: async () => {
     const { workspaceId, workspaceGeneration } = get()
     if (!workspaceId)
@@ -1659,6 +1850,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().removeFunctionBreakpoint(trimmed)
     else
       await get().addFunctionBreakpoint(trimmed)
+  },
+
+  // dnSpy's Add Class Breakpoint puts a breakpoint at the entry of every method the type owns, skipping
+  // the ones that already carry one. This port's breakpoints are function breakpoints — matched by name —
+  // so the methods come from the tree row rather than from the type directly, and a method with no body
+  // simply never matches at launch, which is the same outcome as dnSpy's `IsAbstract || Body is null` skip.
+  addClassBreakpoint: async (node) => {
+    await get().loadChildren(node)
+    const methods = (get().children[node.id] ?? []).filter((child) => child.kind === 'method')
+    // A method name here is the declaring type plus the method, with no parameter list, so two overloads
+    // answer to the same breakpoint; the engine breaks in whichever of them it binds the name to.
+    const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
+    const names: string[] = []
+    for (const method of methods) {
+      const name = methodBreakpointName(method.description)
+      if (name === undefined || seen.has(name))
+        continue
+      seen.add(name)
+      names.push(name)
+    }
+    if (names.length === 0) {
+      get().appendOutput(t('{name} has no method left to break on.', { name: node.label }))
+      return
+    }
+    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true }))] }))
+    await syncFunctionBreakpoints(get)
+    get().appendOutput(t('Added {count} breakpoint(s) for {name}.', { count: names.length, name: node.label }))
   },
 
   setFunctionBreakpointEnabled: async (name, enabled) => {
@@ -3601,4 +3819,9 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
     const refreshed = await window.dnSpy.getChildren(workspaceId, parentId)
     set((state) => ({ children: { ...state.children, [parentId]: refreshed.nodes } }))
   }
+  // A root row's label is read off the document it names, and an edit can change what that is — converting
+  // an assembly to a net module leaves the row above the module with no assembly left to name. The roots
+  // are read back for every edit rather than guessed at, so undo and redo move the label with the state.
+  const roots = await window.dnSpy.getRoots(workspaceId)
+  set({ roots: roots.nodes })
 }

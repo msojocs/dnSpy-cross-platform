@@ -4,8 +4,20 @@ import type { TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { loadAppOptions, saveAppOptions } from './app-options'
 import { AssemblyExplorer, composeTreeRowText } from './AssemblyExplorer'
+import type { AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 
 const assembly: TreeNode = { id: 'assembly', kind: 'assembly', label: 'Example', hasChildren: true }
+
+/** The shell's callbacks, all stubbed. A case only has to name the one it is about. */
+const explorerCommands = (overrides: Partial<AssemblyExplorerCommands> = {}): AssemblyExplorerCommands => ({
+  onOpenNode: vi.fn(),
+  onOpenHex: vi.fn(),
+  onShowHexAt: vi.fn(),
+  onHexWriteBody: vi.fn(),
+  onHexCopyBody: vi.fn(),
+  onHexPasteBody: vi.fn(),
+  ...overrides,
+})
 
 beforeEach(() => {
   localStorage.clear()
@@ -16,7 +28,7 @@ afterEach(cleanup)
 
 it('keeps double-clicking the expander from opening an assembly document', () => {
   const onOpenNode = vi.fn()
-  render(<AssemblyExplorer onOpenNode={onOpenNode} onAnalyzeNode={vi.fn()} onShowHex={vi.fn()} onShowModuleInfo={vi.fn()} />)
+  render(<AssemblyExplorer commands={explorerCommands({ onOpenNode })} />)
 
   fireEvent.doubleClick(screen.getByRole('button', { name: 'Expand' }))
   expect(onOpenNode).not.toHaveBeenCalled()
@@ -46,7 +58,7 @@ it('appends the token only where dnSpy writes one', () => {
 
 it('re-reads the token option when it is saved', () => {
   useAppStore.setState({ roots: [{ ...assembly, metadataToken: 0x20000001 }] })
-  render(<AssemblyExplorer onOpenNode={vi.fn()} onAnalyzeNode={vi.fn()} onShowHex={vi.fn()} onShowModuleInfo={vi.fn()} />)
+  render(<AssemblyExplorer commands={explorerCommands()} />)
   expect(screen.getByText('Example @20000001')).toBeInTheDocument()
 
   act(() => saveAppOptions({ ...loadAppOptions(), assemblyExplorer: { ...loadAppOptions().assemblyExplorer, showToken: false } }))
@@ -67,7 +79,7 @@ it('scrolls the row the app selected on its own into view, and no other', () => 
     expanded: { assembly: true },
     children: { assembly: [{ id: 'member', kind: 'method', label: 'Main()', hasChildren: false }] },
   })
-  render(<AssemblyExplorer onOpenNode={vi.fn()} onAnalyzeNode={vi.fn()} onShowHex={vi.fn()} onShowModuleInfo={vi.fn()} />)
+  render(<AssemblyExplorer commands={explorerCommands()} />)
   scrollIntoView.mockClear()
 
   act(() => useAppStore.setState({ selectedNode: { id: 'member', kind: 'method', label: 'Main()', hasChildren: false } }))

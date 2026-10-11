@@ -220,6 +220,78 @@ describe('function breakpoints', () => {
   })
 })
 
+describe('class breakpoints', () => {
+  const setFunctionBreakpoints = vi.fn(async () => ({}))
+  const getChildren = vi.fn()
+
+  const typeNode: TreeNode = { id: 'n-type', kind: 'type', label: 'Console', hasChildren: true }
+  const row = (description: string, kind: string): TreeNode => ({ id: `n-${description}`, kind, label: description, hasChildren: false, description })
+
+  const install = (nodes: TreeNode[]): void => {
+    getChildren.mockReset().mockImplementation(async () => ({ nodes }))
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: { ...window.dnSpy, getChildren, setFunctionBreakpoints },
+    })
+  }
+
+  beforeEach(() => {
+    setFunctionBreakpoints.mockClear()
+    useAppStore.setState({ workspaceId: 'ws1', functionBreakpoints: [], debugSessionId: 'session', children: {}, output: [] })
+  })
+
+  it('breaks on every method of the type, and on no other kind of row it holds', async () => {
+    install([
+      row('System.Void Ns.Type::.ctor()', 'method'),
+      row('System.Int32 Ns.Type::Get()', 'method'),
+      row('Ns.Type+Kind', 'type'),
+      row('System.Int32 _count', 'field'),
+    ])
+
+    await useAppStore.getState().addClassBreakpoint(typeNode)
+
+    // The type's methods are not loaded until asked for, so the command reads them the way expanding the
+    // row would, and the whole set goes to the adapter as one request.
+    expect(getChildren).toHaveBeenCalledWith('ws1', 'n-type')
+    expect(useAppStore.getState().functionBreakpoints).toEqual([
+      { name: 'Ns.Type..ctor', enabled: true },
+      { name: 'Ns.Type.Get', enabled: true },
+    ])
+    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type..ctor' }, { name: 'Ns.Type.Get' }])
+    expect(useAppStore.getState().output.at(-1)).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 2, name: 'Console' }))
+  })
+
+  it('leaves a breakpoint that is already there alone, and counts two overloads as the one name they share', async () => {
+    install([
+      row('System.Int32 Ns.Type::Get()', 'method'),
+      row('System.Int32 Ns.Type::Get(System.Int32)', 'method'),
+      row('System.Void Ns.Type::Put(System.Int32)', 'method'),
+    ])
+    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Put', enabled: false }] })
+
+    await useAppStore.getState().addClassBreakpoint(typeNode)
+
+    // A name that is already broken on keeps its own settings, and an overload pair cannot be told apart by
+    // name — the engine binds the name to whichever of them it finds.
+    expect(useAppStore.getState().functionBreakpoints).toEqual([
+      { name: 'Ns.Type.Put', enabled: false },
+      { name: 'Ns.Type.Get', enabled: true },
+    ])
+    expect(useAppStore.getState().output.at(-1)).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 1, name: 'Console' }))
+  })
+
+  it('says so when the type has no method left to break on', async () => {
+    install([row('System.Void Ns.Type::Get()', 'method')])
+    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Get', enabled: true }] })
+
+    await useAppStore.getState().addClassBreakpoint(typeNode)
+
+    expect(useAppStore.getState().functionBreakpoints).toEqual([{ name: 'Ns.Type.Get', enabled: true }])
+    expect(setFunctionBreakpoints).not.toHaveBeenCalled()
+    expect(useAppStore.getState().output.at(-1)).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
+  })
+})
+
 describe('collapseTreeViewNodes', () => {
   const node = (id: string, kind = 'type'): TreeNode => ({ id, label: id, kind, hasChildren: true })
 

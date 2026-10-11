@@ -56,6 +56,19 @@ public static class RpcMethods {
 	public const string ModuleSaveAll = "module/saveAll";
 	public const string WorkspaceReload = "workspace/reload";
 	public const string WorkspaceSortAssemblies = "workspace/sortAssemblies";
+	/// <summary>Removes one assembly from the tree — dnSpy's Remove Assembly.</summary>
+	public const string WorkspaceRemoveModule = "workspace/removeModule";
+	/// <summary>The module's entry point or the static constructor of its global type, for dnSpy's two
+	/// "Go to ..." commands.</summary>
+	public const string ModuleGetSpecialNode = "module/getSpecialNode";
+	/// <summary>The node a metadata token names, for dnSpy's "Go to Token".</summary>
+	public const string TreeFindByToken = "tree/findByToken";
+	/// <summary>The bytes a resource node holds, for dnSpy's Save Resource commands.</summary>
+	public const string ResourceGetData = "resource/getData";
+	/// <summary>Opens the assemblies a module's references name — dnSpy's Load Dependencies.</summary>
+	public const string WorkspaceLoadDependencies = "workspace/loadDependencies";
+	/// <summary>Turns a module into an assembly or back — dnSpy's two Convert commands.</summary>
+	public const string EditConvertModule = "edit/convertModule";
 	public const string DebugLaunch = "debug/launch";
 	public const string DebugListProcesses = "debug/listProcesses";
 	public const string DebugAttach = "debug/attach";
@@ -1000,3 +1013,56 @@ public sealed class RpcException : Exception {
 	public int Code { get; }
 	public object? DataValue { get; }
 }
+
+// The records below are appended to this file on purpose. This assembly is also the file the end-to-end
+// tests open as a fixture, so its metadata tokens are pinned in assertions ("HelloRequest @02000005",
+// "get_Code() : int @060008CC"): a type or a method added *before* those rows would shift every token
+// after it and break them, while one added here — after every type in the file — cannot.
+
+/// <summary>Which of a module's two notable members the caller wants the node of.</summary>
+public static class SpecialNodeKinds {
+	/// <summary>The module's entry point method.</summary>
+	public const string EntryPoint = "entryPoint";
+	/// <summary>The static constructor of the module's global type.</summary>
+	public const string GlobalCctor = "globalCctor";
+}
+
+/// <summary>Asks for one of a module's special nodes — what dnSpy's "Go to Entry Point" and "Go to
+/// Global Cctor" navigate to. The node names the module, and any node inside it will do.</summary>
+public sealed record SpecialNodeRequest(string WorkspaceId, string NodeId, string Kind);
+
+/// <summary>The node that was asked for, or null when the module has none: an assembly with no entry
+/// point, or one whose global type carries no static constructor.</summary>
+public sealed record SpecialNodeResponse(string? NodeId);
+
+/// <summary>Asks for the node a metadata token names — dnSpy's "Go to Token". The token is accepted the
+/// way the tree writes it ("0x06000001") or as bare hexadecimal.</summary>
+public sealed record FindByTokenRequest(string WorkspaceId, string NodeId, string Token);
+
+/// <summary>The node the token names, or null when it names no row the tree shows.</summary>
+public sealed record FindByTokenResponse(string? NodeId);
+
+/// <summary>
+/// What is left after an assembly is removed, plus the ids of the nodes that went with it. A client holds
+/// documents and a selection by node id, so it needs to be told which of them the removal took; the ids
+/// are never handed out again, so one the client still holds names nothing rather than something else.
+/// </summary>
+public sealed record RemoveModuleResponse(IReadOnlyList<string> RemovedNodeIds, IReadOnlyList<TreeNodeDto> Roots);
+
+/// <summary>Asks for the bytes one resource node holds, for dnSpy's two Save commands. The node may be
+/// the resource itself or a single entry inside a .resources file.</summary>
+public sealed record ResourceDataRequest(string WorkspaceId, string NodeId);
+
+/// <summary>The bytes to save, and the name the file should be saved under. The bytes travel base64
+/// because a resource is not text and JSON-RPC carries strings.</summary>
+public sealed record ResourceDataResponse(string Name, string Base64Data);
+
+/// <summary>Asks for the assemblies a module's references name to be opened as documents of their own —
+/// dnSpy's Load Dependencies. The recursive form follows the closure instead of stopping at the module's
+/// own references. The node names which module to start from; any node inside it will do.</summary>
+public sealed record LoadDependenciesRequest(string WorkspaceId, string NodeId, bool Recursive);
+
+/// <summary>Queues one of dnSpy's two Convert commands. `ToAssembly` says which way: true gives a module
+/// without an assembly a fresh one named after its file, false detaches an assembly's only module and
+/// leaves it a net module. The node names the module to convert; any node inside it will do.</summary>
+public sealed record ConvertModuleRequest(string WorkspaceId, string TransactionId, string NodeId, bool ToAssembly);

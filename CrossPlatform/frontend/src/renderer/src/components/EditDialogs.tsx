@@ -71,6 +71,44 @@ export const RenameNamespaceDialog = ({ node, onClose }: RenameDialogProps): Rea
   )
 }
 
+interface GoToTokenDialogProps {
+  node: TreeNode
+  onClose(): void
+}
+
+/**
+ * dnSpy's Go to Token box. The row the menu was opened over names the module the token is resolved in;
+ * the token itself is typed as hex with or without the `0x`. A token that names no row keeps the box open
+ * with the failure under it, which is what dnSpy's dialog does.
+ */
+export const GoToTokenDialog = ({ node, onClose }: GoToTokenDialogProps): React.JSX.Element => {
+  const [token, setToken] = useState('')
+  const [error, setError] = useState<string>()
+  const goToToken = useAppStore((state) => state.goToToken)
+  const input = useRef<HTMLInputElement>(null)
+  const { t } = useLanguage()
+  useEffect(() => input.current?.focus(), [])
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="modal rename-dialog" role="dialog" aria-modal="true" aria-labelledby="go-to-token-title" onSubmit={(event) => {
+        event.preventDefault()
+        void goToToken(node, token.trim()).then((found) => {
+          if (found) onClose()
+          else setError(t('The token {token} does not name a row in {module}.', { token: token.trim(), module: node.label }))
+        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+      }}>
+        <div className="modal-title"><span id="go-to-token-title">{t('Go to Token')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-content">
+          <label>{t('Token')}<input ref={input} aria-label={t('Token')} placeholder="0x06000001" value={token} onChange={(event) => { setToken(event.target.value); setError(undefined) }} /></label>
+          {error && <div className="modal-error">{error}</div>}
+        </div>
+        <div className="modal-actions"><button type="button" onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary" disabled={!token.trim()}>{t('OK')}</button></div>
+      </form>
+    </div>
+  )
+}
+
 interface MethodBodyEditorProps {
   node: TreeNode
   onClose(): void

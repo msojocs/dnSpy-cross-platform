@@ -58,6 +58,11 @@ interface MenuBarProps {
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
+  /** Converts the selected module into a net module — dnSpy's Convert Assembly to NetModule. */
+  onConvertModule(): void
+  /** Opens the assemblies the selected module's references name — dnSpy's two Load Dependencies
+   *  commands, which it registers on this menu as well as on the assembly explorer's. */
+  onLoadDependencies(recursive: boolean): void
   onReplaceMethodBodyWithStub(): void
   /** Where the hex commands point for the selection, and for the code document's caret. */
   hexTarget?: HexTargetResponse
@@ -210,6 +215,8 @@ export const MenuBar = ({
   onDelete,
   onRenameNamespace,
   onMoveTypesToEmptyNamespace,
+  onConvertModule,
+  onLoadDependencies,
   onReplaceMethodBodyWithStub,
   hexTarget,
   hexStatement,
@@ -412,6 +419,8 @@ export const MenuBar = ({
       onDelete,
       onRenameNamespace,
       onMoveTypesToEmptyNamespace,
+      onConvertModule,
+      onLoadDependencies,
       onReplaceMethodBodyWithStub,
       hexTarget,
       hexStatement,

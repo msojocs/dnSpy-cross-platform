@@ -169,6 +169,12 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			return true;
 		}, cancellationToken);
 
+	public Task QueueConvertModuleAsync(ConvertModuleRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => {
+			w.QueueConvertModule(request);
+			return true;
+		}, cancellationToken);
+
 	public Task<EditCommitResponse> CommitEditAsync(EditTransactionRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.CommitEdit(request.TransactionId), cancellationToken);
 
@@ -198,6 +204,21 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 
 	public Task<TreeNodesResponse> SortAssembliesAsync(WorkspaceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.SortAssemblies(), cancellationToken);
+
+	public Task<RemoveModuleResponse> RemoveModuleAsync(NodeRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.RemoveModule(request.NodeId), cancellationToken);
+
+	public Task<SpecialNodeResponse> GetSpecialNodeAsync(SpecialNodeRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetSpecialNode(request), cancellationToken);
+
+	public Task<FindByTokenResponse> FindByTokenAsync(FindByTokenRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindByToken(request), cancellationToken);
+
+	public Task<ResourceDataResponse> GetResourceDataAsync(ResourceDataRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetResourceData(request), cancellationToken);
+
+	public Task<AddModulesResponse> LoadDependenciesAsync(LoadDependenciesRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.LoadDependenciesAsync(request, cancellationToken), cancellationToken);
 
 	// ---------------------------------------------------------------- debug symbols
 
@@ -1053,6 +1074,37 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			return new AddModulesResponse(CreateOpenResponse().Modules, skipped, stateId);
 		}
 
+		/// <summary>
+		/// dnSpy's Load Dependencies: every assembly the module's references name is resolved and opened as
+		/// a document of its own, so the references stop being dead ends in the tree. The recursive form
+		/// walks the closure — each opened assembly's own references are followed too — and a module is
+		/// walked once, which is what keeps a cycle from turning into an endless walk. A reference that
+		/// resolves to nothing on this machine is passed over, the way the tree lets it expand to nothing.
+		/// </summary>
+		public async Task<AddModulesResponse> LoadDependenciesAsync(LoadDependenciesRequest request, CancellationToken cancellationToken) {
+			var module = ModuleOf(GetNode(request.NodeId))
+				?? throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not part of a managed assembly.");
+			var paths = new List<string>();
+			var walked = new HashSet<string>(StringComparer.Ordinal) { module.Path };
+			var queue = new Queue<ModuleEntry>();
+			queue.Enqueue(module);
+			while (queue.Count > 0) {
+				var owner = queue.Dequeue();
+				foreach (var reference in owner.Module.GetAssemblyRefs()) {
+					// A reference to an assembly the workspace already holds is that module, not a second
+					// copy of it; loading the file again would put two roots over the same assembly.
+					var target = FindOpenModuleByName(reference.Name.String) ?? LoadReferenceModule(owner, reference);
+					if (target is null)
+						continue;
+					if (walked.Add(target.Path) && !IsOpen(target.Path))
+						paths.Add(target.Path);
+					if (request.Recursive)
+						queue.Enqueue(target);
+				}
+			}
+			return await AddModulesAsync(new AddModulesRequest(request.WorkspaceId, paths), cancellationToken).ConfigureAwait(false);
+		}
+
 		public OpenWorkspaceResponse CreateOpenResponse() {
 			var opened = OrderedEntries().Select(entry => entry switch {
 				ModuleEntry module => new OpenedModule(
@@ -1103,6 +1155,144 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			});
 			version++;
 			return GetRoots();
+		}
+
+		/// <summary>
+		/// Removes the document a node belongs to — dnSpy's Remove Assembly. The node may be the assembly
+		/// root or anything under it, and the whole assembly goes either way, because that is the document
+		/// the tree holds. A file that is not a managed assembly has no such document here, which is why the
+		/// command is only offered on the assembly and module rows.
+		/// </summary>
+		public RemoveModuleResponse RemoveModule(string nodeId) {
+			var node = GetNode(nodeId);
+			if (node.AsModuleEntry is not { } module)
+				throw new RpcException(ErrorCodes.InvalidParams, "Only a managed assembly can be removed.");
+			if (!modules.Remove(module.Id))
+				throw new RpcException(ErrorCodes.NodeNotFound, "The selected assembly is no longer open.");
+			rootOrder.Remove(module.Id);
+			var removed = DropModule(module);
+			version++;
+			return new RemoveModuleResponse(removed, GetRoots().Nodes);
+		}
+
+		/// <summary>
+		/// Forgets everything the workspace held for one module: the nodes of its own tree, and the caches
+		/// keyed by its file, which would otherwise answer for a later open of the same path out of the
+		/// module that was removed. Answers with the ids of the nodes it dropped. Node ids are never handed
+		/// out twice, so an id the client still holds names nothing rather than naming whatever took the
+		/// removed module's place.
+		/// </summary>
+		IReadOnlyList<string> DropModule(ModuleEntry module) {
+			// The module's own nodes are the ones whose owner is this entry: its assembly root, its module
+			// row, and everything the tree has listed under them so far.
+			var removed = nodes.Values.Where(entry => ReferenceEquals(entry.Module, module)).Select(entry => entry.Id).ToArray();
+			foreach (var id in removed) {
+				nodeIdsByKey.Remove(nodes[id].Key);
+				nodes.Remove(id);
+			}
+			namespaceIndexes.Remove(module.Path);
+			// The resolver holds the module's file open, and nothing reads it once the module is gone.
+			if (referenceResolvers.Remove(module.Path, out var resolver))
+				resolver?.Dispose();
+			foreach (var key in referencePaths.Keys.Where(key => key.StartsWith($"{module.Path}:", StringComparison.Ordinal)).ToArray())
+				referencePaths.Remove(key);
+			// A module another assembly resolved this one through is the same file, so its cache entry goes
+			// too; whatever still references it resolves it again the next time it is asked for.
+			foreach (var name in referenceModules.Where(pair => pair.Value.Path == module.Path).Select(pair => pair.Key).ToArray())
+				referenceModules.Remove(name);
+			// The debug symbols are per module file, and the decompiler's statement map is keyed by state as
+			// well as by node, so dropping the lot is the safe half of the trade: the next read rebuilds them.
+			symbols.Invalidate();
+			return removed;
+		}
+
+		/// <summary>
+		/// The node dnSpy's "Go to Entry Point" and "Go to Global Cctor" navigate to: the module's entry
+		/// point method, or the static constructor of its global type. Both are ordinary members of the
+		/// module's tree, so the answer is the node the client reveals — null when the module has neither.
+		/// </summary>
+		public SpecialNodeResponse GetSpecialNode(SpecialNodeRequest request) {
+			var module = ModuleOf(GetNode(request.NodeId));
+			if (module is null)
+				throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not part of a managed assembly.");
+			var method = request.Kind switch {
+				SpecialNodeKinds.EntryPoint => module.Module.EntryPoint,
+				SpecialNodeKinds.GlobalCctor => module.Module.GlobalType?.FindStaticConstructor(),
+				_ => throw new RpcException(ErrorCodes.InvalidParams, $"Unknown special node kind: {request.Kind}"),
+			};
+			// The node is created here rather than looked up, so a member the tree has not listed yet still
+			// answers with the id the tree would give it — GetNodePath builds the chain above it the same way.
+			return new SpecialNodeResponse(method is null ? null : GetMemberNode(method, module).Id);
+		}
+
+		/// <summary>
+		/// The node a metadata token names — dnSpy's "Go to Token". The token is read the way the tree and
+		/// the copy commands write it ("0x06000001" or "06000001"), and the table it belongs to picks the
+		/// kind, so a caller only has to pass on what the user typed. A token the module has no row for, or
+		/// one naming a row the tree does not show, is answered with no node at all.
+		/// </summary>
+		public FindByTokenResponse FindByToken(FindByTokenRequest request) {
+			var module = ModuleOf(GetNode(request.NodeId));
+			if (module is null)
+				throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not part of a managed assembly.");
+			if (!TryParseToken(request.Token, out var token))
+				throw new RpcException(ErrorCodes.InvalidParams, "A metadata token is a 32-bit value such as 0x06000001.");
+			return new FindByTokenResponse(ResolveInModule(module, token)?.NodeId);
+		}
+
+		/// <summary>
+		/// The bytes a resource node holds, for dnSpy's Save Resource commands. A resource node answers with
+		/// the manifest resource's own bytes; an entry inside a .resources file answers with the value that
+		/// entry decodes to, which is what dnSpy's deserialized save writes. The name comes back with them so
+		/// the dialog can suggest it.
+		/// </summary>
+		public ResourceDataResponse GetResourceData(ResourceDataRequest request) {
+			var node = GetNode(request.NodeId);
+			return node.Value switch {
+				EmbeddedResource resource => new ResourceDataResponse(resource.Name.String, Convert.ToBase64String(ReadResourceBytes(resource))),
+				ResourceEntryValue entry => new ResourceDataResponse(entry.Name, Convert.ToBase64String(ResourceEntryBytes(entry))),
+				_ => throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not a resource."),
+			};
+		}
+
+		/// <summary>
+		/// The manifest resource's bytes as they sit in the module. They are read out of the in-memory module
+		/// rather than off the file, so an edit that has not been saved yet is what gets saved.
+		/// </summary>
+		static byte[] ReadResourceBytes(EmbeddedResource resource) {
+			using var stream = resource.CreateReader().AsStream();
+			using var buffer = new MemoryStream();
+			stream.CopyTo(buffer);
+			return buffer.ToArray();
+		}
+
+		/// <summary>The serialized form of one .resources entry: its decoded value, written back out the way
+		/// the value would be stored. An entry that decodes to nothing writes an empty file.</summary>
+		static byte[] ResourceEntryBytes(ResourceEntryValue entry) => entry.Value switch {
+			byte[] bytes => bytes,
+			string text => Encoding.UTF8.GetBytes(text),
+			_ => Array.Empty<byte>(),
+		};
+
+		/// <summary>The managed module a node belongs to, or null when it belongs to a file the tree holds
+		/// as something other than an assembly.</summary>
+		static ModuleEntry? ModuleOf(NodeEntry node) => node.AsModuleEntry ?? node.Module as ModuleEntry;
+
+		/// <summary>
+		/// Reads a metadata token out of what a user typed: an optional "0x" and then hexadecimal. Anything
+		/// else — including a value too large for 32 bits — is not a token.
+		/// </summary>
+		static bool TryParseToken(string? text, out uint token) {
+			token = 0;
+			if (string.IsNullOrWhiteSpace(text))
+				return false;
+			var digits = text.Trim();
+			if (digits.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+				digits = digits[2..];
+			// Eight digits is what the tree writes; a shorter one is still read the same way, the way
+			// dnSpy's token box accepts "0x6000001".
+			return digits.Length is > 0 and <= 8
+				&& uint.TryParse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out token);
 		}
 
 		public TreeNodesResponse GetChildren(string nodeId) {
@@ -2780,6 +2970,86 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				};
 			});
 		}
+
+		/// <summary>
+		/// dnSpy's two Convert commands. Turning an assembly into a net module detaches its single module and
+		/// writes the module kind that says so; the other direction gives a module without an assembly a fresh
+		/// definition named after its file. Both write the characteristics bit that goes with the kind, the
+		/// way dnSpy's own helper does, and both are one queued operation — the inverse is what Undo runs.
+		/// The assembly root node carries the definition it was built with, so the label it shows is refreshed
+		/// here too; the module row names the file either way and does not change.
+		/// </summary>
+		public void QueueConvertModule(ConvertModuleRequest request) {
+			var transaction = GetTransaction(request.TransactionId);
+			var node = GetNode(request.NodeId);
+			var moduleEntry = ModuleOf(node)
+				?? throw new RpcException(ErrorCodes.EditValidationFailed, "Only managed modules can be converted.");
+			var module = moduleEntry.Module;
+			var assembly = module.Assembly;
+			if (request.ToAssembly) {
+				if (assembly is not null)
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The module already belongs to an assembly.");
+			}
+			else {
+				if (assembly is null)
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The module does not belong to an assembly.");
+				// dnSpy only offers the command while the module is the assembly's manifest and only module:
+				// stripping the manifest out from under the others would leave them with no way to be saved.
+				if (assembly.Modules.Count != 1 || assembly.ManifestModule != module)
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The assembly has more than one module, so it cannot become a net module.");
+			}
+
+			var rootKey = $"assembly:{moduleEntry.Path}";
+			var root = nodeIdsByKey.TryGetValue(rootKey, out var rootId) ? nodes[rootId] : null;
+			transaction.Add(node.Id, moduleEntry, () => {
+				var oldValue = root?.Value;
+				var oldKind = module.Kind;
+				var oldCharacteristics = module.Characteristics;
+				object newValue;
+				if (request.ToAssembly) {
+					// dnlib hands the module its assembly through the collection: the property is read-only,
+					// and adding the module is what sets it, exactly as dnSpy's own helper relies on.
+					var created = new AssemblyDefUser(NetModuleName(module));
+					created.Modules.Add(module);
+					newValue = created;
+					module.Kind = ModuleKind.Dll;
+				}
+				else {
+					assembly!.Modules.Remove(module);
+					newValue = module;
+					module.Kind = ModuleKind.NetModule;
+				}
+				module.Characteristics = WithDllBit(oldCharacteristics, module.Kind);
+				if (root is not null)
+					root.Value = newValue;
+				return () => {
+					module.Kind = oldKind;
+					module.Characteristics = oldCharacteristics;
+					if (root is not null)
+						root.Value = oldValue!;
+				};
+			});
+		}
+
+		/// <summary>The name dnSpy gives the assembly it creates, which is the file's without the extension a
+		/// module file is allowed to end in — and the whole file name when nothing is left of it.</summary>
+		static string NetModuleName(ModuleDef module) {
+			var name = module.Name.String;
+			foreach (var extension in new[] { ".dll", ".exe", ".netmodule" }) {
+				if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) {
+					var trimmed = name[..^extension.Length];
+					return !string.IsNullOrWhiteSpace(trimmed) ? trimmed : name;
+				}
+			}
+			return name;
+		}
+
+		/// <summary>The one bit that follows the module kind: a library and a net module are DLLs, an
+		/// executable is not.</summary>
+		static dnlib.PE.Characteristics WithDllBit(dnlib.PE.Characteristics characteristics, ModuleKind kind) =>
+			kind is ModuleKind.Dll or ModuleKind.NetModule
+				? characteristics | dnlib.PE.Characteristics.Dll
+				: characteristics & ~dnlib.PE.Characteristics.Dll;
 
 		public void QueueResource(ReplaceResourceRequest request) {
 			var transaction = GetTransaction(request.TransactionId);

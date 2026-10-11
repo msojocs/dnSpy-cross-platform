@@ -42,6 +42,8 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   onDelete: vi.fn(),
   onRenameNamespace: vi.fn(),
   onMoveTypesToEmptyNamespace: vi.fn(),
+  onConvertModule: vi.fn(),
+  onLoadDependencies: vi.fn(),
   onReplaceMethodBodyWithStub: vi.fn(),
   onOpenHex: vi.fn(),
   onShowHexAt: vi.fn(),
@@ -528,6 +530,8 @@ describe('MenuBar', () => {
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
+      onConvertModule={vi.fn()}
+      onLoadDependencies={vi.fn()}
       onReplaceMethodBodyWithStub={vi.fn()}
       onOpenHex={vi.fn()}
       onShowHexAt={vi.fn()}
@@ -664,6 +668,8 @@ describe('MenuBar', () => {
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
+      onConvertModule={vi.fn()}
+      onLoadDependencies={vi.fn()}
       onReplaceMethodBodyWithStub={vi.fn()}
       onOpenHex={vi.fn()}
       onShowHexAt={vi.fn()}
@@ -979,6 +985,40 @@ describe('MenuBar', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Move Types to Empty Namespace' }))
     expect(onMoveTypesToEmptyNamespace).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the conversion the Edit menu offers on a module', () => {
+    const onConvertModule = vi.fn()
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', onConvertModule })
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert Assembly to NetModule' }))
+    expect(onConvertModule).toHaveBeenCalledTimes(1)
+
+    // The other direction is dnSpy's, but this tree never puts a module on its own, so it never shows.
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Convert NetModule to Assembly/ })).not.toBeInTheDocument()
+  })
+
+  it('runs the two Load Dependencies commands on whatever the tree has selected, the assembly root included', () => {
+    const onLoadDependencies = vi.fn()
+    // dnSpy's CanExecute asks for the module of the selected node, and its helper hands back the module
+    // child of an assembly root as readily as the module row itself.
+    renderMenuWith({ selectionKind: 'assembly', selectionLabel: 'Example', onLoadDependencies })
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Load Dependencies' }))
+    expect(onLoadDependencies).toHaveBeenLastCalledWith(false)
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Load Dependencies Recursively' }))
+    expect(onLoadDependencies).toHaveBeenLastCalledWith(true)
+    expect(onLoadDependencies).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves the two Load Dependencies commands out when the selection names no module', () => {
+    renderMenuWith({ selectionKind: undefined, selectionLabel: undefined })
+    expect(openMenu('Edit').filter((label) => label.startsWith('Load Dependencies'))).toEqual([])
   })
 
   it('offers Move Types to Empty Namespace only when there is an empty namespace to move into', () => {

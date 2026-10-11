@@ -42,6 +42,12 @@ export interface EditMenuContext {
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
+  /** Converts the selected module into a net module, dropping the assembly around it. */
+  onConvertModule(): void
+  /** Opens the assemblies the selected node's module references name. The recursive form walks the whole
+   *  closure instead of stopping at the module's own references; dnSpy registers both on this menu as
+   *  well as on the tree's. */
+  onLoadDependencies(recursive: boolean): void
   onReplaceMethodBodyWithStub(): void
   /** Opens the create dialog for a node of this kind, in the type the selection belongs to. A nested
    * type goes inside the selected type instead of at the top level, which is the one create command with
@@ -104,8 +110,10 @@ const kindIs = (...kinds: string[]) => (ctx: EditMenuContext): boolean =>
 
 const documentIs = (document: ActiveDocument) => (ctx: EditMenuContext): boolean => ctx.activeDocument === document
 
-/** Node kinds that live inside a module — dnSpy's `GetModuleNode(node) is not null`. */
-const inModule = kindIs('module', 'namespace', 'type', 'method', 'field', 'property', 'event', 'resource', 'resourceentry')
+/** Node kinds that live inside a module — dnSpy's `GetModuleNode(node) is not null`. The assembly root
+ *  counts: its helper answers with the module child of whatever it is handed, so selecting the root is
+ *  selecting the module it holds, which is what every entry gated on this acts on. */
+const inModule = kindIs('assembly', 'module', 'namespace', 'type', 'method', 'field', 'property', 'event', 'resource', 'resourceentry')
 
 /**
  * Node kinds whose reference is an `IMemberDef` (type or member). The C# class commands need it, and
@@ -162,7 +170,11 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_MISC, order: 0, label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.selectionKind === 'namespace' && ctx.selectionLabel !== '-' && ctx.hasEmptyNamespaceSibling, action: (ctx) => ctx.onMoveTypesToEmptyNamespace() },
   { group: GROUP_MISC, order: 10, label: (ctx) => ctx.t('Rename Namespace'), visible: kindIs('namespace'), action: (ctx) => ctx.onRenameNamespace() },
   { group: GROUP_MISC, order: 20, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: never },
-  { group: GROUP_MISC, order: 30, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: kindIs('module') },
+  // dnSpy shows the reverse of this one on a module document standing on its own — a module whose parent
+  // is not an assembly row. Every module in this tree hangs off an assembly row, so that rule would never
+  // match anything; the conversion this port can run is the one that drops the assembly, and Undo is the
+  // way back.
+  { group: GROUP_MISC, order: 30, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: kindIs('module'), action: (ctx) => ctx.onConvertModule() },
 
   // 4000 — AsmEditor: New
   { group: GROUP_NEW, order: 0, label: (ctx) => ctx.t('Create Assembly...'), visible: (ctx) => ctx.selectionKind === undefined || ctx.selectionKind === 'module' },
@@ -195,12 +207,16 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_SETTINGS, order: 42, label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember },
   { group: GROUP_SETTINGS, order: 43, label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember },
   { group: GROUP_SETTINGS, order: 44, label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule },
+  // dnSpy's merge runs its compiled-module importer over a picked DLL, merging every type it holds into
+  // this module. That importer is the machinery behind the C# compile commands and the port has neither
+  // it nor a dnlib merger to stand in for it, so the entry keeps its place and stays disabled rather than
+  // offering a command that would corrupt the module it was run on.
   { group: GROUP_SETTINGS, order: 49.999, label: (ctx) => ctx.t('Merge with Assembly...'), visible: inModule },
   { group: GROUP_SETTINGS, order: 50, label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: kindIs('field'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 50, label: (ctx) => ctx.t('Edit Method Body...'), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodBody() },
   { group: GROUP_SETTINGS, order: 51, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: kindIs('method'), action: (ctx) => ctx.onReplaceMethodBodyWithStub() },
-  { group: GROUP_SETTINGS, order: 58.999, label: (ctx) => ctx.t('Load Dependencies'), visible: inModule },
-  { group: GROUP_SETTINGS, order: 59.999, label: (ctx) => ctx.t('Load Dependencies Recursively'), visible: inModule },
+  { group: GROUP_SETTINGS, order: 58.999, label: (ctx) => ctx.t('Load Dependencies'), visible: inModule, action: (ctx) => ctx.onLoadDependencies(false) },
+  { group: GROUP_SETTINGS, order: 59.999, label: (ctx) => ctx.t('Load Dependencies Recursively'), visible: inModule, action: (ctx) => ctx.onLoadDependencies(true) },
   { group: GROUP_SETTINGS, order: 60, label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: kindIs('property'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 70, label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: kindIs('event'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 90, label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resource'), action: (ctx) => ctx.onEditResource() },

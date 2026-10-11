@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
 import type { DecompilerLanguage, TreeNode } from '../../shared/protocol'
@@ -6,11 +6,12 @@ import { enableSessionPersistence, loadSession, methodBreakpointName, orderedDoc
 import { clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { loadAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
+import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
 import { AnalysisPane, DebugPlaceholder, OutputPane, SearchPane } from './components/ToolWindows'
 import { CSharpInteractive } from './components/CSharpInteractive'
-import { MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
+import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
 import { BreakpointsPane, CallStackPane, LocalsPane, ModulesPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
@@ -242,6 +243,9 @@ export const App = (): React.JSX.Element => {
   const [renameNode, setRenameNode] = useState<TreeNode>()
   const [renameNamespaceNode, setRenameNamespaceNode] = useState<TreeNode>()
   const [editMethodNode, setEditMethodNode] = useState<TreeNode>()
+  // dnSpy's Go to Token box. It is opened from the tree, and the node it was opened over is what names
+  // the module the token is looked up in.
+  const [tokenNode, setTokenNode] = useState<TreeNode>()
   // The create or edit dialog the Edit menu opened, over the node it acts on: `nodeId` is what is being
   // edited, and is left off when a new node is being created in `ownerNodeId` instead.
   const [editNode, setEditNode] = useState<{ kind: CreatedKind, nodeId?: string, ownerNodeId?: string, nested?: boolean }>()
@@ -299,8 +303,15 @@ export const App = (): React.JSX.Element => {
   const saveAllModules = useAppStore((state) => state.saveAllModules)
   const reloadAllAssemblies = useAppStore((state) => state.reloadAllAssemblies)
   const sortAssemblies = useAppStore((state) => state.sortAssemblies)
+  const removeModule = useAppStore((state) => state.removeModule)
+  const goToSpecialNode = useAppStore((state) => state.goToSpecialNode)
+  const goToToken = useAppStore((state) => state.goToToken)
   const saveCode = useAppStore((state) => state.saveCode)
   const replaceResource = useAppStore((state) => state.replaceResource)
+  const saveResource = useAppStore((state) => state.saveResource)
+  const loadDependencies = useAppStore((state) => state.loadDependencies)
+  const convertModule = useAppStore((state) => state.convertModule)
+  const addClassBreakpoint = useAppStore((state) => state.addClassBreakpoint)
   const deleteNode = useAppStore((state) => state.deleteNode)
   const renameNamespace = useAppStore((state) => state.renameNamespace)
   const moveTypesToEmptyNamespace = useAppStore((state) => state.moveTypesToEmptyNamespace)
@@ -312,7 +323,6 @@ export const App = (): React.JSX.Element => {
   const hexWriteMethodBody = useAppStore((state) => state.hexWriteMethodBody)
   const hexCopyMethodBody = useAppStore((state) => state.hexCopyMethodBody)
   const hexPasteMethodBody = useAppStore((state) => state.hexPasteMethodBody)
-  const roots = useAppStore((state) => state.roots)
   const treeChildren = useAppStore((state) => state.children)
   const treeParents = useAppStore((state) => state.parents)
   const openDocument = useAppStore((state) => state.openDocument)
@@ -367,13 +377,10 @@ export const App = (): React.JSX.Element => {
   // dnSpy's "Move Types to Empty Namespace" is offered only when the module already has an empty
   // namespace node for the types to land in; the module's children are loaded whenever one of its
   // namespaces is selectable, so the sibling list is the tree the user is looking at.
-  const hasEmptyNamespaceSibling = useMemo(() => {
-    if (selectedNode?.kind !== 'namespace')
-      return false
-    const parentId = treeParents[selectedNode.id]
-    const siblings = parentId ? treeChildren[parentId] : undefined
-    return siblings?.some((sibling) => sibling.kind === 'namespace' && sibling.label === '-') ?? false
-  }, [selectedNode, treeChildren, treeParents])
+  const hasEmptyNamespaceSibling = useMemo(
+    () => namespaceHasEmptySibling(selectedNode, treeChildren, treeParents),
+    [selectedNode, treeChildren, treeParents],
+  )
 
   /** Removes a node, defaulting to the selected one. A menu that carries its own node — the code
    *  viewer's context menu, whose selection is the reference under the caret — hands that one over. */
@@ -1143,22 +1150,26 @@ export const App = (): React.JSX.Element => {
     forceLayoutUpdate((value) => value + 1)
   }
 
-  // The hex commands name their module by node id, and the tab needs a label with it.
+  // The hex commands name their module by node id, and the tab needs a label with it. Both come from the
+  // store rather than from the render, because a menu built for a freshly clicked node runs its commands
+  // after the click that showed it — by which time the target it was built from is the current one.
   const moduleTabTarget = (moduleId: string): { id: string; label: string } | undefined => {
-    const node = roots.find((root) => root.id === moduleId)
+    const node = useAppStore.getState().roots.find((root) => root.id === moduleId)
     return node ? { id: node.id, label: node.label } : undefined
   }
 
   const openHex = (): void => {
-    const target = hexTarget ? moduleTabTarget(hexTarget.moduleId) : undefined
-    if (target)
-      addSpecialTab('hex', target)
+    const target = useAppStore.getState().hexTarget
+    const tab = target ? moduleTabTarget(target.moduleId) : undefined
+    if (tab)
+      addSpecialTab('hex', tab)
   }
 
   /** Opens the hex tab on the bytes one of the "Show ... in Hex Editor" commands names. */
   const showSelectionInHex = (kind: HexShowKind): void => {
+    const hexTarget = useAppStore.getState().hexTarget
     if (kind === 'statement') {
-      const statement = hexStatement
+      const statement = useAppStore.getState().hexStatement
       const target = statement ? moduleTabTarget(statement.moduleId) : undefined
       if (!statement || !target) return
       showHexAt(statement.moduleId, statement.range.offset, statement.range.length)
@@ -1188,20 +1199,57 @@ export const App = (): React.JSX.Element => {
       void window.dnSpy.restartAsAdministrator()
   }
 
-  // App subscribes to the complete tree cache because the menus need to know about the selected node and
-  // its ancestors. Keep the explorer's command props stable across those updates so TreeRow.memo can
-  // skip every row outside the branch that changed. The ref keeps these wrappers current without making
-  // their identity follow the shell's render cycle.
-  const explorerActions = useRef({
-    open: addDocumentTab,
-    analyze: openAnalysis,
-    hex: addSpecialTab,
-  })
-  explorerActions.current = { open: addDocumentTab, analyze: openAnalysis, hex: addSpecialTab }
-  const openExplorerNode = useCallback((item: TreeNode): void => { void explorerActions.current.open(item) }, [])
-  const analyzeExplorerNode = useCallback((item: TreeNode): void => { void explorerActions.current.analyze(item) }, [])
-  const showExplorerHex = useCallback((item: TreeNode): void => { explorerActions.current.hex('hex', item) }, [])
-  const showExplorerModuleInfo = useCallback((item: TreeNode): void => { explorerActions.current.hex('module-info', item) }, [])
+  /**
+   * The commands the assembly explorer's rows run. A command that opens a dialog, a tool window or a tab
+   * belongs to the shell rather than to the tree, so the tree is handed the callbacks instead of reaching
+   * for the layout model. The object is rebuilt every render — each callback closes over the shell's
+   * current handlers — and the tree reads it through a ref, which is what keeps its memoized rows stable.
+   * The commands this port has no plumbing for yet are simply left out: their menu entries show up the
+   * moment one is supplied.
+   */
+  const explorerCommands: AssemblyExplorerCommands = {
+    onOpenNode: (node) => { void addDocumentTab(node) },
+    onOpenInNewTab: (node) => { void openNodeInNewTab(node.id) },
+    onDeleteNode: (node) => deleteSelected(node),
+    onEditNode: (node) => openEditNode(node),
+    onCreateMember: (kind, nested, node) => createMember(kind, nested, node),
+    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
+    onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
+    onEditResource: (node) => { void replaceResource(node) },
+    onSaveResource: (node, raw) => { void saveResource(node, raw) },
+    onLoadDependencies: (node, recursive) => { void loadDependencies(node, recursive) },
+    onConvertModule: (node) => { void convertModule(node) },
+    onRenameNamespace: (node) => setRenameNamespaceNode(node),
+    onMoveTypesToEmptyNamespace: (node) => { void moveTypesToEmptyNamespace(node) },
+    onSortAssemblies: () => { void sortAssemblies() },
+    onRemoveAssembly: (node) => {
+      // The assembly's documents go with it, so the tabs still showing them are closed here rather than
+      // left pointing at nodes the backend no longer has.
+      void removeModule(node).then((removedNodeIds) => {
+        for (const nodeId of removedNodeIds)
+          closeDocumentTabsFor(model, nodeId)
+      })
+    },
+    onOpenContainingFolder: (node) => { if (node.description) void window.dnSpy.showItemInFolder(node.description) },
+    onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
+    onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
+    onGoToToken: (node) => { setTokenNode(node) },
+    onToggleMethodBreakpoint: (name) => { void toggleFunctionBreakpoint(name) },
+    onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
+    onAnalyze: (node) => { void openAnalysis(node) },
+    onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    copyText: (text) => {
+      void navigator.clipboard.writeText(text).catch((error: unknown) => {
+        appendOutput(t('Copy failed: {message}', { message: error instanceof Error ? error.message : String(error) }))
+      })
+    },
+    onShowModuleInfo: (node) => addSpecialTab('module-info', node),
+    onOpenHex: openHex,
+    onShowHexAt: showSelectionInHex,
+    onHexWriteBody: (kind) => void hexWriteMethodBody(kind),
+    onHexCopyBody: () => void hexCopyMethodBody(),
+    onHexPasteBody: () => void hexPasteMethodBody(),
+  }
 
   /**
    * The commands a code viewer's context menu cannot run itself. It draws the menu — dnSpy's grouping,
@@ -1233,7 +1281,7 @@ export const App = (): React.JSX.Element => {
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
-      case 'explorer': return <AssemblyExplorer onOpenNode={openExplorerNode} onAnalyzeNode={analyzeExplorerNode} onShowHex={showExplorerHex} onShowModuleInfo={showExplorerModuleInfo} />
+      case 'explorer': return <AssemblyExplorer commands={explorerCommands} />
       case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} />
@@ -1311,6 +1359,8 @@ export const App = (): React.JSX.Element => {
         onDelete={deleteSelected}
         onRenameNamespace={() => { if (selectedNode?.kind === 'namespace') setRenameNamespaceNode(selectedNode) }}
         onMoveTypesToEmptyNamespace={() => { if (selectedNode?.kind === 'namespace') void moveTypesToEmptyNamespace(selectedNode) }}
+        onConvertModule={() => { if (selectedNode?.kind === 'module') void convertModule(selectedNode) }}
+        onLoadDependencies={(recursive) => { if (selectedNode) void loadDependencies(selectedNode, recursive) }}
         onReplaceMethodBodyWithStub={() => { if (selectedNode?.kind === 'method') void replaceMethodBodyWithStub(selectedNode) }}
         hexTarget={hexTarget}
         hexStatement={hexStatement}
@@ -1491,6 +1541,7 @@ export const App = (): React.JSX.Element => {
       {renameNode && <RenameDialog node={renameNode} onClose={() => setRenameNode(undefined)} />}
       {renameNamespaceNode && <RenameNamespaceDialog node={renameNamespaceNode} onClose={() => setRenameNamespaceNode(undefined)} />}
       {editMethodNode && <MethodBodyEditor node={editMethodNode} onClose={() => setEditMethodNode(undefined)} />}
+      {tokenNode && <GoToTokenDialog node={tokenNode} onClose={() => setTokenNode(undefined)} />}
       {editNode && workspaceId && (
         <NodeOptionsDialog
           key={`${editNode.kind}:${editNode.nodeId ?? editNode.ownerNodeId}:${editNode.nested === true}`}

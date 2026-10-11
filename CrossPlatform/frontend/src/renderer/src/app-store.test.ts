@@ -1205,7 +1205,7 @@ describe('followed references', () => {
     openNodeById.mockReset().mockImplementation(async (nodeId: string) => { calls.push(`open:${nodeId}`); return nodeId })
     getRoots.mockReset().mockImplementation(async () => { calls.push('roots'); return { nodes: [moduleNode('n2', consolePath)] } })
     install({})
-    useAppStore.setState({ workspaceId: 'ws1', openNodeById, roots: [], output: [] })
+    useAppStore.setState({ workspaceId: 'ws1', openNodeById, openNodeInNewTabById: undefined, roots: [], output: [] })
   })
 
   it('opens a reference that names its node without asking the backend for anything', async () => {
@@ -1213,6 +1213,18 @@ describe('followed references', () => {
 
     expect(openNodeById).toHaveBeenCalledWith('n7')
     expect(getRoots).not.toHaveBeenCalled()
+  })
+
+  it('follows a reference into a tab of its own when dnSpy\'s new-tab command asks for one', async () => {
+    // The two follow commands differ only in which shell opener the target goes through, and the new-tab
+    // one is the opener the shell registered for "Open in New Tab".
+    const openNodeInNewTabById = vi.fn(async (nodeId: string) => nodeId)
+    useAppStore.setState({ openNodeInNewTabById })
+
+    await useAppStore.getState().openReferenceTarget({ start: 0, length: 4, kind: 'type', targetNodeId: 'n7' }, true)
+
+    expect(openNodeInNewTabById).toHaveBeenCalledWith('n7')
+    expect(openNodeById).not.toHaveBeenCalled()
   })
 
   it('resolves a reference into a module the workspace does not hold, then reads the tree that module was added to', async () => {

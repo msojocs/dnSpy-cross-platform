@@ -942,20 +942,21 @@ test.describe('the workspace shell', () => {
   })
 })
 
+/** Opens the debuggee and unfolds it down to its namespace, which is where its own documents hang off. */
+const openDebugTarget = async (): Promise<void> => {
+  await page.getByRole('button', { name: 'Open Assembly' }).first().click()
+  await expect(page.getByRole('treeitem').first()).toContainText('DebugTarget')
+  await expandModule()
+  const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^DebugTarget$/ })
+  await expect(namespaceRow).toBeVisible()
+  await namespaceRow.locator('.tree-expander').click()
+}
+
 // Line breakpoints need the debuggee inside the workspace, and so do function breakpoints: the engine resolves
 // both through the workspace's decompiled statement map rather than through PDBs on disk.
 test.describe('the in-process debug engine', () => {
   test.beforeEach(async () => { await launchApp(debugTargetPath) })
   test.afterEach(async () => { await closeApp() })
-
-  const openDebugTarget = async (): Promise<void> => {
-    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
-    await expect(page.getByRole('treeitem').first()).toContainText('DebugTarget')
-    await expandModule()
-    const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^DebugTarget$/ })
-    await expect(namespaceRow).toBeVisible()
-    await namespaceRow.locator('.tree-expander').click()
-  }
 
   // Upstream's Start button opens the Debug Program dialog rather than a bare file picker, and the executable
   // is prefilled from the module the workspace already has open — so confirming the dialog is all a test needs.
@@ -1345,6 +1346,139 @@ test.describe('the in-process debug engine', () => {
 
     await toolbar.getByRole('button', { name: 'Stop' }).click()
     await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
+  })
+})
+
+// The code viewer's context menu stands in for Monaco's own, so its entries are read back the same way the
+// menus are: by role and label. The document is the debuggee's, whose decompiled lines carry both statement
+// maps and spans — which is what most of the entries need to have anything to act on.
+test.describe('the code viewer context menu', () => {
+  test.beforeEach(async () => { await launchApp(debugTargetPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  const openMain = async (): Promise<void> => {
+    await openDebugTarget()
+    const programRow = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^Program @02000002$/ })
+    await programRow.locator('.tree-expander').click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^Main\(/ }).dblclick()
+    // Monaco only renders the lines its viewport can hold, so the window has to be tall enough for the body.
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+  }
+
+  /** Right-clicks the call to `ThrowAndCatch`, which is where the menu is at its fullest: the caret is on
+   * a reference to a method of the workspace, so every group that names a member has one to name. It is
+   * Main's last statement, which is what keeps it inside the viewport once the document is scrolled. */
+  const rightClickThrowAndCatch = async (): Promise<Locator> => {
+    // Main's body is taller than the editor's viewport, and Monaco renders only the lines it can hold, so
+    // the document is scrolled to its end before the call is looked for. A hidden tab keeps its editor
+    // mounted, so the click is aimed at the document that is showing rather than whichever comes first.
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    const call = editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first()
+    await expect(call).toBeVisible()
+    await call.click({ button: 'right' })
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    await expect(menu).toBeVisible()
+    return menu
+  }
+
+  /** The entry labels in the order the menu laid them out. A row's text carries its shortcut too, which is
+   * trimmed off here so the labels can be compared — the same way the Edit menu test reads them. */
+  const menuLabels = async (menu: Locator): Promise<string[]> =>
+    (await menu.getByRole('menuitem').allTextContents()).map((text) => text.replace(/(Ctrl|Shift|Alt)\+.*$/, '').trim())
+
+  test('lays the document viewer commands out in dnSpy group and order', async () => {
+    await openMain()
+    const menu = await rightClickThrowAndCatch()
+    const labels = await menuLabels(menu)
+
+    // dnSpy's groups in their order: Tabs, Debug, then the assembly editor's delete, create and settings
+    // groups, the IL commands, the tokens, the hex group and finally the editor's own commands. The label
+    // names the node the command would act on, which for a caret on a method reference is that method.
+    const index = (label: string): number => labels.findIndex((entry) => entry.startsWith(label))
+    expect(index('Open in New Tab')).toBe(0)
+    expect(index('Start Debugging...')).toBeGreaterThan(index('Open in New Tab'))
+    expect(index('Add Breakpoint')).toBeGreaterThan(index('Start Debugging...'))
+    expect(index('Add Method Breakpoint')).toBeGreaterThan(index('Add Breakpoint'))
+    expect(index('Delete Method')).toBeGreaterThan(index('Add Method Breakpoint'))
+    expect(index('Create Method')).toBeGreaterThan(index('Delete Method'))
+    expect(index('Edit Method')).toBeGreaterThan(index('Create Method'))
+    expect(index('Edit Method Body...')).toBeGreaterThan(index('Edit Method'))
+    expect(index('Copy MD Token')).toBeGreaterThan(index('Edit Method Body...'))
+    expect(index('Copy Full Name')).toBeGreaterThan(index('Copy MD Token'))
+    expect(index('Show Instructions in Hex Editor')).toBeGreaterThan(index('Copy Full Name'))
+    expect(index('Analyze')).toBeGreaterThan(index('Show Instructions in Hex Editor'))
+    expect(index('Find')).toBeGreaterThan(index('Analyze'))
+    // Nothing this port cannot run is on screen, and neither the bookmark group nor Select All is in it.
+    for (const absent of ['Set Next Statement', 'Add Class Breakpoint', 'Break When Exception Thrown', 'Go to Token', 'Edit IL Instructions', 'Go to Resource', 'Incremental Search', 'Select All', 'Bookmark'])
+      expect(labels.filter((label) => label.includes(absent))).toEqual([])
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+  })
+
+  test('copies the full name of the member the caret is on, and opens its instructions in hex', async () => {
+    await openMain()
+    const menu = await rightClickThrowAndCatch()
+    await menu.getByRole('menuitem', { name: 'Copy Full Name' }).click()
+    // The command writes to the renderer's clipboard, which is the main process's clipboard here.
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText()))
+      .toContain('DebugTarget.Program::ThrowAndCatch()')
+
+    await rightClickThrowAndCatch()
+    await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Show Instructions in Hex Editor' }).click()
+    // The hex document marks the bytes the command named, so the mark is what says the tab really opened on
+    // the selected method's code rather than on the module at large.
+    await expect(page.locator('.hex-byte-marked').first()).toBeVisible()
+    await expect(page.getByRole('tab', { name: /\[Hex\]/ })).toBeVisible()
+  })
+
+  test('follows the reference under the caret into a tab of its own', async () => {
+    await openMain()
+    const targetTab = page.getByRole('tab', { name: 'ThrowAndCatch() : void' })
+    const mainTab = page.getByRole('tab', { name: 'Main(string[]) : void' })
+    await expect(mainTab).toHaveCount(1)
+
+    // The target is not open yet, so the command opens the document the reference names. Copying the tab
+    // it was asked from — which is what this used to do — would leave Main showing twice instead.
+    const menu = await rightClickThrowAndCatch()
+    await menu.getByRole('menuitem', { name: 'Open in New Tab' }).click()
+    await expect(targetTab).toHaveCount(1)
+    await expect(targetTab).toHaveAttribute('aria-selected', 'true')
+    await expect(mainTab).toHaveCount(1)
+
+    // Asked again with the target already up, dnSpy gives it another tab rather than bringing the one it
+    // has to the front; the tab that comes forward is the new one.
+    await mainTab.click()
+    const again = await rightClickThrowAndCatch()
+    await again.getByRole('menuitem', { name: 'Open in New Tab' }).click()
+    await expect(targetTab).toHaveCount(2)
+    await expect(targetTab.last()).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test('still opens on a document that has neither spans nor a statement map', async () => {
+    // IL is decompiled without spans, and the IL map behind the statements is C# only — so a caret in such a
+    // document resolves to no member at all. The commands that read the document's own node stay, and the
+    // menu is what opens rather than nothing.
+    await openMain()
+    await page.getByLabel('Decompiler language').selectOption('il')
+    const editor = page.locator('.monaco-editor')
+    await expect.poll(async () => editor.locator('.view-lines').innerText()).toContain('.method')
+    await editor.locator('.view-lines .view-line').nth(2).click({ button: 'right' })
+
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    await expect(menu).toBeVisible()
+    const labels = await menuLabels(menu)
+    expect(labels).toContain('Edit Method Body...')
+    expect(labels).toContain('Find')
+    // Nothing that needs a member to act on: no statement for the breakpoint commands, no reference for the
+    // ones that name the caret's node. The labels are compared whole, so that "Edit Method Body..." does not
+    // stand in for the missing "Edit Method".
+    for (const absent of ['Add Breakpoint', 'Copy Full Name', 'Delete Method', 'Analyze', 'Edit Method'])
+      expect(labels).not.toContain(absent)
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
   })
 })
 

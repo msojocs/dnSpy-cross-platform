@@ -23,6 +23,8 @@ import { NodeOptionsDialog } from './components/NodeOptionsDialog'
 import { OptionsDialog } from './components/OptionsDialog'
 import { cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
 import { DockPane } from './components/DockPane'
+// Only the interface: the component itself is loaded lazily, when a document tab first draws one.
+import type { DocumentViewCommands } from './components/DocumentView'
 import type { ActiveDocument, CreatedKind, HexShowKind } from './components/edit-menu'
 import { findInActiveDocumentEditor, focusDocumentEditor } from './editor-registry'
 import { translate, useLanguage } from './localization'
@@ -321,6 +323,7 @@ export const App = (): React.JSX.Element => {
   const setDocumentOrder = useAppStore((state) => state.setDocumentOrder)
   const appendOutput = useAppStore((state) => state.appendOutput)
   const setOpenNodeById = useAppStore((state) => state.setOpenNodeById)
+  const setOpenNodeInNewTabById = useAppStore((state) => state.setOpenNodeInNewTabById)
   const setRevealDocument = useAppStore((state) => state.setRevealDocument)
   const setOpenToolWindow = useAppStore((state) => state.setOpenToolWindow)
   const bookmarks = useAppStore((state) => state.bookmarks)
@@ -372,17 +375,19 @@ export const App = (): React.JSX.Element => {
     return siblings?.some((sibling) => sibling.kind === 'namespace' && sibling.label === '-') ?? false
   }, [selectedNode, treeChildren, treeParents])
 
-  const deleteSelected = (): void => {
-    if (!selectedNode)
+  /** Removes a node, defaulting to the selected one. A menu that carries its own node — the code
+   *  viewer's context menu, whose selection is the reference under the caret — hands that one over. */
+  const deleteSelected = (node = selectedNode): void => {
+    if (!node)
       return
     // dnSpy asks before removing a type, method or field — each of those can be referenced from code
     // that this edit cannot see. Property, event, resource and namespace removals go through unasked.
-    const question = DELETE_CONFIRMATIONS[selectedNode.kind]
+    const question = DELETE_CONFIRMATIONS[node.kind]
     if (question && !window.confirm(t(question)))
       return
-    void deleteNode(selectedNode).then((deleted) => {
+    void deleteNode(node).then((deleted) => {
       if (deleted)
-        closeDocumentTabsFor(model, selectedNode.id)
+        closeDocumentTabsFor(model, node.id)
     })
   }
   const enableAllBreakpoints = (enabled: boolean): void => {
@@ -665,24 +670,24 @@ export const App = (): React.JSX.Element => {
 
   const collapseTreeViewNodes = (): void => useAppStore.getState().collapseTreeViewNodes()
 
-  /** dnSpy's settings command for the selected node — Edit Method... and its Alt+Enter. A node whose
-   * dialog has not been built yet has no shortcut, since there is nothing for it to open. */
-  const openEditNode = (): void => {
-    const node = selectedNode
+  /** dnSpy's settings command for a node — Edit Method... and its Alt+Enter. A node whose dialog has not
+   *  been built yet has no shortcut, since there is nothing for it to open. */
+  const openEditNode = (node = selectedNode): void => {
     if (node !== undefined && isEditableKind(node.kind))
       setEditNode({ kind: node.kind, nodeId: node.id })
   }
 
   /**
-   * The five create commands. A member goes into the type the selection belongs to, which is the selected
-   * type itself or the type a selected member hangs off. A type is the one of them with two forms: a
-   * nested one goes into that same type, while a top-level one is filed by whoever is selected — a
-   * namespace by its own name, a type by the namespace it is already in, and a module by nothing at all.
-   * dnSpy reaches the first through the namespace ancestor of the selection and the second through the
-   * selected node itself, which is why the owner is picked differently here.
+   * The five create commands. A member goes into the type the node belongs to, which is the node itself or
+   * the type a member hangs off. A type is the one of them with two forms: a nested one goes into that same
+   * type, while a top-level one is filed by whoever the node is — a namespace by its own name, a type by the
+   * namespace it is already in, and a module by nothing at all. dnSpy reaches the first through the
+   * namespace ancestor of the node and the second through the node itself, which is why the owner is picked
+   * differently here. The node defaults to the selection, which is what the menus carry; the code viewer's
+   * context menu is the exception, running them off the reference under the caret instead.
    */
-  const createMember = (kind: CreatedKind, nested = false): void => {
-    const ownerNodeId = kind === 'type' && !nested ? selectedNode?.id : ownerTypeIdOf(treeParents, selectedNode)
+  const createMember = (kind: CreatedKind, nested = false, node: TreeNode | undefined = selectedNode): void => {
+    const ownerNodeId = kind === 'type' && !nested ? node?.id : ownerTypeIdOf(treeParents, node)
     if (ownerNodeId !== undefined)
       setEditNode({ kind, ownerNodeId, nested })
   }
@@ -851,7 +856,7 @@ export const App = (): React.JSX.Element => {
     return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [dirty])
 
-  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage): Promise<void> => {
+  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false): Promise<void> => {
     const { workspaceId, workspaceGeneration } = useAppStore.getState()
     if (recordHistory) {
       setNavigation((current) => {
@@ -874,6 +879,10 @@ export const App = (): React.JSX.Element => {
       const existing = model.getNodeById(tabId)
       if (existing instanceof TabNode && existing.getName() !== tabName)
         model.doAction(Actions.renameTab(tabId, tabName))
+      // "Open in New Tab" keeps the tab the document already had and adds a second one beside it, which
+      // is what cloneDocumentTab draws — the same document under a new tab id.
+      if (newTab && existing instanceof TabNode)
+        cloneDocumentTab(existing)
     } else {
       const targetTabSet = getTargetDocumentTabSet(model)
       if (!targetTabSet) return
@@ -1000,6 +1009,21 @@ export const App = (): React.JSX.Element => {
     }
   }
 
+  // dnSpy's Follow Reference in New Tab, which the code viewer's "Open in New Tab" runs: the target gets
+  // a tab of its own, so asking twice leaves the document showing in as many tabs as it was asked for.
+  const openNodeInNewTab = async (nodeId: string): Promise<string | undefined> => {
+    if (!workspaceId)
+      return undefined
+    try {
+      const node = await window.dnSpy.getNode(workspaceId, nodeId)
+      await addDocumentTab(node, true, undefined, true)
+      return nodeId
+    } catch (reason) {
+      useAppStore.getState().appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+      return undefined
+    }
+  }
+
   // Debug navigation — a frame switch, Show Next Statement — brings a document that is already in the
   // store to the front without decompiling it again, which is what a step cannot afford. Only a node
   // with no tab at all pays for the lookup and the tab the bookmark path builds.
@@ -1020,18 +1044,20 @@ export const App = (): React.JSX.Element => {
 
   // The store cannot open tabs or tool windows itself, so it calls back into the shell. Handlers are
   // read through a ref because both close over the current workspace and layout.
-  const shellCallbacksRef = useRef({ openBookmarkTarget, showToolWindow, restoreSession, revealDocumentTarget })
-  shellCallbacksRef.current = { openBookmarkTarget, showToolWindow, restoreSession, revealDocumentTarget }
+  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget })
+  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget }
   useEffect(() => {
     setOpenNodeById((nodeId) => shellCallbacksRef.current.openBookmarkTarget(nodeId))
+    setOpenNodeInNewTabById((nodeId) => shellCallbacksRef.current.openNodeInNewTab(nodeId))
     setOpenToolWindow((tabId) => shellCallbacksRef.current.showToolWindow(tabId))
     setRevealDocument((nodeId) => shellCallbacksRef.current.revealDocumentTarget(nodeId))
     return () => {
       setOpenNodeById(undefined)
+      setOpenNodeInNewTabById(undefined)
       setOpenToolWindow(undefined)
       setRevealDocument(undefined)
     }
-  }, [setOpenNodeById, setOpenToolWindow, setRevealDocument])
+  }, [setOpenNodeById, setOpenNodeInNewTabById, setOpenToolWindow, setRevealDocument])
 
   // dnSpy selects a document's nodes in the explorer whenever its tab comes to the front, and that is
   // what follows a reference the user clicked, a bookmark, a search result or a step: each of them just
@@ -1177,11 +1203,38 @@ export const App = (): React.JSX.Element => {
   const showExplorerHex = useCallback((item: TreeNode): void => { explorerActions.current.hex('hex', item) }, [])
   const showExplorerModuleInfo = useCallback((item: TreeNode): void => { explorerActions.current.hex('module-info', item) }, [])
 
+  /**
+   * The commands a code viewer's context menu cannot run itself. It draws the menu — dnSpy's grouping,
+   * with the node the caret is on — but opening a tab, a dialog or a tool window belongs to the shell, so
+   * the viewer is handed the callbacks instead of reaching for the layout model. The node each command
+   * acts on is the one the menu picked, never the explorer's selection: the two are usually different.
+   */
+  const documentViewCommands = (): DocumentViewCommands => ({
+    // dnSpy's document viewer "Open in New Tab" follows the reference under the caret, and the reference
+    // goes to a tab of its own rather than the one a plain follow would reuse.
+    onOpenInNewTab: (target) => { void useAppStore.getState().openReferenceTarget(target, true) },
+    onStartDebug: () => setDebugProgramDialogOpen(true),
+    canStartDebug: backendStatus.capabilities?.['debug.coreclr.launch'] === true,
+    onShowDisassembly: () => showToolWindow('disassembly'),
+    onDeleteNode: (node) => deleteSelected(node),
+    onEditNode: (node) => openEditNode(node),
+    onCreateMember: (kind, nested, node) => createMember(kind, nested, node),
+    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
+    onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
+    onAnalyze: (node) => void openAnalysis(node),
+    onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    onOpenHex: openHex,
+    onShowHexAt: showSelectionInHex,
+    onHexWriteBody: (kind) => void hexWriteMethodBody(kind),
+    onHexCopyBody: () => void hexCopyMethodBody(),
+    onHexPasteBody: () => void hexPasteMethodBody(),
+  })
+
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
       case 'explorer': return <AssemblyExplorer onOpenNode={openExplorerNode} onAnalyzeNode={analyzeExplorerNode} onShowHex={showExplorerHex} onShowModuleInfo={showExplorerModuleInfo} />
-      case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} /></Suspense>
+      case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} />
       case 'search': return <SearchPane onOpenNodeId={(nodeId) => void openNodeId(nodeId)} />

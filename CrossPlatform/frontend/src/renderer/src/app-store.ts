@@ -378,6 +378,13 @@ interface AppState {
   openNodeById?: (nodeId: string) => Promise<string | undefined>
   setOpenNodeById(open: ((nodeId: string) => Promise<string | undefined>) | undefined): void
   /**
+   * Opens the document a node id names in a tab of its own, even when a tab already shows it — what
+   * dnSpy's "Open in New Tab" asks for. Set by the shell, which owns the tab layout, like
+   * `openNodeById`.
+   */
+  openNodeInNewTabById?: (nodeId: string) => Promise<string | undefined>
+  setOpenNodeInNewTabById(open: ((nodeId: string) => Promise<string | undefined>) | undefined): void
+  /**
    * Brings a node's document to the front without decompiling it again — the shell selects the tab it
    * already has, and only a node with no tab is opened the slow way. Set by the shell, like the two
    * callbacks around it, because the tab layout is its to read.
@@ -388,8 +395,10 @@ interface AppState {
    * Follows a reference the user clicked in decompiled text — dnSpy's Go To Reference. A reference
    * inside the workspace names its target's node; one into a module the workspace does not hold names
    * the file and token it has there, and the backend opens that module on demand to answer for it.
+   * `newTab` is dnSpy's Follow Reference in New Tab: the target gets a tab of its own instead of the
+   * tab a plain follow would reuse.
    */
-  openReferenceTarget(target: TextSpan): Promise<void>
+  openReferenceTarget(target: TextSpan, newTab?: boolean): Promise<void>
   /** Records the tab order and the selected tab, which the shell reads off the layout it owns. */
   setDocumentOrder(order: string[], active?: string): void
   setRestoringSession(value: boolean): void
@@ -1326,8 +1335,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  openReferenceTarget: async (target) => {
-    const open = get().openNodeById
+  openReferenceTarget: async (target, newTab = false) => {
+    // dnSpy's two follow commands differ only in where the target goes: a plain follow reuses the tab
+    // the target already has, while Follow Reference in New Tab always gives it one of its own. Which
+    // callback the shell registered is the whole of the difference.
+    const open = newTab ? get().openNodeInNewTabById : get().openNodeById
     if (!open)
       return
     if (target.targetNodeId) {
@@ -1767,6 +1779,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setOpenNodeById: (open) => set({ openNodeById: open }),
+  setOpenNodeInNewTabById: (open) => set({ openNodeInNewTabById: open }),
   setRevealDocument: (open) => set({ revealDocument: open }),
   setOpenToolWindow: (open) => set({ openToolWindow: open }),
 
@@ -2062,7 +2075,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 }))
 
-const findNode = (state: Pick<AppState, 'roots' | 'children'>, nodeId: string): TreeNode | undefined => {
+/**
+ * The node a tree cache holds, by id. A `TextSpan` names its target as a node id, so this is what turns
+ * "the caret is on a reference" into the node a command can act on.
+ */
+export const findNode = (state: Pick<AppState, 'roots' | 'children'>, nodeId: string): TreeNode | undefined => {
   for (const node of state.roots) {
     if (node.id === nodeId)
       return node
@@ -2178,6 +2195,21 @@ export const statementIdentity = (modulePath: string, metadataToken: number, ilO
 // breakpoint, so breakpoints created elsewhere (the Breakpoints pane, F9) show up here too, and a document whose
 // language has no IL map simply draws nothing. A breakpoint is matched by IL identity, falling back to the node it
 // was requested from while the backend has not confirmed the snap yet.
+const breakpointLineInDocument = (
+  nodeId: string,
+  statements: CodeStatement[] | undefined,
+  breakpoint: LineBreakpoint,
+): number | undefined => {
+  const statement = breakpoint.modulePath !== undefined && breakpoint.ilOffset !== undefined
+    ? (statements ?? []).find((candidate) => statementIdentity(candidate.modulePath, candidate.metadataToken, candidate.ilOffset) === breakpoint.identity)
+    : undefined
+  if (statement)
+    return statement.startLine
+  // Until the engine has named the module, the requested line is the only place the dot can go. Once it has, an
+  // identity this document does not contain means the breakpoint belongs to some other document entirely.
+  return breakpoint.modulePath === undefined && breakpoint.nodeId === nodeId ? breakpoint.requestedLine : undefined
+}
+
 export const lineBreakpointMarkers = (
   nodeId: string,
   statements: CodeStatement[] | undefined,
@@ -2185,18 +2217,23 @@ export const lineBreakpointMarkers = (
 ): { line: number; enabled: boolean; state: LineBreakpoint['state']; message?: string; description?: string }[] => {
   const markers: { line: number; enabled: boolean; state: LineBreakpoint['state']; message?: string; description?: string }[] = []
   for (const breakpoint of breakpoints) {
-    const statement = breakpoint.modulePath !== undefined && breakpoint.ilOffset !== undefined
-      ? (statements ?? []).find((candidate) => statementIdentity(candidate.modulePath, candidate.metadataToken, candidate.ilOffset) === breakpoint.identity)
-      : undefined
-    if (statement)
-      markers.push({ line: statement.startLine, enabled: breakpoint.enabled, state: breakpoint.state, message: breakpoint.message, description: breakpoint.description })
-    // Until the engine has named the module, the requested line is the only place the dot can go. Once it has, an
-    // identity this document does not contain means the breakpoint belongs to some other document entirely.
-    else if (breakpoint.modulePath === undefined && breakpoint.nodeId === nodeId)
-      markers.push({ line: breakpoint.requestedLine, enabled: breakpoint.enabled, state: breakpoint.state, message: breakpoint.message, description: breakpoint.description })
+    const line = breakpointLineInDocument(nodeId, statements, breakpoint)
+    if (line !== undefined)
+      markers.push({ line, enabled: breakpoint.enabled, state: breakpoint.state, message: breakpoint.message, description: breakpoint.description })
   }
   return markers
 }
+
+// The breakpoint whose dot a line carries, which is what the code viewer's context menu names in its
+// commands: the inverse of `lineBreakpointMarkers`, and wrong in the same way if the two disagree. Several
+// breakpoints can share a line only through the fallback below, so the first match is the one the dots merge.
+export const lineBreakpointAt = (
+  nodeId: string,
+  statements: CodeStatement[] | undefined,
+  breakpoints: LineBreakpoint[],
+  line: number,
+): LineBreakpoint | undefined =>
+  breakpoints.find((breakpoint) => breakpointLineInDocument(nodeId, statements, breakpoint) === line)
 
 // A bookmark is named by the method it sits in and the IL offset inside it, which is what dnSpy's
 // `DotNetMethodBodyBookmarkLocation` stores. The *source* method token is the one that matters: inside a

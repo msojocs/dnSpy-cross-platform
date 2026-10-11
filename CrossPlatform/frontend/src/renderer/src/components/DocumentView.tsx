@@ -4,12 +4,14 @@ import { AlertTriangle, LoaderCircle } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
-import { isNavigableSpan, type CodeStatement, type TextSpan } from '../../../shared/protocol'
-import { bookmarkMarkers, codeStatementAt, lineBreakpointMarkers, methodBreakpointName, useAppStore } from '../app-store'
+import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { bookmarkMarkers, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
 import { clearBookmarks, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from '../bookmark-commands'
-import type { Bookmark, LineBreakpoint } from '../app-store'
+import type { Bookmark, HexBodyKind, LineBreakpoint } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
+import { showCodeEditorContextMenu } from './CodeEditorContextMenu'
+import type { CreatedKind, HexShowKind } from './edit-menu'
 
 // One decoration per breakpoint that has a line in this document. A disabled breakpoint keeps its dot but draws it
 // hollow; one the engine has not bound (module not loaded yet, or no sequence point at that offset) draws it grey.
@@ -52,7 +54,35 @@ const bookmarkDecorations = (
     },
   }))
 
-export const DocumentView = ({ documentId, viewId, theme, onNavigate }: { documentId: string; viewId: string; theme: string; onNavigate(target: TextSpan): void }): React.JSX.Element => {
+/**
+ * The context menu commands only the shell can run: everything that opens a tab, a dialog or a tool
+ * window, plus the hex commands, which are the same ones the Edit menu carries. The viewer answers the
+ * rest itself, from the caret, the document on screen and the breakpoints on it.
+ */
+export interface DocumentViewCommands {
+  /** Follows a reference in a new tab — dnSpy's document viewer "Open in New Tab". */
+  onOpenInNewTab(target: TextSpan): void
+  onStartDebug(): void
+  /** Whether a debug target is configured, so "Start Debugging..." has something to run. */
+  canStartDebug: boolean
+  onShowDisassembly(): void
+  onDeleteNode(node: TreeNode): void
+  onEditNode(node: TreeNode): void
+  /** Opens the create dialog for a node of this kind inside the type the node belongs to. */
+  onCreateMember(kind: CreatedKind, nested: boolean, node: TreeNode): void
+  onEditMethodBody(node: TreeNode): void
+  onReplaceMethodBodyWithStub(node: TreeNode): void
+  onAnalyze(node: TreeNode): void
+  /** Opens an address in the browser, which is how the menu's "Search MSDN" runs. */
+  onOpenUrl(url: string): void
+  onOpenHex(): void
+  onShowHexAt(kind: HexShowKind): void
+  onHexWriteBody(kind: HexBodyKind): void
+  onHexCopyBody(): void
+  onHexPasteBody(): void
+}
+
+export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }: { documentId: string; viewId: string; theme: string; onNavigate(target: TextSpan): void; commands: DocumentViewCommands }): React.JSX.Element => {
   const wordWrap = useAppStore((state) => state.wordWrap)
   const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
   const document = useAppStore((state) => state.documents[documentId])
@@ -111,6 +141,90 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate }: { docume
   }
   const applyPendingRevealRef = useRef(applyPendingReveal)
   applyPendingRevealRef.current = applyPendingReveal
+
+  // The mount-time mouse handler cannot see this render's props, and the menu has to be built from the
+  // state the click lands in — so the builder is kept in a ref, like the reveal above.
+  const commandsRef = useRef(commands)
+  commandsRef.current = commands
+
+  /**
+   * Builds and shows the code viewer's context menu for a click at `line`/`column`. What the caret is on
+   * decides most of it: the span under it names the reference, the statement under it stands in for a
+   * member when there is no reference, and the breakpoint on its line is what the breakpoint commands act
+   * on. The hex groups are the exception — they answer for the assembly explorer's selection, exactly as
+   * the Edit menu does, because the commands behind them act on the selected node: dnSpy resolves them
+   * from the document instead, but showing another node's target here would put entries on screen whose
+   * action is somewhere else entirely.
+   */
+  const openContextMenu = (line: number, column: number, screen: { x: number; y: number }): void => {
+    const current = document
+    if (!current)
+      return
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const state = useAppStore.getState()
+    const statements = statementsRef.current
+    const statement = codeStatementAt(statements, line, column)
+    const offset = model ? model.getOffsetAt({ lineNumber: line, column }) : -1
+    // A reference under the caret is a span, and only a C# document has them: VB and IL decompile without
+    // any, which is why their menus carry no command that needs a reference to act on.
+    const span = offset >= 0
+      ? spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
+      : undefined
+    const breakpoint = lineBreakpointAt(documentId, statements, breakpointsRef.current, line)
+    const selection = editor?.getSelection()
+    const copyText = (text: string): void => {
+      void navigator.clipboard.writeText(text).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        useAppStore.getState().appendOutput(tRef.current('Copy failed: {message}', { message }))
+      })
+    }
+    showCodeEditorContextMenu({
+      t: tRef.current,
+      documentNode: findNode(state, current.nodeId),
+      referenceNode: span?.targetNodeId !== undefined ? findNode(state, span.targetNodeId) : undefined,
+      // "Open in New Tab" acts on the reference itself, not the node it names: dnSpy follows the
+      // TextReference under the caret, and a reference into a module the workspace does not hold has no
+      // node here to name.
+      referenceTarget: span,
+      statement,
+      hasSelection: selection ? !selection.isEmpty() : false,
+      breakpoint,
+      selectionKind: state.selectedNode?.kind,
+      hexTarget: state.hexTarget,
+      hexStatement: state.hexStatement,
+      debugState: state.debugState,
+      stopped: state.debugState === 'stopped' && state.stoppedLocation !== undefined,
+      canStartDebug: commandsRef.current.canStartDebug,
+      onOpenInNewTab: (target) => commandsRef.current.onOpenInNewTab(target),
+      onStartDebug: () => commandsRef.current.onStartDebug(),
+      onShowDisassembly: () => commandsRef.current.onShowDisassembly(),
+      onToggleBreakpoint: () => void toggleLineBreakpointRef.current(documentId, line, column),
+      onSetBreakpointEnabled: (enabled) => {
+        if (breakpoint)
+          void useAppStore.getState().setLineBreakpointEnabled(breakpoint.id, enabled)
+      },
+      onShowNextStatement: () => void useAppStore.getState().revealStoppedLocation(),
+      onToggleMethodBreakpoint: (name) => void toggleFunctionBreakpointRef.current(name),
+      onDeleteNode: (node) => commandsRef.current.onDeleteNode(node),
+      onEditNode: (node) => commandsRef.current.onEditNode(node),
+      onCreateMember: (kind, nested, node) => commandsRef.current.onCreateMember(kind, nested, node),
+      onEditMethodBody: (node) => commandsRef.current.onEditMethodBody(node),
+      onReplaceMethodBodyWithStub: (node) => commandsRef.current.onReplaceMethodBodyWithStub(node),
+      onAnalyze: (node) => commandsRef.current.onAnalyze(node),
+      onOpenUrl: (url) => commandsRef.current.onOpenUrl(url),
+      copyText,
+      onCopy: () => void editor?.getAction('editor.action.clipboardCopyAction')?.run(),
+      onFind: () => void editor?.getAction('actions.find')?.run(),
+      onOpenHex: () => commandsRef.current.onOpenHex(),
+      onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
+      onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
+      onHexCopyBody: () => commandsRef.current.onHexCopyBody(),
+      onHexPasteBody: () => commandsRef.current.onHexPasteBody(),
+    }, screen, { returnFocusTo: editor?.getDomNode() ?? undefined })
+  }
+  const openContextMenuRef = useRef(openContextMenu)
+  openContextMenuRef.current = openContextMenu
 
   useEffect(() => () => unregisterDocumentEditor(viewId), [viewId])
 
@@ -291,26 +405,30 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate }: { docume
                 if (position)
                   void toggleLineBreakpointRef.current(documentId, position.lineNumber, position.column)
               })
-              // Method breakpoints are demoted to the context menu now that a plain gutter click sets a line
-              // breakpoint: this is the way left to say "break wherever this method starts".
-              let contextMenuLine = 0
+              // The document viewer's own context menu, in place of Monaco's (which `contextmenu: false`
+              // switches off): dnSpy's grouping and order, with the commands this port can run. The caret
+              // moves to the click first — the menu is about what it landed on, and the hex statement group
+              // is resolved from the caret, so the menu waits for that answer rather than building from
+              // wherever the caret happened to be.
               editor.onContextMenu((event) => {
-                contextMenuLine = event.target.position?.lineNumber ?? 0
+                const position = event.target.position
+                if (!position) return
+                event.event.preventDefault()
+                event.event.stopPropagation()
+                editor.setPosition(position)
+                const screen = { x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY }
+                const line = position.lineNumber
+                const column = position.column
+                void useAppStore.getState().setCodeCaret({ documentId, line, column }).then(() => {
+                  openContextMenuRef.current(line, column, screen)
+                })
               })
-              editor.addAction({
-                id: 'dnspy.toggleMethodBreakpoint',
-                label: tRef.current('Toggle Method Breakpoint'),
-                contextMenuGroupId: 'dnspy-breakpoints',
-                contextMenuOrder: 1,
-                run: () => {
-                  if (contextMenuLine <= 0) return
-                  const name = methodBreakpointName(codeStatementAt(statementsRef.current, contextMenuLine)?.description)
-                  if (name)
-                    void toggleFunctionBreakpointRef.current(name)
-                },
-              })
+              // Method breakpoints are demoted to the context menu now that a plain gutter click sets a line
+              // breakpoint: "Add Method Breakpoint" there is the way left to say "break wherever this method
+              // starts", so the action that only fed Monaco's menu is gone.
               // The commands act on the caret of the focused editor, which is this one whenever a chord
-              // arrives here, so they can go through the same path the menu and the window use.
+              // arrives here, so they can go through the same path the menu and the window use. The chords
+              // are the keyboard path and stay; only their Monaco menu entries went with the menu.
               const bookmarkCommands: [number, string, () => void][] = [
                 [monaco.KeyCode.KeyK, 'Toggle Bookmark', toggleBookmarkAtCaret],
                 // Visual Studio's chord, kept here because it is the one dnSpy's users have in their fingers.
@@ -324,8 +442,6 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate }: { docume
                 editor.addAction({
                   id: `dnspy.bookmark.${label.replace(/\W+/g, '')}`,
                   label: tRef.current(label),
-                  contextMenuGroupId: 'dnspy-bookmarks',
-                  contextMenuOrder: 1,
                   run,
                 })
                 editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, monaco.KeyMod.CtrlCmd | key), run)
@@ -351,6 +467,9 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate }: { docume
             options={{
               readOnly: true,
               automaticLayout: true,
+              // The viewer draws dnSpy's menu instead (CodeEditorContextMenu.tsx), so Monaco's own — and
+              // the browser's, which Monaco only suppresses to put its own up — is switched off.
+              contextmenu: false,
               glyphMargin: true,
               lineDecorationsWidth: 14,
               wordWrap: wordWrap ? 'on' : 'off',

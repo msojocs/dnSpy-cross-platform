@@ -1,83 +1,136 @@
-using System.Text;
 using dnlib.DotNet;
+using dnSpy.Backend.Contracts;
 
 namespace dnSpy.Backend.Core.Analyzer;
 
 /// <summary>
 /// The text of an analyzer row the way dnSpy's analyzer nodes write it through the C# decompiler: a type
 /// by its own name (<c>List&lt;T&gt;</c>), a member after its declaring type with the namespace
-/// (<c>NS.Outer.Inner.Method(int) : void</c>). The token and the "(hides)" prefix are the client's to add.
+/// (<c>NS.Outer.Inner.Method(int) : void</c>) — each stretch in the color class dnSpy's syntax highlighting
+/// gives it. The token and the "(hides)" prefix are the client's to add.
 /// </summary>
 static class AnalyzerLabelFormatter {
-	public static string Label(IAnalyzerHost host, object entity) => entity switch {
-		// IDecompiler.WriteName → FormatTypeName: no namespace, no enclosing type, no keywords.
-		TypeDef type => CSharpTypeName.Of(null, type, CSharpTypeName.Options.DoNotUsePrimitiveTypeNames | CSharpTypeName.Options.DoNotIncludeEnclosingType) ?? type.Name.String,
-		MethodDef method => $"{DeclaringType(method.DeclaringType)}.{Method(method)}",
-		FieldDef field => $"{DeclaringType(field.DeclaringType)}.{field.Name} : {CSharpTypeName.Of(field, field.FieldSig?.Type) ?? "???"}",
-		PropertyDef property => $"{DeclaringType(property.DeclaringType)}.{PropertyName(host, property)} : {CSharpTypeName.Of(property, property.PropertySig?.GetRetType())}",
-		EventDef @event => $"{DeclaringType(@event.DeclaringType)}.{@event.Name} : {CSharpTypeName.Of(@event, @event.EventType)}",
-		AssemblyDef assembly => Assembly(assembly),
-		ModuleDef module => module.Name.String,
-		_ => entity.ToString() ?? string.Empty,
-	};
+	public static void Write(TextPartsBuilder output, IAnalyzerHost host, object entity, Func<ITypeDefOrRef, string>? typeColor) {
+		switch (entity) {
+		case TypeDef type:
+			// IDecompiler.WriteName → FormatTypeName: no namespace, no enclosing type, no keywords.
+			if (!CSharpTypeName.Write(output, null, type, CSharpTypeName.Options.DoNotUsePrimitiveTypeNames | CSharpTypeName.Options.DoNotIncludeEnclosingType, typeColor))
+				output.Write(MetadataTextColors.Of(type), type.Name.String);
+			break;
+		case MethodDef method:
+			WriteDeclaringType(output, method.DeclaringType, typeColor);
+			Method(output, method, typeColor);
+			break;
+		case FieldDef field:
+			WriteDeclaringType(output, field.DeclaringType, typeColor);
+			output.Write(MetadataTextColors.Of(field), field.Name.String).WriteColon();
+			if (!CSharpTypeName.Write(output, field, field.FieldSig?.Type, typeColor))
+				output.Write(TextColors.Error, "???");
+			break;
+		case PropertyDef property:
+			WriteDeclaringType(output, property.DeclaringType, typeColor);
+			PropertyName(output, host, property, typeColor);
+			output.WriteColon();
+			CSharpTypeName.Write(output, property, property.PropertySig?.GetRetType(), typeColor);
+			break;
+		case EventDef @event:
+			WriteDeclaringType(output, @event.DeclaringType, typeColor);
+			output.Write(MetadataTextColors.Of(@event), @event.Name.String).WriteColon();
+			CSharpTypeName.Write(output, @event, @event.EventType, CSharpTypeName.Options.None, typeColor);
+			break;
+		case AssemblyDef assembly:
+			Assembly(output, assembly);
+			break;
+		case ModuleDef module:
+			output.Write(TextColors.AssemblyModule, module.Name.String);
+			break;
+		default:
+			output.Write(TextColors.Text, entity.ToString());
+			break;
+		}
+	}
 
-	/// <summary>The decompiler's WriteType with includeNamespace: "NS.Outer.Inner&lt;T&gt;".</summary>
-	static string DeclaringType(TypeDef? type) =>
-		CSharpTypeName.Of(null, type, CSharpTypeName.Options.IncludeNamespace) ?? string.Empty;
+	/// <summary>The decompiler's WriteType with includeNamespace — "NS.Outer.Inner&lt;T&gt;" — and the dot
+	/// before the member's name.</summary>
+	static void WriteDeclaringType(TextPartsBuilder output, TypeDef? type, Func<ITypeDefOrRef, string>? typeColor) {
+		CSharpTypeName.Write(output, null, type, CSharpTypeName.Options.IncludeNamespace, typeColor);
+		output.Write(TextColors.Operator, ".");
+	}
 
 	/// <summary>
 	/// NodeFormatter's method text: the name — a constructor named after its type — the parameter types,
 	/// "..." for a vararg method, and the return type after a colon.
 	/// </summary>
-	public static string Method(MethodDef method) {
-		var builder = new StringBuilder();
-		builder.Append(method.Name == ".ctor" ? method.DeclaringType.Name.String : method.Name.String);
-		builder.Append('(');
-		var parameters = method.Parameters.Where(p => !p.IsHiddenThisParameter).ToList();
-		builder.AppendJoin(", ", parameters.Select(p => CSharpTypeName.Of(p.ParamDef, p.Type) ?? string.Empty));
+	static void Method(TextPartsBuilder output, MethodDef method, Func<ITypeDefOrRef, string>? typeColor) {
+		output.Write(MetadataTextColors.Of(method), method.Name == ".ctor" ? method.DeclaringType.Name.String : method.Name.String);
+		output.Write(TextColors.Punctuation, "(");
+		var first = true;
+		foreach (var parameter in method.Parameters) {
+			if (parameter.IsHiddenThisParameter)
+				continue;
+			if (!first)
+				output.WriteCommaSpace();
+			first = false;
+			CSharpTypeName.Write(output, parameter.ParamDef, parameter.Type, typeColor);
+		}
 		var callConv = method.MethodSig is null ? 0 : method.MethodSig.CallingConvention & CallingConvention.Mask;
 		if (callConv == CallingConvention.VarArg || callConv == CallingConvention.NativeVarArg) {
-			if (method.MethodSig.GetParamCount() > 0)
-				builder.Append(", ");
-			builder.Append("...");
+			if (method.MethodSig!.GetParamCount() > 0)
+				output.WriteCommaSpace();
+			output.Write(TextColors.Operator, "...");
 		}
-		builder.Append(") : ");
-		builder.Append(CSharpTypeName.Of(method.Parameters.ReturnParameter.ParamDef, method.ReturnType));
-		return builder.ToString();
+		output.Write(TextColors.Punctuation, ")").WriteColon();
+		CSharpTypeName.Write(output, method.Parameters.ReturnParameter.ParamDef, method.ReturnType, typeColor);
 	}
 
 	/// <summary>
 	/// The decompiler's FormatPropertyName: an indexer is "this[...]", after the interface it implements
 	/// explicitly when it does; any other property is its name.
 	/// </summary>
-	static string PropertyName(IAnalyzerHost host, PropertyDef property) {
-		if (!property.IsIndexer(host))
-			return property.Name.String;
-		var builder = new StringBuilder();
+	static void PropertyName(TextPartsBuilder output, IAnalyzerHost host, PropertyDef property, Func<ITypeDefOrRef, string>? typeColor) {
+		if (!property.IsIndexer(host)) {
+			output.Write(MetadataTextColors.Of(property), property.Name.String);
+			return;
+		}
 		var accessor = property.GetMethod ?? property.SetMethod;
 		if (accessor is not null && accessor.HasOverrides) {
-			builder.Append(CSharpTypeName.Of(null, accessor.Overrides[0].MethodDeclaration?.DeclaringType, CSharpTypeName.Options.IncludeNamespace));
-			builder.Append('.');
+			CSharpTypeName.Write(output, null, accessor.Overrides[0].MethodDeclaration?.DeclaringType, CSharpTypeName.Options.IncludeNamespace, typeColor);
+			output.Write(TextColors.Operator, ".");
 		}
-		builder.Append("this[");
-		builder.AppendJoin(", ", property.PropertySig.GetParams().Select(p => CSharpTypeName.Of(null, p.ToTypeDefOrRef(), CSharpTypeName.Options.IncludeNamespace) ?? string.Empty));
-		builder.Append(']');
-		return builder.ToString();
+		output.Write(TextColors.Keyword, "this").Write(TextColors.Punctuation, "[");
+		var first = true;
+		foreach (var parameter in property.PropertySig.GetParams()) {
+			if (!first)
+				output.WriteCommaSpace();
+			first = false;
+			CSharpTypeName.Write(output, null, parameter.ToTypeDefOrRef(), CSharpTypeName.Options.IncludeNamespace, typeColor);
+		}
+		output.Write(TextColors.Punctuation, "]");
 	}
 
 	/// <summary>The full assembly name the way dnSpy writes an <c>IAssembly</c>.</summary>
-	static string Assembly(AssemblyDef assembly) {
-		var builder = new StringBuilder();
-		builder.Append(assembly.Name.String);
-		builder.Append(", Version=").Append(assembly.Version);
-		builder.Append(", Culture=").Append(UTF8String.IsNullOrEmpty(assembly.Culture) ? "neutral" : assembly.Culture.String);
+	static void Assembly(TextPartsBuilder output, AssemblyDef assembly) {
+		var isExe = assembly.ManifestModule is { } manifest && (manifest.Characteristics & dnlib.PE.Characteristics.Dll) == 0;
+		output.Write(isExe ? TextColors.AssemblyExe : TextColors.Assembly, assembly.Name.String);
+		output.WriteCommaSpace();
+		output.Write(TextColors.InstanceProperty, "Version").Write(TextColors.Operator, "=").WriteVersion(assembly.Version);
+		output.WriteCommaSpace();
+		output.Write(TextColors.InstanceProperty, "Culture").Write(TextColors.Operator, "=");
+		output.Write(TextColors.EnumField, UTF8String.IsNullOrEmpty(assembly.Culture) ? "neutral" : assembly.Culture.String);
+		output.WriteCommaSpace();
 		var publicKey = PublicKeyBase.ToPublicKeyToken(assembly.PublicKeyOrToken);
-		builder.Append(publicKey is null || publicKey is PublicKeyToken ? ", PublicKeyToken=" : ", PublicKey=");
-		builder.Append(PublicKeyBase.IsNullOrEmpty2(publicKey) ? "null" : publicKey!.ToString());
-		if ((assembly.Attributes & AssemblyAttributes.Retargetable) != 0)
-			builder.Append(", Retargetable=Yes");
-		if ((assembly.Attributes & AssemblyAttributes.ContentType_Mask) == AssemblyAttributes.ContentType_WindowsRuntime)
-			builder.Append(", ContentType=WindowsRuntime");
-		return builder.ToString();
+		output.Write(TextColors.InstanceProperty, publicKey is null || publicKey is PublicKeyToken ? "PublicKeyToken" : "PublicKey").Write(TextColors.Operator, "=");
+		if (PublicKeyBase.IsNullOrEmpty2(publicKey))
+			output.Write(TextColors.Keyword, "null");
+		else
+			output.Write(TextColors.Number, publicKey!.ToString());
+		if ((assembly.Attributes & AssemblyAttributes.Retargetable) != 0) {
+			output.WriteCommaSpace();
+			output.Write(TextColors.InstanceProperty, "Retargetable").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "Yes");
+		}
+		if ((assembly.Attributes & AssemblyAttributes.ContentType_Mask) == AssemblyAttributes.ContentType_WindowsRuntime) {
+			output.WriteCommaSpace();
+			output.Write(TextColors.InstanceProperty, "ContentType").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "WindowsRuntime");
+		}
 	}
 }

@@ -314,6 +314,29 @@ describe('class breakpoints', () => {
     expect(setFunctionBreakpoints).not.toHaveBeenCalled()
     expect(useAppStore.getState().output.at(-1)).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
   })
+
+  it('adds a method breakpoint for each method named, and for a property\'s accessors, never taking one away', async () => {
+    const property: TreeNode = { ...row('System.Int32 Ns.Type::Code', 'property'), hasChildren: true }
+    install([row('System.Int32 Ns.Type::get_Code()', 'method'), row('System.Void Ns.Type::set_Code(System.Int32)', 'method')])
+    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Run', enabled: false }] })
+
+    await useAppStore.getState().addMethodBreakpoints([
+      row('System.Void Ns.Type::Run()', 'method'),
+      property,
+      row('System.Int32 Ns.Type::count', 'field'),
+      row('System.Void Ns.Type::Stop()', 'method'),
+    ])
+
+    // The method that already has one keeps it as it is — this adds, where the tree's command toggles.
+    expect(useAppStore.getState().functionBreakpoints).toEqual([
+      { name: 'Ns.Type.Run', enabled: false },
+      { name: 'Ns.Type.get_Code', enabled: true },
+      { name: 'Ns.Type.set_Code', enabled: true },
+      { name: 'Ns.Type.Stop', enabled: true },
+    ])
+    expect(getChildren).toHaveBeenCalledWith('ws1', property.id)
+    expect(setFunctionBreakpoints).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('collapseTreeViewNodes', () => {

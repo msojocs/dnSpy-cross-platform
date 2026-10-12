@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import { Check, ClipboardCopy, Copy, CopyPlus, FileSearch, Globe, Hash, ScanSearch, Trash2 } from 'lucide-react'
+import { Check, CircleDot, ClipboardCopy, Copy, CopyPlus, Crosshair, FileSearch, Globe, Hash, ScanSearch, Trash2 } from 'lucide-react'
 import type { AnalyzerRow } from '../analyzer-model'
 import { searchMsdnUrl } from './CodeEditorContextMenu'
 
@@ -11,6 +11,7 @@ export interface AnalyzerMenuContext {
   selection: AnalyzerRow[]
   isRoot(key: string): boolean
   showToken: boolean
+  syntaxHighlight: boolean
   singleClickExpandsChildren: boolean
   follow(row: AnalyzerRow, newTab: boolean, useCodeRef: boolean): void
   copySelection(): void
@@ -19,7 +20,12 @@ export interface AnalyzerMenuContext {
   analyze(rows: AnalyzerRow[]): void
   removeRoots(rows: AnalyzerRow[]): void
   setShowToken(value: boolean): void
+  setSyntaxHighlight(value: boolean): void
   setSingleClickExpandsChildren(value: boolean): void
+  /** dnSpy's Add Class Breakpoint, for the type a row names. Left out where there is no debugger to add it to. */
+  addClassBreakpoint?(row: AnalyzerRow): void
+  /** dnSpy's Add Method Breakpoint, for the methods the rows name — a property's or an event's accessors. */
+  addMethodBreakpoints?(rows: AnalyzerRow[]): void
 }
 
 interface AnalyzerMenuEntry {
@@ -34,10 +40,10 @@ interface AnalyzerMenuEntry {
   run(ctx: AnalyzerMenuContext): void
 }
 
-// dnSpy's analyzer menu groups (MenuConstants GROUP_CTX_ANALYZER_*), in the order they sort. The debugger's
-// class and method breakpoint commands sit in a group of their own upstream; the port leaves them out.
+// dnSpy's analyzer menu groups (MenuConstants GROUP_CTX_ANALYZER_*), in the order they sort.
 const GROUP_TABS = 0
 const GROUP_TOKENS = 1000
+const GROUP_DEBUG = 2000
 const GROUP_OTHER = 5000
 const GROUP_OPTIONS = 10000
 
@@ -62,6 +68,16 @@ const firstWithToken = (ctx: AnalyzerMenuContext): number | undefined =>
 const firstFullName = (ctx: AnalyzerMenuContext): string | undefined =>
   ctx.selection.find(isEntity)?.node.fullName ?? undefined
 
+/** The type Add Class Breakpoint is for: dnSpy reads the first member selected, and offers it when that is a type. */
+const classBreakpointTarget = (ctx: AnalyzerMenuContext): AnalyzerRow | undefined => {
+  const first = ctx.selection.find(isEntity)
+  return first?.node.kind === 'type' && first.node.nodeId ? first : undefined
+}
+
+/** The rows Add Method Breakpoint is for: every method selected, and every property and event, for their accessors. */
+const methodBreakpointTargets = (ctx: AnalyzerMenuContext): AnalyzerRow[] =>
+  ctx.selection.filter((row) => !!row.node.nodeId && ['method', 'property', 'event'].includes(row.node.kind))
+
 const ENTRIES: AnalyzerMenuEntry[] = [
   // 0 — Following a row (GROUP_CTX_ANALYZER_TABS): to the place the row was found at, or to the row's member.
   { group: GROUP_TABS, order: 0, key: 'show-reference', icon: () => <FileSearch {...iconProps} />, label: (ctx) => ctx.t('Show Reference in Method'), shortcut: (ctx) => ctx.t('Dbl Click'), visible: (ctx) => !!single(ctx)?.node.source, run: (ctx) => ctx.follow(single(ctx)!, false, true) },
@@ -74,6 +90,12 @@ const ENTRIES: AnalyzerMenuEntry[] = [
   { group: GROUP_TOKENS, order: 40, key: 'copy-md-token', icon: () => <Hash {...iconProps} />, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => firstWithToken(ctx) !== undefined, run: (ctx) => { const token = firstWithToken(ctx); if (token !== undefined) ctx.copyText(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 50, key: 'copy-full-name', icon: () => <ClipboardCopy {...iconProps} />, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => firstFullName(ctx) !== undefined, run: (ctx) => { const name = firstFullName(ctx); if (name) ctx.copyText(name) } },
 
+  // 2000 — Debugger (GROUP_CTX_ANALYZER_DEBUG). The class tracepoint dnSpy lists between the two first
+  // opens the breakpoint settings dialog, which lives in the Breakpoints window's own state; the port
+  // leaves it out here as it does in the assembly tree.
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: () => <CircleDot {...iconProps} />, label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => ctx.addClassBreakpoint !== undefined && classBreakpointTarget(ctx) !== undefined, run: (ctx) => { const row = classBreakpointTarget(ctx); if (row) ctx.addClassBreakpoint?.(row) } },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: () => <Crosshair {...iconProps} />, label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => ctx.addMethodBreakpoints !== undefined && methodBreakpointTargets(ctx).length > 0, run: (ctx) => ctx.addMethodBreakpoints?.(methodBreakpointTargets(ctx)) },
+
   // 5000 — Other (GROUP_CTX_ANALYZER_OTHER). A root is already analyzed, so Analyze is only offered while
   // some selected row is not one; Remove is the other way round, and only takes roots.
   { group: GROUP_OTHER, order: 0, key: 'analyze', icon: () => <ScanSearch {...iconProps} />, label: (ctx) => ctx.t('Analyze'), shortcut: () => 'Ctrl+Shift+R', visible: (ctx) => ctx.selection.some(isAnalyzable) && !ctx.selection.every((row) => ctx.isRoot(row.key)), run: (ctx) => ctx.analyze(ctx.selection.filter(isAnalyzable)) },
@@ -82,6 +104,7 @@ const ENTRIES: AnalyzerMenuEntry[] = [
 
   // 10000 — Options (GROUP_CTX_ANALYZER_OPTIONS), checked while they are on.
   { group: GROUP_OPTIONS, order: 0, key: 'show-tokens', icon: (ctx) => ctx.showToken ? <Check {...iconProps} /> : null, label: (ctx) => ctx.t('Show Tokens'), visible: () => true, run: (ctx) => ctx.setShowToken(!ctx.showToken) },
+  { group: GROUP_OPTIONS, order: 10, key: 'syntax-highlight', icon: (ctx) => ctx.syntaxHighlight ? <Check {...iconProps} /> : null, label: (ctx) => ctx.t('Syntax Highlight'), visible: () => true, run: (ctx) => ctx.setSyntaxHighlight(!ctx.syntaxHighlight) },
   { group: GROUP_OPTIONS, order: 20, key: 'single-click-expands', icon: (ctx) => ctx.singleClickExpandsChildren ? <Check {...iconProps} /> : null, label: (ctx) => ctx.t('Single-click expands nodes'), visible: () => true, run: (ctx) => ctx.setSingleClickExpandsChildren(!ctx.singleClickExpandsChildren) },
 ]
 

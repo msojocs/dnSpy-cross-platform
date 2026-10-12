@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, type WebContents } from 'electron'
 import { spawn } from 'node:child_process'
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -6,15 +6,16 @@ import path from 'node:path'
 import { BackendClient } from './backend-client'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
-import type { AnalyzeChildrenRequest, BackendStatus, DebugLaunchOptions, UiLocale } from '../shared/protocol'
+import type { AnalyzeChildrenRequest, AnalyzerNode, BackendStatus, DebugLaunchOptions, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
 let dialogPathHistory: DialogPathHistory | undefined
 let lastBackendStatus: BackendStatus = { state: 'starting' }
 // The analyzer searches still running, by window and the key the renderer named each with, so a row
-// collapsed mid-search can call its search off.
-const analyzerRequests = new Map<string, AbortController>()
+// collapsed mid-search can call its search off, and what a search finds as it goes reaches the window that
+// asked: the map key is the progress token the backend hands back.
+const analyzerRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -215,6 +216,13 @@ const sendBackendStatus = (status: BackendStatus): void => {
 const sendBackendNotification = (method: string, parameters: unknown): void => {
   if (method === 'debug/event')
     mainWindow?.webContents.send('debug:event', parameters)
+  else if (method === 'analyze/progress') {
+    // A batch for a search that was called off in the meantime has no one left to take it.
+    const progress = parameters as { progressToken: string; start: number; children: AnalyzerNode[] }
+    const request = analyzerRequests.get(progress.progressToken)
+    if (request && !request.sender.isDestroyed())
+      request.sender.send('analyze:progress', { requestKey: request.requestKey, start: progress.start, children: progress.children })
+  }
 }
 
 const createWindow = (): void => {
@@ -411,17 +419,17 @@ const registerIpc = (): void => {
   // collapsed while its search runs, the way dnSpy cancels a search node that is folded away.
   ipcMain.handle('analyze:children', async (event, workspaceId: string, request: AnalyzeChildrenRequest, requestKey: string) => {
     const key = `${event.sender.id}:${requestKey}`
-    const controller = new AbortController()
-    analyzerRequests.set(key, controller)
+    const entry = { controller: new AbortController(), sender: event.sender, requestKey }
+    analyzerRequests.set(key, entry)
     try {
-      return await requireBackend().invoke('analyze/children', { workspaceId, ...request }, 600_000, controller.signal)
+      return await requireBackend().invoke('analyze/children', { workspaceId, ...request, progressToken: key }, 600_000, entry.controller.signal)
     } finally {
-      if (analyzerRequests.get(key) === controller)
+      if (analyzerRequests.get(key) === entry)
         analyzerRequests.delete(key)
     }
   })
   ipcMain.handle('analyze:cancel', (event, requestKey: string) => {
-    analyzerRequests.get(`${event.sender.id}:${requestKey}`)?.abort()
+    analyzerRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
   })
   ipcMain.handle('hex:length', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('hex/getLength', { workspaceId, moduleId }))
   ipcMain.handle('hex:read', (_event, workspaceId: string, moduleId: string, offset: number, count: number) => requireBackend().invoke('hex/readRange', { workspaceId, moduleId, offset, count }))

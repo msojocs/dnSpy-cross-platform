@@ -1,5 +1,5 @@
-using System.Text;
 using dnlib.DotNet;
+using dnSpy.Backend.Contracts;
 
 namespace dnSpy.Backend.Core;
 
@@ -10,7 +10,9 @@ namespace dnSpy.Backend.Core;
 /// as "int[]", byrefs as "ref"/"out"/"in" and open generics with their parameters ("Task&lt;T&gt;").
 /// This is a port of that path against dnlib — ILSpy's AstBuilder.ConvertType (the ilspyv2 tree
 /// dnSpy ships) with IncludeTypeParameterDefinitions and no namespace — so the client can compose
-/// rows and tab titles the way the WPF tree does without carrying the decompiler.
+/// rows and tab titles the way the WPF tree does without carrying the decompiler. The same names can be
+/// written in parts, each in the color class dnSpy's syntax highlighting gives it; <c>typeColor</c> picks a
+/// type name's class, which only the caller can resolve a reference for.
 /// </summary>
 static class CSharpTypeName {
 	// AstBuilder.MAX_CONVERTTYPE_DEPTH
@@ -62,28 +64,56 @@ static class CSharpTypeName {
 	/// type row the way its FormatTypeName does ("Int32", a nested type without its outer type).
 	/// </summary>
 	public static string? Of(IHasCustomAttribute? attributeProvider, ITypeDefOrRef? type, Options options) {
+		var output = new TextPartsBuilder();
+		return Write(output, attributeProvider, type, options, null) ? output.ToString() : null;
+	}
+
+	/// <summary>The same in parts. Answers whether there was a type to write.</summary>
+	public static bool Write(TextPartsBuilder output, IHasCustomAttribute? attributeProvider, TypeSig? type, Func<ITypeDefOrRef, string>? typeColor) =>
+		type is not null && Write(output, attributeProvider, type.ToTypeDefOrRef(), Options.None, typeColor);
+
+	/// <inheritdoc cref="Write(TextPartsBuilder, IHasCustomAttribute?, TypeSig?, Func{ITypeDefOrRef, string}?)"/>
+	public static bool Write(TextPartsBuilder output, IHasCustomAttribute? attributeProvider, ITypeDefOrRef? type, Options options, Func<ITypeDefOrRef, string>? typeColor) {
 		if (type is null)
-			return null;
+			return false;
 		var typeIndex = 0;
 		var syntax = Convert(type, attributeProvider, ref typeIndex, includeParameterDefinitions: true, options, depth: 0);
 		if (syntax is null)
-			return null;
+			return false;
 		// CSharpDecompiler.TypeToString spells a byref out in front (WriteRefIfByRef) and takes the
 		// specifier the conversion put on the type itself back off.
-		var parameter = attributeProvider as ParamDef;
 		if (type.TryGetByRefSig() is not null) {
 			syntax.ByRef = false;
-			return RefPrefix(parameter) + Render(syntax);
+			output.Write(TextColors.Keyword, RefKeyword(attributeProvider as ParamDef)).WriteSpace();
 		}
-		return Render(syntax);
+		Write(output, syntax, typeColor);
+		return true;
 	}
 
 	/// <summary>
 	/// A method's parameter list the way the WPF tree and tab write it — each parameter through the
 	/// same conversion, "ref"/"out"/"in" from the parameter's own attributes.
 	/// </summary>
-	public static string ParameterList(MethodDef method) =>
-		$"({string.Join(", ", method.Parameters.Where(p => !p.IsHiddenThisParameter).Select(p => Of(p.ParamDef, p.Type) ?? string.Empty))})";
+	public static string ParameterList(MethodDef method) {
+		var output = new TextPartsBuilder();
+		WriteParameterList(output, method, null);
+		return output.ToString();
+	}
+
+	/// <summary>The same in parts.</summary>
+	public static void WriteParameterList(TextPartsBuilder output, MethodDef method, Func<ITypeDefOrRef, string>? typeColor) {
+		output.Write(TextColors.Punctuation, "(");
+		var first = true;
+		foreach (var parameter in method.Parameters) {
+			if (parameter.IsHiddenThisParameter)
+				continue;
+			if (!first)
+				output.WriteCommaSpace();
+			first = false;
+			Write(output, parameter.ParamDef, parameter.Type, typeColor);
+		}
+		output.Write(TextColors.Punctuation, ")");
+	}
 
 	/// <summary>
 	/// A stack frame's name the way the WPF Call Stack window writes it — dnSpy's
@@ -174,7 +204,7 @@ static class CSharpTypeName {
 				ApplyTypeArguments(open, arguments);
 				return open;
 			case GenericSig genericSig:
-				return new Syntax { Name = genericSig.GenericParam.Name.String };
+				return new Syntax { Name = genericSig.GenericParam.Name.String, Color = genericSig.IsMethodVar ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter };
 			case TypeDefOrRefSig typeDefOrRefSig:
 				return Convert(typeDefOrRefSig.TypeDefOrRef, null, ref typeIndex, includeParameterDefinitions, options, depth);
 			case ModifierSig modifierSig:
@@ -209,12 +239,12 @@ static class CSharpTypeName {
 
 		if (type.Namespace == "System" && (options & Options.DoNotUsePrimitiveTypeNames) == 0) {
 			if (type.Name == "Object" && HasDynamicAttribute(attributeProvider, typeIndex))
-				return new Syntax { Name = "dynamic" };
+				return new Syntax { Name = "dynamic", Color = TextColors.Keyword };
 			if (Keywords.TryGetValue(type.Name.String, out var keyword))
 				// A keyword is returned before any <T> is added, exactly as AstBuilder does.
-				return new Syntax { Name = keyword };
+				return new Syntax { Name = keyword, Color = TextColors.Keyword };
 		}
-		var simple = new Syntax { Name = SplitArity(type.Name.String) };
+		var simple = new Syntax { Name = SplitArity(type.Name.String), Source = type };
 		// A nested type keeps the namespace its outermost type was put in: metadata leaves a nested row's own
 		// namespace empty, so only a type written without its enclosing chain has one here.
 		if ((options & Options.IncludeNamespace) != 0 && !string.IsNullOrEmpty(type.Namespace))
@@ -272,7 +302,7 @@ static class CSharpTypeName {
 		var typeDef = type.ResolveTypeDef();
 		if (typeDef is null || !typeDef.HasGenericParameters)
 			return;
-		ApplyTypeArguments(syntax, typeDef.GenericParameters.Select(p => new Syntax { Name = p.Name.String }).ToList());
+		ApplyTypeArguments(syntax, typeDef.GenericParameters.Select(p => new Syntax { Name = p.Name.String, Color = TextColors.TypeGenericParameter }).ToList());
 	}
 
 	// AstBuilder.ApplyTypeArgumentsTo: over a nested name, the parameters each link declared itself
@@ -300,12 +330,12 @@ static class CSharpTypeName {
 	}
 
 	// WriteRefIfByRef: out (out-only parameter), in (readonly reference), ref everywhere else.
-	static string RefPrefix(ParamDef? parameter) {
+	static string RefKeyword(ParamDef? parameter) {
 		if (parameter is not null && !parameter.IsIn && parameter.IsOut)
-			return "out ";
+			return "out";
 		if (parameter is not null && parameter.CustomAttributes.Any(a => a.AttributeType.Namespace == CompilerServicesNamespace && a.AttributeType.Name == "IsReadOnlyAttribute"))
-			return "in ";
-		return "ref ";
+			return "in";
+		return "ref";
 	}
 
 	// DnlibExtensions.IsSystemNullable: System.Nullable`1 as a value type, matched without resolving.
@@ -333,28 +363,69 @@ static class CSharpTypeName {
 		return false;
 	}
 
-	static string Render(Syntax syntax) {
+	/// <summary>Writes a converted type the way the C# output visitor prints its AstType: keywords, names in
+	/// their type's color, namespaces and the dots between names, brackets and specifiers.</summary>
+	static void Write(TextPartsBuilder output, Syntax syntax, Func<ITypeDefOrRef, string>? typeColor) {
 		if (syntax.Return is not null) {
-			var conventions = syntax.Unmanaged
-				? syntax.Conventions.Count > 0 ? $" unmanaged[{string.Join(", ", syntax.Conventions)}]" : " unmanaged"
-				: string.Empty;
-			return $"delegate*{conventions}<{string.Join(", ", syntax.Parameters.Select(Render))}, {Render(syntax.Return)}>";
+			output.Write(TextColors.Keyword, "delegate").Write(TextColors.Operator, "*");
+			if (syntax.Unmanaged) {
+				output.WriteSpace().Write(TextColors.Keyword, "unmanaged");
+				if (syntax.Conventions.Count > 0) {
+					output.Write(TextColors.Punctuation, "[");
+					for (var index = 0; index < syntax.Conventions.Count; index++) {
+						if (index > 0)
+							output.WriteCommaSpace();
+						output.Write(TextColors.Text, syntax.Conventions[index]);
+					}
+					output.Write(TextColors.Punctuation, "]");
+				}
+			}
+			output.Write(TextColors.Punctuation, "<");
+			foreach (var parameter in syntax.Parameters) {
+				Write(output, parameter, typeColor);
+				output.WriteCommaSpace();
+			}
+			if (syntax.Parameters.Count == 0)
+				output.WriteCommaSpace();
+			Write(output, syntax.Return, typeColor);
+			output.Write(TextColors.Punctuation, ">");
+			return;
 		}
-		var text = syntax.Target is not null ? $"{Render(syntax.Target)}.{syntax.Name}"
-			: syntax.Namespace is not null ? $"{syntax.Namespace}.{syntax.Name}"
-			: syntax.Name;
-		if (syntax.TypeArguments.Count > 0)
-			text += $"<{string.Join(", ", syntax.TypeArguments.Select(Render))}>";
 		if (syntax.ByRef)
-			text = "ref " + text;
-		text += new string('*', syntax.Pointers);
-		foreach (var rank in syntax.ArrayRanks)
+			output.Write(TextColors.Keyword, "ref").WriteSpace();
+		if (syntax.Target is not null) {
+			Write(output, syntax.Target, typeColor);
+			output.Write(TextColors.Operator, ".");
+		}
+		else if (syntax.Namespace is not null) {
+			output.WriteNamespace(syntax.Namespace);
+			output.Write(TextColors.Operator, ".");
+		}
+		output.Write(syntax.Color ?? (syntax.Source is not null && typeColor is not null ? typeColor(syntax.Source) : TextColors.Type), syntax.Name);
+		if (syntax.TypeArguments.Count > 0) {
+			output.Write(TextColors.Punctuation, "<");
+			for (var index = 0; index < syntax.TypeArguments.Count; index++) {
+				if (index > 0)
+					output.WriteCommaSpace();
+				Write(output, syntax.TypeArguments[index], typeColor);
+			}
+			output.Write(TextColors.Punctuation, ">");
+		}
+		for (var pointer = 0; pointer < syntax.Pointers; pointer++)
+			output.Write(TextColors.Operator, "*");
+		foreach (var rank in syntax.ArrayRanks) {
 			// A jagged bracket is empty; a multidimensional one names its rows, the way the C#
 			// output visitor writes them.
-			text += rank <= 1 ? "[]" : $"[{string.Join(",", Enumerable.Repeat("0...", rank))}]";
+			output.Write(TextColors.Punctuation, "[");
+			for (var dimension = 0; rank > 1 && dimension < rank; dimension++) {
+				if (dimension > 0)
+					output.Write(TextColors.Punctuation, ",");
+				output.Write(TextColors.Text, "0...");
+			}
+			output.Write(TextColors.Punctuation, "]");
+		}
 		if (syntax.Nullable)
-			text += "?";
-		return text;
+			output.Write(TextColors.Operator, "?");
 	}
 
 	// NRefactory ReflectionHelper.SplitTypeParameterCountFromReflectionName: the `N arity suffix
@@ -377,9 +448,12 @@ static class CSharpTypeName {
 	/// </summary>
 	sealed class Syntax {
 		public string Name = string.Empty;
+		// The class a keyword or a generic parameter is written in; a type's name takes its type's.
+		public string? Color;
 		// The namespace an IncludeNamespace conversion writes in front of a top-level name.
 		public string? Namespace;
-		// What a MemberType names — its parameter counts steer the argument distribution.
+		// What a name names — a MemberType's parameter counts steer the argument distribution, and every
+		// name is colored after it.
 		public ITypeDefOrRef? Source;
 		// The enclosing chain of a nested type.
 		public Syntax? Target;

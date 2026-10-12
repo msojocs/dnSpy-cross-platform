@@ -87,11 +87,13 @@ sealed class AttributeAppliedToSearch : AnalyzerSearch {
 		}
 	}
 
-	public override void ScanType(TypeDef type, AnalyzerScanUnit unit, List<AnalyzerHit> hits) {
+	public override IReadOnlyList<AnalyzerHit> Collect(TypeDef type, AnalyzerScanUnit unit) {
 		const AttributeTargets memberTargets = AttributeTargets.Class | AttributeTargets.Enum | AttributeTargets.Interface | AttributeTargets.Struct | AttributeTargets.GenericParameter | AttributeTargets.Field | AttributeTargets.Property | AttributeTargets.Event | AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.ReturnValue | AttributeTargets.Parameter;
-		if ((usage & memberTargets) != 0)
-			hits.AddRange(FindReferencesWithinInType(type, (ITypeDefOrRef)unit.State!));
+		return (usage & memberTargets) != 0 ? FindReferencesWithinInType(type, (ITypeDefOrRef)unit.State!).ToList() : [];
 	}
+
+	/// <summary>A method is listed once: the user method a lambda's attribute is shown as may hold several.</summary>
+	public override bool Accept(AnalyzerHit hit) => hit.Entity is not MethodDef method || foundMethods.Add(method);
 
 	IEnumerable<AnalyzerHit> FindReferencesWithinInType(TypeDef type, ITypeDefOrRef attrTypeRef) {
 		var attrTypeRefScopeType = attrTypeRef.GetScopeType();
@@ -149,8 +151,8 @@ sealed class AttributeAppliedToSearch : AnalyzerSearch {
 						}
 					}
 				}
-				if (found && GetOriginalCodeLocation(method) is var codeLocation && foundMethods.Add(codeLocation))
-					yield return new AnalyzerHit(codeLocation);
+				if (found)
+					yield return new AnalyzerHit(GetOriginalCodeLocation(method));
 			}
 		}
 	}
@@ -253,16 +255,13 @@ sealed class TypeUsedBySearch(IAnalyzerHost host, TypeDef analyzedType) : Scoped
 		return new ScopedWhereUsedAnalyzer(Host, analyzedType, includeAllModules ? ScopedWhereUsedAnalyzerOptions.IncludeAllModules : ScopedWhereUsedAnalyzerOptions.None);
 	}
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
-		// The analyzed type's own members are not uses of it, and a member found twice — a property through
-		// both its getter and its setter — is listed once, with the place it was found first.
-		var seen = new HashSet<IMemberRef>();
-		var result = hits
-			.Where(hit => hit.Member!.DeclaringType != analyzedType && seen.Add(hit.Member))
-			.ToList();
-		result.AddRange(FindGlobalUsage());
-		return result;
-	}
+	readonly HashSet<IMemberRef> seen = [];
+
+	// The analyzed type's own members are not uses of it, and a member found twice — a property through
+	// both its getter and its setter — is listed once, with the place it was found first.
+	public override bool Accept(AnalyzerHit hit) => hit.Member!.DeclaringType != analyzedType && seen.Add(hit.Member);
+
+	public override void Finish(List<AnalyzerHit> hits) => hits.AddRange(FindGlobalUsage());
 
 	IEnumerable<AnalyzerHit> FindGlobalUsage() {
 		var analyzedAssemblies = new HashSet<AssemblyDef>();

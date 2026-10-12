@@ -463,6 +463,95 @@ select:focus-visible,
   text-overflow: ellipsis;
 }
 
+/* dnSpy's syntax highlighting of a tree row's text: each stretch carries the color class the backend gave
+   it (TextColors), drawn in the colors of dnSpy's own themes — dark.dntheme for the dark and blue themes,
+   light.dntheme for the light one. Plain text and punctuation keep the row's color, and the high-contrast
+   theme, whose dnSpy counterpart defines none of these, keeps everything plain. */
+:root {
+  --tc-operator: #b4b4b4;
+  --tc-number: #b5cea8;
+  --tc-keyword: #569cd6;
+  --tc-error: #ff0000;
+  --tc-namespace: #ffd700;
+  --tc-type: #4ec9b0;
+  --tc-static-type: #378d7b;
+  --tc-delegate: #33ccff;
+  --tc-enum: #b8d7a3;
+  --tc-interface: #9b9b82;
+  --tc-value-type: #009933;
+  --tc-generic-parameter: #4b8595;
+  --tc-instance-method: #ff8000;
+  --tc-static-method: #e67300;
+  --tc-extension-method: #cc6600;
+  --tc-instance-field: #aa70ff;
+  --tc-enum-field: #bd63c5;
+  --tc-literal-field: #c266ff;
+  --tc-static-field: #8d8dc6;
+  --tc-instance-event: #cc6699;
+  --tc-static-event: #db94b8;
+  --tc-instance-property: #248f8f;
+  --tc-static-property: #1f8e8e;
+  --tc-assembly: #c4c4c4;
+  --tc-assembly-exe: #f0ca93;
+  --tc-assembly-module: #b17fd7;
+}
+
+:root[data-theme="light"] {
+  --tc-operator: inherit;
+  --tc-number: #5b2da8;
+  --tc-keyword: #0000ff;
+  --tc-namespace: #9e7e00;
+  --tc-type: #2b91af;
+  --tc-static-type: #1b5d70;
+  --tc-delegate: #6666ff;
+  --tc-enum: #336600;
+  --tc-interface: #1e667a;
+  --tc-generic-parameter: #2b91af;
+  --tc-instance-method: #880000;
+  --tc-static-method: #880000;
+  --tc-extension-method: #960000;
+  --tc-instance-field: #cc3399;
+  --tc-enum-field: #6f008a;
+  --tc-literal-field: #9900ff;
+  --tc-static-field: #990099;
+  --tc-instance-event: #990033;
+  --tc-static-event: #660033;
+  --tc-instance-property: #996633;
+  --tc-static-property: #7a5229;
+  --tc-assembly: #414141;
+  --tc-assembly-exe: #c17b19;
+  --tc-assembly-module: #642c8f;
+}
+
+:root:not([data-theme="hc"]) .tc-operator { color: var(--tc-operator); }
+:root:not([data-theme="hc"]) .tc-number { color: var(--tc-number); }
+:root:not([data-theme="hc"]) .tc-keyword { color: var(--tc-keyword); }
+:root:not([data-theme="hc"]) .tc-error { color: var(--tc-error); }
+:root:not([data-theme="hc"]) .tc-namespace { color: var(--tc-namespace); }
+:root:not([data-theme="hc"]) .tc-type,
+:root:not([data-theme="hc"]) .tc-sealedType { color: var(--tc-type); }
+:root:not([data-theme="hc"]) .tc-staticType { color: var(--tc-static-type); }
+:root:not([data-theme="hc"]) .tc-delegate { color: var(--tc-delegate); }
+:root:not([data-theme="hc"]) .tc-enum { color: var(--tc-enum); }
+:root:not([data-theme="hc"]) .tc-interface { color: var(--tc-interface); }
+:root:not([data-theme="hc"]) .tc-valueType { color: var(--tc-value-type); }
+:root:not([data-theme="hc"]) .tc-typeGenericParameter,
+:root:not([data-theme="hc"]) .tc-methodGenericParameter { color: var(--tc-generic-parameter); }
+:root:not([data-theme="hc"]) .tc-instanceMethod { color: var(--tc-instance-method); }
+:root:not([data-theme="hc"]) .tc-staticMethod { color: var(--tc-static-method); }
+:root:not([data-theme="hc"]) .tc-extensionMethod { color: var(--tc-extension-method); font-style: italic; }
+:root:not([data-theme="hc"]) .tc-instanceField { color: var(--tc-instance-field); }
+:root:not([data-theme="hc"]) .tc-enumField { color: var(--tc-enum-field); }
+:root:not([data-theme="hc"]) .tc-literalField { color: var(--tc-literal-field); }
+:root:not([data-theme="hc"]) .tc-staticField { color: var(--tc-static-field); }
+:root:not([data-theme="hc"]) .tc-instanceEvent { color: var(--tc-instance-event); }
+:root:not([data-theme="hc"]) .tc-staticEvent { color: var(--tc-static-event); }
+:root:not([data-theme="hc"]) .tc-instanceProperty { color: var(--tc-instance-property); }
+:root:not([data-theme="hc"]) .tc-staticProperty { color: var(--tc-static-property); }
+:root:not([data-theme="hc"]) .tc-assembly { color: var(--tc-assembly); }
+:root:not([data-theme="hc"]) .tc-assemblyExe { color: var(--tc-assembly-exe); }
+:root:not([data-theme="hc"]) .tc-assemblyModule { color: var(--tc-assembly-module); }
+
 /* The line a search shows while it is still running — dnSpy's "Searching..." message node. */
 .analyzer-searching .tree-label {
   color: var(--text-muted);
@@ -726,6 +815,16 @@ select:focus-visible,
 
 .result-row:hover {
   background: var(--selection);
+}
+
+.search-result {
+  cursor: default;
+  user-select: none;
+}
+
+.search-result.selected {
+  background: var(--selection);
+  color: var(--text);
 }
 
 .result-name,

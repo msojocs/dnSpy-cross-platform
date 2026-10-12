@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { LanguageProvider } from '../localization'
-import { loadAppOptions, saveAppOptions } from './app-options'
+import { loadAppOptions, resetAppOptions, saveAppOptions } from './app-options'
 import { AssemblyExplorer, composeTreeRowText } from './AssemblyExplorer'
 import type { AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 
@@ -118,6 +118,28 @@ it('re-reads the token option when it is saved', () => {
 
   act(() => saveAppOptions({ ...loadAppOptions(), assemblyExplorer: { ...loadAppOptions().assemblyExplorer, showToken: true } }))
   expect(screen.getByText('Example @02000001')).toBeInTheDocument()
+})
+
+it('writes a row the backend colored in its colors, and plain text with syntax highlighting off', () => {
+  useAppStore.setState({ roots: [{
+    id: 'm', kind: 'method', label: 'Run(int)', hasChildren: false, metadataToken: 0x06000002, returnType: 'void',
+    labelParts: [{ text: 'Run', color: 'staticMethod' }, { text: '(', color: 'punctuation' }, { text: 'int', color: 'keyword' }, { text: ')', color: 'punctuation' }],
+    returnTypeParts: [{ text: 'void', color: 'keyword' }],
+  }] })
+  render(<AssemblyExplorer commands={explorerCommands()} />)
+  const label = (): Element => screen.getByRole('treeitem').querySelector('.tree-label')!
+  expect(label().textContent).toBe('Run(int) : void @06000002')
+  expect([...label().querySelectorAll('span')].map((span) => [span.textContent, span.className])).toEqual([
+    ['Run', 'tc-staticMethod'], ['(', 'tc-punctuation'], ['int', 'tc-keyword'], [')', 'tc-punctuation'],
+    [' ', 'tc-text'], [':', 'tc-punctuation'], [' ', 'tc-text'], ['void', 'tc-keyword'],
+    [' ', 'tc-text'], ['@', 'tc-operator'], ['06000002', 'tc-number'],
+  ])
+
+  act(() => saveAppOptions({ ...loadAppOptions(), assemblyExplorer: { ...loadAppOptions().assemblyExplorer, syntaxHighlight: false } }))
+  expect(label().querySelector('span')).toBeNull()
+  expect(label().textContent).toBe('Run(int) : void @06000002')
+  // The snapshot the tree reads outlives the storage the next case clears.
+  act(() => saveAppOptions(resetAppOptions()))
 })
 
 // A row the app selected on its own — the node of a document that just came to the front — can be

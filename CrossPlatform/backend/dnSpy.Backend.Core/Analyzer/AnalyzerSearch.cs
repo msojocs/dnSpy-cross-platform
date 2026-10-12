@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using dnlib.DotNet;
 
 namespace dnSpy.Backend.Core.Analyzer;
@@ -23,8 +24,11 @@ sealed class AnalyzerScanUnit(ModuleDef module, Func<IEnumerable<TypeDef>> types
 /// <summary>
 /// One of dnSpy's analyzer searches — what a <c>SearchNode</c>'s FetchChildren does, split into the
 /// steps a time-sliced run can stop between: <see cref="Prepare"/> works out which types to look at,
-/// <see cref="ScanType"/> looks at one of them, and <see cref="Finish"/> adds what is only known once
-/// everything was seen (an attribute at assembly level, the duplicates a whole search leaves).
+/// <see cref="Collect"/> looks at one of them, <see cref="Accept"/> decides which of what it found goes on
+/// the list, and <see cref="Finish"/> adds what is only known once everything was seen (an attribute at
+/// assembly level). The hits only ever grow at the end: what a search found is sent to the client while it
+/// still runs, so no step may take back or reorder a hit already listed — a duplicate is dropped before it
+/// is added, the way WPF's lazy Distinct() does.
 /// </summary>
 abstract class AnalyzerSearch(IAnalyzerHost host) {
 	protected IAnalyzerHost Host { get; } = host;
@@ -36,12 +40,21 @@ abstract class AnalyzerSearch(IAnalyzerHost host) {
 	public virtual void BeginUnit(AnalyzerScanUnit unit, List<AnalyzerHit> hits) {
 	}
 
-	public virtual void ScanType(TypeDef type, AnalyzerScanUnit unit, List<AnalyzerHit> hits) =>
-		hits.AddRange(FindReferencesInType(type));
+	/// <summary>
+	/// What one type holds for the search. Several types may be looked at at once, on as many threads — the
+	/// way dnSpy's PLINQ query runs a search — so this may only read the model and resolve through the
+	/// host; whatever a search remembers from one type to the next is <see cref="Accept"/>'s to keep.
+	/// </summary>
+	public virtual IReadOnlyList<AnalyzerHit> Collect(TypeDef type, AnalyzerScanUnit unit) => FindReferencesInType(type).ToList();
+
+	/// <summary>Whether a hit goes on the list. Asked one hit at a time, in the order the types are walked in
+	/// and each type's hits were found in, so a search's result does not depend on the threads.</summary>
+	public virtual bool Accept(AnalyzerHit hit) => true;
 
 	protected virtual IEnumerable<AnalyzerHit> FindReferencesInType(TypeDef type) => [];
 
-	public virtual List<AnalyzerHit> Finish(List<AnalyzerHit> hits) => hits;
+	public virtual void Finish(List<AnalyzerHit> hits) {
+	}
 
 	protected MethodDef GetOriginalCodeLocation(MethodDef method) => AnalyzerHelpers.GetOriginalCodeLocation(Host, method);
 
@@ -70,20 +83,26 @@ abstract class ScopedSearch(IAnalyzerHost host) : AnalyzerSearch(host) {
 /// Runs a search a slice at a time. Every slice runs while the caller holds the workspace gate, so dnlib's
 /// objects are only ever touched under it, and the gate is let go between slices so a long search does not
 /// keep the tree and the documents waiting. A unit's types are listed when the unit starts, and only the
-/// position in that list outlives a slice — no dnlib enumerator is held across the gap.
+/// position in that list outlives a slice — no dnlib enumerator is held across the gap. Run on more than one
+/// thread, a slice looks at the types a batch at a time, the batch spread over the threads.
 /// </summary>
 sealed class AnalyzerSearchRun {
 	readonly AnalyzerSearch search;
 	readonly IReadOnlyList<AnalyzerScanUnit> units;
 	readonly int maxResults;
-	List<AnalyzerHit> hits = [];
+	readonly int parallelism;
+	// Enough types per batch to keep every thread busy while the slice's clock is checked often.
+	readonly int batchSize;
+	readonly List<AnalyzerHit> hits = [];
 	int unitIndex;
 	List<TypeDef>? types;
 	int typeIndex;
 
-	public AnalyzerSearchRun(AnalyzerSearch search, long epoch, int maxResults, CancellationToken cancellationToken) {
+	public AnalyzerSearchRun(AnalyzerSearch search, long epoch, int maxResults, int parallelism, CancellationToken cancellationToken) {
 		this.search = search;
 		this.maxResults = maxResults;
+		this.parallelism = Math.Max(1, parallelism);
+		batchSize = this.parallelism == 1 ? 1 : this.parallelism * 4;
 		Epoch = epoch;
 		units = search.Prepare(cancellationToken);
 	}
@@ -97,6 +116,12 @@ sealed class AnalyzerSearchRun {
 
 	public bool Completed => Truncated || unitIndex >= units.Count;
 
+	/// <summary>What the search found so far, as far as the limit lets it be listed: a type can bring several
+	/// hits at once, and the ones past the limit are never shown.</summary>
+	public int Count => Math.Min(hits.Count, maxResults);
+
+	public AnalyzerHit this[int index] => hits[index];
+
 	public void RunSlice(TimeSpan budget, CancellationToken cancellationToken) {
 		var stopwatch = Stopwatch.StartNew();
 		while (!Completed) {
@@ -108,10 +133,18 @@ sealed class AnalyzerSearchRun {
 			}
 			while (typeIndex < types.Count) {
 				cancellationToken.ThrowIfCancellationRequested();
-				search.ScanType(types[typeIndex++], unit, hits);
-				if (hits.Count >= maxResults) {
-					Truncated = true;
-					return;
+				var found = Collect(types, typeIndex, Math.Min(batchSize, types.Count - typeIndex), unit, cancellationToken);
+				typeIndex += found.Length;
+				foreach (var typeHits in found) {
+					foreach (var hit in typeHits) {
+						if (!search.Accept(hit))
+							continue;
+						hits.Add(hit);
+						if (hits.Count >= maxResults) {
+							Truncated = true;
+							return;
+						}
+					}
 				}
 				if (stopwatch.Elapsed >= budget)
 					return;
@@ -121,12 +154,27 @@ sealed class AnalyzerSearchRun {
 		}
 	}
 
-	public IReadOnlyList<AnalyzerHit> Finish() {
-		hits = search.Finish(hits);
-		if (hits.Count > maxResults) {
-			Truncated = true;
-			hits.RemoveRange(maxResults, hits.Count - maxResults);
+	/// <summary>What a batch of types holds for the search, a list per type in the order of the types.</summary>
+	IReadOnlyList<AnalyzerHit>[] Collect(List<TypeDef> batch, int start, int count, AnalyzerScanUnit unit, CancellationToken cancellationToken) {
+		var found = new IReadOnlyList<AnalyzerHit>[count];
+		if (count == 1) {
+			found[0] = search.Collect(batch[start], unit);
+			return found;
 		}
-		return hits;
+		try {
+			Parallel.For(0, count, new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = parallelism },
+				index => found[index] = search.Collect(batch[start + index], unit));
+		}
+		catch (AggregateException ex) when (ex.InnerExceptions.Count == 1) {
+			ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw();
+		}
+		return found;
+	}
+
+	/// <summary>Adds what the search only knows once every type was seen; <see cref="Count"/> covers it after.</summary>
+	public void Finish() {
+		search.Finish(hits);
+		if (hits.Count > maxResults)
+			Truncated = true;
 	}
 }

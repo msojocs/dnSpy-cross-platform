@@ -1,4 +1,4 @@
-import type { AnalyzerNode, AnalyzerSource, AnalyzerTarget, CodeStatement, TextSpan } from '../../shared/protocol'
+import type { AnalyzerNode, AnalyzerSource, AnalyzerTarget, CodeStatement, TextPart, TextSpan } from '../../shared/protocol'
 
 // The pieces of dnSpy's analyzer tree that need no React and no store: how a row is written, the order rows
 // are shown in, what Copy puts on the clipboard, and where "Show Reference in Method" puts the caret.
@@ -11,9 +11,10 @@ export interface AnalyzerRow {
   node: AnalyzerNode
 }
 
-/** Where a row's children stand: being fetched by the request named, or fetched. */
+/** Where a row's children stand: being fetched by the request named — a search shows what it found so
+ * far while it runs — or fetched. */
 export type AnalyzerChildren =
-  | { status: 'loading'; requestKey: string }
+  | { status: 'loading'; requestKey: string; keys: string[] }
   | { status: 'loaded'; keys: string[]; truncated: boolean }
 
 /** What the tree is drawn from; the store holds it, and these helpers only read it. */
@@ -51,6 +52,29 @@ export const composeAnalyzerText = (node: AnalyzerNode, t: (message: string) => 
 }
 
 /**
+ * The same text cut where dnSpy's syntax highlighting changes color: "(hides)" between punctuation, the
+ * label as the backend colored it — a search row's header plain — and the token an operator and a number.
+ */
+export const composeAnalyzerParts = (node: AnalyzerNode, t: (message: string) => string, showToken: boolean): TextPart[] => {
+  if (node.kind === 'search')
+    return [{ text: t(node.label), color: 'text' }]
+  const parts: TextPart[] = []
+  if (node.hidesParent)
+    parts.push({ text: '(', color: 'punctuation' }, { text: t('hides'), color: 'text' }, { text: ')', color: 'punctuation' }, { text: ' ', color: 'text' })
+  parts.push(...(node.labelParts ?? [{ text: node.label, color: 'text' }]))
+  if (showToken && !node.accessor && node.metadataToken != null && KINDS_WITH_TOKEN.has(node.kind))
+    parts.push(...tokenParts(node.metadataToken))
+  return parts
+}
+
+/** NodeFormatter's " @06000004": a space, an operator and the token as a number. */
+export const tokenParts = (token: number): TextPart[] => [
+  { text: ' ', color: 'text' },
+  { text: '@', color: 'operator' },
+  { text: formatToken(token), color: 'number' },
+]
+
+/**
  * dnSpy sorts every level but the top one with `StringComparer.OrdinalIgnoreCase` over the row's text:
  * code unit by code unit, after upper-casing — not a locale's collation, which would put "_" and "a"
  * elsewhere.
@@ -63,7 +87,8 @@ export const compareOrdinalIgnoreCase = (left: string, right: string): number =>
 
 /**
  * The tree as it is drawn: the roots in the order they were analyzed, every other level sorted by its text
- * (equal texts keep the order they were found in), and a "Searching..." line under a search still running.
+ * (equal texts keep the order they were found in), and a "Searching..." line under a search still running —
+ * after what it found so far, where dnSpy's message node sorts.
  */
 export const flattenAnalyzerTree = (state: AnalyzerTreeState, compose: (node: AnalyzerNode) => string): AnalyzerLine[] => {
   const lines: AnalyzerLine[] = []
@@ -81,10 +106,10 @@ export const flattenAnalyzerTree = (state: AnalyzerTreeState, compose: (node: An
       if (!state.expanded[key])
         continue
       const children = state.children[key]
+      if (children)
+        visit(children.keys, depth + 1, true)
       if (children?.status === 'loading' && row.node.kind === 'search')
         lines.push({ kind: 'searching', key: `${key}:searching`, depth: depth + 1 })
-      else if (children?.status === 'loaded')
-        visit(children.keys, depth + 1, true)
     }
   }
   visit(state.rootKeys, 0, false)

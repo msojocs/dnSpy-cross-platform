@@ -190,7 +190,10 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.AnalyzeNodes:
 				return await workspaces.AnalyzeNodesAsync(DeserializeParams<AnalyzeNodesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.AnalyzeChildren:
-				return await workspaces.AnalyzeChildrenAsync(DeserializeParams<AnalyzeChildrenRequest>(request), cancellationToken).ConfigureAwait(false);
+				return await workspaces.AnalyzeChildrenAsync(
+					DeserializeParams<AnalyzeChildrenRequest>(request),
+					progress => WriteNotificationAsync(RpcMethods.AnalyzeProgress, progress),
+					cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexGetLength:
 				return await workspaces.GetHexLengthAsync(DeserializeParams<HexLengthRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexReadRange:

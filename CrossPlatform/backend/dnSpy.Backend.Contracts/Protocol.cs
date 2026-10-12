@@ -31,6 +31,12 @@ public static class RpcMethods {
 	public const string Search = "search/run";
 	public const string AnalyzeNodes = "analyze/nodes";
 	public const string AnalyzeChildren = "analyze/children";
+	/// <summary>
+	/// A notification, not a request: the rows an analyzer search found since the last one, sent while it
+	/// is still running when the request named a <see cref="AnalyzeChildrenRequest.ProgressToken"/> — what
+	/// dnSpy's search nodes show as they go. The response then carries only what was not sent ahead.
+	/// </summary>
+	public const string AnalyzeProgress = "analyze/progress";
 	public const string HexGetLength = "hex/getLength";
 	public const string HexReadRange = "hex/readRange";
 	public const string HexResolveTarget = "hex/resolveTarget";
@@ -142,6 +148,9 @@ public sealed record TreeNodesResponse(IReadOnlyList<TreeNodeDto> Nodes);
 /// the bare member name that bookmarks, output messages and tests quote. The token is the raw
 /// <c>MDToken.Raw</c>, present only where the WPF tree writes one; the return type only on members
 /// whose row names one after a colon.</para>
+/// <para><paramref name="LabelParts"/> and <paramref name="ReturnTypeParts"/> are the same two texts cut
+/// where dnSpy's syntax highlighting changes color; a row whose text dnSpy writes in one plain color — a
+/// folder, a resource — carries none.</para>
 /// </summary>
 public sealed record TreeNodeDto(
 	string Id,
@@ -152,7 +161,9 @@ public sealed record TreeNodeDto(
 	string? Icon = null,
 	string? Key = null,
 	int? MetadataToken = null,
-	string? ReturnType = null);
+	string? ReturnType = null,
+	IReadOnlyList<TextPartDto>? LabelParts = null,
+	IReadOnlyList<TextPartDto>? ReturnTypeParts = null);
 
 public enum DecompilerLanguage {
 	CSharp,
@@ -1096,12 +1107,16 @@ public sealed record AnalyzeNodesResponse(IReadOnlyList<AnalyzerNodeDto?> Nodes)
 /// Asks for what an analyzer row expands to. Without <see cref="Search"/> that is the member's own rows —
 /// its searches and, for a property or an event, its accessors; with one, it is what that search finds.
 /// <see cref="IsSetter"/> is the flag the property's "set" row carries, which widens the setter's "Used
-/// By" to the attributes that assign the property by name.
+/// By" to the attributes that assign the property by name. A search asked with a
+/// <see cref="ProgressToken"/> sends what it finds ahead, in <see cref="RpcMethods.AnalyzeProgress"/>
+/// notifications that carry the token back.
 /// </summary>
-public sealed record AnalyzeChildrenRequest(string WorkspaceId, string NodeId, string? Search = null, bool IsSetter = false, int MaxResults = 20_000);
+public sealed record AnalyzeChildrenRequest(string WorkspaceId, string NodeId, string? Search = null, bool IsSetter = false, int MaxResults = 20_000, string? ProgressToken = null);
 
-/// <summary>The rows, in the order the search found them, and whether the search stopped at the limit.</summary>
-public sealed record AnalyzeChildrenResponse(IReadOnlyList<AnalyzerNodeDto> Children, bool Truncated);
+/// <summary>The rows, in the order the search found them, and whether the search stopped at the limit.
+/// <see cref="Start"/> is where the first of them stands among everything the search found: the rows
+/// sent ahead in progress notifications come before it.</summary>
+public sealed record AnalyzeChildrenResponse(IReadOnlyList<AnalyzerNodeDto> Children, bool Truncated, int Start = 0);
 
 /// <summary>
 /// One row of dnSpy's analyzer tree.
@@ -1117,6 +1132,7 @@ public sealed record AnalyzeChildrenResponse(IReadOnlyList<AnalyzerNodeDto> Chil
 /// <param name="FullName">The member's full name, for Copy Full Name and Search MSDN.</param>
 /// <param name="IsPublic">Whether the member is visible outside its assembly, which is when dnSpy offers Search MSDN.</param>
 /// <param name="Source">Where in a method body the row was found, when it was found there.</param>
+/// <param name="LabelParts">The label cut where dnSpy's syntax highlighting changes color; none for a search row.</param>
 public sealed record AnalyzerNodeDto(
 	string Kind,
 	string Label,
@@ -1130,7 +1146,8 @@ public sealed record AnalyzerNodeDto(
 	bool HidesParent = false,
 	string? FullName = null,
 	bool IsPublic = false,
-	AnalyzerSourceDto? Source = null);
+	AnalyzerSourceDto? Source = null,
+	IReadOnlyList<TextPartDto>? LabelParts = null);
 
 /// <summary>
 /// The place in a method body a search result was found at — dnSpy's SourceRef. The method is the document
@@ -1144,3 +1161,52 @@ public sealed record AnalyzerSourceDto(string MethodNodeId, string ModulePath, i
 /// <summary>A member a reference may name: by node when it lives in a module the workspace holds, by file and
 /// token when it does not — the two ways <see cref="TextSpanDto"/> names a target.</summary>
 public sealed record AnalyzerTargetDto(string? NodeId, string? ModulePath = null, int? MetadataToken = null);
+
+/// <summary>
+/// The params of an <see cref="RpcMethods.AnalyzeProgress"/> notification: rows a search found while it was
+/// still running, for the request that named <see cref="ProgressToken"/>. <see cref="Start"/> is where the
+/// first of them stands among everything the search found, so a client can tell a batch it already holds.
+/// </summary>
+public sealed record AnalyzeProgressNotification(string ProgressToken, int Start, IReadOnlyList<AnalyzerNodeDto> Children);
+
+/// <summary>A stretch of a row's text, and the color class dnSpy's syntax highlighting writes it in — one of
+/// <see cref="TextColors"/>.</summary>
+public sealed record TextPartDto(string Text, string Color);
+
+/// <summary>
+/// The color classes of dnSpy's tree text, named after its <c>BoxedTextColor</c> members: what a keyword,
+/// a namespace, a type of each kind or a member of each kind is written in. The client maps them to the
+/// colors of its theme.
+/// </summary>
+public static class TextColors {
+	public const string Text = "text";
+	public const string Punctuation = "punctuation";
+	public const string Operator = "operator";
+	public const string Keyword = "keyword";
+	public const string Number = "number";
+	public const string Error = "error";
+	public const string Namespace = "namespace";
+	public const string Type = "type";
+	public const string SealedType = "sealedType";
+	public const string StaticType = "staticType";
+	public const string Interface = "interface";
+	public const string ValueType = "valueType";
+	public const string Enum = "enum";
+	public const string Delegate = "delegate";
+	public const string TypeGenericParameter = "typeGenericParameter";
+	public const string MethodGenericParameter = "methodGenericParameter";
+	public const string InstanceMethod = "instanceMethod";
+	public const string StaticMethod = "staticMethod";
+	public const string ExtensionMethod = "extensionMethod";
+	public const string InstanceField = "instanceField";
+	public const string EnumField = "enumField";
+	public const string LiteralField = "literalField";
+	public const string StaticField = "staticField";
+	public const string InstanceProperty = "instanceProperty";
+	public const string StaticProperty = "staticProperty";
+	public const string InstanceEvent = "instanceEvent";
+	public const string StaticEvent = "staticEvent";
+	public const string Assembly = "assembly";
+	public const string AssemblyExe = "assemblyExe";
+	public const string AssemblyModule = "assemblyModule";
+}

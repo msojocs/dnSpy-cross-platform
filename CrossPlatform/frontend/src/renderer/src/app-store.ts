@@ -403,6 +403,11 @@ interface AppState {
    * one breakpoint at the entry of each method of the type the row names.
    */
   addClassBreakpoint(node: TreeNode): Promise<void>
+  /**
+   * dnSpy's "Add Method Breakpoint" from the analyzer and the search window: a breakpoint at the entry of
+   * each method the nodes name — a property's or an event's accessors for one of those. It only adds.
+   */
+  addMethodBreakpoints(nodes: TreeNode[]): Promise<void>
   setFunctionBreakpointEnabled(name: string, enabled: boolean): Promise<void>
   /** Attaches a condition, hit count, filter, trace and labels; `undefined` clears them all. */
   setFunctionBreakpointSettings(name: string, settings: BreakpointSettings | undefined): Promise<void>
@@ -1881,6 +1886,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true }))] }))
     await syncFunctionBreakpoints(get)
     get().appendOutput(t('Added {count} breakpoint(s) for {name}.', { count: names.length, name: node.label }))
+  },
+
+  // dnSpy's MethodBreakpointsService.Add, which the analyzer's and the search window's command run: the
+  // methods a property or an event stands for are its accessors, the rows the tree nests under it, and a
+  // method that already has a breakpoint keeps the one it has.
+  addMethodBreakpoints: async (nodes) => {
+    const methods: TreeNode[] = []
+    for (const node of nodes) {
+      if (node.kind === 'method')
+        methods.push(node)
+      else if (node.kind === 'property' || node.kind === 'event') {
+        await get().loadChildren(node)
+        methods.push(...(get().children[node.id] ?? []).filter((child) => child.kind === 'method'))
+      }
+    }
+    const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
+    const names: string[] = []
+    for (const method of methods) {
+      const name = methodBreakpointName(method.description)
+      if (name === undefined || seen.has(name))
+        continue
+      seen.add(name)
+      names.push(name)
+    }
+    if (names.length === 0)
+      return
+    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true }))] }))
+    await syncFunctionBreakpoints(get)
   },
 
   setFunctionBreakpointEnabled: async (name, enabled) => {

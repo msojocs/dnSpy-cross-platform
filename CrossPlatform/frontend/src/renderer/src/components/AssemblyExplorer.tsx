@@ -21,10 +21,12 @@ import {
   Search,
   Variable,
 } from 'lucide-react'
-import type { TreeNode } from '../../../shared/protocol'
+import type { TextPart, TreeNode } from '../../../shared/protocol'
+import { tokenParts } from '../analyzer-model'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { useAppOptions } from './app-options'
+import { ColoredText } from './ColoredText'
 import { hasEmptyNamespaceSibling, showAssemblyExplorerContextMenu, type AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 
 interface AssemblyExplorerProps {
@@ -41,6 +43,7 @@ interface ExplorerRowProps {
   node: TreeNode
   depth: number
   showToken: boolean
+  syntaxHighlight: boolean
   onOpenNode(node: TreeNode): void
   onContextMenu(node: TreeNode, position: { x: number; y: number }, returnFocusTo?: HTMLElement): void
 }
@@ -102,7 +105,23 @@ export const composeTreeRowText = (label: string, node: TreeNode, showToken: boo
   return `${label}${typeSuffix}${tokenSuffix}`
 }
 
-const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: ExplorerRowProps): React.JSX.Element => {
+/**
+ * The same text cut where dnSpy's syntax highlighting changes color, as the backend colored the label and
+ * the return type. A label the client words itself — a group folder's — is written plain. Only a row the
+ * backend colored is drawn this way: one it sent no parts for is plain text in dnSpy too.
+ */
+export const composeTreeRowParts = (label: string, node: TreeNode, showToken: boolean): TextPart[] => {
+  const parts: TextPart[] = label === node.label && node.labelParts ? [...node.labelParts] : [{ text: label, color: 'text' }]
+  if (node.returnType != null && KINDS_WITH_RETURN_TYPE.has(node.kind)) {
+    parts.push({ text: ' ', color: 'text' }, { text: ':', color: 'punctuation' }, { text: ' ', color: 'text' })
+    parts.push(...(node.returnTypeParts ?? [{ text: node.returnType, color: 'text' }]))
+  }
+  if (showToken && node.metadataToken != null && KINDS_WITH_TOKEN.has(node.kind))
+    parts.push(...tokenParts(node.metadataToken))
+  return parts
+}
+
+const TreeRow = memo(({ node, depth, showToken, syntaxHighlight, onOpenNode, onContextMenu }: ExplorerRowProps): React.JSX.Element => {
   const children = useAppStore((state) => state.children[node.id])
   const expanded = useAppStore((state) => state.expanded[node.id] ?? false)
   const loading = useAppStore((state) => state.loadingNodes[node.id] ?? false)
@@ -168,10 +187,10 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: Exp
           {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
         </button>
         <span className={`tree-icon kind-${node.kind} icon-${node.icon ?? 'item'}`}><NodeIcon icon={node.icon} expanded={expanded} /></span>
-        <span className="tree-label">{composeTreeRowText(label, node, showToken)}</span>
+        <span className="tree-label">{syntaxHighlight && node.labelParts ? <ColoredText parts={composeTreeRowParts(label, node, showToken)} /> : composeTreeRowText(label, node, showToken)}</span>
       </div>
       {expanded && children?.map((child) => (
-        <TreeRow key={child.id} node={child} depth={depth + 1} showToken={showToken} onOpenNode={onOpenNode} onContextMenu={onContextMenu} />
+        <TreeRow key={child.id} node={child} depth={depth + 1} showToken={showToken} syntaxHighlight={syntaxHighlight} onOpenNode={onOpenNode} onContextMenu={onContextMenu} />
       ))}
     </>
   )
@@ -179,7 +198,7 @@ const TreeRow = memo(({ node, depth, showToken, onOpenNode, onContextMenu }: Exp
 
 export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX.Element => {
   const roots = useAppStore((state) => state.roots)
-  const showToken = useAppOptions().assemblyExplorer.showToken
+  const { showToken, syntaxHighlight } = useAppOptions().assemblyExplorer
   const { t } = useLanguage()
   // The shell rebuilds `commands` every render, but a memoized row must not see the object change: the two
   // props the rows take read it through a ref, so they keep one identity for as long as the tree lives.
@@ -215,7 +234,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
   return (
     <div className="assembly-tree" role="tree" aria-label={t('Assembly Explorer')}>
       {roots.map((root) => (
-        <TreeRow key={root.id} node={root} depth={0} showToken={showToken} onOpenNode={openNode} onContextMenu={openMenu} />
+        <TreeRow key={root.id} node={root} depth={0} showToken={showToken} syntaxHighlight={syntaxHighlight} onOpenNode={openNode} onContextMenu={openMenu} />
       ))}
     </div>
   )

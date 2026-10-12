@@ -14,7 +14,9 @@ namespace dnSpy.Backend.Tests;
 /// </summary>
 public sealed class WorkspaceAnalyzerTests : IDisposable {
 	const BindingFlags AnyMember = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
-	readonly WorkspaceManager manager = new();
+	// Every search here runs a type per slice, with the gate let go in between, and sends a batch after every
+	// slice that found something: the cut-up run has to come to what one pass over the modules would.
+	readonly WorkspaceManager manager = new() { AnalyzerSliceBudget = TimeSpan.Zero, AnalyzerProgressInterval = TimeSpan.Zero };
 
 	static CancellationToken Token => TestContext.Current.CancellationToken;
 
@@ -42,6 +44,37 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		Assert.True(row.IsPublic);
 		Assert.Equal("class", (await RootAsync(workspaceId, typeof(Circle))).Icon);
 		Assert.Equal("interface", (await RootAsync(workspaceId, typeof(IShape))).Icon);
+	}
+
+	[Fact]
+	public async Task CutsARowsLabelWhereSyntaxHighlightingChangesColor() {
+		var workspaceId = await OpenAsync();
+
+		var total = await RootAsync(workspaceId, Method(typeof(Usage), nameof(Usage.Total)));
+		Assert.Equal(total.Label, string.Concat(total.LabelParts!.Select(part => part.Text)));
+		Assert.Equal([
+			("AnalyzerTarget", "namespace"), (".", "operator"), ("Usage", "staticType"), (".", "operator"), ("Total", "staticMethod"),
+			("(", "punctuation"), ("IShape", "interface"), (")", "punctuation"), (" ", "text"), (":", "punctuation"), (" ", "text"), ("double", "keyword"),
+		], Parts(total));
+		Assert.Equal([("Box", "type"), ("<", "punctuation"), ("T", "typeGenericParameter"), (">", "punctuation")], Parts(await RootAsync(workspaceId, typeof(Box<>))));
+		Assert.Equal("instanceField", Assert.Single(Parts(await RootAsync(workspaceId, typeof(Circle).GetField(nameof(Circle.Radius))!)), part => part.Text == "Radius").Color);
+		Assert.Equal("literalField", Assert.Single(Parts(await RootAsync(workspaceId, typeof(Circle).GetField(nameof(Circle.Pi))!)), part => part.Text == "Pi").Color);
+		// An accessor row is its keyword alone.
+		var getter = (await ChildrenAsync(workspaceId, await NodeAsync(workspaceId, typeof(Circle).GetProperty(nameof(Circle.Name), AnyMember)!)))[0];
+		Assert.Equal([("get", "keyword")], Parts(getter));
+		// A search row's header is the client's to translate, and carries none.
+		Assert.Null(Assert.Single(await ChildrenAsync(workspaceId, await NodeAsync(workspaceId, typeof(Circle).GetField(nameof(Circle.Pi))!))).LabelParts);
+	}
+
+	[Fact]
+	public async Task CutsATreeRowsTextWhereSyntaxHighlightingChangesColor() {
+		var workspaceId = await OpenAsync();
+
+		var total = await manager.GetNodeAsync(new NodeRequest(workspaceId, await NodeAsync(workspaceId, Method(typeof(Usage), nameof(Usage.Total)))), Token);
+		Assert.Equal([("Total", "staticMethod"), ("(", "punctuation"), ("IShape", "interface"), (")", "punctuation")], total.LabelParts!.Select(part => (part.Text, part.Color)));
+		Assert.Equal([("double", "keyword")], total.ReturnTypeParts!.Select(part => (part.Text, part.Color)));
+		var root = (await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), Token)).Nodes.Single(node => node.Label.StartsWith("AnalyzerTarget (", StringComparison.Ordinal));
+		Assert.Equal([("AnalyzerTarget", "assembly"), (" ", "text"), ("(", "punctuation"), ("1.0.0.0", "number"), (")", "punctuation")], root.LabelParts!.Select(part => (part.Text, part.Color)));
 	}
 
 	[Fact]
@@ -351,6 +384,125 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		Assert.True(response.Truncated);
 	}
 
+	[Fact]
+	public async Task SendsWhatASearchFindsAheadOfItsAnswer() {
+		var workspaceId = await OpenAsync();
+		var circle = await NodeAsync(workspaceId, typeof(Circle));
+		var whole = (await manager.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy), Token)).Children;
+
+		var batches = new List<AnalyzeProgressNotification>();
+		var response = await manager.AnalyzeChildrenAsync(
+			new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy, ProgressToken: "circle-used-by"),
+			progress => {
+				batches.Add(progress);
+				return Task.CompletedTask;
+			},
+			Token);
+
+		Assert.True(batches.Count > 1, $"Expected the search to send several batches, got {batches.Count}.");
+		Assert.All(batches, batch => Assert.Equal("circle-used-by", batch.ProgressToken));
+		// Each batch starts where the one before it ended, and the answer where the last one did; together
+		// they are what the search finds in one go, in the same order.
+		var position = 0;
+		foreach (var batch in batches) {
+			Assert.Equal(position, batch.Start);
+			Assert.NotEmpty(batch.Children);
+			position += batch.Children.Count;
+		}
+		Assert.Equal(position, response.Start);
+		Assert.Equal(Labels(whole), Labels(batches.SelectMany(batch => batch.Children).Concat(response.Children)));
+
+		// What a search only knows once every type was seen — the assembly [Marker] is applied to — comes in
+		// the answer, after everything sent ahead.
+		var marker = await NodeAsync(workspaceId, typeof(MarkerAttribute));
+		var markerBatches = 0;
+		var markerResponse = await manager.AnalyzeChildrenAsync(
+			new AnalyzeChildrenRequest(workspaceId, marker, AnalyzerSearchKinds.UsedBy, ProgressToken: "marker-used-by"),
+			_ => {
+				markerBatches++;
+				return Task.CompletedTask;
+			},
+			Token);
+		Assert.True(markerBatches > 0);
+		Assert.Equal("assembly", markerResponse.Children[^1].Kind);
+	}
+
+	[Fact]
+	public async Task SendsNothingAheadWithoutAProgressToken() {
+		var workspaceId = await OpenAsync();
+		var circle = await NodeAsync(workspaceId, typeof(Circle));
+		var sent = 0;
+
+		var response = await manager.AnalyzeChildrenAsync(
+			new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy),
+			_ => {
+				sent++;
+				return Task.CompletedTask;
+			},
+			Token);
+
+		Assert.Equal(0, sent);
+		Assert.Equal(0, response.Start);
+		Assert.NotEmpty(response.Children);
+	}
+
+	[Fact]
+	public async Task FindsTheSameRowsInTheSameOrderOnOneThreadAsOnMany() {
+		using var oneThread = new WorkspaceManager { AnalyzerParallelism = 1 };
+		using var manyThreads = new WorkspaceManager { AnalyzerParallelism = 8, AnalyzerSliceBudget = TimeSpan.Zero };
+		// Two assemblies big enough for a batch of types to be spread over the threads, the second using the
+		// first all over: the searches that drop duplicates — a type's, a method body's — are the ones a
+		// thread finishing out of turn would upset.
+		string[] paths = [typeof(HelloRequest).Assembly.Location, typeof(WorkspaceManager).Assembly.Location];
+		(MemberInfo Member, string Search)[] searches = [
+			(typeof(RpcException), AnalyzerSearchKinds.UsedBy),
+			(typeof(RpcException), AnalyzerSearchKinds.InstantiatedBy),
+			(typeof(TreeNodeDto), AnalyzerSearchKinds.UsedBy),
+			(typeof(TreeNodeDto).GetConstructors().Single(), AnalyzerSearchKinds.UsedBy),
+			(typeof(TreeNodeDto).GetProperty(nameof(TreeNodeDto.Label))!.GetMethod!, AnalyzerSearchKinds.UsedBy),
+		];
+
+		async Task<IReadOnlyList<string>> RunAsync(WorkspaceManager on, MemberInfo member, string search) {
+			var workspaceId = (await on.OpenAsync(new OpenWorkspaceRequest(paths), Token)).WorkspaceId;
+			var nodeId = (await on.FindMemberAsync(new FindMemberRequest(workspaceId, member.Module.Assembly.Location, member.MetadataToken), Token)).NodeId!;
+			var rows = (await on.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, nodeId, search), Token)).Children;
+			on.Close(new WorkspaceRequest(workspaceId));
+			return rows.Select(row => $"{row.Label} {row.Source?.IlOffset}").ToArray();
+		}
+
+		foreach (var (member, search) in searches) {
+			var expected = await RunAsync(oneThread, member, search);
+			Assert.True(expected.Count > 0, $"{member.Name} {search} found nothing.");
+			Assert.Equal(expected, await RunAsync(manyThreads, member, search));
+		}
+	}
+
+	[Fact]
+	public async Task GivesUpWhenAnEditLandsBetweenTheSlicesOfASearch() {
+		var workspaceId = await OpenAsync();
+		var circle = await NodeAsync(workspaceId, typeof(Circle));
+		var describe = await NodeAsync(workspaceId, Method<Circle>(nameof(Circle.Describe)));
+		var edited = false;
+
+		var exception = await Assert.ThrowsAsync<RpcException>(() => manager.AnalyzeChildrenAsync(
+			new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy, ProgressToken: "edited"),
+			async _ => {
+				if (edited)
+					return;
+				edited = true;
+				// The search let the gate go to send its first batch, which is when an edit can get in.
+				var transaction = await manager.BeginEditAsync(new BeginEditRequest(workspaceId), Token);
+				await manager.QueueRenameAsync(new RenameEditRequest(workspaceId, transaction.TransactionId, describe, "Portray"), Token);
+				await manager.CommitEditAsync(new EditTransactionRequest(workspaceId, transaction.TransactionId), Token);
+			},
+			Token));
+
+		Assert.True(edited);
+		Assert.Equal(ErrorCodes.EditConflict, exception.Code);
+		// The model the search was looking at is gone; a search started now runs against the edited one.
+		Assert.NotEmpty((await manager.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy), Token)).Children);
+	}
+
 	async Task<string> OpenAsync() {
 		var target = typeof(Circle).Assembly.Location;
 		var consumer = typeof(Ellipse).Assembly.Location;
@@ -384,6 +536,8 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		await ChildrenAsync(workspaceId, await NodeAsync(workspaceId, member), search);
 
 	static IReadOnlyList<string> Labels(IEnumerable<AnalyzerNodeDto> rows) => rows.Select(row => row.Label).ToArray();
+
+	static IReadOnlyList<(string Text, string Color)> Parts(AnalyzerNodeDto row) => row.LabelParts!.Select(part => (part.Text, part.Color)).ToArray();
 
 	public void Dispose() => manager.Dispose();
 }

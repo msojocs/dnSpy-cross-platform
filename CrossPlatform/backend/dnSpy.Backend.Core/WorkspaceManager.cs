@@ -3910,7 +3910,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			GetIcon(node),
 			node.Key,
 			GetMetadataToken(node),
-			GetMemberReturnType(node));
+			GetMemberReturnType(node),
+			GetLabelParts(node),
+			GetMemberReturnTypeParts(node));
 
 		// The token the WPF tree appends as "@06000004" — every node whose value is a metadata row
 		// (assemblies, modules, assembly references, types and members); namespaces, the group folders,

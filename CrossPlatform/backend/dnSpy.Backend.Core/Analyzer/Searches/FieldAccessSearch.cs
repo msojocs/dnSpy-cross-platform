@@ -27,8 +27,8 @@ sealed class FieldAccessSearch(IAnalyzerHost host, FieldDef analyzedField, bool 
 					}
 				}
 			}
-			if (foundInstr is not null && BodyHit(method, foundInstr) is { } hit)
-				yield return hit;
+			if (foundInstr is not null)
+				yield return BodyHit(method, foundInstr);
 		}
 		if (showWrites) {
 			foreach (var hit in NamedArgumentWritesInType(type, analyzedField))
@@ -36,10 +36,9 @@ sealed class FieldAccessSearch(IAnalyzerHost host, FieldDef analyzedField, bool 
 		}
 	}
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		if (showWrites)
 			hits.AddRange(NamedArgumentWritesInModules(analyzedField));
-		return hits;
 	}
 
 	bool CanBeReference(Code code) => code switch {

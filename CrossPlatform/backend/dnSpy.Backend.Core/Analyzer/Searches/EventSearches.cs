@@ -43,8 +43,8 @@ sealed class EventFiredBySearch : BodySearch {
 					}
 				}
 			}
-			if (foundInstr is not null && BodyHit(method, foundInstr) is { } hit)
-				yield return hit;
+			if (foundInstr is not null)
+				yield return BodyHit(method, foundInstr);
 		}
 	}
 
@@ -70,7 +70,7 @@ sealed class EventFiredBySearch : BodySearch {
 sealed class EventOverriddenSearch(IAnalyzerHost host, EventDef analyzedEvent) : AnalyzerSearch(host) {
 	public override IReadOnlyList<AnalyzerScanUnit> Prepare(CancellationToken cancellationToken) => [];
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		var analyzedAccessor = GetVirtualAccessor(analyzedEvent.AddMethod) ?? GetVirtualAccessor(analyzedEvent.RemoveMethod) ?? GetVirtualAccessor(analyzedEvent.InvokeMethod);
 		if (analyzedAccessor is not null) {
 			foreach (var o in analyzedAccessor.Overrides) {
@@ -80,7 +80,7 @@ sealed class EventOverriddenSearch(IAnalyzerHost host, EventDef analyzedEvent) :
 				}
 			}
 			if (hits.Count > 0)
-				return hits;
+				return;
 		}
 		foreach (var eventDef in TypesHierarchyHelpers.FindBaseEvents(Host, analyzedEvent, analyzedEvent.DeclaringType)) {
 			var anyAccessor = GetVirtualAccessor(eventDef.AddMethod) ?? GetVirtualAccessor(eventDef.RemoveMethod) ?? GetVirtualAccessor(eventDef.InvokeMethod);
@@ -89,7 +89,6 @@ sealed class EventOverriddenSearch(IAnalyzerHost host, EventDef analyzedEvent) :
 			hits.Add(new AnalyzerHit(eventDef));
 			break;
 		}
-		return hits;
 	}
 
 	public static bool CanShow(EventDef @event) =>

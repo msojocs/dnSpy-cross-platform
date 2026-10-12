@@ -1,13 +1,14 @@
 import { create } from 'zustand'
-import type { AnalyzerNode } from '../../shared/protocol'
-import type { AnalyzerRow, AnalyzerTreeState } from './analyzer-model'
+import type { AnalyzeProgress, AnalyzerNode } from '../../shared/protocol'
+import type { AnalyzerChildren, AnalyzerRow, AnalyzerTreeState } from './analyzer-model'
 import { useAppStore } from './app-store'
 import { translate as t } from './localization'
 
 // dnSpy's analyzer window. Each analyzed member is a root of its own, appended in the order it was asked
 // for; a row's children are fetched the first time it is opened — a member's searches and accessors right
-// away, a search's results once it has run — and kept from then on. A search still running when its row is
-// closed is called off and starts over the next time, which is what dnSpy's search nodes do.
+// away, a search's results as it finds them — and kept from then on. A search still running when its row is
+// closed is called off, forgets what it found so far and starts over the next time, which is what dnSpy's
+// search nodes do.
 
 interface AnalyzerState extends AnalyzerTreeState {
   /** The selected rows, in the order they were selected. */
@@ -25,6 +26,8 @@ interface AnalyzerState extends AnalyzerTreeState {
   collapse(key: string): void
   toggle(key: string): void
   select(keys: string[], options?: { anchorKey?: string; focusKey?: string }): void
+  /** Adds what a running search found since its last batch under the row that is waiting for it. */
+  receiveProgress(progress: AnalyzeProgress): void
   /** Takes rows off the top level, with everything under them; only roots can be removed. */
   removeRoots(keys: string[]): void
   /** Empties the window, calling off whatever is still running. */
@@ -43,7 +46,8 @@ const newRowKey = (): string => `a${++nextRowKey}`
 
 const message = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason)
 
-/** Every key of a row's subtree that is fetched so far, the row itself first. */
+/** Every key of a row's subtree that is fetched so far — what a running search found included — the row
+ * itself first. */
 const subtreeKeys = (state: AnalyzerTreeState, key: string): string[] => {
   const keys: string[] = []
   const stack = [key]
@@ -51,11 +55,15 @@ const subtreeKeys = (state: AnalyzerTreeState, key: string): string[] => {
     const current = stack.pop()!
     keys.push(current)
     const children = state.children[current]
-    if (children?.status === 'loaded')
+    if (children)
       stack.push(...children.keys)
   }
   return keys
 }
+
+/** The part of a batch a row does not hold yet: the batch starts at `start` among everything the search
+ * found, and the row holds the first `held` of those. */
+const unseen = <T,>(batch: T[], start: number, held: number): T[] => batch.slice(Math.max(held - start, 0))
 
 /** Calls off the requests still running under the keys given and tells the caller which they were. */
 const cancelLoading = (state: AnalyzerTreeState, keys: string[]): string[] => {
@@ -138,7 +146,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       return
     }
     const requestKey = `r${++nextRequestKey}`
-    set((state) => ({ children: { ...state.children, [key]: { status: 'loading', requestKey } } }))
+    set((state) => ({ children: { ...state.children, [key]: { status: 'loading', requestKey, keys: [] } } }))
     // A response is only taken while the row still waits for this very request: one the row was closed
     // on, or one that outlived the workspace, is dropped.
     const stillWanted = (): boolean => {
@@ -153,32 +161,53 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       }, requestKey)
       if (!stillWanted())
         return
-      const childRows: AnalyzerRow[] = response.children.map((node) => ({ key: newRowKey(), parentKey: key, node }))
+      // The answer holds what was not sent ahead in a batch.
+      const held = (get().children[key] as Extract<AnalyzerChildren, { status: 'loading' }>).keys
+      const childRows: AnalyzerRow[] = unseen(response.children, response.start ?? 0, held.length).map((node) => ({ key: newRowKey(), parentKey: key, node }))
+      const keys = [...held, ...childRows.map((child) => child.key)]
       set((state) => ({
         rows: { ...state.rows, ...Object.fromEntries(childRows.map((child) => [child.key, child])) },
-        children: { ...state.children, [key]: { status: 'loaded', keys: childRows.map((child) => child.key), truncated: response.truncated } },
+        children: { ...state.children, [key]: { status: 'loaded', keys, truncated: response.truncated } },
       }))
       if (response.truncated)
-        useAppStore.getState().appendOutput(t('The analyzer stopped after {count} result(s).', { count: childRows.length }))
+        useAppStore.getState().appendOutput(t('The analyzer stopped after {count} result(s).', { count: keys.length }))
     } catch (reason) {
       if (!stillWanted())
         return
-      set((state) => ({ children: { ...state.children, [key]: { status: 'loaded', keys: [], truncated: false } } }))
+      // A search that failed keeps what it found before it did.
+      const held = (get().children[key] as Extract<AnalyzerChildren, { status: 'loading' }>).keys
+      set((state) => ({ children: { ...state.children, [key]: { status: 'loaded', keys: held, truncated: false } } }))
       useAppStore.getState().appendOutput(t('Analysis failed: {message}', { message: message(reason) }))
     }
   },
 
+  receiveProgress: ({ requestKey, start, children: batch }) => {
+    const waiting = Object.entries(get().children).find(([, children]) => children.status === 'loading' && children.requestKey === requestKey)
+    if (!waiting)
+      return
+    const [key, loading] = waiting as [string, Extract<AnalyzerChildren, { status: 'loading' }>]
+    const childRows: AnalyzerRow[] = unseen(batch, start, loading.keys.length).map((node) => ({ key: newRowKey(), parentKey: key, node }))
+    if (childRows.length === 0)
+      return
+    set((state) => ({
+      rows: { ...state.rows, ...Object.fromEntries(childRows.map((child) => [child.key, child])) },
+      children: { ...state.children, [key]: { ...loading, keys: [...loading.keys, ...childRows.map((child) => child.key)] } },
+    }))
+  },
+
   collapse: (key) => {
-    // A search that has not finished is called off, and opening its row again starts it over. One that
-    // has finished keeps what it found.
+    // A search that has not finished is called off and forgets what it found so far; opening its row
+    // again starts it over. One that has finished keeps what it found.
     const state = get()
     const subtree = subtreeKeys(state, key)
     const canceled = cancelLoading(state, subtree)
+    const dropped = new Set(canceled.flatMap((canceledKey) => subtreeKeys(state, canceledKey).slice(1)))
     const hidden = new Set(subtree.slice(1))
     const selection = state.selection.filter((selected) => !hidden.has(selected))
     set({
-      expanded: { ...state.expanded, [key]: false },
-      children: withoutKeys(state.children, canceled),
+      rows: withoutKeys(state.rows, dropped),
+      expanded: { ...withoutKeys(state.expanded, dropped), [key]: false },
+      children: withoutKeys(state.children, [...canceled, ...dropped]),
       // A selected row that the collapse hides hands the selection to the row that was closed.
       selection: selection.length === state.selection.length ? state.selection : [...new Set([...selection, key])],
       focusKey: state.focusKey && hidden.has(state.focusKey) ? key : state.focusKey,
@@ -273,6 +302,9 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
 // — an edit, its undo or redo, a reload, an assembly added or removed by hand — makes it start its searches
 // over. An assembly opened on demand, to follow a reference, does not: dnSpy leaves the analyzer alone for
 // the documents it loads by itself.
+// A running search sends what it finds in batches, each for the request it was asked with.
+window.dnSpy?.onAnalyzeProgress?.((progress) => useAnalyzerStore.getState().receiveProgress(progress))
+
 useAppStore.subscribe((state, previous) => {
   if (state.workspaceId !== previous.workspaceId || state.workspaceGeneration !== previous.workspaceGeneration) {
     useAnalyzerStore.getState().clear()

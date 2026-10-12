@@ -24,6 +24,7 @@ const context = (selection: AnalyzerRow[], extra: Partial<AnalyzerMenuContext> =
   selection,
   isRoot: (key) => key.startsWith('root'),
   showToken: true,
+  syntaxHighlight: true,
   singleClickExpandsChildren: false,
   follow: vi.fn(),
   copySelection: vi.fn(),
@@ -32,6 +33,7 @@ const context = (selection: AnalyzerRow[], extra: Partial<AnalyzerMenuContext> =
   analyze: vi.fn(),
   removeRoots: vi.fn(),
   setShowToken: vi.fn(),
+  setSyntaxHighlight: vi.fn(),
   setSingleClickExpandsChildren: vi.fn(),
   ...extra,
 })
@@ -52,7 +54,7 @@ describe('buildAnalyzerMenuItems', () => {
       'show-reference', 'show-reference-new-tab', 'go-to-reference', 'go-to-reference-new-tab', '|',
       'copy', 'copy-md-token', 'copy-full-name', '|',
       'analyze', 'search-msdn', '|',
-      'show-tokens', 'single-click-expands',
+      'show-tokens', 'syntax-highlight', 'single-click-expands',
     ])
   })
 
@@ -65,15 +67,46 @@ describe('buildAnalyzerMenuItems', () => {
 
   it('keeps Copy and the options for an empty selection, and leaves out what needs a row', () => {
     const ctx = context([])
-    expect(keys(ctx)).toEqual(['copy', '|', 'show-tokens', 'single-click-expands'])
+    expect(keys(ctx)).toEqual(['copy', '|', 'show-tokens', 'syntax-highlight', 'single-click-expands'])
     const copy = buildAnalyzerMenuItems(ctx).find((item) => !('type' in item) && item.key === 'copy')
     expect(copy && !('type' in copy) && copy.disabled).toBe(true)
   })
 
   it('offers no following, token or MSDN entries for a search row', () => {
     expect(keys(context([row('search', { kind: 'search', label: 'Used By', metadataToken: undefined, fullName: undefined, isPublic: false })]))).toEqual([
-      'copy', '|', 'show-tokens', 'single-click-expands',
+      'copy', '|', 'show-tokens', 'syntax-highlight', 'single-click-expands',
     ])
+  })
+
+  it('offers the debugger\'s breakpoints for the members the selection names, once the shell supplies them', () => {
+    const debug = { addClassBreakpoint: vi.fn(), addMethodBreakpoints: vi.fn() }
+    const type = row('type', { kind: 'type', label: 'Type', fullName: 'NS.Type' })
+    const method = row('hit')
+    const property = row('prop', { kind: 'property', label: 'NS.Type.P : int' })
+    const field = row('field', { kind: 'field', label: 'NS.Type.F : int' })
+    const search = row('search', { kind: 'search', label: 'Used By' })
+
+    // dnSpy's debug group sits between the copy commands and Analyze.
+    expect(keys(context([type, method], debug))).toEqual([
+      'copy', 'copy-md-token', 'copy-full-name', '|',
+      'add-class-breakpoint', 'add-method-breakpoint', '|',
+      'analyze', 'search-msdn', '|',
+      'show-tokens', 'syntax-highlight', 'single-click-expands',
+    ])
+    // The class breakpoint reads the first member selected; a search row in front of it is no member.
+    expect(keys(context([method, type], debug))).not.toContain('add-class-breakpoint')
+    expect(keys(context([search, type], debug))).toContain('add-class-breakpoint')
+    // A field has no method to break in.
+    expect(keys(context([field], debug))).not.toContain('add-method-breakpoint')
+    // Nothing to add them to, nothing offered.
+    expect(keys(context([type, method]))).not.toContain('add-class-breakpoint')
+    expect(keys(context([type, method]))).not.toContain('add-method-breakpoint')
+
+    const ctx = context([search, type, method, field, property], debug)
+    run(ctx, 'add-class-breakpoint')
+    expect(debug.addClassBreakpoint).toHaveBeenCalledWith(type)
+    run(ctx, 'add-method-breakpoint')
+    expect(debug.addMethodBreakpoints).toHaveBeenCalledWith([method, property])
   })
 
   it('runs its entries against the selection', () => {
@@ -89,6 +122,8 @@ describe('buildAnalyzerMenuItems', () => {
     expect(ctx.openUrl).toHaveBeenCalledWith(expect.stringContaining('NS.Type.M'))
     run(ctx, 'show-tokens')
     expect(ctx.setShowToken).toHaveBeenCalledWith(false)
+    run(ctx, 'syntax-highlight')
+    expect(ctx.setSyntaxHighlight).toHaveBeenCalledWith(false)
     run(ctx, 'analyze')
     expect(ctx.analyze).toHaveBeenCalledWith([found])
   })

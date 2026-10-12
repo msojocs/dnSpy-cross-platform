@@ -118,6 +118,52 @@ describe('analyzer store', () => {
     expect(state().children[search]).toBeUndefined()
   })
 
+  it('shows what a running search found so far, and takes from its answer only what was not sent ahead', async () => {
+    await state().analyze('n1')
+    const search = (state().children[state().rootKeys[0]] as { keys: string[] }).keys[0]
+    const pending = deferred<AnalyzeChildrenResponse>()
+    analyzeChildren.mockImplementationOnce(() => pending.promise)
+    const running = state().expand(search)
+    const requestKey = (state().children[search] as { requestKey: string }).requestKey
+    const labels = (): string[] => (state().children[search] as { keys: string[] }).keys.map((key) => state().rows[key].node.label)
+
+    state().receiveProgress({ requestKey, start: 0, children: [node({ label: 'First' }), node({ label: 'Second' })] })
+    expect(state().children[search]).toMatchObject({ status: 'loading' })
+    expect(labels()).toEqual(['First', 'Second'])
+    // A batch for another request, or one the row already holds, adds nothing.
+    state().receiveProgress({ requestKey: 'other', start: 2, children: [node({ label: 'Elsewhere' })] })
+    state().receiveProgress({ requestKey, start: 0, children: [node({ label: 'First' })] })
+    state().receiveProgress({ requestKey, start: 1, children: [node({ label: 'Second' }), node({ label: 'Third' })] })
+    expect(labels()).toEqual(['First', 'Second', 'Third'])
+    const streamed = (state().children[search] as { keys: string[] }).keys
+
+    pending.resolve({ children: [node({ label: 'Last' })], truncated: false, start: 3 })
+    await running
+    expect(state().children[search]).toMatchObject({ status: 'loaded', truncated: false })
+    expect(labels()).toEqual(['First', 'Second', 'Third', 'Last'])
+    // The rows sent ahead keep their keys, so a selection made while the search ran survives its end.
+    expect((state().children[search] as { keys: string[] }).keys.slice(0, 3)).toEqual(streamed)
+  })
+
+  it('forgets what a search found so far when its row is closed before it finished', async () => {
+    await state().analyze('n1')
+    const search = (state().children[state().rootKeys[0]] as { keys: string[] }).keys[0]
+    analyzeChildren.mockImplementationOnce(() => new Promise(() => undefined))
+    void state().expand(search)
+    const requestKey = (state().children[search] as { requestKey: string }).requestKey
+    state().receiveProgress({ requestKey, start: 0, children: [node({ label: 'Partial' })] })
+    const partial = (state().children[search] as { keys: string[] }).keys[0]
+    state().select([partial])
+
+    state().collapse(search)
+
+    expect(state().rows[partial]).toBeUndefined()
+    expect(state().selection).toEqual([search])
+    // A batch that was already on its way when the search was called off has nowhere to go.
+    state().receiveProgress({ requestKey, start: 1, children: [node({ label: 'Late' })] })
+    expect(state().children[search]).toBeUndefined()
+  })
+
   it('carries a setter row\'s flag into the searches under it', async () => {
     analyzeNodes.mockResolvedValueOnce({ nodes: [node({ nodeId: 'set', label: 'set', accessor: 'set', isSetter: true })] })
     await state().analyze('set')

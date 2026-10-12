@@ -116,6 +116,11 @@ const api: DnSpyApi = {
     ipcRenderer.on('debug:event', listener)
     return () => ipcRenderer.removeListener('debug:event', listener)
   },
+  onAnalyzeProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+    ipcRenderer.on('analyze:progress', listener)
+    return () => ipcRenderer.removeListener('analyze:progress', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('dnSpy', api)

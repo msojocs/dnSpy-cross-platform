@@ -9,7 +9,7 @@ import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
-import { DebugPlaceholder, OutputPane, SearchPane } from './components/ToolWindows'
+import { DebugPlaceholder, OutputPane, SearchPane, type SearchPaneCommands } from './components/ToolWindows'
 import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPane'
 import { isAnalyzableNode } from './components/CodeEditorContextMenu'
 import { useAnalyzerStore } from './analyzer-store'
@@ -315,6 +315,7 @@ export const App = (): React.JSX.Element => {
   const loadDependencies = useAppStore((state) => state.loadDependencies)
   const convertModule = useAppStore((state) => state.convertModule)
   const addClassBreakpoint = useAppStore((state) => state.addClassBreakpoint)
+  const addMethodBreakpoints = useAppStore((state) => state.addMethodBreakpoints)
   const deleteNode = useAppStore((state) => state.deleteNode)
   const renameNamespace = useAppStore((state) => state.renameNamespace)
   const moveTypesToEmptyNamespace = useAppStore((state) => state.moveTypesToEmptyNamespace)
@@ -1309,6 +1310,22 @@ export const App = (): React.JSX.Element => {
     onHexPasteBody: () => void hexPasteMethodBody(),
   })
 
+  /** The tree nodes the analyzer's and the search window's commands name by id; one that cannot be read is
+   * reported and left out. */
+  const readNodes = async (nodeIds: string[]): Promise<TreeNode[]> => {
+    if (!workspaceId)
+      return []
+    const nodes: TreeNode[] = []
+    for (const nodeId of nodeIds) {
+      try {
+        nodes.push(await window.dnSpy.getNode(workspaceId, nodeId))
+      } catch (reason) {
+        appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+      }
+    }
+    return nodes
+  }
+
   // The analyzer goes to a row's member, or to the method it was found in, through the same tabs the tree
   // opens documents in; the caret it then places needs the tab the document landed in.
   const analyzerCommands: AnalyzerPaneCommands = {
@@ -1326,6 +1343,19 @@ export const App = (): React.JSX.Element => {
     },
     copyText: (text) => explorerCommands.copyText?.(text),
     openUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    addClassBreakpoint: (nodeId) => { void readNodes([nodeId]).then(([node]) => node && addClassBreakpoint(node)) },
+    addMethodBreakpoints: (nodeIds) => { void readNodes(nodeIds).then((nodes) => addMethodBreakpoints(nodes)) },
+  }
+
+  // A search result names its node by id; the commands that act on more than following it read the node.
+  const searchCommands: SearchPaneCommands = {
+    openNode: (nodeId, newTab) => { void (newTab ? openNodeInNewTab(nodeId) : openNodeId(nodeId)) },
+    getNode: async (nodeId) => (await readNodes([nodeId]))[0],
+    analyze: (node) => { void openAnalysis(node) },
+    copyText: (text) => explorerCommands.copyText?.(text),
+    openUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    addClassBreakpoint: (node) => { void addClassBreakpoint(node) },
+    addMethodBreakpoints: (nodes) => { void addMethodBreakpoints(nodes) },
   }
 
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
@@ -1335,7 +1365,7 @@ export const App = (): React.JSX.Element => {
       case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} />
-      case 'search': return <SearchPane onOpenNodeId={(nodeId) => void openNodeId(nodeId)} />
+      case 'search': return <SearchPane commands={searchCommands} />
       case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
       case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />

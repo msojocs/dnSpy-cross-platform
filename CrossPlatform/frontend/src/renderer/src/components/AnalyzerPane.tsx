@@ -1,12 +1,13 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, LoaderCircle, Search } from 'lucide-react'
 import type { AnalyzerSource } from '../../../shared/protocol'
-import { analyzerCopyText, composeAnalyzerText, findReferenceCaret, flattenAnalyzerTree, type AnalyzerLine, type AnalyzerRow } from '../analyzer-model'
+import { analyzerCopyText, composeAnalyzerParts, composeAnalyzerText, findReferenceCaret, flattenAnalyzerTree, type AnalyzerLine, type AnalyzerRow } from '../analyzer-model'
 import { useAnalyzerStore } from '../analyzer-store'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './app-options'
 import { NodeIcon } from './AssemblyExplorer'
+import { ColoredText } from './ColoredText'
 import { showAnalyzerContextMenu, type AnalyzerMenuContext } from './AnalyzerContextMenu'
 
 /** What the analyzer needs from the shell, which owns the document tabs and the clipboard. */
@@ -15,6 +16,10 @@ export interface AnalyzerPaneCommands {
   openNode(nodeId: string, newTab: boolean): Promise<{ documentId: string; viewId: string } | undefined>
   copyText(text: string): void
   openUrl(url: string): void
+  /** Breaks on every method of the type a node names — dnSpy's Add Class Breakpoint. */
+  addClassBreakpoint?(nodeId: string): void
+  /** Breaks on the methods the nodes name, a property's or an event's accessors for one of those. */
+  addMethodBreakpoints?(nodeIds: string[]): void
 }
 
 interface RowProps {
@@ -23,6 +28,9 @@ interface RowProps {
   focused: boolean
   expanded: boolean
   loading: boolean
+  /** The settings the row's text is written with, which the line's own text was composed with too. */
+  showToken: boolean
+  syntaxHighlight: boolean
   onMouseDown(line: Extract<AnalyzerLine, { kind: 'row' }>, event: React.MouseEvent): void
   onClick(line: Extract<AnalyzerLine, { kind: 'row' }>, event: React.MouseEvent): void
   onDoubleClick(line: Extract<AnalyzerLine, { kind: 'row' }>, event: React.MouseEvent): void
@@ -32,7 +40,20 @@ interface RowProps {
 
 const indent = (depth: number): React.CSSProperties => ({ paddingLeft: `${6 + depth * 16}px` })
 
-const AnalyzerTreeRow = memo(({ line, selected, focused, expanded, loading, onMouseDown, onClick, onDoubleClick, onToggle, onContextMenu }: RowProps): React.JSX.Element => {
+// The tree draws only the lines in sight, and a margin of them on either side: a search can find tens of
+// thousands of rows. Every line is one `.tree-row` high.
+const ROW_HEIGHT = 22
+const OVERSCAN = 20
+// What is drawn before the window has been measured — and in a layout that measures nothing, like jsdom's.
+const FALLBACK_HEIGHT = 600
+
+/** The lines to draw, end excluded, for a window scrolled to `top` that is `height` high. */
+export const visibleLineRange = (count: number, top: number, height: number): { first: number; last: number } => ({
+  first: Math.max(0, Math.min(count, Math.floor(top / ROW_HEIGHT) - OVERSCAN)),
+  last: Math.min(count, Math.ceil((top + (height > 0 ? height : FALLBACK_HEIGHT)) / ROW_HEIGHT) + OVERSCAN),
+})
+
+const AnalyzerTreeRow = memo(({ line, selected, focused, expanded, loading, showToken, syntaxHighlight, onMouseDown, onClick, onDoubleClick, onToggle, onContextMenu }: RowProps): React.JSX.Element => {
   const { t } = useLanguage()
   const { node } = line.row
   const icon = node.icon ?? 'item'
@@ -68,7 +89,8 @@ const AnalyzerTreeRow = memo(({ line, selected, focused, expanded, loading, onMo
         {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
       </button>
       <span className={`tree-icon kind-${node.kind} icon-${icon}`}><NodeIcon icon={icon} expanded={expanded} /></span>
-      <span className="tree-label">{line.text}</span>
+      {/* A row the backend sent no colors for — a search's header — is plain text in dnSpy too. */}
+      <span className="tree-label">{syntaxHighlight && node.labelParts ? <ColoredText parts={composeAnalyzerParts(node, t, showToken)} /> : line.text}</span>
     </div>
   )
 })
@@ -89,45 +111,100 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
   const focusKey = useAnalyzerStore((state) => state.focusKey)
   const focusToken = useAnalyzerStore((state) => state.focusToken)
   const settings = useAppOptions().analyzer
-  const { t } = useLanguage()
+  // `t` keeps one identity across languages, so the locale is what says the search rows need new words.
+  const { t, locale } = useLanguage()
   const treeRef = useRef<HTMLDivElement>(null)
   // Set when the keyboard moved the focus row, so the row is given the DOM focus once it is drawn.
   const moveFocusRef = useRef(false)
+  // The row to give the DOM focus to once it is drawn, which for one outside the window means scrolling first.
+  const pendingFocusRef = useRef<string | undefined>(undefined)
+  const [viewport, setViewport] = useState({ top: 0, height: 0 })
   const commandsRef = useRef(commands)
   commandsRef.current = commands
 
   const lines = useMemo(
     () => flattenAnalyzerTree({ rootKeys, rows, children, expanded }, (node) => composeAnalyzerText(node, t, settings.showToken)),
-    [rootKeys, rows, children, expanded, t, settings.showToken],
+    [rootKeys, rows, children, expanded, t, locale, settings.showToken],
   )
   const rowLines = useMemo(() => lines.filter((line): line is Extract<AnalyzerLine, { kind: 'row' }> => line.kind === 'row'), [lines])
   const selected = useMemo(() => new Set(selection), [selection])
-  // The tab stop: the focus row while it is drawn, the first row otherwise.
+  // The tab stop: the focus row while it is in the tree, the first row otherwise.
   const tabStop = rowLines.some((line) => line.key === focusKey) ? focusKey : rowLines[0]?.key
+  const { first, last } = visibleLineRange(lines.length, viewport.top, viewport.height)
+  const tabStopIndex = lines.findIndex((line) => line.key === tabStop)
+  const tabStopDrawn = tabStopIndex >= first && tabStopIndex < last
 
-  const focusRow = (key: string | undefined): void => {
-    if (key)
-      treeRef.current?.querySelector<HTMLElement>(`[data-row-key="${key}"]`)?.focus()
+  const measure = useCallback((): void => {
+    const element = treeRef.current
+    if (element)
+      setViewport((current) => current.top === element.scrollTop && current.height === element.clientHeight
+        ? current
+        : { top: element.scrollTop, height: element.clientHeight })
+  }, [])
+
+  useLayoutEffect(() => {
+    measure()
+    if (typeof ResizeObserver === 'undefined' || !treeRef.current)
+      return
+    const observer = new ResizeObserver(measure)
+    observer.observe(treeRef.current)
+    return () => observer.disconnect()
+  }, [measure])
+
+  /**
+   * Gives the DOM focus to the row asked for once it is drawn. A row outside the drawn lines is scrolled to
+   * first, which draws it on the next pass, and that pass finishes the job.
+   */
+  const flushPendingFocus = (): void => {
+    const key = pendingFocusRef.current
+    const element = treeRef.current
+    if (!key || !element)
+      return
+    const drawn = element.querySelector<HTMLElement>(`[data-row-key="${key}"]`)
+    if (drawn) {
+      pendingFocusRef.current = undefined
+      drawn.focus()
+      return
+    }
+    const index = lines.findIndex((line) => line.key === key)
+    const top = index * ROW_HEIGHT
+    if (index >= 0)
+      element.scrollTop = top < element.scrollTop ? top : Math.max(top + ROW_HEIGHT - element.clientHeight, 0)
+    // A tree that cannot scroll there — one that is not on screen — leaves the row be.
+    const range = visibleLineRange(lines.length, element.scrollTop, element.clientHeight)
+    if (index < range.first || index >= range.last) {
+      pendingFocusRef.current = undefined
+      return
+    }
+    setViewport({ top: element.scrollTop, height: element.clientHeight })
   }
 
   // Analyze hands the window the focus, as dnSpy's AnalyzerService.Add does.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (focusToken > 0)
-      focusRow(useAnalyzerStore.getState().focusKey)
+      pendingFocusRef.current = useAnalyzerStore.getState().focusKey
   }, [focusToken])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (moveFocusRef.current) {
       moveFocusRef.current = false
-      focusRow(focusKey)
+      pendingFocusRef.current = focusKey
     }
   }, [focusKey, lines])
+
+  // Runs after the two above in every pass, so what they ask for is done in the pass that asked.
+  useLayoutEffect(flushPendingFocus)
 
   const store = useAnalyzerStore.getState
 
   const setShowToken = (value: boolean): void => {
     const options = loadAppOptions()
     saveAppOptions({ ...options, analyzer: { ...options.analyzer, showToken: value } })
+  }
+
+  const setSyntaxHighlight = (value: boolean): void => {
+    const options = loadAppOptions()
+    saveAppOptions({ ...options, analyzer: { ...options.analyzer, syntaxHighlight: value } })
   }
 
   const setSingleClickExpandsChildren = (value: boolean): void => {
@@ -189,6 +266,7 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
     selection: selectedRows(),
     isRoot,
     showToken: settings.showToken,
+    syntaxHighlight: settings.syntaxHighlight,
     singleClickExpandsChildren: settings.singleClickExpandsChildren,
     follow,
     copySelection,
@@ -197,7 +275,14 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
     analyze,
     removeRoots: (targets) => store().removeRoots(targets.map((row) => row.key)),
     setShowToken,
+    setSyntaxHighlight,
     setSingleClickExpandsChildren,
+    addClassBreakpoint: commandsRef.current.addClassBreakpoint
+      ? (row) => { if (row.node.nodeId) commandsRef.current.addClassBreakpoint?.(row.node.nodeId) }
+      : undefined,
+    addMethodBreakpoints: commandsRef.current.addMethodBreakpoints
+      ? (targets) => commandsRef.current.addMethodBreakpoints?.(targets.flatMap((row) => row.node.nodeId ? [row.node.nodeId] : []))
+      : undefined,
   })
 
   /** Selects the rows between the anchor and `key`, both included, in the order the tree shows them. */
@@ -365,10 +450,20 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
       role="tree"
       aria-label={t('Analyzer')}
       aria-multiselectable
+      // The tab stop row may be scrolled out of the drawn lines; the tree takes Tab for it then.
+      tabIndex={tabStop && !tabStopDrawn ? 0 : undefined}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget && tabStop && !tabStopDrawn) {
+          pendingFocusRef.current = tabStop
+          flushPendingFocus()
+        }
+      }}
+      onScroll={measure}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => onRowContextMenu(undefined, event)}
     >
-      {lines.map((line) => line.kind === 'searching' ? (
+      {first > 0 && <div className="analyzer-spacer" role="none" style={{ height: first * ROW_HEIGHT }} />}
+      {lines.slice(first, last).map((line) => line.kind === 'searching' ? (
         <div key={line.key} className="tree-row analyzer-searching" style={indent(line.depth)} role="treeitem" aria-level={line.depth + 1}>
           <span className="tree-expander" />
           <span className="tree-icon icon-search"><Search size={15} strokeWidth={1.6} aria-hidden /></span>
@@ -382,6 +477,8 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
           focused={line.key === tabStop}
           expanded={expanded[line.key] ?? false}
           loading={children[line.key]?.status === 'loading'}
+          showToken={settings.showToken}
+          syntaxHighlight={settings.syntaxHighlight}
           onMouseDown={rowMouseDown}
           onClick={rowClick}
           onDoubleClick={rowDoubleClick}
@@ -389,6 +486,7 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
           onContextMenu={rowContextMenu}
         />
       ))}
+      {last < lines.length && <div className="analyzer-spacer" role="none" style={{ height: (lines.length - last) * ROW_HEIGHT }} />}
     </div>
   )
 }

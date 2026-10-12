@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnalyzerNode } from '../../../shared/protocol'
 import { useAnalyzerStore } from '../analyzer-store'
 import { useAppStore } from '../app-store'
-import { AnalyzerPane, type AnalyzerPaneCommands } from './AnalyzerPane'
+import { AnalyzerPane, visibleLineRange, type AnalyzerPaneCommands } from './AnalyzerPane'
 import { loadAppOptions, resetAppOptions, saveAppOptions } from './app-options'
 
 const node = (extra: Partial<AnalyzerNode>): AnalyzerNode => ({
@@ -84,8 +84,36 @@ describe('AnalyzerPane', () => {
 
   it('leaves the tokens off when the option is off', () => {
     render(<AnalyzerPane commands={commands()} />)
-    act(() => saveAppOptions({ ...loadAppOptions(), analyzer: { showToken: false, singleClickExpandsChildren: true } }))
+    act(() => saveAppOptions({ ...loadAppOptions(), analyzer: { showToken: false, syntaxHighlight: true, singleClickExpandsChildren: true } }))
     expect(screen.getAllByRole('treeitem')[0].textContent).toBe('NS.Type.Callee() : void')
+  })
+
+  it('writes a row the backend colored in its colors, until syntax highlighting is turned off', () => {
+    useAnalyzerStore.setState((state) => ({
+      rows: {
+        ...state.rows,
+        root2: { key: 'root2', node: node({ nodeId: 'other', label: 'NS.Type.Other() : void', metadataToken: 0x06000003, hidesParent: true, labelParts: [
+          { text: 'NS', color: 'namespace' }, { text: '.', color: 'operator' }, { text: 'Type', color: 'type' }, { text: '.', color: 'operator' },
+          { text: 'Other', color: 'instanceMethod' }, { text: '()', color: 'punctuation' }, { text: ' ', color: 'text' }, { text: ':', color: 'punctuation' },
+          { text: ' ', color: 'text' }, { text: 'void', color: 'keyword' },
+        ] }) },
+      },
+    }))
+    render(<AnalyzerPane commands={commands()} />)
+    const label = rowNamed('(hides) NS.Type.Other').querySelector('.tree-label')!
+    expect(label.textContent).toBe('(hides) NS.Type.Other() : void @06000003')
+    expect([...label.querySelectorAll('span')].map((span) => [span.textContent, span.className])).toEqual([
+      ['(', 'tc-punctuation'], ['hides', 'tc-text'], [')', 'tc-punctuation'], [' ', 'tc-text'],
+      ['NS', 'tc-namespace'], ['.', 'tc-operator'], ['Type', 'tc-type'], ['.', 'tc-operator'], ['Other', 'tc-instanceMethod'], ['()', 'tc-punctuation'],
+      [' ', 'tc-text'], [':', 'tc-punctuation'], [' ', 'tc-text'], ['void', 'tc-keyword'],
+      [' ', 'tc-text'], ['@', 'tc-operator'], ['06000003', 'tc-number'],
+    ])
+    // A row it sent no colors for stays plain text.
+    expect(rowNamed('Used By').querySelector('.tree-label span')).toBeNull()
+
+    act(() => saveAppOptions({ ...loadAppOptions(), analyzer: { showToken: true, syntaxHighlight: false, singleClickExpandsChildren: true } }))
+    expect(rowNamed('(hides) NS.Type.Other').querySelector('.tree-label span')).toBeNull()
+    expect(rowNamed('(hides) NS.Type.Other').textContent).toBe('(hides) NS.Type.Other() : void @06000003')
   })
 
   it('goes to where a result was found on a double click, in a new tab with Shift', async () => {
@@ -119,7 +147,7 @@ describe('AnalyzerPane', () => {
     fireEvent.click(rowNamed('Used By'), { detail: 1 })
     expect(useAnalyzerStore.getState().expanded.usedBy).toBe(false)
 
-    act(() => saveAppOptions({ ...loadAppOptions(), analyzer: { showToken: true, singleClickExpandsChildren: false } }))
+    act(() => saveAppOptions({ ...loadAppOptions(), analyzer: { showToken: true, syntaxHighlight: true, singleClickExpandsChildren: false } }))
     fireEvent.click(rowNamed('NS.Type.Callee'), { detail: 1 })
     expect(useAnalyzerStore.getState().expanded.root1).toBe(true)
   })
@@ -161,6 +189,39 @@ describe('AnalyzerPane', () => {
     } finally {
       window.removeEventListener('keydown', windowKeys)
     }
+  })
+
+  it('draws only the rows in sight of a long list, and keeps the height of the rest for the scroll bar', () => {
+    const hits = Array.from({ length: 1000 }, (_, index) => `hit${String(index).padStart(4, '0')}`)
+    useAnalyzerStore.setState((state) => ({
+      rows: { ...state.rows, ...Object.fromEntries(hits.map((key) => [key, { key, parentKey: 'usedBy', node: node({ nodeId: key, label: `NS.Found.${key}() : void` }) }])) },
+      children: { ...state.children, usedBy: { status: 'loaded', keys: hits, truncated: false } },
+    }))
+    const { container } = render(<AnalyzerPane commands={commands()} />)
+    const tree = screen.getByRole('tree')
+    // The two roots, the two searches and the thousand rows found in place of the one the seed has.
+    const total = 1004
+    const drawn = (): string[] => screen.getAllByRole('treeitem').map((item) => item.textContent ?? '')
+    expect(drawn().length).toBeLessThan(60)
+    expect(drawn()[0]).toBe('NS.Type.Callee() : void @06000001')
+    const spacers = (): number[] => [...container.querySelectorAll<HTMLElement>('.analyzer-spacer')].map((spacer) => Number.parseInt(spacer.style.height, 10))
+    expect(spacers()).toEqual([(total - drawn().length) * 22])
+
+    // Scrolled down, the window moves with it; what is above it is kept as height too.
+    Object.defineProperty(tree, 'scrollTop', { configurable: true, value: 22 * 500 })
+    Object.defineProperty(tree, 'clientHeight', { configurable: true, value: 22 * 10 })
+    fireEvent.scroll(tree)
+    expect(drawn()[0]).toBe('NS.Found.hit0478() : void')
+    expect(drawn()).toHaveLength(50)
+    expect(spacers()).toEqual([480 * 22, (total - 530) * 22])
+  })
+
+  it('works out the lines a window draws, with a margin either side', () => {
+    expect(visibleLineRange(1000, 0, 220)).toEqual({ first: 0, last: 30 })
+    expect(visibleLineRange(1000, 2200, 220)).toEqual({ first: 80, last: 130 })
+    expect(visibleLineRange(10, 0, 220)).toEqual({ first: 0, last: 10 })
+    // A window not measured yet is taken to be a usual size rather than none at all.
+    expect(visibleLineRange(1000, 0, 0).last).toBeGreaterThan(40)
   })
 
   it('copies the selected rows indented by level', () => {

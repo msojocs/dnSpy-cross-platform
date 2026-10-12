@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using dnlib.DotNet;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core.Analyzer;
@@ -9,13 +10,38 @@ public sealed partial class WorkspaceManager {
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.AnalyzeNodes(request.NodeIds), cancellationToken);
 
 	public Task<AnalyzeChildrenResponse> AnalyzeChildrenAsync(AnalyzeChildrenRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).AnalyzeChildrenAsync(request, cancellationToken);
+		AnalyzeChildrenAsync(request, null, cancellationToken);
+
+	/// <summary>
+	/// What an analyzer row expands to. A search asked with a progress token hands what it finds to
+	/// <paramref name="progress"/> as it goes, and the response then carries only the rest; the next slice
+	/// waits for the notification to be written, so the client always gets the batches before the answer.
+	/// </summary>
+	public Task<AnalyzeChildrenResponse> AnalyzeChildrenAsync(AnalyzeChildrenRequest request, Func<AnalyzeProgressNotification, Task>? progress, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).AnalyzeChildrenAsync(request, new AnalyzerPacing(AnalyzerSliceBudget, AnalyzerProgressInterval, AnalyzerParallelism), progress, cancellationToken);
+
+	/// <summary>How long one slice of a search holds the workspace gate. Short enough that a tree click queued
+	/// behind a search over a framework assembly is answered without a noticeable wait.</summary>
+	public TimeSpan AnalyzerSliceBudget { get; init; } = TimeSpan.FromMilliseconds(40);
+
+	/// <summary>How often a running search sends what it found so far — the 100 ms dnSpy's AsyncNodeProvider
+	/// gives the tree to take a batch in. A search done sooner than that sends everything in its answer.</summary>
+	public TimeSpan AnalyzerProgressInterval { get; init; } = TimeSpan.FromMilliseconds(100);
+
+	/// <summary>
+	/// How many types a search looks at at once, each on a thread of its own, the way dnSpy's PLINQ query
+	/// does. One by default: measured on 25 framework assemblies, sixteen threads took a search that does
+	/// little but read bodies from 2.0 s to 1.8 s and one that lists 20,000 rows nowhere faster — dnlib's
+	/// thread-safe readers take a lock per metadata table — while a document decompiled during the search
+	/// took twice as long and the tree's own requests waited longer. The searches keep what they remember
+	/// between types in <see cref="AnalyzerSearch.Accept"/>, so more than one gives the same rows in the same
+	/// order; a test holds them to it.
+	/// </summary>
+	public int AnalyzerParallelism { get; init; } = 1;
+
+	readonly record struct AnalyzerPacing(TimeSpan SliceBudget, TimeSpan ProgressInterval, int Parallelism);
 
 	sealed partial class Workspace {
-		// How long one slice of a search holds the workspace gate. Short enough that a tree click queued
-		// behind a search over a framework assembly is answered without a noticeable wait.
-		static readonly TimeSpan AnalyzerSliceBudget = TimeSpan.FromMilliseconds(40);
-
 		// Counts the changes to the dnlib model — edits, their undo and redo, reloads, removed assemblies. A
 		// search lets the gate go between slices, and one that finds the count moved on has been looking at
 		// a model that is no longer there. The state id cannot say so: an undo hands the previous one back.
@@ -40,28 +66,50 @@ public sealed partial class WorkspaceManager {
 		/// slice at a time — prepared, scanned and finished each under the gate, with the gate let go in
 		/// between — so it neither touches dnlib's objects unguarded nor keeps the rest of the workspace waiting.
 		/// </summary>
-		public async Task<AnalyzeChildrenResponse> AnalyzeChildrenAsync(AnalyzeChildrenRequest request, CancellationToken cancellationToken) {
+		public async Task<AnalyzeChildrenResponse> AnalyzeChildrenAsync(AnalyzeChildrenRequest request, AnalyzerPacing pacing, Func<AnalyzeProgressNotification, Task>? progress, CancellationToken cancellationToken) {
 			if (request.Search is null)
 				return await RunAsync(w => w.GetAnalyzerEntityChildren(request), cancellationToken).ConfigureAwait(false);
+			var progressToken = progress is null ? null : request.ProgressToken;
 			var maxResults = Math.Clamp(request.MaxResults, 1, 100_000);
-			var (run, host) = await RunAsync(w => w.PrepareAnalyzerSearch(request, maxResults, cancellationToken), cancellationToken).ConfigureAwait(false);
+			var (run, host) = await RunAsync(w => w.PrepareAnalyzerSearch(request, maxResults, pacing.Parallelism, cancellationToken), cancellationToken).ConfigureAwait(false);
+			// The hits written as rows so far, and the rows sent ahead: a hit in a module the workspace has no
+			// entry for makes no row, so the two counts part.
+			var written = 0;
+			var sent = 0;
+			var sinceSent = Stopwatch.StartNew();
 			while (!run.Completed) {
-				await RunAsync(w => {
+				var batch = await RunAsync(w => {
 					w.CheckAnalyzerEpoch(run);
-					run.RunSlice(AnalyzerSliceBudget, cancellationToken);
-					return true;
+					run.RunSlice(pacing.SliceBudget, cancellationToken);
+					if (progressToken is null || run.Count == written || sinceSent.Elapsed < pacing.ProgressInterval)
+						return null;
+					var rows = w.AnalyzerRows(host, run, written);
+					written = run.Count;
+					return rows;
 				}, cancellationToken).ConfigureAwait(false);
+				// Written with the gate let go: the tree has no reason to wait for the pipe.
+				if (batch is { Count: > 0 }) {
+					await progress!(new AnalyzeProgressNotification(progressToken!, sent, batch)).ConfigureAwait(false);
+					sent += batch.Count;
+					sinceSent.Restart();
+				}
 			}
 			return await RunAsync(w => {
 				w.CheckAnalyzerEpoch(run);
-				var hits = run.Finish();
-				var rows = new List<AnalyzerNodeDto>(hits.Count);
-				foreach (var hit in hits) {
-					if (w.AnalyzerEntityDto(host, hit.Entity, hit.Source, hit.HidesParent) is { } row)
-						rows.Add(row);
-				}
-				return new AnalyzeChildrenResponse(rows, run.Truncated);
+				run.Finish();
+				return new AnalyzeChildrenResponse(w.AnalyzerRows(host, run, written), run.Truncated, sent);
 			}, cancellationToken).ConfigureAwait(false);
+		}
+
+		/// <summary>The rows of a run's hits from <paramref name="from"/> on, up to the limit.</summary>
+		List<AnalyzerNodeDto> AnalyzerRows(AnalyzerHost host, AnalyzerSearchRun run, int from) {
+			var rows = new List<AnalyzerNodeDto>(run.Count - from);
+			for (var index = from; index < run.Count; index++) {
+				var hit = run[index];
+				if (AnalyzerEntityDto(host, hit.Entity, hit.Source, hit.HidesParent) is { } row)
+					rows.Add(row);
+			}
+			return rows;
 		}
 
 		AnalyzeChildrenResponse GetAnalyzerEntityChildren(AnalyzeChildrenRequest request) {
@@ -73,7 +121,9 @@ public sealed partial class WorkspaceManager {
 			foreach (var child in AnalyzerEntityChildren.Of(host, member, request.IsSetter)) {
 				if (child.Accessor is { } accessor) {
 					if (AnalyzerEntityDto(host, accessor) is { } row)
-						rows.Add(child.Keyword is null ? row with { IsSetter = child.IsSetter } : row with { Label = child.Keyword, Accessor = child.Keyword, IsSetter = child.IsSetter });
+						rows.Add(child.Keyword is null
+							? row with { IsSetter = child.IsSetter }
+							: row with { Label = child.Keyword, LabelParts = [new TextPartDto(child.Keyword, TextColors.Keyword)], Accessor = child.Keyword, IsSetter = child.IsSetter });
 					continue;
 				}
 				rows.Add(new AnalyzerNodeDto(
@@ -88,12 +138,12 @@ public sealed partial class WorkspaceManager {
 			return new AnalyzeChildrenResponse(rows, false);
 		}
 
-		(AnalyzerSearchRun Run, AnalyzerHost Host) PrepareAnalyzerSearch(AnalyzeChildrenRequest request, int maxResults, CancellationToken cancellationToken) {
+		(AnalyzerSearchRun Run, AnalyzerHost Host) PrepareAnalyzerSearch(AnalyzeChildrenRequest request, int maxResults, int parallelism, CancellationToken cancellationToken) {
 			var member = AnalyzableMember(GetNode(request.NodeId))
 				?? throw new RpcException(ErrorCodes.InvalidParams, "Only types and members can be analyzed.");
 			var host = new AnalyzerHost(this, member.Module);
 			var search = AnalyzerEntityChildren.CreateSearch(host, member, request.Search!, request.IsSetter);
-			return (new AnalyzerSearchRun(search, analyzerEpoch, maxResults, cancellationToken), host);
+			return (new AnalyzerSearchRun(search, analyzerEpoch, maxResults, parallelism, cancellationToken), host);
 		}
 
 		void CheckAnalyzerEpoch(AnalyzerSearchRun run) {
@@ -150,37 +200,42 @@ public sealed partial class WorkspaceManager {
 				// Only an assembly the workspace holds has a row of its own in the tree to go to.
 				var entry = AnalyzerModuleEntry(assembly.ManifestModule);
 				var isExe = assembly.ManifestModule is { } manifest && (manifest.Characteristics & dnlib.PE.Characteristics.Dll) == 0;
+				var label = AnalyzerLabel(host, assembly);
 				return new AnalyzerNodeDto(
 					"assembly",
-					AnalyzerLabelFormatter.Label(host, assembly),
+					label.ToString(),
 					HasChildren: false,
 					NodeId: entry is not null && IsOpenModule(entry) ? entry.Id : null,
 					Icon: isExe ? "assembly-exe" : "assembly",
 					MetadataToken: unchecked((int)assembly.MDToken.Raw),
-					FullName: assembly.FullName);
+					FullName: assembly.FullName,
+					LabelParts: label.ToParts());
 			}
 			case ModuleDef module: {
 				var entry = AnalyzerModuleEntry(module);
 				var nodeId = entry is not null && IsOpenModule(entry)
 					? GetOrAddNode($"module:{entry.Path}", NodeKind.Module, entry.Module, entry).Id
 					: null;
+				var label = AnalyzerLabel(host, module);
 				return new AnalyzerNodeDto(
 					"module",
-					AnalyzerLabelFormatter.Label(host, module),
+					label.ToString(),
 					HasChildren: false,
 					NodeId: nodeId,
 					Icon: "module",
 					MetadataToken: unchecked((int)module.MDToken.Raw),
-					FullName: module.FullName);
+					FullName: module.FullName,
+					LabelParts: label.ToParts());
 			}
 			case IMemberDef member when member is TypeDef or MethodDef or FieldDef or PropertyDef or EventDef: {
 				var entry = AnalyzerModuleEntry(member.Module);
 				if (entry is null)
 					return null;
 				var kind = GetKind(member);
+				var label = AnalyzerLabel(host, member);
 				return new AnalyzerNodeDto(
 					kind.ToString().ToLowerInvariant(),
-					AnalyzerLabelFormatter.Label(host, member),
+					label.ToString(),
 					HasChildren: true,
 					NodeId: GetMemberNode(member, entry).Id,
 					Icon: member is TypeDef type ? TypeIcon(type) : kind.ToString().ToLowerInvariant(),
@@ -188,11 +243,18 @@ public sealed partial class WorkspaceManager {
 					HidesParent: hidesParent,
 					FullName: member.FullName,
 					IsPublic: IsPublicApi(member),
-					Source: AnalyzerSourceDto(host, source));
+					Source: AnalyzerSourceDto(host, source),
+					LabelParts: label.ToParts());
 			}
 			default:
 				return null;
 			}
+		}
+
+		TextPartsBuilder AnalyzerLabel(AnalyzerHost host, object entity) {
+			var label = new TextPartsBuilder();
+			AnalyzerLabelFormatter.Write(label, host, entity, TypeColor);
+			return label;
 		}
 
 		AnalyzerSourceDto? AnalyzerSourceDto(AnalyzerHost host, AnalyzerSourceRef? source) {
@@ -268,10 +330,13 @@ public sealed partial class WorkspaceManager {
 		/// analyzed member's own when it lives in an assembly a reference loaded — dnSpy's document list holds
 		/// such an assembly too. A reference resolves to a module of the workspace first, then to one a
 		/// reference already loaded, then to one it loads on demand: the step dnSpy's own resolver takes when
-		/// it auto-loads an assembly. What resolved is remembered for the length of the request.
+		/// it auto-loads an assembly. What resolved is remembered for the length of the request. A search
+		/// looks at several types at once, so one lookup runs at a time: it reads the workspace's indexes and
+		/// may load a module into it, neither of which is safe to do from two threads.
 		/// </summary>
 		sealed class AnalyzerHost : IAnalyzerHost {
 			const int MaxForwarderDepth = 8;
+			readonly Lock sync = new();
 			readonly Workspace workspace;
 			readonly List<ModuleDef> documents;
 			readonly Dictionary<object, TypeDef?> types = new(ReferenceEqualityComparer.Instance);
@@ -287,16 +352,19 @@ public sealed partial class WorkspaceManager {
 
 			public IReadOnlyList<ModuleDef> Documents => documents;
 
-			public TypeDef? ResolveTypeDef(IType? type) => type switch {
-				TypeDef typeDef => typeDef,
-				TypeRef typeRef => ResolveTypeRef(typeRef),
-				null => null,
-				_ => type.ScopeType switch {
-					TypeDef typeDef => typeDef,
-					TypeRef typeRef => ResolveTypeRef(typeRef),
-					_ => null,
-				},
-			};
+			public TypeDef? ResolveTypeDef(IType? type) {
+				switch (type) {
+				case TypeDef typeDef:
+					return typeDef;
+				case null:
+					return null;
+				}
+				var reference = type as TypeRef ?? type.ScopeType as TypeRef;
+				if (reference is null)
+					return type.ScopeType as TypeDef;
+				lock (sync)
+					return ResolveTypeRef(reference);
+			}
 
 			TypeDef? ResolveTypeRef(TypeRef typeRef) {
 				if (types.TryGetValue(typeRef, out var cached))
@@ -377,11 +445,13 @@ public sealed partial class WorkspaceManager {
 				case MethodSpec methodSpec:
 					return ResolveMethodDef(methodSpec.Method);
 				case MemberRef memberRef when memberRef.IsMethodRef:
-					if (methods.TryGetValue(memberRef, out var cached))
-						return cached;
-					var resolved = ResolveMethodRef(memberRef);
-					methods[memberRef] = resolved;
-					return resolved;
+					lock (sync) {
+						if (methods.TryGetValue(memberRef, out var cached))
+							return cached;
+						var resolved = ResolveMethodRef(memberRef);
+						methods[memberRef] = resolved;
+						return resolved;
+					}
 				default:
 					return null;
 				}
@@ -417,11 +487,13 @@ public sealed partial class WorkspaceManager {
 				case FieldDef fieldDef:
 					return fieldDef;
 				case MemberRef memberRef when memberRef.IsFieldRef:
-					if (fields.TryGetValue(memberRef, out var cached))
-						return cached;
-					var resolved = ResolveFieldRef(memberRef);
-					fields[memberRef] = resolved;
-					return resolved;
+					lock (sync) {
+						if (fields.TryGetValue(memberRef, out var cached))
+							return cached;
+						var resolved = ResolveFieldRef(memberRef);
+						fields[memberRef] = resolved;
+						return resolved;
+					}
 				default:
 					return null;
 				}

@@ -67,7 +67,7 @@ const tree = (): AnalyzerTreeState => ({
   children: {
     r1: { status: 'loaded', keys: ['s1', 's2'], truncated: false },
     s1: { status: 'loaded', keys: ['x1', 'x2', 'x3'], truncated: false },
-    s2: { status: 'loading', requestKey: 'k' },
+    s2: { status: 'loading', requestKey: 'k', keys: [] },
   },
   expanded: { r1: true, s1: true, s2: true },
 })
@@ -90,13 +90,23 @@ describe('flattenAnalyzerTree', () => {
     expect(lines.map((line) => line.depth)).toEqual([0, 0, 1, 2, 1, 2, 2, 2])
   })
 
+  it('shows what a running search found so far, sorted, with "Searching..." after it', () => {
+    const state = tree()
+    state.rows.y1 = { key: 'y1', parentKey: 's2', node: node({ label: 'Q.R() : void' }) }
+    state.rows.y2 = { key: 'y2', parentKey: 's2', node: node({ label: 'C.D() : void' }) }
+    state.children.s2 = { status: 'loading', requestKey: 'k', keys: ['y1', 'y2'] }
+    const lines = flattenAnalyzerTree(state, (row) => row.label)
+    expect(lines.slice(2, 6).map((line) => line.kind === 'row' ? line.text : 'Searching...')).toEqual(['Used By', 'C.D() : void', 'Q.R() : void', 'Searching...'])
+    expect(lines.slice(2, 6).map((line) => line.depth)).toEqual([1, 2, 2, 2])
+  })
+
   it('shows nothing under a row that is closed, and no "Searching..." for a member still fetching its rows', () => {
     const state = tree()
     state.expanded.r1 = false
     expect(flattenAnalyzerTree(state, (row) => row.label)).toHaveLength(2)
 
     const loading = tree()
-    loading.children.r2 = { status: 'loading', requestKey: 'k2' }
+    loading.children.r2 = { status: 'loading', requestKey: 'k2', keys: [] }
     loading.expanded.r2 = true
     expect(flattenAnalyzerTree(loading, (row) => row.label).filter((line) => line.kind === 'searching')).toHaveLength(1)
   })

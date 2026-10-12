@@ -6,7 +6,7 @@ namespace dnSpy.Backend.Core.Analyzer.Searches;
 sealed class PropertyOverriddenSearch(IAnalyzerHost host, PropertyDef analyzedProperty) : AnalyzerSearch(host) {
 	public override IReadOnlyList<AnalyzerScanUnit> Prepare(CancellationToken cancellationToken) => [];
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		var analyzedAccessor = GetVirtualAccessor(analyzedProperty.GetMethod) ?? GetVirtualAccessor(analyzedProperty.SetMethod);
 		if (analyzedAccessor is not null) {
 			foreach (var o in analyzedAccessor.Overrides) {
@@ -16,7 +16,7 @@ sealed class PropertyOverriddenSearch(IAnalyzerHost host, PropertyDef analyzedPr
 				}
 			}
 			if (hits.Count > 0)
-				return hits;
+				return;
 		}
 		foreach (var property in TypesHierarchyHelpers.FindBaseProperties(Host, analyzedProperty, analyzedProperty.DeclaringType)) {
 			var anyAccessor = GetVirtualAccessor(property.GetMethod) ?? GetVirtualAccessor(property.SetMethod);
@@ -25,7 +25,6 @@ sealed class PropertyOverriddenSearch(IAnalyzerHost host, PropertyDef analyzedPr
 			hits.Add(new AnalyzerHit(property));
 			break;
 		}
-		return hits;
 	}
 
 	public static bool CanShow(PropertyDef property) =>

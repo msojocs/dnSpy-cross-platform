@@ -11,26 +11,22 @@ namespace dnSpy.Backend.Core.Analyzer.Searches;
 abstract class BodySearch(IAnalyzerHost host) : ScopedSearch(host) {
 	readonly HashSet<MethodDef> foundMethods = [];
 
-	protected bool HasAlreadyBeenFound(MethodDef method) => !foundMethods.Add(method);
+	/// <summary>A method is listed once, however many places in it — or in the lambdas it holds — match, and
+	/// however many of its attributes assign the member by name.</summary>
+	public override bool Accept(AnalyzerHit hit) => hit.Entity is not MethodDef method || foundMethods.Add(method);
 
-	protected AnalyzerHit? BodyHit(MethodDef method, Instruction foundInstr) {
+	protected AnalyzerHit BodyHit(MethodDef method, Instruction foundInstr) {
 		var codeLocation = GetOriginalCodeLocation(method);
-		if (HasAlreadyBeenFound(codeLocation))
-			return null;
 		return new AnalyzerHit(codeLocation, codeLocation == method ? new AnalyzerSourceRef(method, foundInstr.Offset, foundInstr.Operand as IMDTokenProvider) : null);
 	}
 
 	/// <summary>
 	/// The attributes that assign the property a setter belongs to by name, which dnSpy counts as uses of
-	/// the setter: in the type, minus the methods the body search already listed.
+	/// the setter: in the type, after the methods the body search found there, which leaves out the ones
+	/// it already listed.
 	/// </summary>
-	protected IEnumerable<AnalyzerHit> NamedArgumentWritesInType(TypeDef type, IMemberRef member) {
-		foreach (var hit in NamedArgumentWrites.Find(type, member)) {
-			if (hit.Entity is MethodDef method && HasAlreadyBeenFound(method))
-				continue;
-			yield return hit;
-		}
-	}
+	protected static IEnumerable<AnalyzerHit> NamedArgumentWritesInType(TypeDef type, IMemberRef member) =>
+		NamedArgumentWrites.Find(type, member);
 
 	/// <summary>The same at the assembly and module level, for every module the search looked at.</summary>
 	protected IEnumerable<AnalyzerHit> NamedArgumentWritesInModules(IMemberRef member) {
@@ -50,7 +46,7 @@ abstract class BodySearch(IAnalyzerHost host) : ScopedSearch(host) {
 sealed class MethodUsesSearch(IAnalyzerHost host, MethodDef analyzedMethod) : AnalyzerSearch(host) {
 	public override IReadOnlyList<AnalyzerScanUnit> Prepare(CancellationToken cancellationToken) => [];
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		// WPF's Distinct() compares the definition and the place it was found, which is a different place
 		// for every instruction — so every reference keeps its own row.
 		foreach (var instr in analyzedMethod.Body.Instructions) {
@@ -61,7 +57,6 @@ sealed class MethodUsesSearch(IAnalyzerHost host, MethodDef analyzedMethod) : An
 			if (instr.Operand is IMethod mr && !mr.IsField && Host.ResolveMethodDef(mr) is { } def)
 				hits.Add(new AnalyzerHit(def, new AnalyzerSourceRef(analyzedMethod, instr.Offset, instr.Operand as IMDTokenProvider)));
 		}
-		return hits;
 	}
 }
 
@@ -146,8 +141,8 @@ sealed class MethodUsedBySearch : BodySearch {
 					}
 				}
 			}
-			if (foundInstr is not null && BodyHit(method, foundInstr) is { } hit)
-				yield return hit;
+			if (foundInstr is not null)
+				yield return BodyHit(method, foundInstr);
 		}
 		if (property is not null) {
 			foreach (var hit in NamedArgumentWritesInType(type, property))
@@ -155,10 +150,9 @@ sealed class MethodUsedBySearch : BodySearch {
 		}
 	}
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		if (property is not null)
 			hits.AddRange(NamedArgumentWritesInModules(property));
-		return hits;
 	}
 }
 
@@ -208,8 +202,8 @@ sealed class VirtualMethodUsedBySearch(IAnalyzerHost host, MethodDef analyzedMet
 					}
 				}
 			}
-			if (foundInstr is not null && BodyHit(method, foundInstr) is { } hit)
-				yield return hit;
+			if (foundInstr is not null)
+				yield return BodyHit(method, foundInstr);
 		}
 		if (property is not null) {
 			foreach (var hit in NamedArgumentWritesInType(type, property))
@@ -217,10 +211,9 @@ sealed class VirtualMethodUsedBySearch(IAnalyzerHost host, MethodDef analyzedMet
 		}
 	}
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		if (property is not null)
 			hits.AddRange(NamedArgumentWritesInModules(property));
-		return hits;
 	}
 }
 
@@ -229,20 +222,19 @@ sealed class VirtualMethodUsedBySearch(IAnalyzerHost host, MethodDef analyzedMet
 sealed class MethodOverriddenSearch(IAnalyzerHost host, MethodDef analyzedMethod) : AnalyzerSearch(host) {
 	public override IReadOnlyList<AnalyzerScanUnit> Prepare(CancellationToken cancellationToken) => [];
 
-	public override List<AnalyzerHit> Finish(List<AnalyzerHit> hits) {
+	public override void Finish(List<AnalyzerHit> hits) {
 		foreach (var o in analyzedMethod.Overrides) {
 			if (Host.ResolveMethodDef(o.MethodDeclaration) is MethodDef method && (method.IsVirtual || method.IsAbstract))
 				hits.Add(new AnalyzerHit(method));
 		}
 		if (hits.Count > 0)
-			return hits;
+			return;
 		foreach (var method in TypesHierarchyHelpers.FindBaseMethods(Host, analyzedMethod, analyzedMethod.DeclaringType)) {
 			if (!(method.IsVirtual || method.IsAbstract))
 				continue;
 			hits.Add(new AnalyzerHit(method));
 			break;
 		}
-		return hits;
 	}
 
 	public static bool CanShow(MethodDef method) =>

@@ -54,6 +54,17 @@ export interface TreeNode {
    */
   metadataToken?: number
   returnType?: string
+  /** The label and the return type cut where dnSpy's syntax highlighting changes color; absent on a row dnSpy
+   *  writes in one plain color. */
+  labelParts?: TextPart[] | null
+  returnTypeParts?: TextPart[] | null
+}
+
+/** A stretch of a row's text, and the color class dnSpy's syntax highlighting writes it in — "keyword",
+ *  "namespace", "interface", "staticMethod" and the rest of the backend's `TextColors`. */
+export interface TextPart {
+  text: string
+  color: string
 }
 
 export interface TreeNodesResponse {
@@ -229,6 +240,8 @@ export interface AnalyzerNode {
   fullName?: string | null
   isPublic: boolean
   source?: AnalyzerSource | null
+  /** The label cut where dnSpy's syntax highlighting changes color; none on a search row. */
+  labelParts?: TextPart[] | null
 }
 
 export interface AnalyzeNodesResponse {
@@ -245,6 +258,16 @@ export interface AnalyzeChildrenRequest {
 export interface AnalyzeChildrenResponse {
   children: AnalyzerNode[]
   truncated: boolean
+  /** Where the first row stands among everything the search found: the rows sent ahead come before it. */
+  start?: number
+}
+
+/** Rows a search found while it was still running, for the request the renderer named `requestKey`. */
+export interface AnalyzeProgress {
+  requestKey: string
+  /** Where the first row stands among everything the search found. */
+  start: number
+  children: AnalyzerNode[]
 }
 
 export interface HexLengthResponse {
@@ -1099,4 +1122,6 @@ export interface DnSpyApi {
   onFullScreenChange(callback: (isFullScreen: boolean) => void): () => void
   onBackendStatus(callback: (status: BackendStatus) => void): () => void
   onDebugEvent(callback: (event: DebugEvent) => void): () => void
+  /** What an analyzer search found so far, sent while it still runs. */
+  onAnalyzeProgress(callback: (progress: AnalyzeProgress) => void): () => void
 }

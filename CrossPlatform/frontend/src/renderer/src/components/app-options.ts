@@ -356,6 +356,7 @@ export interface BookmarkSettings {
 /** dnSpy's AnalyzerSettings, which only the analyzer's own context menu changes — there is no page for them. */
 export interface AnalyzerSettings {
   showToken: boolean
+  syntaxHighlight: boolean
   singleClickExpandsChildren: boolean
 }
 
@@ -652,6 +653,7 @@ export const defaultAppOptions: AppOptions = {
   },
   analyzer: {
     showToken: true,
+    syntaxHighlight: true,
     singleClickExpandsChildren: true,
   },
 }

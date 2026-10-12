@@ -73,6 +73,8 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onReplaceMethodBodyWithStub?(node: TreeNode): void
   onCreateMember?(kind: CreatedKind, nested: boolean, node: TreeNode): void
   onAnalyze?(node: TreeNode): void
+  /** Analyzes a reference into a module the workspace does not hold, which has no node until it is opened. */
+  onAnalyzeReference?(target: TextSpan): void
   /** Opens an address in the browser, which is how dnSpy's Search MSDN command runs. */
   onOpenUrl?(url: string): void
   /** Writes plain text to the clipboard, which is what dnSpy's two copy commands put there. */
@@ -134,6 +136,21 @@ const referenceIs = (...kinds: string[]) => (ctx: CodeEditorMenuContext): boolea
  * set, which is why one predicate covers them all.
  */
 const isMemberRef = referenceIs('type', 'method', 'field', 'property', 'event')
+
+// The metadata tables an `IMemberDef` token can come from: TypeDef, Field, Method, Event and Property.
+const MEMBER_TABLES = [0x02, 0x04, 0x06, 0x14, 0x17]
+
+/**
+ * A reference into a module the workspace does not hold, when what it names is a member. dnSpy's Analyze
+ * shows for any `IMemberRef` under the caret and resolves it only when it runs; such a reference has no
+ * node here, but its token says what it is, and the module is opened on demand when the command runs.
+ */
+const externalMemberTarget = (ctx: CodeEditorMenuContext): TextSpan | undefined => {
+  const target = ctx.referenceTarget
+  if (ctx.referenceNode || !target?.targetModulePath || target.targetMetadataToken === undefined)
+    return undefined
+  return MEMBER_TABLES.includes(target.targetMetadataToken >>> 24) ? target : undefined
+}
 
 /**
  * The method dnSpy's "Edit Method Body" acts on: the reference under the caret when that reference *is* a
@@ -299,8 +316,9 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // 13000 — Reload All Method Bodies has no equivalent here, so only the group's absence shows: with no
   // entries it contributes nothing at all.
 
-  // 14000 — Other (GROUP_CTX_DOCVIEWER_OTHER)
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), visible: (ctx) => isMemberRef(ctx) && ctx.onAnalyze !== undefined, run: (ctx) => { if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode) } },
+  // 14000 — Other (GROUP_CTX_DOCVIEWER_OTHER). Analyze takes a member of the workspace by its node, and a
+  // member of a module the workspace does not hold by the reference itself.
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
   { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: never },
 
@@ -353,14 +371,16 @@ export interface CodeEditorMenuOptions {
   onClose?(): void
 }
 
+/** Shows the menu and says whether it did: a context with nothing to offer puts nothing on screen, and
+ * then `onClose` is never called either. */
 export const showCodeEditorContextMenu = (
   ctx: CodeEditorMenuContext,
   position: { x: number; y: number },
   options: CodeEditorMenuOptions = {},
-): void => {
+): boolean => {
   const items = buildCodeEditorMenuItems(ctx)
   if (items.length === 0)
-    return
+    return false
   showPopupMenu({
     anchor: { x: position.x, y: position.y },
     returnFocusTo: options.returnFocusTo,
@@ -368,4 +388,5 @@ export const showCodeEditorContextMenu = (
     items,
     onClose: () => options.onClose?.(),
   })
+  return true
 }

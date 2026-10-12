@@ -517,6 +517,13 @@ select:focus-visible,
   text-underline-offset: 2px;
 }
 
+/* The context menu takes the focus, and Monaco hides the caret of an editor without it by setting `visibility`
+   inline. dnSpy keeps the caret on screen while its menu is open — it marks what the menu is about — so the
+   view DocumentView marks for an open menu draws it anyway. */
+.editor-host.code-menu-open .monaco-editor .cursors-layer > .cursor {
+  visibility: inherit !important;
+}
+
 /* Breakpoints in the editor's glyph margin: a filled dot when enabled, a hollow one when disabled, and a grey one
    when the engine has not bound it (the module is not loaded yet, or the offset is not a sequence point). */
 .breakpoint-glyph::before,

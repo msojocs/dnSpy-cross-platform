@@ -54,6 +54,7 @@ const commands = () => ({
   onEditMethodBody: vi.fn(),
   onReplaceMethodBodyWithStub: vi.fn(),
   onAnalyze: vi.fn(),
+  onAnalyzeReference: vi.fn(),
   onOpenUrl: vi.fn(),
   copyText: vi.fn(),
   onCopy: vi.fn(),
@@ -244,6 +245,30 @@ describe('buildCodeEditorMenuItems', () => {
     const ctx = methodReferenceContext()
     runEntry(ctx, 'open-in-new-tab')
     expect(ctx.onOpenInNewTab).toHaveBeenCalledWith(referenceSpan)
+  })
+
+  it('offers Analyze on a member of a module the workspace does not hold, and hands it the reference', () => {
+    // dnSpy shows Analyze for any member reference under the caret and resolves it only when it runs, so a
+    // reference with no node here — one into a framework assembly — still gets it. A token outside the member
+    // tables names no member to analyze: a TypeRef that never resolved, a module, an assembly reference.
+    const external: TextSpan = { start: 0, length: 9, kind: 'method', targetModulePath: '/lib/System.Console.dll', targetMetadataToken: 0x06000123 }
+    const ctx = context({ referenceTarget: external })
+    expect(menuKeys(ctx)).toContain('analyze')
+    runEntry(ctx, 'analyze')
+    expect(ctx.onAnalyzeReference).toHaveBeenCalledWith(external)
+    expect(ctx.onAnalyze).not.toHaveBeenCalled()
+
+    for (const token of [0x01000005, 0x23000001, 0x00000001])
+      expect(menuKeys(context({ referenceTarget: { ...external, targetMetadataToken: token } }))).not.toContain('analyze')
+    expect(menuKeys(context({ referenceTarget: { start: 0, length: 9, kind: 'method' } }))).not.toContain('analyze')
+    expect(menuKeys(context({ referenceTarget: external, onAnalyzeReference: undefined }))).not.toContain('analyze')
+  })
+
+  it('analyzes the node a reference names before the reference itself', () => {
+    const ctx = methodReferenceContext({ referenceTarget: { ...referenceSpan, targetModulePath: '/lib/System.Console.dll', targetMetadataToken: 0x06000123 } })
+    runEntry(ctx, 'analyze')
+    expect(ctx.onAnalyze).toHaveBeenCalledWith(methodNode)
+    expect(ctx.onAnalyzeReference).not.toHaveBeenCalled()
   })
 
   it('never shows a command this port has no equivalent for', () => {

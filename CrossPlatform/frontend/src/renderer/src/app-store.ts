@@ -438,6 +438,12 @@ interface AppState {
    * tab a plain follow would reuse.
    */
   openReferenceTarget(target: TextSpan, newTab?: boolean): Promise<void>
+  /**
+   * The node a reference names, as `openReferenceTarget` finds it: a reference into a module the
+   * workspace does not hold opens that module first. Undefined when the reference names nothing; a
+   * module that does not answer for the token throws, with the module's path as the message.
+   */
+  resolveReferenceTarget(target: TextSpan): Promise<string | undefined>
   /** Records the tab order and the selected tab, which the shell reads off the layout it owns. */
   setDocumentOrder(order: string[], active?: string): void
   setRestoringSession(value: boolean): void
@@ -1533,29 +1539,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     const open = newTab ? get().openNodeInNewTabById : get().openNodeById
     if (!open)
       return
-    if (target.targetNodeId) {
-      await open(target.targetNodeId)
-      return
+    try {
+      const nodeId = await get().resolveReferenceTarget(target)
+      if (nodeId)
+        await open(nodeId)
+    } catch (reason) {
+      get().appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
     }
+  },
+
+  resolveReferenceTarget: async (target) => {
+    if (target.targetNodeId)
+      return target.targetNodeId
     // Inside the workspace a span carries the node itself. A reference into a module the workspace does
     // not hold carries the file and token it has there instead: asking the backend for that pair opens
     // the module on demand, which is how dnSpy follows a reference into an assembly the tree does not
     // have. Opening one adds a root, so the tree is read again — and read first, so the root is there
-    // by the time the document is.
+    // by the time the caller acts on the node.
     const workspaceId = get().workspaceId
     if (!workspaceId || !target.targetModulePath || target.targetMetadataToken === undefined)
-      return
-    try {
-      const found = await window.dnSpy.findMember(workspaceId, target.targetModulePath, target.targetMetadataToken)
-      if (!found.nodeId) {
-        get().appendOutput(t('Navigation failed: {message}', { message: target.targetModulePath }))
-        return
-      }
-      await get().refreshRoots()
-      await open(found.nodeId)
-    } catch (reason) {
-      get().appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
-    }
+      return undefined
+    const found = await window.dnSpy.findMember(workspaceId, target.targetModulePath, target.targetMetadataToken)
+    if (!found.nodeId)
+      throw new Error(target.targetModulePath)
+    await get().refreshRoots()
+    return found.nodeId
   },
 
   saveCode: async (documentId) => {

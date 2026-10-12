@@ -54,6 +54,20 @@ const bookmarkDecorations = (
     },
   }))
 
+// The node a reference names. The tree lists a member only once its type has been expanded, so one it has not
+// loaded yet is asked of the backend; a node that cannot be had leaves the menu without the commands that need it.
+const referenceNodeOf = async (nodeId: string): Promise<TreeNode | undefined> => {
+  const state = useAppStore.getState()
+  const loaded = findNode(state, nodeId)
+  if (loaded || !state.workspaceId)
+    return loaded
+  try {
+    return await window.dnSpy.getNode(state.workspaceId, nodeId)
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * The context menu commands only the shell can run: everything that opens a tab, a dialog or a tool
  * window, plus the hex commands, which are the same ones the Edit menu carries. The viewer answers the
@@ -73,6 +87,8 @@ export interface DocumentViewCommands {
   onEditMethodBody(node: TreeNode): void
   onReplaceMethodBodyWithStub(node: TreeNode): void
   onAnalyze(node: TreeNode): void
+  /** Analyzes a reference into a module the workspace does not hold, opening that module to do it. */
+  onAnalyzeReference(target: TextSpan): void
   /** Opens an address in the browser, which is how the menu's "Search MSDN" runs. */
   onOpenUrl(url: string): void
   onOpenHex(): void
@@ -98,6 +114,9 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   // makes the mount a dependency of theirs: a document that arrives already decompiled — which is what a
   // frame navigation produces — has no later store change to run them again on.
   const [editorReady, setEditorReady] = useState(false)
+  // Whether this view's context menu is open, which styles.css reads to keep the caret drawn while the menu has
+  // the focus. It marks the host rather than Monaco's own node, whose class list Monaco rewrites on every blur.
+  const [menuOpen, setMenuOpen] = useState(false)
   // The stopped-location request whose line this view already moved the caret to.
   const revealedTokenRef = useRef(0)
   // The reveal that has not landed yet. A frame navigation opens its document while the tab is still being
@@ -157,21 +176,29 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
    * action is somewhere else entirely. The hex group's file command is the other exception: it opens the
    * file this viewer is showing, which is the document dnSpy's `GetActiveAssemblyTreeNode` hands it.
    */
-  const openContextMenu = (line: number, column: number, screen: { x: number; y: number }): void => {
+  const openContextMenu = async (line: number, column: number, screen: { x: number; y: number }): Promise<void> => {
     const current = document
     if (!current)
       return
     const editor = editorRef.current
     const model = editor?.getModel()
-    const state = useAppStore.getState()
-    const statements = statementsRef.current
-    const statement = codeStatementAt(statements, line, column)
     const offset = model ? model.getOffsetAt({ lineNumber: line, column }) : -1
     // A reference under the caret is a span, and only a C# document has them: VB and IL decompile without
     // any, which is why their menus carry no command that needs a reference to act on.
     const span = offset >= 0
       ? spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
       : undefined
+    // The hex statement group is resolved from the caret, so the menu waits for the store to have it rather
+    // than building from wherever the caret was before. The node the reference names is looked up alongside:
+    // the tree lists a member only once its type has been expanded, and dnSpy's commands act on whatever the
+    // reference is, not on what the tree happens to show.
+    const [referenceNode] = await Promise.all([
+      span?.targetNodeId !== undefined ? referenceNodeOf(span.targetNodeId) : undefined,
+      useAppStore.getState().setCodeCaret({ documentId, line, column }),
+    ])
+    const state = useAppStore.getState()
+    const statements = statementsRef.current
+    const statement = codeStatementAt(statements, line, column)
     const breakpoint = lineBreakpointAt(documentId, statements, breakpointsRef.current, line)
     const selection = editor?.getSelection()
     const copyText = (text: string): void => {
@@ -180,10 +207,13 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
         useAppStore.getState().appendOutput(tRef.current('Copy failed: {message}', { message }))
       })
     }
-    showCodeEditorContextMenu({
+    // The menu takes the focus, and Monaco hides the caret of an editor without it — so the caret the right
+    // button just placed would vanish the moment the menu came up. dnSpy keeps it on screen, showing what
+    // the menu is about; the view is marked for as long as the menu is open, which keeps it drawn.
+    const shown = showCodeEditorContextMenu({
       t: tRef.current,
       documentNode: findNode(state, current.nodeId),
-      referenceNode: span?.targetNodeId !== undefined ? findNode(state, span.targetNodeId) : undefined,
+      referenceNode,
       // "Open in New Tab" acts on the reference itself, not the node it names: dnSpy follows the
       // TextReference under the caret, and a reference into a module the workspace does not hold has no
       // node here to name.
@@ -215,16 +245,35 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
       onEditMethodBody: (node) => commandsRef.current.onEditMethodBody(node),
       onReplaceMethodBodyWithStub: (node) => commandsRef.current.onReplaceMethodBodyWithStub(node),
       onAnalyze: (node) => commandsRef.current.onAnalyze(node),
+      onAnalyzeReference: (target) => commandsRef.current.onAnalyzeReference(target),
       onOpenUrl: (url) => commandsRef.current.onOpenUrl(url),
       copyText,
-      onCopy: () => void editor?.getAction('editor.action.clipboardCopyAction')?.run(),
+      // Monaco's copy is a command rather than one of the editor's actions, so `getAction` has nothing to run:
+      // the selected text is written out here, one selection per line as Monaco would.
+      onCopy: () => {
+        const model = editor?.getModel()
+        const selections = editor?.getSelections()?.filter((range) => !range.isEmpty())
+        if (model && selections?.length)
+          copyText(selections.map((range) => model.getValueInRange(range)).join(model.getEOL()))
+      },
       onFind: () => void editor?.getAction('actions.find')?.run(),
       onOpenHex: () => commandsRef.current.onOpenHex(),
       onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
       onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
       onHexCopyBody: () => commandsRef.current.onHexCopyBody(),
       onHexPasteBody: () => commandsRef.current.onHexPasteBody(),
-    }, screen, { returnFocusTo: editor?.getDomNode() ?? undefined })
+    }, screen, {
+      onClose: () => {
+        setMenuOpen(false)
+        // dnSpy's view has the focus back once its menu closes. Monaco's own node cannot take it, so the editor
+        // is asked to — unless what closed the menu put the focus somewhere of its own, a dialog or a widget.
+        const active = window.document.activeElement
+        if (!active || active === window.document.body)
+          editor?.focus()
+      },
+    })
+    if (shown)
+      setMenuOpen(true)
   }
   const openContextMenuRef = useRef(openContextMenu)
   openContextMenuRef.current = openContextMenu
@@ -340,7 +389,7 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
           </span>
         )}
       </div>
-      <div className="editor-host">
+      <div className={menuOpen ? 'editor-host code-menu-open' : 'editor-host'}>
         {document.loading ? (
           <div className="loading-state"><LoaderCircle className="spin" size={18} /> {t('Loading')}</div>
         ) : (
@@ -408,23 +457,37 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
                 if (position)
                   void toggleLineBreakpointRef.current(documentId, position.lineNumber, position.column)
               })
+              // The right button puts the caret where it lands, as dnSpy's `OnMouseRightButtonDown` does —
+              // unless it lands inside the selection, which then stays for the menu's Copy to act on.
+              const placeCaretForMenu = (position: { lineNumber: number; column: number }): void => {
+                const selection = editor.getSelection()
+                if (!selection || selection.isEmpty() || !selection.containsPosition(position))
+                  editor.setPosition(position)
+              }
+              // Where the last right press landed, which the menu it brings up is about. Chromium on Linux fires
+              // `contextmenu` straight after the press, before Monaco has redrawn the caret the press just moved
+              // there, and the hit test then lands on the caret's element and reads the position it was last
+              // drawn at — the old one, which would take the caret back.
+              let rightPress: { position: { lineNumber: number; column: number }; x: number; y: number } | undefined
               // The document viewer's own context menu, in place of Monaco's (which `contextmenu: false`
               // switches off): dnSpy's grouping and order, with the commands this port can run. The caret
               // moves to the click first — the menu is about what it landed on, and the hex statement group
               // is resolved from the caret, so the menu waits for that answer rather than building from
               // wherever the caret happened to be.
               editor.onContextMenu((event) => {
-                const position = event.target.position
+                const screen = { x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY }
+                const press = rightPress
+                rightPress = undefined
+                const pressed = press && Math.abs(press.x - screen.x) <= 2 && Math.abs(press.y - screen.y) <= 2 ? press.position : undefined
+                const position = pressed ?? event.target.position
                 if (!position) return
                 event.event.preventDefault()
                 event.event.stopPropagation()
-                editor.setPosition(position)
-                const screen = { x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY }
-                const line = position.lineNumber
-                const column = position.column
-                void useAppStore.getState().setCodeCaret({ documentId, line, column }).then(() => {
-                  openContextMenuRef.current(line, column, screen)
-                })
+                // The press has placed the caret already; a menu that came up without one — over the margins,
+                // say — places it here.
+                if (!pressed)
+                  placeCaretForMenu(position)
+                void openContextMenuRef.current(position.lineNumber, position.column, screen)
               })
               // Method breakpoints are demoted to the context menu now that a plain gutter click sets a line
               // breakpoint: "Add Method Breakpoint" there is the way left to say "break wherever this method
@@ -450,6 +513,20 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
                 editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, monaco.KeyMod.CtrlCmd | key), run)
               }
               editor.onMouseDown((event) => {
+                // Monaco leaves the right button to the browser, which takes the focus off the editor and so hides
+                // its caret. dnSpy focuses the view and moves the caret on the press, before the menu comes up;
+                // the right button never toggles the marks in the margins, which is the left button's job.
+                rightPress = undefined
+                if (event.event.rightButton) {
+                  const position = event.target.position
+                  if (position && (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY)) {
+                    event.event.preventDefault()
+                    editor.focus()
+                    placeCaretForMenu(position)
+                    rightPress = { position, x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY }
+                  }
+                  return
+                }
                 // A click in the margin next to the line numbers toggles a breakpoint on that line. The click does not
                 // have to land on a statement — the store snaps it to the nearest one the engine can bind.
                 if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {

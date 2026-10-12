@@ -1374,6 +1374,21 @@ describe('followed references', () => {
     expect(openNodeById).not.toHaveBeenCalled()
     expect(useAppStore.getState().output).toEqual([])
   })
+
+  it('resolves a reference for a command that opens no document, which is how Analyze reaches a module not open yet', async () => {
+    const findMember = vi.fn(async () => ({ nodeId: 'n42', label: 'WriteLine', description: 'System.Void System.Console::WriteLine(System.Int32)' }))
+    install({ findMember })
+    useAppStore.setState({ openNodeById: undefined })
+
+    await expect(useAppStore.getState().resolveReferenceTarget({ start: 0, length: 4, kind: 'type', targetNodeId: 'n7' })).resolves.toBe('n7')
+    expect(findMember).not.toHaveBeenCalled()
+    await expect(useAppStore.getState().resolveReferenceTarget({ start: 0, length: 9, kind: 'method', targetModulePath: consolePath, targetMetadataToken: 0x06000123 })).resolves.toBe('n42')
+    expect(calls).toEqual(['roots'])
+    await expect(useAppStore.getState().resolveReferenceTarget({ start: 0, length: 9, kind: 'text' })).resolves.toBeUndefined()
+
+    install({ findMember: vi.fn(async () => ({ nodeId: undefined })) })
+    await expect(useAppStore.getState().resolveReferenceTarget({ start: 0, length: 9, kind: 'method', targetModulePath: '/app/Missing.dll', targetMetadataToken: 0x06000001 })).rejects.toThrow('/app/Missing.dll')
+  })
 })
 
 // Bringing a node the tree has never listed into view, which is what follows a document tab coming to the

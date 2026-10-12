@@ -1726,6 +1726,88 @@ test.describe('the code viewer context menu', () => {
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()
   })
+
+  test('keeps the caret on what it was right-clicked on, and analyzes a member the tree has not listed', async () => {
+    await openMain()
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    // `new Worker()` names the constructor of a nested type nothing has expanded, so the tree holds no row for
+    // it: the menu has to ask for the node the reference names rather than find it among the loaded ones.
+    await expect(page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^Worker @/ })).toHaveAttribute('aria-expanded', 'false')
+    const worker = editor.locator('.view-lines').getByText('Worker', { exact: true }).first()
+    await expect(worker).toBeVisible()
+    await worker.click({ button: 'right' })
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    await expect(menu).toBeVisible()
+
+    // The menu has the focus, which is what Monaco hides an editor's caret for. dnSpy keeps it drawn, on the
+    // reference the menu is about.
+    const caret = editor.locator('.cursors-layer > .cursor')
+    await expect(caret).toHaveCSS('visibility', 'visible')
+    const caretBox = await caret.boundingBox()
+    const workerBox = await worker.boundingBox()
+    expect(caretBox?.x).toBeGreaterThanOrEqual((workerBox?.x ?? 0) - 1)
+    expect(caretBox?.x).toBeLessThanOrEqual((workerBox?.x ?? 0) + (workerBox?.width ?? 0) + 1)
+
+    await menu.getByRole('menuitem', { name: 'Analyze' }).click()
+    await expect(page.getByRole('tab', { name: 'Analyzer' })).toHaveAttribute('aria-selected', 'true')
+    // Main constructs a Worker twice, and those calls are what the constructor is used by.
+    await expect(page.locator('.result-row').first()).toContainText('Main')
+    // The editor has the focus back once the menu is gone, so its caret is drawn without the menu's help.
+    await expect(editor).toHaveClass(/\bfocused\b/)
+    await expect(caret).toHaveCSS('visibility', 'visible')
+  })
+
+  test('leaves the selection a right-click lands in, so Copy has it to copy', async () => {
+    await openMain()
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    const call = editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first()
+    await call.dblclick()
+    await call.click({ button: 'right' })
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    // The entry's name carries its shortcut, which is what keeps it apart from "Copy MD Token" and the rest.
+    await menu.getByRole('menuitem', { name: /^Copy Ctrl\+C$/ }).click()
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toBe('ThrowAndCatch')
+
+    // A right-click outside the selection moves the caret there, which is what drops the selection.
+    await editor.locator('.view-lines').getByText('ThrowUnhandled', { exact: true }).first().click({ button: 'right' })
+    await expect(menu).toBeVisible()
+    expect(await menuLabels(menu)).not.toContain('Copy')
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+  })
+
+  test('leaves the margins\' breakpoints and bookmarks to the left button', async () => {
+    await openMain()
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    // Main's last statement, which is still in the viewport once the document is scrolled to its end.
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    const statementLine = editor.locator('.view-lines .view-line').filter({ hasText: /^\s*ThrowAndCatch\(\);/ }).first()
+    const { lineBox, marginBox } = await editorLayout(statementLine, editor.locator('.margin').first())
+    const y = lineBox.y + lineBox.height / 2
+    // The glyph margin is the strip next to the line numbers on the left, the bookmark strip the one on their right.
+    const strips = [
+      { x: marginBox.x + 8, marks: editor.locator('.breakpoint-glyph, .breakpoint-glyph-disabled, .breakpoint-glyph-unbound') },
+      { x: marginBox.x + marginBox.width - 7, marks: editor.locator('.bookmark-glyph, .bookmark-glyph-disabled') },
+    ]
+    for (const { x, marks } of strips) {
+      // The right button opens the menu there and leaves the line as it was; the left one is what toggles it.
+      await page.mouse.click(x, y, { button: 'right' })
+      const menu = page.getByRole('menu', { name: 'Code editor' })
+      await expect(menu).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(menu).not.toBeVisible()
+      await expect(marks).toHaveCount(0)
+      await page.mouse.click(x, y)
+      await expect(marks).toHaveCount(1)
+      await page.mouse.click(x, y)
+      await expect(marks).toHaveCount(0)
+    }
+  })
 })
 
 // "Go to Entry Point" needs a module that has one. The contracts library the other suites open is a library

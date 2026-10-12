@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
-import type { DecompilerLanguage, TreeNode } from '../../shared/protocol'
+import type { DecompilerLanguage, TextSpan, TreeNode } from '../../shared/protocol'
 import { enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { loadAppOptions } from './components/app-options'
@@ -1131,6 +1131,19 @@ export const App = (): React.JSX.Element => {
     showToolWindow('analysis')
   }
 
+  // dnSpy resolves the member a reference names only when Analyze runs, which for a member of a module the
+  // workspace does not hold means opening that module first — the way following the reference would.
+  const analyzeReference = async (target: TextSpan): Promise<void> => {
+    if (!workspaceId) return
+    try {
+      const nodeId = await useAppStore.getState().resolveReferenceTarget(target)
+      if (nodeId)
+        await openAnalysis(await window.dnSpy.getNode(workspaceId, nodeId))
+    } catch (reason) {
+      appendOutput(t('Analysis failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+    }
+  }
+
   // A module node and the module a hex command names are the same node id, but a command only has the
   // id, so the tab builder takes the two fields it needs rather than the whole tree node.
   const addSpecialTab = (component: 'hex' | 'module-info', module: { id: string; label: string }): void => {
@@ -1272,6 +1285,7 @@ export const App = (): React.JSX.Element => {
     onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
     onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
     onAnalyze: (node) => void openAnalysis(node),
+    onAnalyzeReference: (target) => void analyzeReference(target),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     onOpenHex: openHex,
     onShowHexAt: showSelectionInHex,

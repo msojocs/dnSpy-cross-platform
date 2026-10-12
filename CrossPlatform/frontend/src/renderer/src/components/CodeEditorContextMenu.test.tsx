@@ -73,6 +73,9 @@ const commands = () => ({
 const context = (overrides: Partial<CodeEditorMenuContext> = {}): CodeEditorMenuContext => {
   const ctx: CodeEditorMenuContext = {
     t: (message) => message,
+    // This menu is always a code document viewer's, which is what `DocumentView` says when it builds one:
+    // the file command has a document to open whatever the tree happens to have selected.
+    documentAvailable: true,
     hasSelection: false,
     debugState: 'inactive',
     stopped: false,
@@ -210,6 +213,7 @@ describe('buildCodeEditorMenuItems', () => {
       'replace-method-body-with-stub',
       'copy-md-token',
       'copy-full-name',
+      'hex-0',
       'search-msdn',
       'find',
     ])
@@ -219,10 +223,12 @@ describe('buildCodeEditorMenuItems', () => {
 
   it('offers only the method body and the editor commands in a document with neither spans nor statements', () => {
     // VB and IL are decompiled without spans and without an IL map, so the caret resolves to neither a
-    // reference nor a statement. The commands left are the ones that read the document's own node.
+    // reference nor a statement. The commands left are the ones that read the document's own node — and
+    // the file command, which reads the document itself: this viewer is showing a file.
     expect(menuKeys(context({ documentNode: methodNode }))).toEqual([
       'edit-method-body',
       'replace-method-body-with-stub',
+      'hex-0',
       'find',
     ])
   })
@@ -270,14 +276,15 @@ describe('buildCodeEditorMenuItems', () => {
       'add-method-breakpoint',
       'copy-md-token',
       'copy-full-name',
+      'hex-0',
       'search-msdn',
       'find',
     ])
   })
 
   it('offers Copy only with a selection, since the menu replaces Monaco\'s own', () => {
-    expect(menuKeys(context({ hasSelection: false }))).toEqual(['find'])
-    expect(menuKeys(context({ hasSelection: true }))).toEqual(['copy', 'find'])
+    expect(menuKeys(context({ hasSelection: false }))).toEqual(['hex-0', 'find'])
+    expect(menuKeys(context({ hasSelection: true }))).toEqual(['hex-0', 'copy', 'find'])
   })
 
   it('writes the token, the full name and the docs address where dnSpy does', () => {

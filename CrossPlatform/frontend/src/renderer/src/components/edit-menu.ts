@@ -26,6 +26,12 @@ export interface EditMenuContext {
   /** `selectedNode.label`, used by the dynamic "Delete {name}" / "Remove {name}" headers. */
   selectionLabel?: string
   activeDocument: ActiveDocument
+  /**
+   * Whether a code document is open in a viewer. dnSpy's Edit-menu hex commands fall back to the file the
+   * active document belongs to when the tree's selection names no file of its own, and a hex or
+   * metadata-table document is not a viewer, so only a code document counts.
+   */
+  documentAvailable: boolean
   canUndo: boolean
   canRedo: boolean
   /**

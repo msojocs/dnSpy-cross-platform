@@ -2577,8 +2577,9 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			var length = new FileInfo(path).Length;
 
 			// Selecting an ELF node asks the same question a managed module does. It answers with the file
-			// and no member target rather than failing the query, so the edit menu simply has no hex
-			// command to show and the renderer never has to swallow an error.
+			// and no member target rather than failing the query, so the commands that take a member have
+			// nothing to point at and only the one that opens the file's bytes has — and the renderer never
+			// has to swallow an error.
 			foreach (var node in new[] { root, elf }) {
 				var target = await manager.ResolveHexTargetAsync(
 					new HexTargetRequest(opened.WorkspaceId, node.Id), TestContext.Current.CancellationToken);

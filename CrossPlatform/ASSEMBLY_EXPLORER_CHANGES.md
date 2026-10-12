@@ -164,3 +164,21 @@ protected override IEnumerable<DocumentTreeNodeData> CreateChildren() {
 - 后端 `WorkspaceManagerTests.AccessorsAreListedUnderTheMemberThatDeclaresThem`、`EventAccessorsAreListedUnderTheEvent`（夹具程序集里没有事件，这条自己写一个带事件的模块）、`NodePath_LeadsFromTheRootToTheNodeItself`
 - 前端 `app-store.test.ts` › `ownerTypeIdOf`、`class breakpoints`（访问器也要被类断点覆盖）
 - e2e：凡是点 `get_Code()` 的用例都先展开它的属性行（`expandPropertyRow`）；`go to token` 那条不展开，验证 `GetNodePath` 自己把属性行打开
+
+### 8. ✅ 「打开十六进制编辑器」改为 WPF 的可见范围（选项存在，不删）
+
+参考 WPF 的 `Extensions/dnSpy.AsmEditor/Hex/Commands.cs`（`OpenHexEditorCommand.IsVisibleInternal` / `GetDocumentNode`），两个注册点分别是 `GROUP_CTX_DOCVIEWER_HEX`（代码视图右键）与 `GROUP_APP_MENU_EDIT_HEX`（编辑菜单），同一命令另有树右键的那份：
+
+- 该选项在 WPF 里**存在**（"Open He_x Editor"，Ctrl+X），所以本移植保留，只是原来的可见范围与 WPF 相反：树里选中任何一个模块内的行（命名空间/类型/方法/字段/属性/事件/资源）都显示，反而程序集根行不显示。
+- WPF 的规则是「命中的行本身是**文档行**」：`DsDocumentNode` 及其子类——程序集、模块、只有 PE 的文件、未知文件（本移植另有 ELF 文件行 `elfdocument`）。命名空间、类型、成员、资源、以及模块下的 `pe`/`pestructure`、ELF 结构行，都是文件**内部**的东西，不是文件，命令不开它们。
+- 三处菜单现在共用 `hex-menu.ts` 里同一个 order 0 谓词：`文档行 || 打开着代码文档`，并且当「光标所在语句」那条命令（order 20）可见时让位——WPF 两者共用同一个 `GetDocumentNode`，本来就互斥。
+  - **树右键**：命中的行是文档行才显示（`AssemblyExplorerContextMenu.tsx` 不设 `documentAvailable`）。
+  - **代码视图右键**：代码文档就在眼前，一直显示（`DocumentView.tsx` 传 `documentAvailable: true`）。
+  - **编辑菜单**：打开着代码文档，或选中的是文档行（`MenuBar.tsx` 传 `activeDocument === 'code'`）。十六进制标签页与元数据表标签页在 WPF 里都不是 `IDocumentViewer`，所以不算「打开着文档」。
+- 其余十六进制命令（order 20、50~130）仍按解析出的 hex 目标显示，行为未变；后端 `ResolveHexTarget` 也没动——文档行本来就返回「文件 + 无成员目标」，正好让文件命令有东西可开，成员命令没有。
+
+对应测试：
+- 前端 `AssemblyExplorerContextMenu.test.tsx` › `opens the hex editor from the rows that are documents, and from no others`（新增）：文档行五类显示，`namespace`/`type`/`method`/`pe`/`elf` 等不显示
+- 前端 `MenuBar.test.tsx` › `opens the hex editor for the file the selection names, or for the open document`（改写）、`shows the statement hex command only while no method target is resolved`（补互斥断言）
+- 前端 `CodeEditorContextMenu.test.tsx`：上下文加上 `documentAvailable`（与 `DocumentView` 的调用一致），代码视图菜单里 order 0 一直在
+- e2e `app.spec.ts`：类型行右键的标签表里没有该项，模块行的标签表里有；代码视图右键的组顺序里 `Open Hex Editor` 在 token 之后、语句命令之前；未打开任何文档时编辑菜单里没有该项

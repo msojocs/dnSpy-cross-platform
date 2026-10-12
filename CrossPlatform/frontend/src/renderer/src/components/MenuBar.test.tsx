@@ -847,10 +847,10 @@ describe('MenuBar', () => {
       'Replace Method Body with stub...',
       'Load Dependencies',
       'Load Dependencies Recursively',
-      // The hex group follows Settings; only "Open Hex Editor" shows without a resolved method target.
-      'Open Hex EditorCtrl+X',
+      // The hex group follows Settings and contributes nothing here: no code document is open, and a
+      // method row names no file for the command that opens the hex editor.
     ])
-    expect(screen.getAllByRole('separator')).toHaveLength(5)
+    expect(screen.getAllByRole('separator')).toHaveLength(4)
   })
 
   it('offers the member-creating commands for a type and for each kind of member', () => {
@@ -1059,8 +1059,8 @@ describe('MenuBar', () => {
   })
 
   it('shows the metadata-table Edit groups only for those documents', () => {
-    // A hex tab with nothing selected offers none of the hex commands — they follow the selection, not
-    // which document happens to hold the focus.
+    // A hex tab is neither a code document viewer nor a row of the assembly tree, so the hex group has no
+    // file to open and no target to point at.
     renderMenuWith({ activeDocument: 'hex' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
@@ -1074,17 +1074,31 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
   })
 
-  it('opens the hex editor for a selection that lives in a module', () => {
+  it('opens the hex editor for the file the selection names, or for the open document', () => {
+    // dnSpy's file command reads the active document's tree node, and only falls back to the selected row
+    // when no document is open — and only a row that *is* a document (an assembly, a module, a PE-only or
+    // unknown file) can answer for a file. A namespace or a member names no file of its own.
     const onOpenHex = vi.fn()
-    renderMenuWith({ selectionKind: 'namespace', selectionLabel: 'N', onOpenHex })
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', onOpenHex })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /^Open Hex Editor/ }))
     expect(onOpenHex).toHaveBeenCalledTimes(1)
 
-    // Upstream's rule is "a selected node inside a module", so with nothing selected there is no entry
-    // even while a code document has the focus.
+    // A code document is open, so there is a file to open whether or not the tree names one.
     cleanup()
     renderMenuWith({ activeDocument: 'code' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByRole('menuitem', { name: /^Open Hex Editor/ })).toBeInTheDocument()
+
+    // A selection inside a module is not a file, and a hex or metadata-table tab is not a code document
+    // viewer, so neither puts the entry on the menu on its own.
+    cleanup()
+    renderMenuWith({ selectionKind: 'namespace', selectionLabel: 'N' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
+
+    cleanup()
+    renderMenuWith({ activeDocument: 'hex' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
   })
@@ -1142,6 +1156,9 @@ describe('MenuBar', () => {
     renderMenuWith({ activeDocument: 'code', hexStatement: { moduleId: 'm', range: { offset: 0x201, length: 2 } } })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.getAllByRole('menuitem', { name: /^Show Instructions in Hex Editor/ })).toHaveLength(1)
+    // dnSpy builds this command and the file one from the same tree node and shows only the more specific
+    // of the two, so the code document being open does not also put "Open Hex Editor" on the menu.
+    expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
 
     cleanup()
     renderMenuWith({

@@ -154,7 +154,8 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
    * on. The hex groups are the exception — they answer for the assembly explorer's selection, exactly as
    * the Edit menu does, because the commands behind them act on the selected node: dnSpy resolves them
    * from the document instead, but showing another node's target here would put entries on screen whose
-   * action is somewhere else entirely.
+   * action is somewhere else entirely. The hex group's file command is the other exception: it opens the
+   * file this viewer is showing, which is the document dnSpy's `GetActiveAssemblyTreeNode` hands it.
    */
   const openContextMenu = (line: number, column: number, screen: { x: number; y: number }): void => {
     const current = document
@@ -191,6 +192,8 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
       hasSelection: selection ? !selection.isEmpty() : false,
       breakpoint,
       selectionKind: state.selectedNode?.kind,
+      // A code document is open in a viewer, which is what dnSpy's file command reads the file from.
+      documentAvailable: true,
       hexTarget: state.hexTarget,
       hexStatement: state.hexStatement,
       debugState: state.debugState,

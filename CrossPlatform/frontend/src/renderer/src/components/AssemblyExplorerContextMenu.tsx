@@ -220,7 +220,8 @@ export const hasEmptyNamespaceSibling = (
 /** The shared hex group (GROUP_HEX), wearing this menu's entry shape. Its predicates read the selection
  *  kind — because in the Edit menu and the code viewer the group answers for the assembly explorer's
  *  selection rather than for what was clicked — and in the tree the row that was clicked *is* the
- *  selection, so the kind comes from the node and the two can never disagree. */
+ *  selection, so the kind comes from the node and the two can never disagree. `documentAvailable` is left
+ *  unset: the click is in the tree, so no document viewer is the one the hex commands answer for. */
 const hexIcon = fixedIcon(<Binary {...iconProps} />)
 const HEX_ENTRIES: AsmMenuEntry[] = hexMenuEntries.map((entry) => {
   const hexCtx = (ctx: AssemblyExplorerMenuContext): HexMenuContext => ({ ...ctx, selectionKind: ctx.node.kind })

@@ -2757,9 +2757,10 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 		public HexTargetResponse ResolveHexTarget(string nodeId) {
 			var node = GetNode(nodeId);
 			// Member-level hex targets only exist in a managed module. A node of a PE-only, ELF or unknown
-			// file answers with the file it lives in and no target, which is what leaves the hex commands
-			// off the menu for it; the query is an ordinary "nothing here" rather than an error the caller
-			// has to swallow.
+			// file answers with the file it lives in and no target, which is what leaves the member
+			// commands off the menu for it — only the command that opens the bytes of the file it names
+			// has something to point at. The query is an ordinary "nothing here" rather than an error the
+			// caller has to swallow.
 			var moduleEntry = node.Module as IModuleEntry
 				?? throw new RpcException(ErrorCodes.NodeNotFound, "The selected tree node no longer exists.");
 			HexMethodTargetDto? method = null;

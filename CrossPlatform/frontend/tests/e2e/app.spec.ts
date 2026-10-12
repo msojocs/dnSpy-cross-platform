@@ -507,9 +507,10 @@ test.describe('the workspace shell', () => {
 
     // dnSpy builds this menu from the tree's selection, and a right click selects the row before the menu
     // opens, so a type offers the type's own commands: the delete, the six creates, the editor, the token
-    // copies, the shared hex group, the one debugger command a type can name — everything its methods are
-    // — and the three outer ones. A row is read by its label span, since the shortcut beside it is part of
-    // the item's own text.
+    // copies, the one debugger command a type can name — everything its methods are — and the three outer
+    // ones. The hex group contributes nothing: a type is a part inside a file, not a file, and this menu
+    // has no document viewer behind it. A row is read by its label span, since the shortcut beside it is
+    // part of the item's own text.
     const menu = page.getByRole('menu', { name: 'Assembly Explorer' })
     const helloType = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @02000005$/ })
     await helloType.click({ button: 'right' })
@@ -528,7 +529,6 @@ test.describe('the workspace shell', () => {
       'Go to Token...',
       'Copy MD Token',
       'Copy Full Name',
-      'Open Hex Editor',
       'Add Class Breakpoint',
       'Analyze',
       'Search MSDN',
@@ -543,7 +543,8 @@ test.describe('the workspace shell', () => {
     await expect(editType).not.toBeVisible()
 
     // A module swaps the member commands for its own: the remove, the one create, the two "Go to ..."
-    // navigations, the module's own token, and the three documents and folders it can open.
+    // navigations, the module's own token, and the three documents and folders it can open. "Open Hex
+    // Editor" is back — a module row is a file, so it is one of the rows the hex editor opens.
     await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label')).toHaveText([
       'Open in New Tab',
@@ -677,15 +678,17 @@ test.describe('the workspace shell', () => {
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
-    // in it: an int getter gets no 'return true'/'return false' body, whose commands belong to bool methods.
+    // in it: an int getter gets no 'return true'/'return false' body, whose commands belong to bool
+    // methods. The file command is not in it either — a method row is no file, and with no code document
+    // open there is nothing else for it to open — so the group starts at the selected method's own bytes.
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     // The shortcut rides along with the label in the item's own text, so it is trimmed off to compare order.
     const labels = (await page.getByRole('menu').last().getByRole('menuitem').allTextContents())
       .map((text) => text.replace(/(Ctrl|Shift|Alt)\+.*$/, '').trim())
-    const start = labels.indexOf('Open Hex Editor')
+    expect(labels).not.toContain('Open Hex Editor')
+    const start = labels.indexOf('Show Instructions in Hex Editor')
     expect(start).toBeGreaterThanOrEqual(0)
-    expect(labels.slice(start, start + 6)).toEqual([
-      'Open Hex Editor',
+    expect(labels.slice(start, start + 5)).toEqual([
       'Show Instructions in Hex Editor',
       'Show Method Body in Hex Editor',
       'Hex Write Empty Body',
@@ -1648,7 +1651,10 @@ test.describe('the code viewer context menu', () => {
     expect(index('Edit Method Body...')).toBeGreaterThan(index('Edit Method'))
     expect(index('Copy MD Token')).toBeGreaterThan(index('Edit Method Body...'))
     expect(index('Copy Full Name')).toBeGreaterThan(index('Copy MD Token'))
-    expect(index('Show Instructions in Hex Editor')).toBeGreaterThan(index('Copy Full Name'))
+    // A code document is open in front of this menu, so the hex editor is one command away from it: the
+    // file the command opens is this document's, and the caret's own statement follows it inside the group.
+    expect(index('Open Hex Editor')).toBeGreaterThan(index('Copy Full Name'))
+    expect(index('Show Instructions in Hex Editor')).toBeGreaterThan(index('Open Hex Editor'))
     expect(index('Analyze')).toBeGreaterThan(index('Show Instructions in Hex Editor'))
     expect(index('Find')).toBeGreaterThan(index('Analyze'))
     // Nothing this port cannot run is on screen, and neither the bookmark group nor Select All is in it.

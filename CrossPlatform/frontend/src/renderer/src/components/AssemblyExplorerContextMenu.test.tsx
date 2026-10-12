@@ -142,8 +142,8 @@ describe('buildAssemblyExplorerMenuItems', () => {
       // 7000 — tokens
       'copy-md-token',
       'copy-full-name',
-      // 9000 — hex
-      'hex-0',
+      // 9000 — hex: empty for a type, since the file command is off the menu for it and the rest of the
+      // group needs a resolved target this node has none of
       // 11000 — other
       'analyze',
       'search-msdn',
@@ -157,9 +157,18 @@ describe('buildAssemblyExplorerMenuItems', () => {
       'separator-4000',
       'separator-5000',
       'separator-7000',
-      'separator-9000',
       'separator-11000',
     ])
+  })
+
+  it('opens the hex editor from the rows that are documents, and from no others', () => {
+    // dnSpy's file command answers for a `DsDocumentNode` — the assembly, the module, a PE-only file, an
+    // ELF image and a file nothing could be read from — and for nothing below one: a namespace or a
+    // member is a part inside a file, and the file the command opens is not what was clicked.
+    for (const kind of ['assembly', 'module', 'pedocument', 'elfdocument', 'unknowndocument'])
+      expect(menuKeys(richContext({ id: 'n-doc', kind, label: 'Example.dll', hasChildren: true })), `for a ${kind} row`).toContain('hex-0')
+    for (const kind of ['namespace', 'type', 'method', 'field', 'property', 'event', 'resource', 'resourceentry', 'pe', 'elf'])
+      expect(menuKeys(richContext({ id: 'n-part', kind, label: 'Part', hasChildren: true })), `for a ${kind} row`).not.toContain('hex-0')
   })
 
   it('gives a method the method commands and no create command for a nested type', () => {
@@ -178,8 +187,9 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(keys).toContain('edit-method-body')
     expect(keys).toContain('replace-method-body-with-stub')
     expect(keys).toContain('add-method-breakpoint')
-    // The method's bytes are what the hex group points at, so the group is at its widest here.
-    expect(keys.filter((key) => key.startsWith('hex-'))).toEqual(['hex-0', 'hex-50', 'hex-60', 'hex-90', 'hex-120', 'hex-130'])
+    // The method's bytes are what the hex group points at, so the group is at its widest here — bar the
+    // file command, which a method row is not a file for.
+    expect(keys.filter((key) => key.startsWith('hex-'))).toEqual(['hex-50', 'hex-60', 'hex-90', 'hex-120', 'hex-130'])
   })
 
   it('offers a module the module commands, which is where its tools and its dependencies live', () => {
@@ -201,7 +211,9 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(keys).not.toContain('module-information')
     expect(keys).not.toContain('open-containing-folder')
     expect(keys).not.toContain('go-to-entry-point')
-    expect(keys.filter((key) => key.startsWith('hex-'))).toEqual(['hex-0'])
+    // A namespace owns no bytes of its own, so the hex group has nothing on it at all — not even the file
+    // command, which answers for a document row and not for a part inside one.
+    expect(keys.filter((key) => key.startsWith('hex-'))).toEqual([])
   })
 
   it('names a delete after the node it would remove, and the namespace one after itself', () => {

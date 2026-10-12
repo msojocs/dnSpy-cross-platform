@@ -9,13 +9,20 @@ import type { TranslationValues } from '../localization'
 export type HexShowKind = 'statement' | 'instructions' | 'body' | 'fieldInitialValue' | 'resource'
 
 /**
- * What the hex menu needs to know. It is a subset of `EditMenuContext`, so the Edit menu and the code
- * viewer's context menu can both drive it from the context object they already build.
+ * What the hex menu needs to know. It is a subset of `EditMenuContext`, so the Edit menu, the code
+ * viewer's context menu and the documents tree's can all drive it from the context object they already
+ * build.
  */
 export interface HexMenuContext {
   t(message: string, values?: TranslationValues): string
   /** `selectedNode.kind` in the Edit menu, the reference under the caret in the context menu. */
   selectionKind?: string
+  /**
+   * Whether a file-backed document is open in a viewer, which is dnSpy's `GetActiveAssemblyTreeNode`
+   * answering with the file the active document belongs to. The code viewer's own context menu always has
+   * one, the documents tree's never does, and the Edit menu has one while a code document is open.
+   */
+  documentAvailable?: boolean
   /**
    * Where the hex commands point for the selection. dnSpy resolves this from the selection itself;
    * here the backend answers it when the selection changes, so the menu only has to read it.
@@ -42,11 +49,16 @@ export interface HexMenuEntry {
   run(ctx: HexMenuContext): void
 }
 
-/** Node kinds that live inside a module — dnSpy's `GetModuleNode(node) is not null`. */
-const inModuleKinds = ['module', 'namespace', 'type', 'method', 'field', 'property', 'event', 'resource', 'resourceentry']
+/**
+ * Tree rows that stand for a file the hex editor can open: dnSpy's `DsDocumentNode` and its subtypes — an
+ * assembly, a module, a PE-only file, an ELF image, and a file nothing could be read from. Every other row
+ * is a *part* inside one of those files, and a part is what the commands that read the resolved hex target
+ * act on, not the file the command that opens the hex editor opens.
+ */
+const documentKinds = ['assembly', 'module', 'pedocument', 'elfdocument', 'unknowndocument']
 
-const inModule = (ctx: HexMenuContext): boolean =>
-  ctx.selectionKind !== undefined && inModuleKinds.includes(ctx.selectionKind)
+const isDocumentRow = (ctx: HexMenuContext): boolean =>
+  ctx.selectionKind !== undefined && documentKinds.includes(ctx.selectionKind)
 
 // Items dnSpy shows only for node types this port has no equivalent of (address references into a hex
 // editor, a hex document's own tree, PE section headers). They stay in the table so the group keeps
@@ -61,19 +73,28 @@ const never = (): boolean => false
 const hasTarget = <T,>(part: T | null | undefined): part is T => part !== undefined && part !== null
 
 /**
- * dnSpy's GROUP_HEX: every entry points at the bytes of the current selection — or, for the statement
- * command, at where the code document's caret is — which is why the group is driven by the resolved hex
- * target rather than by which kind of document happens to hold the focus. Shared by the Edit menu
- * (`edit-menu.ts`) and the code viewer's context menu (`CodeEditorContextMenu.tsx`) so the two can
- * never drift.
+ * The command that acts on the caret's own statement rather than on the selection (order 20 below). dnSpy
+ * builds it and the file command from a single `GetDocumentNode`, and that helper answers null while a
+ * command acting on the caret's reference is visible — so the file command steps aside for it and the two
+ * are never on screen together.
+ */
+const statementCommandShows = (ctx: HexMenuContext): boolean =>
+  ctx.hexStatement !== undefined && !hasTarget(ctx.hexTarget?.method)
+
+/**
+ * dnSpy's GROUP_HEX, shared by the Edit menu (`edit-menu.ts`), the code viewer's context menu
+ * (`CodeEditorContextMenu.tsx`) and the documents tree's (`AssemblyExplorerContextMenu.tsx`) so the three
+ * can never drift. Every entry but the first points at the bytes of the current selection, which is why
+ * they are driven by the resolved hex target rather than by which kind of document holds the focus; the
+ * first opens the file the selection or the open document belongs to, so its own rule reads that instead.
  */
 export const hexMenuEntries: HexMenuEntry[] = [
-  { order: 0, label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: inModule, run: (ctx) => ctx.onOpenHex() },
+  { order: 0, label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && (isDocumentRow(ctx) || ctx.documentAvailable === true), run: (ctx) => ctx.onOpenHex() },
   // An address reference inside a code document — dnSpy's ShowAddressReferenceInHexEditorCommand.
   { order: 10, label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
   // The two "Show Instructions" commands are mutually exclusive upstream: this one runs off the
   // statement under the caret, the other off the selected method.
-  { order: 20, label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => ctx.hexStatement !== undefined && !hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('statement') },
+  { order: 20, label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: statementCommandShows, run: (ctx) => ctx.onShowHexAt('statement') },
   // A node of a hex document's own tree (PE headers, metadata tables), which this port does not model.
   { order: 30, label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
   // A PE section header or a metadata stream node, likewise absent here.

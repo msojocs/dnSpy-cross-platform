@@ -408,6 +408,7 @@ export const MenuBar = ({
       selectionLabel,
       hasEmptyNamespaceSibling,
       activeDocument,
+      documentAvailable: activeDocument === 'code',
       canUndo,
       canRedo,
       onUndo,

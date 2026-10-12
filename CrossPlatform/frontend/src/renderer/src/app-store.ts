@@ -1,7 +1,6 @@
 import { Actions, TabNode, TabSetNode, type Model } from 'flexlayout-react'
 import { create } from 'zustand'
 import type {
-  AnalyzeReferencesResponse,
   BackendStatus,
   BreakpointConditionKind,
   BreakpointHitCountKind,
@@ -26,7 +25,6 @@ import type {
   HexTargetResponse,
   NodeOptionsDto,
   OpenedModule,
-  ReferenceResult,
   ScriptOutputEntry,
   SearchResult,
   SpecialNodeKind,
@@ -144,11 +142,14 @@ export interface Bookmark {
 }
 
 /**
- * Asks the editor showing `documentId` to move to a line. The token changes on every request, so
- * asking twice for the same line still moves the caret back.
+ * Asks the editor showing `documentId` to move its caret — to a bookmark's line, or to the reference an
+ * analyzer row was found at. `viewId` names one tab when the document is open in more than one; without it
+ * every view of the document moves. The token changes on every request, so asking twice for the same place
+ * still moves the caret back.
  */
-export interface BookmarkReveal {
+export interface CaretReveal {
   documentId: string
+  viewId?: string
   line: number
   column: number
   token: number
@@ -196,7 +197,12 @@ interface AppState {
    * tabs being rebuilt — is not the user's state and must not be written over the archive. */
   restoringSession: boolean
   searchResults: SearchResult[]
-  references: ReferenceResult[]
+  /**
+   * Counts the times the user changed which assemblies the workspace holds — added some, loaded a module's
+   * dependencies, removed one. dnSpy's analyzer starts its searches over then; an assembly opened on demand
+   * to follow a reference is not counted, since dnSpy leaves the analyzer alone for those.
+   */
+  assemblyListRevision: number
   output: string[]
   busy: boolean
   dirty: boolean
@@ -226,7 +232,9 @@ interface AppState {
   bookmarks: Bookmark[]
   /** The bookmark navigation steps from; set by the last go-to, so next/previous continue from there. */
   activeBookmarkId?: string
-  bookmarksReveal?: BookmarkReveal
+  caretReveal?: CaretReveal
+  /** Moves the caret of the editor showing `documentId` — of the tab `viewId`, when one is named. */
+  revealCaret(documentId: string, line: number, column: number, viewId?: string): void
   /**
    * The exception list as the engine has it, refreshed whenever it changes. The engine owns the
    * list — the client stores only `exceptionDiff`, and replays it to get here.
@@ -282,7 +290,6 @@ interface AppState {
   openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
   changeDocumentLanguage(nodeId: string, language: DecompilerLanguage): Promise<void>
   runSearch(query: string, kinds?: string[]): Promise<void>
-  analyzeNode(node: TreeNode): Promise<AnalyzeReferencesResponse | undefined>
   renameNode(node: TreeNode, newName: string): Promise<boolean>
   /** Adds the type or member a create dialog assembled to the node that owns it, and selects the new
    * node. Says whether it was created; a refused one has already been reported. */
@@ -530,7 +537,7 @@ const breakpointsStorageKey = 'dnspy.breakpoints.v1'
 // counters rather than derived from the persisted data.
 let bookmarkSequence = 0
 let bookmarkOrder = 0
-let bookmarkRevealToken = 0
+let caretRevealToken = 0
 // Each stop, step and frame switch asks the editor to show a line; the token tells a second request for
 // the same line apart from a re-render of the first, which is what keeps the caret from being reset.
 let stoppedRevealToken = 0
@@ -552,7 +559,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   documentOrder: [],
   restoringSession: false,
   searchResults: [],
-  references: [],
+  assemblyListRevision: 0,
   output: [],
   scriptEntries: [],
   scriptRunning: false,
@@ -618,6 +625,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             workspaceStateId: added.stateId,
             savedStateId: added.stateId,
             recentWorkspaces: rememberWorkspace(added.modules.map((module) => module.path)),
+            assemblyListRevision: state.assemblyListRevision + 1,
           }
         })
         const count = added.modules.length - previousModules.length
@@ -649,7 +657,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         documentOrder: [],
         activeDocumentId: undefined,
         searchResults: [],
-        references: [],
         dirty: false,
         workspaceStateId: opened.stateId,
         savedStateId: opened.stateId,
@@ -689,7 +696,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeDocumentId: undefined,
       restoringSession: false,
       searchResults: [],
-      references: [],
       busy: false,
       error: undefined,
       dirty: false,
@@ -861,26 +867,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = error instanceof Error ? error.message : String(error)
       set({ error: message })
       get().appendOutput(t('Search failed: {message}', { message }))
-    } finally {
-      set({ busy: false })
-    }
-  },
-
-  analyzeNode: async (node) => {
-    const workspaceId = get().workspaceId
-    if (!workspaceId)
-      return undefined
-    set({ busy: true, selectedNode: node, error: undefined })
-    try {
-      const response = await window.dnSpy.analyzeReferences(workspaceId, node.id)
-      set({ references: response.results })
-      get().appendOutput(t('Analysis returned {count} reference(s).', { count: `${response.results.length}${response.truncated ? '+' : ''}` }))
-      return response
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Analysis failed: {message}', { message }))
-      return undefined
     } finally {
       set({ busy: false })
     }
@@ -1328,7 +1314,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         documentOrder: [],
         activeDocumentId: undefined,
         searchResults: [],
-        references: [],
         dirty: false,
         workspaceStateId: reloaded.stateId,
         savedStateId: reloaded.stateId,
@@ -1387,6 +1372,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           // dnSpy leaves the tree on another document rather than on nothing at all.
           selectedNode: selectionWent ? response.roots[0] : state.selectedNode,
           hexTarget: selectionWent ? undefined : state.hexTarget,
+          assemblyListRevision: state.assemblyListRevision + 1,
         }
       })
       return response.removedNodeIds
@@ -1497,6 +1483,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           // The first root the tree did not have before is one of the assemblies that just arrived; when
           // nothing could be resolved the selection stays on the row the command was run on.
           selectedNode: roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode,
+          assemblyListRevision: state.assemblyListRevision + 1,
         }
       })
       const count = added.modules.length - previousModules.length
@@ -2174,7 +2161,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
     const line = bookmarkLineInDocument(documentId, get().documents[documentId]?.codeStatements, bookmark) ?? bookmark.line
-    set((state) => ({ bookmarksReveal: { documentId, line, column: 1, token: ++bookmarkRevealToken } }))
+    get().revealCaret(documentId, line, 1)
+  },
+
+  revealCaret: (documentId, line, column, viewId) => {
+    set({ caretReveal: { documentId, viewId, line, column, token: ++caretRevealToken } })
   },
 
   selectNextBookmark: async (position) => { await stepBookmark(get, 1, { position }) },

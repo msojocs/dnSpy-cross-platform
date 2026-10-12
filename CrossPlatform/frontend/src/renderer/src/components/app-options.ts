@@ -353,6 +353,12 @@ export interface BookmarkSettings {
   syntaxHighlight: boolean
 }
 
+/** dnSpy's AnalyzerSettings, which only the analyzer's own context menu changes — there is no page for them. */
+export interface AnalyzerSettings {
+  showToken: boolean
+  singleClickExpandsChildren: boolean
+}
+
 export interface AppOptions {
   environmentGeneral: EnvironmentGeneralSettings
   environmentFont: EnvironmentFontSettings
@@ -370,6 +376,7 @@ export interface AppOptions {
   hexEditor: Record<HexEditorView, HexEditorPaneOptions>
   backgroundImage: BackgroundImageSettings
   bookmarks: BookmarkSettings
+  analyzer: AnalyzerSettings
 }
 
 const defaultEditorGeneral = (): EditorGeneralSettings => ({
@@ -642,6 +649,10 @@ export const defaultAppOptions: AppOptions = {
   },
   bookmarks: {
     syntaxHighlight: true,
+  },
+  analyzer: {
+    showToken: true,
+    singleClickExpandsChildren: true,
   },
 }
 

@@ -95,28 +95,48 @@ export class BackendClient {
     return hello
   }
 
-  invoke<T>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
-    return this.invokeInternal(method, params, timeoutMs, false)
+  /**
+   * Sends a request and waits for its answer. Aborting `signal` gives up on the answer and tells the host
+   * to cancel the work, the same notice a timeout sends — what a request the user walked away from needs.
+   */
+  invoke<T>(method: string, params: unknown, timeoutMs = 60_000, signal?: AbortSignal): Promise<T> {
+    return this.invokeInternal(method, params, timeoutMs, false, signal)
   }
 
-  private invokeInternal<T>(method: string, params: unknown, timeoutMs: number, settleDuringDispose: boolean): Promise<T> {
+  private invokeInternal<T>(method: string, params: unknown, timeoutMs: number, settleDuringDispose: boolean, signal?: AbortSignal): Promise<T> {
     if (!this.process || this.process.exitCode !== null)
       return Promise.reject(new Error('The backend is not running.'))
+    if (signal?.aborted)
+      return Promise.reject(new Error(`${method} was canceled.`))
     const id = ++this.nextRequestId
     const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, method, params }), 'utf8')
     const header = Buffer.from(`Content-Length: ${payload.length}\r\n\r\n`, 'ascii')
     return new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      const abandon = (error: Error): void => {
+        clearTimeout(timeout)
         this.pending.delete(id)
         this.sendNotification('system/cancel', { id })
-        reject(new Error(`${method} timed out.`))
-      }, timeoutMs)
+        signal?.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+      const onAbort = (): void => {
+        if (this.pending.has(id))
+          abandon(new Error(`${method} was canceled.`))
+      }
+      const timeout = setTimeout(() => abandon(new Error(`${method} timed out.`)), timeoutMs)
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve(value as T)
+        },
+        reject: (error) => {
+          signal?.removeEventListener('abort', onAbort)
+          reject(error)
+        },
         timeout,
         settleDuringDispose,
       })
+      signal?.addEventListener('abort', onAbort, { once: true })
       this.process?.stdin.write(Buffer.concat([header, payload]), (error) => {
         if (error) {
           clearTimeout(timeout)

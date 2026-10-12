@@ -971,7 +971,7 @@ describe('bookmarks', () => {
     useAppStore.setState({
       bookmarks: [],
       activeBookmarkId: undefined,
-      bookmarksReveal: undefined,
+      caretReveal: undefined,
       output: [],
       workspaceId: 'ws1',
       openNodeById,
@@ -1156,7 +1156,7 @@ describe('bookmarks', () => {
 
     await useAppStore.getState().selectNextBookmark({ documentId: 'method-1', line: 5 })
     expect(useAppStore.getState().activeBookmarkId).toBe('b2')
-    expect(useAppStore.getState().bookmarksReveal).toMatchObject({ documentId: 'method-1', line: 9 })
+    expect(useAppStore.getState().caretReveal).toMatchObject({ documentId: 'method-1', line: 9 })
 
     // With no caret to go on, next means "after the one the last go-to landed on" — and it wraps.
     await useAppStore.getState().selectNextBookmark()
@@ -1176,7 +1176,7 @@ describe('bookmarks', () => {
 
     await useAppStore.getState().selectNextBookmarkInDocument('method-1', 0)
     expect(useAppStore.getState().activeBookmarkId).toBe('b1')
-    expect(useAppStore.getState().bookmarksReveal).toMatchObject({ documentId: 'method-1', line: 4 })
+    expect(useAppStore.getState().caretReveal).toMatchObject({ documentId: 'method-1', line: 4 })
   })
 
   it('steps between the bookmarks sharing the active one’s label', async () => {
@@ -1197,7 +1197,7 @@ describe('bookmarks', () => {
     useAppStore.setState({ bookmarks: [bookmark({ id: 'b1', labels: [] })], activeBookmarkId: 'b1' })
 
     await useAppStore.getState().selectNextBookmarkWithSameLabel()
-    expect(useAppStore.getState().bookmarksReveal).toBeUndefined()
+    expect(useAppStore.getState().caretReveal).toBeUndefined()
   })
 
   it('asks the backend for the node again when the cached one is gone', async () => {
@@ -1235,7 +1235,7 @@ describe('bookmarks', () => {
 
     await useAppStore.getState().goToBookmark('b1')
 
-    expect(useAppStore.getState().bookmarksReveal).toBeUndefined()
+    expect(useAppStore.getState().caretReveal).toBeUndefined()
     expect(useAppStore.getState().output.at(-1)).toContain(translate('Bookmark "{name}" is in a module that is not loaded.', { name: 'Loop head' }))
   })
 
@@ -2416,7 +2416,7 @@ describe('file commands', () => {
     documentOrder: [],
     activeDocumentId: undefined,
     searchResults: [],
-    references: [],
+    assemblyListRevision: 0,
     output: [],
     dirty: false,
     workspaceStateId: undefined,

@@ -178,15 +178,72 @@ export interface SearchResponse {
   truncated: boolean
 }
 
-export interface ReferenceResult {
-  sourceNodeId: string
-  sourceName: string
-  kind: string
-  location: string
+/** The searches dnSpy's analyzer offers under a member, by the key a search row carries. */
+export type AnalyzerSearchKind =
+  | 'uses' | 'usedBy' | 'overrides' | 'overriddenBy' | 'implementedBy' | 'readBy' | 'assignedBy'
+  | 'raisedBy' | 'appliedTo' | 'instantiatedBy' | 'exposedBy' | 'subtypes' | 'extensionMethods'
+
+/**
+ * A member a reference may name, written the way a `TextSpan` names its target: by node in a module the
+ * workspace holds, by file and token in one it does not.
+ */
+export interface AnalyzerTarget {
+  nodeId?: string | null
+  modulePath?: string | null
+  metadataToken?: number | null
 }
 
-export interface AnalyzeReferencesResponse {
-  results: ReferenceResult[]
+/**
+ * Where in a method body a search result was found — dnSpy's SourceRef. "Show Reference in Method" opens
+ * the method and puts the caret on the reference the instruction at `ilOffset` makes to one of `targets`.
+ * The offset is null for a result found in the method's locals or exception handlers.
+ */
+export interface AnalyzerSource {
+  methodNodeId: string
+  modulePath: string
+  methodToken: number
+  ilOffset?: number | null
+  targets: AnalyzerTarget[]
+}
+
+/**
+ * One row of dnSpy's analyzer tree: a member, an assembly or a module (`kind` as the tree names it), or a
+ * row that runs a search (`kind: 'search'`). The label carries neither the token nor the "(hides)" prefix,
+ * which the client adds; a search row's label is its English header.
+ */
+export interface AnalyzerNode {
+  kind: string
+  label: string
+  hasChildren: boolean
+  /** The tree node the row names; for a search row, the member the search is for. */
+  nodeId?: string | null
+  icon?: string | null
+  metadataToken?: number | null
+  search?: AnalyzerSearchKind | null
+  /** The keyword an accessor row is written as: get, set, add, remove or raise. */
+  accessor?: string | null
+  /** Carried by a property's "set" row and its searches: the setter's "Used By" also looks at the
+   * attributes that assign the property by name. */
+  isSetter: boolean
+  hidesParent: boolean
+  fullName?: string | null
+  isPublic: boolean
+  source?: AnalyzerSource | null
+}
+
+export interface AnalyzeNodesResponse {
+  /** One row per node asked for, null where the node is not a member — or no longer is. */
+  nodes: (AnalyzerNode | null)[]
+}
+
+export interface AnalyzeChildrenRequest {
+  nodeId: string
+  search?: AnalyzerSearchKind
+  isSetter?: boolean
+}
+
+export interface AnalyzeChildrenResponse {
+  children: AnalyzerNode[]
   truncated: boolean
 }
 
@@ -928,7 +985,15 @@ export interface DnSpyApi {
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
   search(workspaceId: string, query: string, kinds?: string[]): Promise<SearchResponse>
-  analyzeReferences(workspaceId: string, nodeId: string): Promise<AnalyzeReferencesResponse>
+  /** The analyzer rows of tree nodes — what dnSpy's analyzer adds for a member it is asked to analyze. */
+  analyzeNodes(workspaceId: string, nodeIds: string[]): Promise<AnalyzeNodesResponse>
+  /**
+   * What an analyzer row expands to: a member's searches and accessor rows, or what a search finds. A
+   * search can run for a while; `requestKey` names it to `cancelAnalyze`, which a row collapsed while its
+   * search is still running calls.
+   */
+  analyzeChildren(workspaceId: string, request: AnalyzeChildrenRequest, requestKey: string): Promise<AnalyzeChildrenResponse>
+  cancelAnalyze(requestKey: string): Promise<void>
   getHexLength(workspaceId: string, moduleId: string): Promise<HexLengthResponse>
   readHex(workspaceId: string, moduleId: string, offset: number, count: number): Promise<HexReadResponse>
   /** Where the hex commands point for a selected node: a method's body and code, a field's initial

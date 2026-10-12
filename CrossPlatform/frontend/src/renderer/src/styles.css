@@ -451,6 +451,7 @@ select:focus-visible,
 .icon-class { color: #62a9df; }
 .icon-interface { color: #4a9be8; }
 .icon-enum { color: #c0a05a; }
+.icon-search { color: var(--text-muted); }
 
 .kind-method { color: #bd8dcc; }
 .kind-field { color: #72b8a0; }
@@ -460,6 +461,11 @@ select:focus-visible,
 .tree-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The line a search shows while it is still running — dnSpy's "Searching..." message node. */
+.analyzer-searching .tree-label {
+  color: var(--text-muted);
 }
 
 .document-view {

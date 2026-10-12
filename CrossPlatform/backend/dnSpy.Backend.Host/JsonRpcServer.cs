@@ -187,8 +187,10 @@ internal sealed class JsonRpcServer {
 				return await workspaces.FindMemberAsync(DeserializeParams<FindMemberRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.Search:
 				return await workspaces.SearchAsync(DeserializeParams<SearchRequest>(request), cancellationToken).ConfigureAwait(false);
-			case RpcMethods.AnalyzeReferences:
-				return await workspaces.AnalyzeReferencesAsync(DeserializeParams<AnalyzeReferencesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.AnalyzeNodes:
+				return await workspaces.AnalyzeNodesAsync(DeserializeParams<AnalyzeNodesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.AnalyzeChildren:
+				return await workspaces.AnalyzeChildrenAsync(DeserializeParams<AnalyzeChildrenRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexGetLength:
 				return await workspaces.GetHexLengthAsync(DeserializeParams<HexLengthRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexReadRange:
@@ -307,7 +309,7 @@ internal sealed class JsonRpcServer {
 				["document.il"] = true,
 				["document.ilWithCSharp"] = true,
 				["search"] = true,
-				["analyze.references"] = true,
+				["analyze"] = true,
 				["hex.read"] = true,
 				["hex.write"] = true,
 				["assembly.edit"] = true,

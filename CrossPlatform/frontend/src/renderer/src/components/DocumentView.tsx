@@ -10,7 +10,7 @@ import { clearBookmarks, showBookmarksWindow, stepBookmark, toggleBookmarkAtCare
 import type { Bookmark, HexBodyKind, LineBreakpoint } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
-import { showCodeEditorContextMenu } from './CodeEditorContextMenu'
+import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
 import type { CreatedKind, HexShowKind } from './edit-menu'
 
 // One decoration per breakpoint that has a line in this document. A disabled breakpoint keeps its dot but draws it
@@ -104,7 +104,7 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const document = useAppStore((state) => state.documents[documentId])
   const lineBreakpoints = useAppStore((state) => state.lineBreakpoints)
   const bookmarks = useAppStore((state) => state.bookmarks)
-  const bookmarksReveal = useAppStore((state) => state.bookmarksReveal)
+  const caretReveal = useAppStore((state) => state.caretReveal)
   const toggleLineBreakpoint = useAppStore((state) => state.toggleLineBreakpoint)
   const toggleFunctionBreakpoint = useAppStore((state) => state.toggleFunctionBreakpoint)
   const stoppedLocation = useAppStore((state) => state.stoppedLocation)
@@ -119,6 +119,8 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const [menuOpen, setMenuOpen] = useState(false)
   // The stopped-location request whose line this view already moved the caret to.
   const revealedTokenRef = useRef(0)
+  // The caret request — a bookmark's, the analyzer's — this view already carried out.
+  const appliedCaretRevealRef = useRef(0)
   // The reveal that has not landed yet. A frame navigation opens its document while the tab is still being
   // laid out, so the scroll it asks for finds an editor with no height and moves nowhere; keeping the
   // request until the line is really on screen is what makes the second attempt (on a layout change) work.
@@ -160,6 +162,21 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   }
   const applyPendingRevealRef = useRef(applyPendingReveal)
   applyPendingRevealRef.current = applyPendingReveal
+
+  // The line a caret request put the caret on, until it has been scrolled into view. An editor mounted for
+  // the request has no height yet when the caret is placed, so the scroll is tried again on its layout.
+  const pendingCaretLineRef = useRef<number | undefined>(undefined)
+  const scrollToPendingCaret = (): void => {
+    const line = pendingCaretLineRef.current
+    const editor = editorRef.current
+    if (line === undefined || !editor)
+      return
+    editor.revealLineInCenterIfOutsideViewport(line)
+    if (editor.getVisibleRanges().some((range) => line >= range.startLineNumber && line <= range.endLineNumber))
+      pendingCaretLineRef.current = undefined
+  }
+  const scrollToPendingCaretRef = useRef(scrollToPendingCaret)
+  scrollToPendingCaretRef.current = scrollToPendingCaret
 
   // The mount-time mouse handler cannot see this render's props, and the menu has to be built from the
   // state the click lands in — so the builder is kept in a ref, like the reveal above.
@@ -310,20 +327,36 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
     bookmarkDecorationsRef.current?.set(bookmarkDecorations(documentId, document?.codeStatements, bookmarks, t))
   }, [documentId, bookmarks, document?.codeStatements, document?.text, locale, editorReady])
 
-  // "Go to bookmark" is answered here rather than in the action itself: the line has to be shown in an
-  // editor that is mounted, and only the mounted view knows its own model.
+  // The editor is taken down while the document is decompiled again — reopened, or switched to another
+  // language — and a new one is mounted when the text is back. The effects that wait for `editorReady` have
+  // to run again for that one, so the flag drops with the old editor rather than staying up across the swap.
   useEffect(() => {
-    if (!bookmarksReveal || bookmarksReveal.documentId !== documentId)
+    if (document?.loading) {
+      editorRef.current = undefined
+      setEditorReady(false)
+    }
+  }, [document?.loading])
+
+  // "Go to bookmark" and the analyzer's "Show Reference in Method" are answered here rather than in the
+  // action itself: the place has to be shown in an editor that is mounted, and only the mounted view knows
+  // its own model. A request is carried out once: the document it names may be decompiled again as it is
+  // opened, and the editor that comes back is where the caret goes — later reloads leave the caret alone.
+  useEffect(() => {
+    if (!caretReveal || caretReveal.documentId !== documentId || (caretReveal.viewId !== undefined && caretReveal.viewId !== viewId))
+      return
+    if (caretReveal.token === appliedCaretRevealRef.current)
       return
     const editor = editorRef.current
     const model = editor?.getModel()
     if (!editor || !model)
       return
-    const line = Math.min(Math.max(bookmarksReveal.line, 1), model.getLineCount())
-    editor.setPosition({ lineNumber: line, column: Math.min(bookmarksReveal.column, model.getLineMaxColumn(line)) })
-    editor.revealLineInCenterIfOutsideViewport(line)
+    const line = Math.min(Math.max(caretReveal.line, 1), model.getLineCount())
+    editor.setPosition({ lineNumber: line, column: Math.min(caretReveal.column, model.getLineMaxColumn(line)) })
     editor.focus()
-  }, [bookmarksReveal, documentId, document?.text, editorReady])
+    appliedCaretRevealRef.current = caretReveal.token
+    pendingCaretLineRef.current = line
+    scrollToPendingCaret()
+  }, [caretReveal, documentId, viewId, document?.text, editorReady])
 
   // The line the active frame is stopped at, in the document that frame decompiles to. Stepping moves it one
   // statement at a time, so the view follows it — otherwise the marker would advance off-screen and the step
@@ -405,7 +438,10 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
               setEditorReady(true)
               // A frame navigation opens its document while the tab is still being laid out, so the reveal
               // it asks for finds an editor without a height; this is where that request is tried again.
-              editor.onDidLayoutChange(() => applyPendingRevealRef.current())
+              editor.onDidLayoutChange(() => {
+                applyPendingRevealRef.current()
+                scrollToPendingCaretRef.current()
+              })
               const updateLanguageId = (): void => {
                 const languageId = editor.getModel()?.getLanguageId()
                 if (languageId)
@@ -440,6 +476,23 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
                 if (span) onNavigate(span)
               }
               editor.addCommand(monaco.KeyCode.F12, navigateAtCursor)
+              // dnSpy's Ctrl+Shift+R in the code viewer analyzes the reference under the caret — what the
+              // context menu's Analyze would, a member of a module the workspace does not hold included.
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR, () => {
+                const position = editor.getPosition()
+                if (!position) return
+                const offset = model.getOffsetAt(position)
+                const span = spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
+                if (!span) return
+                void (async () => {
+                  const referenceNode = span.targetNodeId !== undefined ? await referenceNodeOf(span.targetNodeId) : undefined
+                  const external = externalMemberTarget({ referenceNode, referenceTarget: span })
+                  if (isAnalyzableNode(referenceNode))
+                    commandsRef.current.onAnalyze(referenceNode)
+                  else if (external)
+                    commandsRef.current.onAnalyzeReference(external)
+                })()
+              })
               // The caret decides which statement "Show Instructions in Hex Editor" acts on, so the store
               // is told where it is — but only while this editor is the one the user is working in; a
               // background tab moving its own caret is not a change of the current position.

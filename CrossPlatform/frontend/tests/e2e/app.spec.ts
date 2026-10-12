@@ -346,7 +346,7 @@ test.describe('the workspace shell', () => {
   test('runs document tab commands from the title context menu', async () => {
     await openAssemblyAndNamespace()
     const helloRequest = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @02000005$/ })
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await helloRequest.dblclick()
     await expect.poll(async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll('\u00a0', ' ')).toContain('record HelloRequest')
     await rpcException.dblclick()
@@ -394,10 +394,10 @@ test.describe('the workspace shell', () => {
 
   test('navigates C# references with F12 and document history', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -420,7 +420,7 @@ test.describe('the workspace shell', () => {
 
   test('follows a reference into a module the tree does not hold', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
     await expect(page.getByRole('tab', { name: 'RpcException' })).toBeVisible()
 
@@ -486,10 +486,10 @@ test.describe('the workspace shell', () => {
     await page.getByRole('menuitem', { name: /^Redo/ }).click()
     await expect(page.locator('.tree-row[data-kind="type"]').filter({ hasText: /HelloRequestEdited/ })).toBeVisible()
 
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -565,9 +565,9 @@ test.describe('the workspace shell', () => {
     await page.keyboard.press('Escape')
 
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
-    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ }).locator('.tree-expander').click()
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -592,7 +592,7 @@ test.describe('the workspace shell', () => {
 
     // The type's methods are not in the tree until the row is expanded, and the command is expected to read
     // them itself — so the row is left exactly as the assembly opened it, collapsed.
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Class Breakpoint' }).click()
 
@@ -636,10 +636,10 @@ test.describe('the workspace shell', () => {
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // The token the method row is pinned with selects that row, opening the type above it on the way.
-    await tokenDialog.getByLabel('Token').fill('0x060008CC')
+    await tokenDialog.getByLabel('Token').fill('0x06000896')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
-    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ })).toHaveAttribute('aria-selected', 'true')
 
     // Remove Assembly takes the row and every row under it, and the tree is left with nothing on it.
     await moduleRow.click({ button: 'right' })
@@ -671,10 +671,10 @@ test.describe('the workspace shell', () => {
 
   test('writes a method body from the hex editor and undoes the bytes', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -756,10 +756,10 @@ test.describe('the workspace shell', () => {
 
     // The stub body is built by the backend from the method's signature, so its only job here is to
     // land as an edit the user can undo.
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -804,7 +804,7 @@ test.describe('the workspace shell', () => {
 
   test('creates a method with a parameter and an attribute, then renames it with Alt+Enter', async () => {
     await openAssemblyAndNamespace()
-    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ }).click()
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ }).click()
 
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Create Method...' }).click()
@@ -868,10 +868,10 @@ test.describe('the workspace shell', () => {
 
   test('closes only the topmost dialog when Escape is pressed', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -899,7 +899,7 @@ test.describe('the workspace shell', () => {
 
   test('toggles a line breakpoint by clicking the editor gutter', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     // The constructor body is the only place in this document a statement is printed: an auto-property such as
@@ -931,7 +931,7 @@ test.describe('the workspace shell', () => {
 
   test('bookmarks a statement from the gutter and clears it from the View menu', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     const browserWindow = await application.browserWindow(page)
@@ -971,7 +971,7 @@ test.describe('the workspace shell', () => {
 
   test('keeps a bookmark across a reload', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     const browserWindow = await application.browserWindow(page)
@@ -1001,7 +1001,7 @@ test.describe('the workspace shell', () => {
 
   test('exports the bookmarks to a file and reads them back', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     const browserWindow = await application.browserWindow(page)
@@ -1038,7 +1038,7 @@ test.describe('the workspace shell', () => {
 
   test('toggles a bookmark with the Ctrl+K chord while the editor has focus', async () => {
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     const browserWindow = await application.browserWindow(page)
@@ -1070,11 +1070,11 @@ test.describe('the workspace shell', () => {
     await expandModule()
     const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^dnSpy\.Backend\.Contracts$/ })
     await namespaceRow.locator('.tree-expander').click()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     // The tree row keeps focus, so the F9 handler is not suppressed by the editor guard.
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @060008CC$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000896$/ }).click()
 
     const breakpointRows = page.locator('.breakpoint-row')
     await page.keyboard.press('F9')
@@ -1752,11 +1752,69 @@ test.describe('the code viewer context menu', () => {
 
     await menu.getByRole('menuitem', { name: 'Analyze' }).click()
     await expect(page.getByRole('tab', { name: 'Analyzer' })).toHaveAttribute('aria-selected', 'true')
-    // Main constructs a Worker twice, and those calls are what the constructor is used by.
-    await expect(page.locator('.result-row').first()).toContainText('Main')
-    // The editor has the focus back once the menu is gone, so its caret is drawn without the menu's help.
-    await expect(editor).toHaveClass(/\bfocused\b/)
-    await expect(caret).toHaveCSS('visibility', 'visible')
+    // dnSpy's analyzer gains one row, for the constructor the reference names, and takes the focus with it.
+    const analyzer = page.getByRole('tree', { name: 'Analyzer' })
+    const roots = analyzer.locator('.tree-row[aria-level="1"]')
+    await expect(roots).toHaveText([/^DebugTarget\.Program\.Worker\.Worker\(\) : void @06[0-9A-F]{6}$/])
+    await expect(roots.first()).toHaveAttribute('aria-selected', 'true')
+    await expect(roots.first()).toBeFocused()
+  })
+
+  test('opens an analyzed member onto its searches and goes to where a result uses it', async () => {
+    await openMain()
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    // Main's body is taller than the viewport, and Monaco draws only the lines it shows.
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    // Main's first `new Worker()`, the one ViaInterface is handed: the constructor's first use.
+    const line = editor.locator('.view-line').filter({ hasText: /ViaInterface\(new\sWorker\(\)\)/ })
+    const worker = line.getByText('Worker', { exact: true })
+    await expect(worker).toBeVisible()
+    await worker.click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Analyze' }).click()
+
+    const analyzer = page.getByRole('tree', { name: 'Analyzer' })
+    const root = analyzer.locator('.tree-row[aria-level="1"]')
+    await expect(root).toHaveCount(1)
+    // The searches dnSpy offers a constructor, sorted by their text.
+    await expect(analyzer.locator('.tree-row[aria-level="2"]')).toHaveText(['Used By', 'Uses'])
+
+    // A search runs when its row is opened; Main constructs the Worker twice, and is listed once.
+    await analyzer.locator('.tree-row[aria-level="2"]').filter({ hasText: 'Used By' }).locator('.tree-expander').click()
+    const caller = analyzer.locator('.tree-row[aria-level="3"]').filter({ hasText: /^DebugTarget\.Program\.Main\(string\[\]\) : void @06[0-9A-F]{6}$/ })
+    await expect(caller).toHaveCount(1)
+
+    // Away from the reference, so that landing back on it is the double click's doing.
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+    await caller.dblclick()
+    await expect(page.getByRole('tab', { name: /^Main\(string\[\]\) : void/ })).toHaveAttribute('aria-selected', 'true')
+    const caret = editor.locator('.cursors-layer > .cursor')
+    await expect.poll(async () => {
+      const caretBox = await caret.boundingBox()
+      const workerBox = await worker.boundingBox()
+      if (!caretBox || !workerBox)
+        return false
+      // dnSpy puts the caret at the start of the reference, and Monaco draws it a pixel or so to the left.
+      const caretMiddle = caretBox.y + caretBox.height / 2
+      return Math.abs(caretBox.x - workerBox.x) <= 2 && caretMiddle >= workerBox.y && caretMiddle <= workerBox.y + workerBox.height
+    }).toBe(true)
+
+    // Analyzing the member again goes back to its row rather than adding a second one.
+    await worker.click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Analyze' }).click()
+    await expect(root).toHaveCount(1)
+    await expect(root).toBeFocused()
+
+    // Delete takes an analyzed member off the window.
+    await page.keyboard.press('Delete')
+    await expect(root).toHaveCount(0)
+
+    // And Ctrl+Shift+R analyzes the member selected in the assembly tree.
+    const mainRow = page.getByRole('tree', { name: 'Assembly Explorer' }).locator('.tree-row[data-kind="method"]').filter({ hasText: /^Main\(/ })
+    await mainRow.click()
+    await page.keyboard.press('Control+Shift+R')
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Main\(string\[\]\) : void @06[0-9A-F]{6}$/])
   })
 
   test('leaves the selection a right-click lands in, so Copy has it to copy', async () => {
@@ -2070,7 +2128,7 @@ test.describe('the breakpoints a run leaves behind', () => {
   test('are written as an IL location, not as a line in a document', async () => {
     await launchApp(contractsAssemblyPath, { userDataDirectory: profileDirectory })
     await openAssemblyAndNamespace()
-    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000076$/ })
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ })
     await rpcException.dblclick()
 
     // Monaco only renders the lines the viewport holds, so the window has to be tall enough to show the

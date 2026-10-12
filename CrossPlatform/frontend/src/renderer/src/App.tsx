@@ -9,7 +9,10 @@ import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
-import { AnalysisPane, DebugPlaceholder, OutputPane, SearchPane } from './components/ToolWindows'
+import { DebugPlaceholder, OutputPane, SearchPane } from './components/ToolWindows'
+import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPane'
+import { isAnalyzableNode } from './components/CodeEditorContextMenu'
+import { useAnalyzerStore } from './analyzer-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
@@ -341,7 +344,6 @@ export const App = (): React.JSX.Element => {
   const bookmarks = useAppStore((state) => state.bookmarks)
   const setAllBookmarksEnabled = useAppStore((state) => state.setAllBookmarksEnabled)
   const clearBookmarksAction = useAppStore((state) => state.clearBookmarks)
-  const analyzeNode = useAppStore((state) => state.analyzeNode)
   const setBackendStatus = useAppStore((state) => state.setBackendStatus)
   const clearError = useAppStore((state) => state.clearError)
   const debugState = useAppStore((state) => state.debugState)
@@ -759,6 +761,14 @@ export const App = (): React.JSX.Element => {
           closeDocumentTab(tab)
           forceLayoutUpdate((value) => value + 1)
         }
+      } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'r') {
+        // dnSpy's Analyze. The code viewer and the analyzer bind the key themselves; from the assembly tree
+        // it analyzes the selected member, and anywhere else it brings an open analyzer forward.
+        event.preventDefault()
+        if (target?.closest('.assembly-tree:not(.analyzer-tree)') && isAnalyzableNode(selectedNode))
+          void openAnalysis(selectedNode)
+        else if (model.getNodeById('analysis'))
+          showToolWindow('analysis')
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'p') {
         event.preventDefault()
         collapseTreeViewNodes()
@@ -865,7 +875,9 @@ export const App = (): React.JSX.Element => {
     return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [dirty])
 
-  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false): Promise<void> => {
+  // Answers with the id of the tab the document ended up selected in — the clone a new tab is, or the one
+  // the document already had — which is the view a caret placed afterwards has to land in.
+  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false): Promise<string | undefined> => {
     const { workspaceId, workspaceGeneration } = useAppStore.getState()
     if (recordHistory) {
       setNavigation((current) => {
@@ -878,8 +890,9 @@ export const App = (): React.JSX.Element => {
     const documentId = await openDocument(node, language)
     const current = useAppStore.getState()
     if (current.workspaceId !== workspaceId || current.workspaceGeneration !== workspaceGeneration)
-      return
+      return undefined
     const tabId = `doc:${documentId}`
+    let viewId = tabId
     // A method's tab shows the title the backend decompiled it under — "name(params) : return" — not
     // the tree label, which drops the return type. Anything else already labels the two the same way.
     const tabName = current.documents[documentId]?.title ?? node.label
@@ -891,10 +904,10 @@ export const App = (): React.JSX.Element => {
       // "Open in New Tab" keeps the tab the document already had and adds a second one beside it, which
       // is what cloneDocumentTab draws — the same document under a new tab id.
       if (newTab && existing instanceof TabNode)
-        cloneDocumentTab(existing)
+        viewId = cloneDocumentTab(existing)?.getId() ?? tabId
     } else {
       const targetTabSet = getTargetDocumentTabSet(model)
-      if (!targetTabSet) return
+      if (!targetTabSet) return undefined
       model.doAction(Actions.addNode({
         type: 'tab',
         id: tabId,
@@ -906,6 +919,7 @@ export const App = (): React.JSX.Element => {
         model.doAction(Actions.deleteTab('start'))
     }
     forceLayoutUpdate((value) => value + 1)
+    return viewId
   }
 
   // Where the previous session comes back. Every node the saved session names is looked up by key —
@@ -1126,9 +1140,10 @@ export const App = (): React.JSX.Element => {
     void addDocumentTab(node, false)
   }
 
+  // dnSpy shows its analyzer before it adds the member, so the row lands in a window that is already there.
   const openAnalysis = async (node: TreeNode): Promise<void> => {
-    await analyzeNode(node)
     showToolWindow('analysis')
+    await useAnalyzerStore.getState().analyze(node.id)
   }
 
   // dnSpy resolves the member a reference names only when Analyze runs, which for a member of a module the
@@ -1294,6 +1309,25 @@ export const App = (): React.JSX.Element => {
     onHexPasteBody: () => void hexPasteMethodBody(),
   })
 
+  // The analyzer goes to a row's member, or to the method it was found in, through the same tabs the tree
+  // opens documents in; the caret it then places needs the tab the document landed in.
+  const analyzerCommands: AnalyzerPaneCommands = {
+    openNode: async (nodeId, newTab) => {
+      if (!workspaceId)
+        return undefined
+      try {
+        const node = await window.dnSpy.getNode(workspaceId, nodeId)
+        const viewId = await addDocumentTab(node, true, undefined, newTab)
+        return viewId ? { documentId: node.id, viewId } : undefined
+      } catch (reason) {
+        appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+        return undefined
+      }
+    },
+    copyText: (text) => explorerCommands.copyText?.(text),
+    openUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+  }
+
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
@@ -1302,7 +1336,7 @@ export const App = (): React.JSX.Element => {
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} />
       case 'search': return <SearchPane onOpenNodeId={(nodeId) => void openNodeId(nodeId)} />
-      case 'analysis': return <AnalysisPane onOpenNodeId={(nodeId) => void openNodeId(nodeId)} />
+      case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
       case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'locals': return <LocalsPane />
@@ -1521,6 +1555,9 @@ export const App = (): React.JSX.Element => {
             // order — and the tab order is part of the session the next run restores.
             const { order, active } = orderedDocumentKeys(nextModel)
             setDocumentOrder(order, active)
+            // Closing dnSpy's analyzer window throws away what it held; opening it again starts empty.
+            if (!nextModel.getNodeById('analysis'))
+              useAnalyzerStore.getState().clear()
             forceLayoutUpdate((value) => value + 1)
           }}
           onContextMenu={(node, event) => {

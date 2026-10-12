@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Network,
   Package,
+  Search,
   Variable,
 } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
@@ -66,6 +67,8 @@ export const NodeIcon = ({ icon, expanded = false }: { icon?: string; expanded?:
     case 'property': return <Braces {...props} />
     case 'event': return <CircleDot {...props} />
     case 'interface': return <Network {...props} />
+    // The analyzer's search rows wear dnSpy's DsImages.Search.
+    case 'search': return <Search {...props} />
     default: return <Box {...props} />
   }
 }

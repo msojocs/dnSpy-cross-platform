@@ -30,7 +30,7 @@ using DecompilerMetadataFile = ICSharpCode.Decompiler.Metadata.MetadataFile;
 
 namespace dnSpy.Backend.Core;
 
-public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
+public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 	const int MaxHexReadLength = 1024 * 1024;
 	readonly ConcurrentDictionary<string, Workspace> workspaces = new(StringComparer.Ordinal);
 	readonly SymbolResolver symbols = new();
@@ -86,9 +86,6 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 
 	public Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.Search(request, cancellationToken), cancellationToken);
-
-	public Task<AnalyzeReferencesResponse> AnalyzeReferencesAsync(AnalyzeReferencesRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => w.AnalyzeReferences(request, cancellationToken), cancellationToken);
 
 	public Task<HexLengthResponse> GetHexLengthAsync(HexLengthRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetHexLength(request.ModuleId), cancellationToken);
@@ -918,7 +915,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 		}
 	}
 
-	sealed class Workspace : IDisposable {
+	sealed partial class Workspace : IDisposable {
 		readonly SemaphoreSlim gate = new(1, 1);
 		readonly SymbolResolver symbols;
 		readonly Dictionary<string, ModuleEntry> modules = new(StringComparer.Ordinal);
@@ -1173,6 +1170,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			if (!modules.Remove(module.Id))
 				throw new RpcException(ErrorCodes.NodeNotFound, "The selected assembly is no longer open.");
 			rootOrder.Remove(module.Id);
+			NoteModelChanged();
 			var removed = DropModule(module);
 			version++;
 			return new RemoveModuleResponse(removed, GetRoots().Nodes);
@@ -2703,36 +2701,6 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			return new SearchResponse(results, false);
 		}
 
-		public AnalyzeReferencesResponse AnalyzeReferences(AnalyzeReferencesRequest request, CancellationToken cancellationToken) {
-			var target = GetNode(request.NodeId);
-			var targetName = GetReferenceIdentity(target.Value);
-			if (targetName is null)
-				throw new RpcException(ErrorCodes.InvalidParams, "References can only be analyzed for types and members.");
-			var maxResults = Math.Clamp(request.MaxResults, 1, 10_000);
-			var results = new List<ReferenceResultDto>();
-
-			foreach (var module in modules.Values) {
-				foreach (var type in module.Module.GetTypes()) {
-					cancellationToken.ThrowIfCancellationRequested();
-					if (type.BaseType is not null && GetReferenceIdentity(type.BaseType) == targetName) {
-						var source = GetMemberNode(type, module);
-						results.Add(new ReferenceResultDto(source.Id, type.FullName, "base-type", module.Module.Name.String));
-					}
-					foreach (var method in type.Methods.Where(m => m.HasBody)) {
-						foreach (var instruction in method.Body.Instructions) {
-							if (!ReferencesTarget(instruction.Operand, targetName))
-								continue;
-							var source = GetMemberNode(method, module);
-							results.Add(new ReferenceResultDto(source.Id, method.FullName, "instruction", $"IL_{instruction.Offset:X4}"));
-							if (results.Count >= maxResults)
-								return new AnalyzeReferencesResponse(results, true);
-						}
-					}
-				}
-			}
-			return new AnalyzeReferencesResponse(results, false);
-		}
-
 		public HexLengthResponse GetHexLength(string moduleId) => new(GetModule(moduleId).FileLength);
 
 		public async Task<HexReadResponse> ReadHexAsync(string moduleId, long offset, int count, CancellationToken cancellationToken) {
@@ -3536,6 +3504,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				module.IsModified = true;
 			var previousStateId = stateId;
 			stateId = Guid.NewGuid().ToString("N");
+			NoteModelChanged();
 			undoHistory.Push(new EditHistoryEntry(transaction.Operations.ToArray(), undo.ToArray(), previousStateId, stateId));
 			redoHistory.Clear();
 			version++;
@@ -3553,6 +3522,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			foreach (var undo in history.UndoActions)
 				undo();
 			stateId = history.BeforeStateId;
+			NoteModelChanged();
 			redoHistory.Push(history);
 			version++;
 			return CreateHistoryResponse(history.Operations);
@@ -3573,6 +3543,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The edit could not be reapplied.", null, ex);
 			}
 			stateId = history.AfterStateId;
+			NoteModelChanged();
 			var reapplied = new EditHistoryEntry(history.Operations, undo.ToArray(), history.BeforeStateId, history.AfterStateId);
 			undoHistory.Push(reapplied);
 			version++;
@@ -3691,6 +3662,7 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 			cachedStatementsStateId = string.Empty;
 			version = 0;
 			stateId = Guid.NewGuid().ToString("N");
+			NoteModelChanged();
 			symbols.Invalidate();
 			await LoadModulesAsync(paths, cancellationToken).ConfigureAwait(false);
 			if (modules.Count == 0 && peModules.Count == 0 && elfFiles.Count == 0 && unknownFiles.Count == 0)
@@ -3893,28 +3865,6 @@ public sealed class WorkspaceManager : IDisposable, IDebugSymbolResolver {
 				yield return @event;
 			foreach (var method in type.Methods)
 				yield return method;
-		}
-
-		static string? GetReferenceIdentity(object? value) => value switch {
-			ITypeDefOrRef type => $"T:{type.FullName}",
-			IField field => $"F:{field.FullName}",
-			IMethod method => $"M:{method.FullName}",
-			PropertyDef property => $"P:{property.FullName}",
-			EventDef @event => $"E:{@event.FullName}",
-			_ => null,
-		};
-
-		static bool ReferencesTarget(object? value, string targetIdentity) {
-			if (GetReferenceIdentity(value) == targetIdentity)
-				return true;
-			if (!targetIdentity.StartsWith("T:", StringComparison.Ordinal))
-				return false;
-			var declaringType = value switch {
-				IMethod method => method.DeclaringType,
-				IField field => field.DeclaringType,
-				_ => null,
-			};
-			return declaringType is not null && $"T:{declaringType.FullName}" == targetIdentity;
 		}
 
 		static string GetMemberDisplayName(IMDTokenProvider member) => member switch {

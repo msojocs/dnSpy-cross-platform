@@ -6,12 +6,15 @@ import path from 'node:path'
 import { BackendClient } from './backend-client'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
-import type { BackendStatus, DebugLaunchOptions, UiLocale } from '../shared/protocol'
+import type { AnalyzeChildrenRequest, BackendStatus, DebugLaunchOptions, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
 let dialogPathHistory: DialogPathHistory | undefined
 let lastBackendStatus: BackendStatus = { state: 'starting' }
+// The analyzer searches still running, by window and the key the renderer named each with, so a row
+// collapsed mid-search can call its search off.
+const analyzerRequests = new Map<string, AbortController>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -402,7 +405,24 @@ const registerIpc = (): void => {
     requireBackend().invoke('document/decompile', { workspaceId, nodeId, language }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
   ipcMain.handle('search:run', (_event, workspaceId: string, query: string, kinds?: string[]) => requireBackend().invoke('search/run', { workspaceId, query, kinds }))
-  ipcMain.handle('analyze:references', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('analyze/references', { workspaceId, nodeId }))
+  ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds }))
+  // An analyzer search walks every module that can see the member, which on a framework assembly takes a
+  // while; it gets the long deadline, and the renderer can call it off by the key it named it with — a row
+  // collapsed while its search runs, the way dnSpy cancels a search node that is folded away.
+  ipcMain.handle('analyze:children', async (event, workspaceId: string, request: AnalyzeChildrenRequest, requestKey: string) => {
+    const key = `${event.sender.id}:${requestKey}`
+    const controller = new AbortController()
+    analyzerRequests.set(key, controller)
+    try {
+      return await requireBackend().invoke('analyze/children', { workspaceId, ...request }, 600_000, controller.signal)
+    } finally {
+      if (analyzerRequests.get(key) === controller)
+        analyzerRequests.delete(key)
+    }
+  })
+  ipcMain.handle('analyze:cancel', (event, requestKey: string) => {
+    analyzerRequests.get(`${event.sender.id}:${requestKey}`)?.abort()
+  })
   ipcMain.handle('hex:length', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('hex/getLength', { workspaceId, moduleId }))
   ipcMain.handle('hex:read', (_event, workspaceId: string, moduleId: string, offset: number, count: number) => requireBackend().invoke('hex/readRange', { workspaceId, moduleId, offset, count }))
   ipcMain.handle('hex:resolveTarget', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('hex/resolveTarget', { workspaceId, nodeId }))

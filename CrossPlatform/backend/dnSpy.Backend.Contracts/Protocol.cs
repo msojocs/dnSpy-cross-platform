@@ -29,7 +29,8 @@ public static class RpcMethods {
 	public const string DocumentDecompile = "document/decompile";
 	public const string DocumentFindMember = "document/findMember";
 	public const string Search = "search/run";
-	public const string AnalyzeReferences = "analyze/references";
+	public const string AnalyzeNodes = "analyze/nodes";
+	public const string AnalyzeChildren = "analyze/children";
 	public const string HexGetLength = "hex/getLength";
 	public const string HexReadRange = "hex/readRange";
 	public const string HexResolveTarget = "hex/resolveTarget";
@@ -244,12 +245,6 @@ public sealed record SearchResultDto(
 	string Name,
 	string Location,
 	string? Preview = null);
-
-public sealed record AnalyzeReferencesRequest(string WorkspaceId, string NodeId, int MaxResults = 1000);
-
-public sealed record AnalyzeReferencesResponse(IReadOnlyList<ReferenceResultDto> Results, bool Truncated);
-
-public sealed record ReferenceResultDto(string SourceNodeId, string SourceName, string Kind, string Location);
 
 public sealed record HexLengthRequest(string WorkspaceId, string ModuleId);
 
@@ -1016,7 +1011,7 @@ public sealed class RpcException : Exception {
 
 // The records below are appended to this file on purpose. This assembly is also the file the end-to-end
 // tests open as a fixture, so its metadata tokens are pinned in assertions ("HelloRequest @02000005",
-// "get_Code() : int @060008CC"): a type or a method added *before* those rows would shift every token
+// "get_Code() : int @06000896"): a type or a method added *before* those rows would shift every token
 // after it and break them, while one added here — after every type in the file — cannot.
 
 /// <summary>Which of a module's two notable members the caller wants the node of.</summary>
@@ -1066,3 +1061,86 @@ public sealed record LoadDependenciesRequest(string WorkspaceId, string NodeId, 
 /// without an assembly a fresh one named after its file, false detaches an assembly's only module and
 /// leaves it a net module. The node names the module to convert; any node inside it will do.</summary>
 public sealed record ConvertModuleRequest(string WorkspaceId, string TransactionId, string NodeId, bool ToAssembly);
+
+/// <summary>
+/// The searches dnSpy's analyzer offers under a member, by the key a search row carries. Which of them a
+/// member gets follows the member's kind and shape — WPF's <c>CanShow</c> rules — and the backend says so
+/// by listing exactly those rows; a key that does not apply to the member is refused.
+/// </summary>
+public static class AnalyzerSearchKinds {
+	public const string Uses = "uses";
+	public const string UsedBy = "usedBy";
+	public const string Overrides = "overrides";
+	public const string OverriddenBy = "overriddenBy";
+	public const string ImplementedBy = "implementedBy";
+	public const string ReadBy = "readBy";
+	public const string AssignedBy = "assignedBy";
+	public const string RaisedBy = "raisedBy";
+	public const string AppliedTo = "appliedTo";
+	public const string InstantiatedBy = "instantiatedBy";
+	public const string ExposedBy = "exposedBy";
+	public const string Subtypes = "subtypes";
+	public const string ExtensionMethods = "extensionMethods";
+}
+
+/// <summary>Asks for the analyzer rows of tree nodes — what dnSpy adds to its analyzer when a member is
+/// analyzed. Several are asked at once so a client can check every row it holds after the workspace
+/// changed.</summary>
+public sealed record AnalyzeNodesRequest(string WorkspaceId, IReadOnlyList<string> NodeIds);
+
+/// <summary>One row per node asked for, in the same order. A node that cannot be analyzed — it is not a
+/// member, or the member it named is gone — answers null rather than failing the whole request.</summary>
+public sealed record AnalyzeNodesResponse(IReadOnlyList<AnalyzerNodeDto?> Nodes);
+
+/// <summary>
+/// Asks for what an analyzer row expands to. Without <see cref="Search"/> that is the member's own rows —
+/// its searches and, for a property or an event, its accessors; with one, it is what that search finds.
+/// <see cref="IsSetter"/> is the flag the property's "set" row carries, which widens the setter's "Used
+/// By" to the attributes that assign the property by name.
+/// </summary>
+public sealed record AnalyzeChildrenRequest(string WorkspaceId, string NodeId, string? Search = null, bool IsSetter = false, int MaxResults = 20_000);
+
+/// <summary>The rows, in the order the search found them, and whether the search stopped at the limit.</summary>
+public sealed record AnalyzeChildrenResponse(IReadOnlyList<AnalyzerNodeDto> Children, bool Truncated);
+
+/// <summary>
+/// One row of dnSpy's analyzer tree.
+/// </summary>
+/// <param name="Kind">type, method, field, property, event, assembly, module, or search for a row that runs a search.</param>
+/// <param name="Label">The row's text without the token or the "(hides)" prefix, which the client adds. A search row carries its English header.</param>
+/// <param name="HasChildren">Whether the row can be expanded: every member and search row, never an assembly or a module.</param>
+/// <param name="NodeId">The tree node of the member the row names; for a search row, the member it searches for. Null when the row names something the tree has no node for.</param>
+/// <param name="Search">The search a search row runs.</param>
+/// <param name="Accessor">The keyword an accessor row is written as: get, set, add, remove or raise.</param>
+/// <param name="IsSetter">Carried by a property's "set" row and the searches under it.</param>
+/// <param name="HidesParent">The member hides the one it was found for rather than overriding it.</param>
+/// <param name="FullName">The member's full name, for Copy Full Name and Search MSDN.</param>
+/// <param name="IsPublic">Whether the member is visible outside its assembly, which is when dnSpy offers Search MSDN.</param>
+/// <param name="Source">Where in a method body the row was found, when it was found there.</param>
+public sealed record AnalyzerNodeDto(
+	string Kind,
+	string Label,
+	bool HasChildren,
+	string? NodeId = null,
+	string? Icon = null,
+	int? MetadataToken = null,
+	string? Search = null,
+	string? Accessor = null,
+	bool IsSetter = false,
+	bool HidesParent = false,
+	string? FullName = null,
+	bool IsPublic = false,
+	AnalyzerSourceDto? Source = null);
+
+/// <summary>
+/// The place in a method body a search result was found at — dnSpy's SourceRef. The method is the document
+/// "Show Reference in Method" opens; the offset is the instruction, absent when the result was found in the
+/// method's locals or handlers rather than in an instruction. <see cref="Targets"/> are what that instruction
+/// refers to, written the way a decompiled document's spans write their targets, so the caret can be put on
+/// the reference itself.
+/// </summary>
+public sealed record AnalyzerSourceDto(string MethodNodeId, string ModulePath, int MethodToken, int? IlOffset, IReadOnlyList<AnalyzerTargetDto> Targets);
+
+/// <summary>A member a reference may name: by node when it lives in a module the workspace holds, by file and
+/// token when it does not — the two ways <see cref="TextSpanDto"/> names a target.</summary>
+public sealed record AnalyzerTargetDto(string? NodeId, string? ModulePath = null, int? MetadataToken = null);

@@ -145,12 +145,17 @@ const MEMBER_TABLES = [0x02, 0x04, 0x06, 0x14, 0x17]
  * shows for any `IMemberRef` under the caret and resolves it only when it runs; such a reference has no
  * node here, but its token says what it is, and the module is opened on demand when the command runs.
  */
-const externalMemberTarget = (ctx: CodeEditorMenuContext): TextSpan | undefined => {
+export const externalMemberTarget = (ctx: Pick<CodeEditorMenuContext, 'referenceNode' | 'referenceTarget'>): TextSpan | undefined => {
   const target = ctx.referenceTarget
   if (ctx.referenceNode || !target?.targetModulePath || target.targetMetadataToken === undefined)
     return undefined
   return MEMBER_TABLES.includes(target.targetMetadataToken >>> 24) ? target : undefined
 }
+
+/** Whether a node is one Analyze takes: a type or a member — what `isMemberRef` asks of the reference — or
+ * a derived type row of the assembly tree, which names a type as well. */
+export const isAnalyzableNode = (node: TreeNode | undefined): node is TreeNode =>
+  node !== undefined && ['type', 'method', 'field', 'property', 'event', 'derivedtype'].includes(node.kind)
 
 /**
  * The method dnSpy's "Edit Method Body" acts on: the reference under the caret when that reference *is* a
@@ -318,7 +323,7 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
 
   // 14000 — Other (GROUP_CTX_DOCVIEWER_OTHER). Analyze takes a member of the workspace by its node, and a
   // member of a module the workspace does not hold by the reference itself.
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
   { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: never },
 

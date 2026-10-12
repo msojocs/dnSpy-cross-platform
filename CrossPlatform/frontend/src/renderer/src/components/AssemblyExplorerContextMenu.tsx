@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
 import { methodBreakpointName } from '../app-store'
-import { searchMsdnUrl } from './CodeEditorContextMenu'
+import { isAnalyzableNode, searchMsdnUrl } from './CodeEditorContextMenu'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
 
@@ -374,7 +374,7 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // searcher, a tool window of its own that this port has no equivalent of, so it stays in the table
   // without a rule that could ever pass.
   { group: GROUP_OTHER, order: 0, key: 'find-string-references', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find String References in Module'), visible: never },
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => isMember(ctx) && ctx.onAnalyze !== undefined, run: (ctx) => ctx.onAnalyze?.(ctx.node) },
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => isAnalyzableNode(ctx.node) && ctx.onAnalyze !== undefined, run: (ctx) => ctx.onAnalyze?.(ctx.node) },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
   { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: never },
   { group: GROUP_OTHER, order: 30, key: 'open-containing-folder', icon: fixedIcon(<FolderSearch {...iconProps} />), label: (ctx) => ctx.t('Open Containing Folder'), visible: (ctx) => kindIs('assembly', 'module')(ctx) && ctx.onOpenContainingFolder !== undefined, run: (ctx) => ctx.onOpenContainingFolder?.(ctx.node) },

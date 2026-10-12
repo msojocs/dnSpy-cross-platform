@@ -626,7 +626,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	[Fact]
-	public async Task FindsReferencesAcrossOpenedModules() {
+	public async Task AnalyzesAcrossOpenedModules() {
 		var opened = await manager.OpenAsync(
 			new OpenWorkspaceRequest([typeof(HelloRequest).Assembly.Location, typeof(WorkspaceManager).Assembly.Location]),
 			TestContext.Current.CancellationToken);
@@ -637,11 +637,15 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var contractsNamespace = Assert.Single(moduleChildren.Nodes, node => node.Label == "dnSpy.Backend.Contracts");
 		var types = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, contractsNamespace.Id), TestContext.Current.CancellationToken);
 		var rpcException = Assert.Single(types.Nodes, node => node.Label == "RpcException");
-		var references = await manager.AnalyzeReferencesAsync(
-			new AnalyzeReferencesRequest(opened.WorkspaceId, rpcException.Id),
+
+		var row = Assert.Single((await manager.AnalyzeNodesAsync(new AnalyzeNodesRequest(opened.WorkspaceId, [rpcException.Id]), TestContext.Current.CancellationToken)).Nodes);
+		Assert.Equal("RpcException", row?.Label);
+		// The exception is thrown all over the other assembly, and each of those methods is found in its body.
+		var instantiatedBy = await manager.AnalyzeChildrenAsync(
+			new AnalyzeChildrenRequest(opened.WorkspaceId, rpcException.Id, AnalyzerSearchKinds.InstantiatedBy),
 			TestContext.Current.CancellationToken);
-		Assert.NotEmpty(references.Results);
-		Assert.Contains(references.Results, reference => reference.Location.StartsWith("IL_", StringComparison.Ordinal));
+		Assert.Contains(instantiatedBy.Children, child =>
+			child.Label.StartsWith("dnSpy.Backend.Core.WorkspaceManager.", StringComparison.Ordinal) && child.Source?.IlOffset is not null);
 	}
 
 	[Fact]
@@ -1655,7 +1659,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.Equal(getter.Id, (await Find($"0x{token:X8}")).NodeId);
 		Assert.Equal(getter.Id, (await Find($"{token:X8}")).NodeId);
 		var type = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
-		Assert.Equal(type.Id, (await Find("0x02000076")).NodeId);
+		Assert.Equal(type.Id, (await Find($"0x{typeof(RpcException).MetadataToken:X8}")).NodeId);
 
 		// A row the tree does not show and a token past the end of the table both name nothing.
 		Assert.Null((await Find("0x0600FFFF")).NodeId);

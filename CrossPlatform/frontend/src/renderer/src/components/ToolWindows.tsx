@@ -57,28 +57,6 @@ export const SearchPane = ({ onOpenNodeId }: { onOpenNodeId(nodeId: string): voi
   )
 }
 
-export const AnalysisPane = ({ onOpenNodeId }: { onOpenNodeId(nodeId: string): void }): React.JSX.Element => {
-  const references = useAppStore((state) => state.references)
-  const { t } = useLanguage()
-
-  return (
-    <div className="result-list">
-      {references.map((reference, index) => (
-        <button
-          key={`${reference.sourceNodeId}:${reference.location}:${index}`}
-          className="result-row"
-          onDoubleClick={() => {
-            onOpenNodeId(reference.sourceNodeId)
-          }}
-        >
-          <span className="result-name">{reference.sourceName}</span>
-          <span className="result-location">{reference.kind === 'base-type' ? t('Base type') : reference.kind === 'instruction' ? t('Instruction') : reference.kind} · {reference.location}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
 export const DebugPlaceholder = ({ label }: { label: string }): React.JSX.Element => (
   <div className="pane-empty">{label}</div>
 )

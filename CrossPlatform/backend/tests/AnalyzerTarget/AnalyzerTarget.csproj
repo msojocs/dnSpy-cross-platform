@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The library the analyzer tests search. Its IL is what the expectations are written against, so it
+       is never optimized: an optimizing build may drop the very loads and calls a test looks for. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+</Project>

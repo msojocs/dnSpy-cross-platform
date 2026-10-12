@@ -67,7 +67,7 @@ beforeEach(() => {
       }),
     ],
     activeBookmarkId: undefined,
-    bookmarksReveal: undefined,
+    caretReveal: undefined,
     openNodeById,
     documents: {
       'method-1': {
@@ -152,7 +152,7 @@ describe('BookmarksPane', () => {
     fireEvent.doubleClick(rowFor('First'))
 
     expect(useAppStore.getState().activeBookmarkId).toBe('b1')
-    await vi.waitFor(() => expect(useAppStore.getState().bookmarksReveal).toMatchObject({ documentId: 'method-1', line: 4, column: 1 }))
+    await vi.waitFor(() => expect(useAppStore.getState().caretReveal).toMatchObject({ documentId: 'method-1', line: 4, column: 1 }))
     expect(openNodeById).toHaveBeenCalledWith('method-1')
   })
 

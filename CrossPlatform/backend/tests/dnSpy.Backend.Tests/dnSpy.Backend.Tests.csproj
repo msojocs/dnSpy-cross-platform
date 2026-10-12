@@ -23,6 +23,7 @@
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <ProjectReference Include="..\DebugTarget\DebugTarget.csproj" />
     <ProjectReference Include="..\AnalyzerTarget.Consumer\AnalyzerTarget.Consumer.csproj" />
+    <ProjectReference Include="..\SearchTarget\SearchTarget.csproj" />
   </ItemGroup>
 
   <Target Name="BuildBamlFixture" BeforeTargets="Build">

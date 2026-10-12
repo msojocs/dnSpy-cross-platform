@@ -9,12 +9,15 @@ import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
-import { DebugPlaceholder, OutputPane, SearchPane, type SearchPaneCommands } from './components/ToolWindows'
+import { DebugPlaceholder, OutputPane } from './components/ToolWindows'
+import { SearchPane, type SearchPaneCommands } from './components/SearchPane'
 import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPane'
 import { isAnalyzableNode } from './components/CodeEditorContextMenu'
 import { useAnalyzerStore } from './analyzer-store'
+import { useSearchStore } from './search-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
+import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
 import { BreakpointsPane, CallStackPane, LocalsPane, ModulesPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
@@ -249,6 +252,8 @@ export const App = (): React.JSX.Element => {
   // dnSpy's Go to Token box. It is opened from the tree, and the node it was opened over is what names
   // the module the token is looked up in.
   const [tokenNode, setTokenNode] = useState<TreeNode>()
+  // The type "Add Class Tracepoint" asked for, while the breakpoint settings dialog it opens is up.
+  const [classTracepointNode, setClassTracepointNode] = useState<TreeNode>()
   // The create or edit dialog the Edit menu opened, over the node it acts on: `nodeId` is what is being
   // edited, and is left off when a new node is being created in `ownerNodeId` instead.
   const [editNode, setEditNode] = useState<{ kind: CreatedKind, nodeId?: string, ownerNodeId?: string, nested?: boolean }>()
@@ -781,7 +786,7 @@ export const App = (): React.JSX.Element => {
         showToolWindow('csharp-interactive')
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'k' && workspaceId) {
         event.preventDefault()
-        showToolWindow('search')
+        showSearch()
       } else if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === 'f' && activeDocument === 'code') {
         event.preventDefault()
         findInActiveDocumentEditor()
@@ -1141,6 +1146,12 @@ export const App = (): React.JSX.Element => {
     void addDocumentTab(node, false)
   }
 
+  // dnSpy's Search Assemblies shows the search window and hands its text box the focus.
+  const showSearch = (): void => {
+    showToolWindow('search')
+    useSearchStore.getState().requestFocus()
+  }
+
   // dnSpy shows its analyzer before it adds the member, so the row lands in a window that is already there.
   const openAnalysis = async (node: TreeNode): Promise<void> => {
     showToolWindow('analysis')
@@ -1265,8 +1276,9 @@ export const App = (): React.JSX.Element => {
     onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
     onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
     onGoToToken: (node) => { setTokenNode(node) },
-    onToggleMethodBreakpoint: (name) => { void toggleFunctionBreakpoint(name) },
+    onAddMethodBreakpoints: (targets) => { void addMethodBreakpoints(targets) },
     onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
+    onAddClassTracepoint: (node) => setClassTracepointNode(node),
     onAnalyze: (node) => { void openAnalysis(node) },
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     copyText: (text) => {
@@ -1301,6 +1313,8 @@ export const App = (): React.JSX.Element => {
     onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
     onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
     onAnalyze: (node) => void openAnalysis(node),
+    onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
+    onAddClassTracepoint: (node) => setClassTracepointNode(node),
     onAnalyzeReference: (target) => void analyzeReference(target),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     onOpenHex: openHex,
@@ -1344,17 +1358,20 @@ export const App = (): React.JSX.Element => {
     copyText: (text) => explorerCommands.copyText?.(text),
     openUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     addClassBreakpoint: (nodeId) => { void readNodes([nodeId]).then(([node]) => node && addClassBreakpoint(node)) },
+    addClassTracepoint: (nodeId) => { void readNodes([nodeId]).then(([node]) => node && setClassTracepointNode(node)) },
     addMethodBreakpoints: (nodeIds) => { void readNodes(nodeIds).then((nodes) => addMethodBreakpoints(nodes)) },
   }
 
   // A search result names its node by id; the commands that act on more than following it read the node.
+  // Following one opens it the way the analyzer opens a row, since a match in a body places the caret after.
   const searchCommands: SearchPaneCommands = {
-    openNode: (nodeId, newTab) => { void (newTab ? openNodeInNewTab(nodeId) : openNodeId(nodeId)) },
+    openNode: analyzerCommands.openNode,
     getNode: async (nodeId) => (await readNodes([nodeId]))[0],
     analyze: (node) => { void openAnalysis(node) },
     copyText: (text) => explorerCommands.copyText?.(text),
     openUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     addClassBreakpoint: (node) => { void addClassBreakpoint(node) },
+    addClassTracepoint: (node) => setClassTracepointNode(node),
     addMethodBreakpoints: (nodes) => { void addMethodBreakpoints(nodes) },
   }
 
@@ -1431,7 +1448,7 @@ export const App = (): React.JSX.Element => {
         onReloadAll={() => void reloadAllAssemblies()}
         onSortAssemblies={() => void sortAssemblies()}
         onFind={() => { findInActiveDocumentEditor() }}
-        onSearchAssemblies={() => showToolWindow('search')}
+        onSearchAssemblies={showSearch}
         onUndo={() => void undoEdit()}
         onRedo={() => void redoEdit()}
         onEditMethodBody={() => { if (selectedNode?.kind === 'method') setEditMethodNode(selectedNode) }}
@@ -1558,7 +1575,7 @@ export const App = (): React.JSX.Element => {
         onShowOptions={(category) => setOptionsDialogCategory(category ?? 'environment')}
       />
       <ToolBar
-        hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSave={() => void saveModuleAs()} onSearch={() => showToolWindow('search')}
+        hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSave={() => void saveModuleAs()} onSearch={showSearch}
         canGoBack={navigation.index > 0} canGoForward={navigation.index >= 0 && navigation.index < navigation.items.length - 1} onBack={goBack} onForward={goForward}
         canUndo={canUndo} canRedo={canRedo} onUndo={() => void undoEdit()} onRedo={() => void redoEdit()}
         decompilerLanguage={activeDocumentLanguage} onLanguageChange={(language) => { if (activeDocumentId) void changeDocumentLanguage(activeDocumentId, language) }}
@@ -1625,6 +1642,20 @@ export const App = (): React.JSX.Element => {
       {renameNamespaceNode && <RenameNamespaceDialog node={renameNamespaceNode} onClose={() => setRenameNamespaceNode(undefined)} />}
       {editMethodNode && <MethodBodyEditor node={editMethodNode} onClose={() => setEditMethodNode(undefined)} />}
       {tokenNode && <GoToTokenDialog node={tokenNode} onClose={() => setTokenNode(undefined)} />}
+      {/* dnSpy's Add Class Tracepoint asks for the settings first, with the trace already switched on, and only
+          then puts a breakpoint on every method of the type — each carrying what the dialog said. */}
+      {classTracepointNode && (
+        <BreakpointSettingsDialog
+          title={t('Breakpoint settings')}
+          settings={{ trace: { message: '', continue: true } }}
+          onClose={() => setClassTracepointNode(undefined)}
+          onSave={(settings) => {
+            const node = classTracepointNode
+            setClassTracepointNode(undefined)
+            void addClassBreakpoint(node, settings)
+          }}
+        />
+      )}
       {editNode && workspaceId && (
         <NodeOptionsDialog
           key={`${editNode.kind}:${editNode.nodeId ?? editNode.ownerNodeId}:${editNode.nested === true}`}

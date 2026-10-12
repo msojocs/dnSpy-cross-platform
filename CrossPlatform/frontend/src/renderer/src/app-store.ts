@@ -26,7 +26,6 @@ import type {
   NodeOptionsDto,
   OpenedModule,
   ScriptOutputEntry,
-  SearchResult,
   SpecialNodeKind,
   TextSpan,
   TreeNode,
@@ -196,7 +195,6 @@ interface AppState {
   /** True while the previous session is being put back. The churn that causes — a workspace arriving,
    * tabs being rebuilt — is not the user's state and must not be written over the archive. */
   restoringSession: boolean
-  searchResults: SearchResult[]
   /**
    * Counts the times the user changed which assemblies the workspace holds — added some, loaded a module's
    * dependencies, removed one. dnSpy's analyzer starts its searches over then; an assembly opened on demand
@@ -289,7 +287,6 @@ interface AppState {
   collapseTreeViewNodes(): void
   openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
   changeDocumentLanguage(nodeId: string, language: DecompilerLanguage): Promise<void>
-  runSearch(query: string, kinds?: string[]): Promise<void>
   renameNode(node: TreeNode, newName: string): Promise<boolean>
   /** Adds the type or member a create dialog assembled to the node that owns it, and selects the new
    * node. Says whether it was created; a refused one has already been reported. */
@@ -400,14 +397,15 @@ interface AppState {
   toggleFunctionBreakpoint(name: string): Promise<void>
   /**
    * Adds a function breakpoint for every method of a type — dnSpy's "Add Class Breakpoint", which puts
-   * one breakpoint at the entry of each method of the type the row names.
+   * one breakpoint at the entry of each method of the type the row names. With settings it is "Add Class
+   * Tracepoint": every breakpoint it adds carries them.
    */
-  addClassBreakpoint(node: TreeNode): Promise<void>
+  addClassBreakpoint(node: TreeNode, settings?: BreakpointSettings): Promise<void>
   /**
-   * dnSpy's "Add Method Breakpoint" from the analyzer and the search window: a breakpoint at the entry of
-   * each method the nodes name — a property's or an event's accessors for one of those. It only adds.
+   * dnSpy's "Add Method Breakpoint": a breakpoint at the entry of each method named — a property's or an
+   * event's accessors for one of those. It only adds; a method that already has one keeps it.
    */
-  addMethodBreakpoints(nodes: TreeNode[]): Promise<void>
+  addMethodBreakpoints(targets: MethodBreakpointTarget[]): Promise<void>
   setFunctionBreakpointEnabled(name: string, enabled: boolean): Promise<void>
   /** Attaches a condition, hit count, filter, trace and labels; `undefined` clears them all. */
   setFunctionBreakpointSettings(name: string, settings: BreakpointSettings | undefined): Promise<void>
@@ -563,7 +561,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   documents: {},
   documentOrder: [],
   restoringSession: false,
-  searchResults: [],
   assemblyListRevision: 0,
   output: [],
   scriptEntries: [],
@@ -661,8 +658,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
-        searchResults: [],
-        dirty: false,
+          dirty: false,
         workspaceStateId: opened.stateId,
         savedStateId: opened.stateId,
         canUndo: false,
@@ -700,7 +696,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       documentOrder: [],
       activeDocumentId: undefined,
       restoringSession: false,
-      searchResults: [],
       busy: false,
       error: undefined,
       dirty: false,
@@ -855,26 +850,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const node = findNode(get(), nodeId)
     if (existing && node)
       await get().openDocument(node, language)
-  },
-
-  runSearch: async (query, kinds) => {
-    const workspaceId = get().workspaceId
-    if (!workspaceId || !query.trim()) {
-      set({ searchResults: [] })
-      return
-    }
-    set({ busy: true, error: undefined })
-    try {
-      const response = await window.dnSpy.search(workspaceId, query.trim(), kinds)
-      set({ searchResults: response.results })
-      get().appendOutput(t('Search returned {count} result(s).', { count: `${response.results.length}${response.truncated ? '+' : ''}` }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Search failed: {message}', { message }))
-    } finally {
-      set({ busy: false })
-    }
   },
 
   renameNode: async (node, newName) => {
@@ -1318,8 +1293,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
-        searchResults: [],
-        dirty: false,
+          dirty: false,
         workspaceStateId: reloaded.stateId,
         savedStateId: reloaded.stateId,
         canUndo: false,
@@ -1856,7 +1830,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // the ones that already carry one. This port's breakpoints are function breakpoints — matched by name —
   // so the methods come from the tree row rather than from the type directly, and a method with no body
   // simply never matches at launch, which is the same outcome as dnSpy's `IsAbstract || Body is null` skip.
-  addClassBreakpoint: async (node) => {
+  addClassBreakpoint: async (node, settings) => {
     await get().loadChildren(node)
     const members = get().children[node.id] ?? []
     // `type.Methods` is what dnSpy walks, and that holds a property's getter and setter too — the rows
@@ -1883,28 +1857,34 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().appendOutput(t('{name} has no method left to break on.', { name: node.label }))
       return
     }
-    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true }))] }))
+    const normalized = normalizeBreakpointSettings(settings)
+    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true, ...(normalized ? { settings: normalized } : {}) }))] }))
     await syncFunctionBreakpoints(get)
     get().appendOutput(t('Added {count} breakpoint(s) for {name}.', { count: names.length, name: node.label }))
   },
 
-  // dnSpy's MethodBreakpointsService.Add, which the analyzer's and the search window's command run: the
-  // methods a property or an event stands for are its accessors, the rows the tree nests under it, and a
-  // method that already has a breakpoint keeps the one it has.
-  addMethodBreakpoints: async (nodes) => {
-    const methods: TreeNode[] = []
-    for (const node of nodes) {
-      if (node.kind === 'method')
-        methods.push(node)
-      else if (node.kind === 'property' || node.kind === 'event') {
-        await get().loadChildren(node)
-        methods.push(...(get().children[node.id] ?? []).filter((child) => child.kind === 'method'))
+  // dnSpy's MethodBreakpointsService.Add, which every "Add Method Breakpoint" runs — the tree's, the code
+  // viewer's, the analyzer's and the search window's: the methods a property or an event stands for are its
+  // accessors, the rows the tree nests under it, and a method that already has a breakpoint keeps the one it
+  // has rather than losing it, the way dnSpy skips an existing location.
+  addMethodBreakpoints: async (targets) => {
+    const candidates: (string | undefined)[] = []
+    for (const target of targets) {
+      if (typeof target === 'string')
+        candidates.push(target)
+      else if (target.kind === 'method')
+        candidates.push(methodBreakpointName(target.description))
+      else if (target.kind === 'property' || target.kind === 'event') {
+        await get().loadChildren(target)
+        for (const child of get().children[target.id] ?? []) {
+          if (child.kind === 'method')
+            candidates.push(methodBreakpointName(child.description))
+        }
       }
     }
     const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
     const names: string[] = []
-    for (const method of methods) {
-      const name = methodBreakpointName(method.description)
+    for (const name of candidates) {
       if (name === undefined || seen.has(name))
         continue
       seen.add(name)
@@ -2384,6 +2364,10 @@ const lastTopLevelSpace = (value: string): number => {
   }
   return index
 }
+
+/** What "Add Method Breakpoint" is handed: a node — a method, or a property or an event for its
+ * accessors — or a method already named the way a function breakpoint names one. */
+export type MethodBreakpointTarget = TreeNode | string
 
 // Tree node descriptions are dnlib's MethodDef.FullName, e.g. "System.Void Ns.Type::Method(System.Int32)".
 // Debug adapters want "Ns.Type.Method", so drop the return type and the parameter list, and turn the "::"

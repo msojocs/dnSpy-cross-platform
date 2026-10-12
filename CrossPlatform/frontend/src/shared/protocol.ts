@@ -176,17 +176,65 @@ export interface FindMemberResponse {
   description?: string
 }
 
+/** The search window's "Search For" box — one entry of dnSpy's SearchType each. */
+export type SearchType =
+  | 'assembly' | 'module' | 'namespace' | 'type' | 'field' | 'method' | 'property' | 'event'
+  | 'parameter' | 'local' | 'parameterLocal' | 'assemblyRef' | 'moduleRef' | 'resource'
+  | 'genericType' | 'nonGenericType' | 'enum' | 'interface' | 'class' | 'struct' | 'delegate'
+  | 'member' | 'any' | 'literal'
+
+/** The box beside it — dnSpy's SearchLocation. */
+export type SearchLocation = 'allFiles' | 'selectedFiles' | 'allFilesInSameDir' | 'selectedType'
+
+/**
+ * What the search window asks for: the query, the two boxes and the options. The locations other than all
+ * files read the tree's selection, which `selectedNodeIds` names.
+ */
+export interface SearchRequest {
+  query: string
+  searchType: SearchType
+  location: SearchLocation
+  selectedNodeIds?: string[]
+  caseSensitive: boolean
+  matchWholeWords: boolean
+  matchAnySearchTerm: boolean
+  searchDecompiledData: boolean
+  searchFrameworkAssemblies: boolean
+  searchCompilerGeneratedMembers: boolean
+  maxResults?: number
+}
+
+/**
+ * One result, written the way dnSpy's search list writes it. `nodeId` is what following it opens — absent for
+ * a module reference, which the tree has no row for; `ilOffset` is the instruction a match in a method body
+ * was found at, which following it puts the caret on.
+ */
 export interface SearchResult {
-  nodeId: string
+  nodeId?: string | null
   kind: string
   name: string
   location: string
-  preview?: string
+  nameParts?: TextPart[] | null
+  locationParts?: TextPart[] | null
+  icon?: string | null
+  locationIcon?: string | null
+  toolTip?: string | null
+  ilOffset?: number | null
 }
 
 export interface SearchResponse {
   results: SearchResult[]
+  /** The search stopped at the limit — dnSpy's "too many results". */
   truncated: boolean
+  /** Where the first result stands among everything found: the ones sent ahead come before it. */
+  start?: number
+}
+
+/** Results a search found while it was still running, for the request the renderer named `requestKey`. */
+export interface SearchProgress {
+  requestKey: string
+  start: number
+  results: SearchResult[]
 }
 
 /** The searches dnSpy's analyzer offers under a member, by the key a search row carries. */
@@ -1007,7 +1055,9 @@ export interface DnSpyApi {
   decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage): Promise<DecompileResponse>
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
-  search(workspaceId: string, query: string, kinds?: string[]): Promise<SearchResponse>
+  /** Runs a search; `requestKey` names it to `cancelSearch` and to the batches `onSearchProgress` hands over. */
+  search(workspaceId: string, request: SearchRequest, requestKey: string): Promise<SearchResponse>
+  cancelSearch(requestKey: string): Promise<void>
   /** The analyzer rows of tree nodes — what dnSpy's analyzer adds for a member it is asked to analyze. */
   analyzeNodes(workspaceId: string, nodeIds: string[]): Promise<AnalyzeNodesResponse>
   /**
@@ -1124,4 +1174,6 @@ export interface DnSpyApi {
   onDebugEvent(callback: (event: DebugEvent) => void): () => void
   /** What an analyzer search found so far, sent while it still runs. */
   onAnalyzeProgress(callback: (progress: AnalyzeProgress) => void): () => void
+  /** What a search window search found so far, sent while it still runs. */
+  onSearchProgress(callback: (progress: SearchProgress) => void): () => void
 }

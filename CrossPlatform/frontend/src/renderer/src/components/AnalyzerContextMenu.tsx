@@ -24,6 +24,8 @@ export interface AnalyzerMenuContext {
   setSingleClickExpandsChildren(value: boolean): void
   /** dnSpy's Add Class Breakpoint, for the type a row names. Left out where there is no debugger to add it to. */
   addClassBreakpoint?(row: AnalyzerRow): void
+  /** dnSpy's Add Class Tracepoint: the same breakpoints, after asking for the trace's settings. */
+  addClassTracepoint?(row: AnalyzerRow): void
   /** dnSpy's Add Method Breakpoint, for the methods the rows name — a property's or an event's accessors. */
   addMethodBreakpoints?(rows: AnalyzerRow[]): void
 }
@@ -90,10 +92,9 @@ const ENTRIES: AnalyzerMenuEntry[] = [
   { group: GROUP_TOKENS, order: 40, key: 'copy-md-token', icon: () => <Hash {...iconProps} />, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => firstWithToken(ctx) !== undefined, run: (ctx) => { const token = firstWithToken(ctx); if (token !== undefined) ctx.copyText(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 50, key: 'copy-full-name', icon: () => <ClipboardCopy {...iconProps} />, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => firstFullName(ctx) !== undefined, run: (ctx) => { const name = firstFullName(ctx); if (name) ctx.copyText(name) } },
 
-  // 2000 — Debugger (GROUP_CTX_ANALYZER_DEBUG). The class tracepoint dnSpy lists between the two first
-  // opens the breakpoint settings dialog, which lives in the Breakpoints window's own state; the port
-  // leaves it out here as it does in the assembly tree.
+  // 2000 — Debugger (GROUP_CTX_ANALYZER_DEBUG).
   { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: () => <CircleDot {...iconProps} />, label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => ctx.addClassBreakpoint !== undefined && classBreakpointTarget(ctx) !== undefined, run: (ctx) => { const row = classBreakpointTarget(ctx); if (row) ctx.addClassBreakpoint?.(row) } },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: () => null, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => ctx.addClassTracepoint !== undefined && classBreakpointTarget(ctx) !== undefined, run: (ctx) => { const row = classBreakpointTarget(ctx); if (row) ctx.addClassTracepoint?.(row) } },
   { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: () => <Crosshair {...iconProps} />, label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => ctx.addMethodBreakpoints !== undefined && methodBreakpointTargets(ctx).length > 0, run: (ctx) => ctx.addMethodBreakpoints?.(methodBreakpointTargets(ctx)) },
 
   // 5000 — Other (GROUP_CTX_ANALYZER_OTHER). A root is already analyzed, so Analyze is only offered while

@@ -79,7 +79,7 @@ describe('buildAnalyzerMenuItems', () => {
   })
 
   it('offers the debugger\'s breakpoints for the members the selection names, once the shell supplies them', () => {
-    const debug = { addClassBreakpoint: vi.fn(), addMethodBreakpoints: vi.fn() }
+    const debug = { addClassBreakpoint: vi.fn(), addClassTracepoint: vi.fn(), addMethodBreakpoints: vi.fn() }
     const type = row('type', { kind: 'type', label: 'Type', fullName: 'NS.Type' })
     const method = row('hit')
     const property = row('prop', { kind: 'property', label: 'NS.Type.P : int' })
@@ -89,7 +89,7 @@ describe('buildAnalyzerMenuItems', () => {
     // dnSpy's debug group sits between the copy commands and Analyze.
     expect(keys(context([type, method], debug))).toEqual([
       'copy', 'copy-md-token', 'copy-full-name', '|',
-      'add-class-breakpoint', 'add-method-breakpoint', '|',
+      'add-class-breakpoint', 'add-class-tracepoint', 'add-method-breakpoint', '|',
       'analyze', 'search-msdn', '|',
       'show-tokens', 'syntax-highlight', 'single-click-expands',
     ])
@@ -105,6 +105,8 @@ describe('buildAnalyzerMenuItems', () => {
     const ctx = context([search, type, method, field, property], debug)
     run(ctx, 'add-class-breakpoint')
     expect(debug.addClassBreakpoint).toHaveBeenCalledWith(type)
+    run(ctx, 'add-class-tracepoint')
+    expect(debug.addClassTracepoint).toHaveBeenCalledWith(type)
     run(ctx, 'add-method-breakpoint')
     expect(debug.addMethodBreakpoints).toHaveBeenCalledWith([method, property])
   })

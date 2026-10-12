@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef } from 'react'
 import {
+  AtSign,
   Binary,
   Box,
   Braces,
@@ -18,6 +19,8 @@ import {
   LoaderCircle,
   Network,
   Package,
+  Parentheses,
+  Quote,
   Search,
   Variable,
 } from 'lucide-react'
@@ -70,6 +73,10 @@ export const NodeIcon = ({ icon, expanded = false }: { icon?: string; expanded?:
     case 'property': return <Braces {...props} />
     case 'event': return <CircleDot {...props} />
     case 'interface': return <Network {...props} />
+    // The search window's "Search For" box wears these too: a parameter, a local and a literal.
+    case 'parameter': return <Parentheses {...props} />
+    case 'local': return <AtSign {...props} />
+    case 'literal': return <Quote {...props} />
     // The analyzer's search rows wear dnSpy's DsImages.Search.
     case 'search': return <Search {...props} />
     default: return <Box {...props} />

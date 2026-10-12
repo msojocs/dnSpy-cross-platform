@@ -22,7 +22,8 @@ const api: DnSpyApi = {
   getNodePath: (workspaceId, nodeId) => ipcRenderer.invoke('tree:nodePath', workspaceId, nodeId),
   decompile: (workspaceId, nodeId, language: DecompilerLanguage) => ipcRenderer.invoke('document:decompile', workspaceId, nodeId, language),
   findMember: (workspaceId, modulePath, metadataToken) => ipcRenderer.invoke('document:findMember', workspaceId, modulePath, metadataToken),
-  search: (workspaceId, query, kinds) => ipcRenderer.invoke('search:run', workspaceId, query, kinds),
+  search: (workspaceId, request, requestKey) => ipcRenderer.invoke('search:run', workspaceId, request, requestKey),
+  cancelSearch: (requestKey) => ipcRenderer.invoke('search:cancel', requestKey),
   analyzeNodes: (workspaceId, nodeIds) => ipcRenderer.invoke('analyze:nodes', workspaceId, nodeIds),
   analyzeChildren: (workspaceId, request, requestKey) => ipcRenderer.invoke('analyze:children', workspaceId, request, requestKey),
   cancelAnalyze: (requestKey) => ipcRenderer.invoke('analyze:cancel', requestKey),
@@ -120,6 +121,11 @@ const api: DnSpyApi = {
     const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
     ipcRenderer.on('analyze:progress', listener)
     return () => ipcRenderer.removeListener('analyze:progress', listener)
+  },
+  onSearchProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+    ipcRenderer.on('search:progress', listener)
+    return () => ipcRenderer.removeListener('search:progress', listener)
   },
 }
 

@@ -24,7 +24,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
-import { methodBreakpointName, type LineBreakpoint } from '../app-store'
+import { methodBreakpointName, type LineBreakpoint, type MethodBreakpointTarget } from '../app-store'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
 
@@ -47,7 +47,8 @@ export interface CodeEditorMenuContext extends HexMenuContext {
    * is the span that decides whether the command shows.
    */
   referenceTarget?: TextSpan
-  /** The statement under the caret, which stands in for a member when there is no reference. */
+  /** The statement under the caret, which the line breakpoint commands act on. dnSpy's reference commands —
+   *  the copies, Search MSDN, Add Method Breakpoint — read only the reference, so a statement stands in for none. */
   statement?: CodeStatement
   /** Whether the editor holds a non-empty selection, which is what WPF's Copy is gated on. */
   hasSelection: boolean
@@ -66,7 +67,11 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onSetBreakpointEnabled?(enabled: boolean): void
   onShowNextStatement?(): void
   onShowDisassembly?(): void
-  onToggleMethodBreakpoint?(name: string): void
+  /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
+  onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
+  /** dnSpy's "Add Class Breakpoint" and "Add Class Tracepoint", for the type the reference names. */
+  onAddClassBreakpoint?(node: TreeNode): void
+  onAddClassTracepoint?(node: TreeNode): void
   onDeleteNode?(node: TreeNode): void
   onEditNode?(node: TreeNode): void
   onEditMethodBody?(node: TreeNode): void
@@ -169,26 +174,35 @@ const methodTarget = (ctx: CodeEditorMenuContext): TreeNode | undefined => {
   return ctx.documentNode?.kind === 'method' ? ctx.documentNode : undefined
 }
 
-/** What "Add Method Breakpoint" names: the referenced method, or the one the statement belongs to. */
-const methodBreakpointTarget = (ctx: CodeEditorMenuContext): string | undefined =>
-  methodBreakpointName(ctx.referenceNode?.kind === 'method' ? ctx.referenceNode.description : ctx.statement?.description)
+/**
+ * What "Add Method Breakpoint" is for: the method the reference under the caret names, or the property or
+ * event whose accessors it stands for — dnSpy's GetMethodReferences, which reads the TextReference at the
+ * caret and nothing else. A caret on no reference, or on one to a type or a field, has no method to name.
+ */
+const methodBreakpointTarget = (ctx: CodeEditorMenuContext): MethodBreakpointTarget | undefined =>
+  ctx.referenceNode && ['method', 'property', 'event'].includes(ctx.referenceNode.kind) ? ctx.referenceNode : undefined
+
+/** What the class breakpoint commands are for: the type the reference under the caret names — dnSpy's
+ *  GetTypeRef, which resolves the reference to its definition. */
+const classBreakpointTarget = (ctx: CodeEditorMenuContext): TreeNode | undefined =>
+  ctx.referenceNode?.kind === 'type' ? ctx.referenceNode : undefined
 
 /**
- * The token dnSpy's "Copy MD Token" writes — the reference's, or the statement's when the caret is not on
- * a reference. `CopyTokenCommand` writes it as `0x` plus eight hex digits.
+ * The token dnSpy's "Copy MD Token" writes: the reference's under the caret, a member of a module the
+ * workspace does not hold included — the reference carries its token either way. `CopyTokenCommand` writes
+ * it as `0x` plus eight hex digits.
  */
 const metadataTokenOf = (ctx: CodeEditorMenuContext): number | undefined =>
-  ctx.referenceNode?.metadataToken ?? ctx.statement?.metadataToken
+  ctx.referenceNode?.metadataToken ?? ctx.referenceTarget?.targetMetadataToken ?? undefined
 
-const formatToken = (token: number): string => `0x${token.toString(16).toUpperCase().padStart(8, '0')}`
+const formatToken = (token: number): string => `0x${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
 
 /**
- * What "Copy Full Name" and "Search MSDN" text: dnSpy copies `IFullName.FullName` of the reference under
- * the caret. A tree node's description is dnlib's FullName for the kinds that have one, and a statement's
- * description is its method's — so a caret that is not on a reference still names something.
+ * What "Copy Full Name" and "Search MSDN" text: dnSpy reads `IFullName.FullName` off the reference under
+ * the caret. A tree node's description is dnlib's FullName for the kinds that have one.
  */
 const fullNameOf = (ctx: CodeEditorMenuContext): string | undefined =>
-  ctx.referenceNode?.description ?? ctx.referenceNode?.label ?? ctx.statement?.description
+  ctx.referenceNode?.description ?? ctx.referenceNode?.label
 
 /**
  * Where dnSpy's "Search MSDN" sends the browser. `SearchMsdnCommand.GetAddress` builds a docs API address
@@ -271,9 +285,9 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_DEBUG, order: 30, key: 'show-next-statement', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Show Next Statement'), shortcut: 'Alt + Numpad *', visible: (ctx) => ctx.stopped && ctx.onShowNextStatement !== undefined, run: (ctx) => ctx.onShowNextStatement?.() },
   { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: never },
   { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: fixedIcon(<Cpu {...iconProps} />), label: (ctx) => ctx.t('Go to Disassembly'), visible: (ctx) => ctx.stopped && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
-  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: never },
-  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Tracepoint'), visible: never },
-  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<CircleDashed {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onToggleMethodBreakpoint !== undefined, run: (ctx) => { const name = methodBreakpointTarget(ctx); if (name) ctx.onToggleMethodBreakpoint?.(name) } },
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassBreakpoint?.(node) } },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: fixedIcon(null), label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassTracepoint?.(node) } },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<CircleDashed {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => { const target = methodBreakpointTarget(ctx); if (target) ctx.onAddMethodBreakpoints?.([target]) } },
   { group: GROUP_DEBUG, order: 1000, key: 'break-when-exception-thrown', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
 
   // 3000 — Delete commands (GROUP_CTX_DOCVIEWER_ASMED_DELETE). One entry per deletable node type, so
@@ -311,7 +325,7 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Go to Entry Point'), visible: never },
   { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Go to Global Cctor'), visible: never },
   { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+Shift+D', visible: never },
-  { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: fixedIcon(<Hash {...iconProps} />), label: (ctx) => ctx.t('Copy MD Token'), shortcut: 'Ctrl+C', visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
+  { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: fixedIcon(<Hash {...iconProps} />), label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 60, key: 'copy-full-name', icon: fixedIcon(<ClipboardCopy {...iconProps} />), label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
 
   // 9000 — Hex editor. The entries live in hex-menu.ts, shared with the Edit menu, which shows the same

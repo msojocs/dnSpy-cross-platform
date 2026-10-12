@@ -43,6 +43,45 @@ sealed class TextPartsBuilder {
 	public TextPartsBuilder WriteVersion(Version? version) =>
 		version is null ? Write(TextColors.Error, "?.?.?.?") : Write(TextColors.Number, version.ToString());
 
+	/// <summary>The full name of an assembly or an assembly reference the way dnSpy writes an <c>IAssembly</c>.</summary>
+	public TextPartsBuilder WriteAssembly(IAssembly assembly) {
+		var isExe = assembly is AssemblyDef { ManifestModule: { } manifest } && (manifest.Characteristics & dnlib.PE.Characteristics.Dll) == 0;
+		Write(isExe ? TextColors.AssemblyExe : TextColors.Assembly, assembly.Name.String);
+		WriteCommaSpace();
+		Write(TextColors.InstanceProperty, "Version").Write(TextColors.Operator, "=").WriteVersion(assembly.Version);
+		WriteCommaSpace();
+		Write(TextColors.InstanceProperty, "Culture").Write(TextColors.Operator, "=");
+		Write(TextColors.EnumField, UTF8String.IsNullOrEmpty(assembly.Culture) ? "neutral" : assembly.Culture.String);
+		WriteCommaSpace();
+		var publicKey = PublicKeyBase.ToPublicKeyToken(assembly.PublicKeyOrToken);
+		Write(TextColors.InstanceProperty, publicKey is null || publicKey is PublicKeyToken ? "PublicKeyToken" : "PublicKey").Write(TextColors.Operator, "=");
+		if (PublicKeyBase.IsNullOrEmpty2(publicKey))
+			Write(TextColors.Keyword, "null");
+		else
+			Write(TextColors.Number, publicKey!.ToString());
+		if ((assembly.Attributes & AssemblyAttributes.Retargetable) != 0) {
+			WriteCommaSpace();
+			Write(TextColors.InstanceProperty, "Retargetable").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "Yes");
+		}
+		if ((assembly.Attributes & AssemblyAttributes.ContentType_Mask) == AssemblyAttributes.ContentType_WindowsRuntime) {
+			WriteCommaSpace();
+			Write(TextColors.InstanceProperty, "ContentType").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "WindowsRuntime");
+		}
+		return this;
+	}
+
+	/// <summary>A file name in its directory, name and extension parts — dnSpy's WriteFilename.</summary>
+	public TextPartsBuilder WriteFilename(string fileName) {
+		var parts = fileName.Replace('\\', '/').Split('/');
+		for (var index = 0; index < parts.Length - 1; index++)
+			Write(TextColors.DirectoryPart, parts[index]).Write(TextColors.Text, "/");
+		var name = parts[^1];
+		var dot = name.LastIndexOf('.');
+		if (dot < 0)
+			return Write(TextColors.FileNameNoExtension, name);
+		return Write(TextColors.FileNameNoExtension, name[..dot]).Write(TextColors.Text, ".").Write(TextColors.FileExtension, name[(dot + 1)..]);
+	}
+
 	public IReadOnlyList<TextPartDto> ToParts() => parts.ToArray();
 
 	public override string ToString() => string.Concat(parts.Select(part => part.Text));

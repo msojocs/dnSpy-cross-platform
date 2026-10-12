@@ -202,10 +202,11 @@ public sealed class WorkspaceEditCreateTests : IDisposable {
 
 			var reopened = await manager.OpenAsync(new OpenWorkspaceRequest([destination]), TestContext.Current.CancellationToken);
 			var results = await manager.SearchAsync(
-				new SearchRequest(reopened.WorkspaceId, "MyMethod", ["method"]),
+				new SearchRequest(reopened.WorkspaceId, "MyMethod", SearchTypes.Method),
 				TestContext.Current.CancellationToken);
 			var found = Assert.Single(results.Results);
-			Assert.Equal(created.Label, found.Name);
+			// The search list writes the return type ahead of the tree's "name(params)".
+			Assert.Equal($"void {created.Label}", found.Name);
 			Assert.Equal("dnSpy.Backend.Contracts.RpcException", found.Location);
 		}
 		finally {

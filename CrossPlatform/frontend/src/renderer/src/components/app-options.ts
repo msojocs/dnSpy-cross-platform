@@ -9,6 +9,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
+import type { SearchLocation, SearchType } from '../../../shared/protocol'
 
 export type ThemeName = 'blue' | 'light' | 'dark' | 'hc'
 /** Runtime kind hosted by the DAP backend (upstream `RuntimeDisplayName` is ".NET"). */
@@ -360,6 +361,20 @@ export interface AnalyzerSettings {
   singleClickExpandsChildren: boolean
 }
 
+/** dnSpy's SearchSettings: the search window's two boxes and the options its expander and its context menu
+ * switch — kept from one session to the next the way dnSpy keeps them. */
+export interface SearchSettings {
+  searchType: SearchType
+  location: SearchLocation
+  syntaxHighlight: boolean
+  matchWholeWords: boolean
+  caseSensitive: boolean
+  matchAnySearchTerm: boolean
+  searchDecompiledData: boolean
+  searchFrameworkAssemblies: boolean
+  searchCompilerGeneratedMembers: boolean
+}
+
 export interface AppOptions {
   environmentGeneral: EnvironmentGeneralSettings
   environmentFont: EnvironmentFontSettings
@@ -378,6 +393,7 @@ export interface AppOptions {
   backgroundImage: BackgroundImageSettings
   bookmarks: BookmarkSettings
   analyzer: AnalyzerSettings
+  search: SearchSettings
 }
 
 const defaultEditorGeneral = (): EditorGeneralSettings => ({
@@ -655,6 +671,17 @@ export const defaultAppOptions: AppOptions = {
     showToken: true,
     syntaxHighlight: true,
     singleClickExpandsChildren: true,
+  },
+  search: {
+    searchType: 'any',
+    location: 'allFiles',
+    syntaxHighlight: true,
+    matchWholeWords: false,
+    caseSensitive: false,
+    matchAnySearchTerm: false,
+    searchDecompiledData: true,
+    searchFrameworkAssemblies: true,
+    searchCompilerGeneratedMembers: true,
   },
 }
 

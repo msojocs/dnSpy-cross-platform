@@ -84,9 +84,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 	public Task<FindMemberResponse> FindMemberAsync(FindMemberRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindMemberAsync(request.ModulePath, request.MetadataToken, cancellationToken), cancellationToken);
 
-	public Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => w.Search(request, cancellationToken), cancellationToken);
-
 	public Task<HexLengthResponse> GetHexLengthAsync(HexLengthRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetHexLength(request.ModuleId), cancellationToken);
 
@@ -1767,9 +1764,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 			return values
 				.OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
-				.Select(value => GetOrAddNode($"resource-entry:{node.AsModuleEntry!.Path}:{embedded.Name}:{value.Name}", NodeKind.ResourceEntry, value, node.Module))
+				.Select(value => GetOrAddNode(ResourceEntryKey(node.AsModuleEntry!, embedded, value.Name), NodeKind.ResourceEntry, value, node.Module))
 				.ToArray();
 		}
+
+		static string ResourceEntryKey(ModuleEntry module, EmbeddedResource resource, string name) => $"resource-entry:{module.Path}:{resource.Name}:{name}";
 
 		static object? DecodeResourceData(string typeName, byte[] data) {
 			if (typeName == "ResourceTypeCode.Null")
@@ -2657,48 +2656,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				.Concat(conversion.Exceptions?.Select(exception => new DiagnosticDto("warning", exception)) ?? [])
 				.ToArray();
 			return new DecompileResponse(csharp.Title, "visual-basic", conversion.ConvertedCode, Array.Empty<TextSpanDto>(), diagnostics);
-		}
-
-		public SearchResponse Search(SearchRequest request, CancellationToken cancellationToken) {
-			if (string.IsNullOrWhiteSpace(request.Query))
-				return new SearchResponse(Array.Empty<SearchResultDto>(), false);
-			var maxResults = Math.Clamp(request.MaxResults, 1, 10_000);
-			var comparison = request.MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-			var requestedKinds = request.Kinds is null ? null : new HashSet<string>(request.Kinds, StringComparer.OrdinalIgnoreCase);
-			var results = new List<SearchResultDto>();
-
-			bool Add(NodeEntry node, string kind, string name, string location, string? preview = null) {
-				if (requestedKinds is not null && !requestedKinds.Contains(kind))
-					return false;
-				if (!name.Contains(request.Query, comparison) && (preview is null || !preview.Contains(request.Query, comparison)))
-					return false;
-				results.Add(new SearchResultDto(node.Id, kind, name, location, preview));
-				return results.Count >= maxResults;
-			}
-
-			foreach (var moduleEntry in modules.Values) {
-				foreach (var type in moduleEntry.Module.GetTypes()) {
-					cancellationToken.ThrowIfCancellationRequested();
-					var typeNode = GetMemberNode(type, moduleEntry);
-					if (Add(typeNode, "type", type.FullName, moduleEntry.Module.Name.String))
-						return new SearchResponse(results, true);
-					foreach (var member in EnumerateMembers(type)) {
-						var memberNode = GetMemberNode(member, moduleEntry);
-						if (Add(memberNode, GetKind(member).ToString().ToLowerInvariant(), GetMemberDisplayName(member), type.FullName))
-							return new SearchResponse(results, true);
-					}
-					foreach (var method in type.Methods.Where(m => m.HasBody)) {
-						foreach (var instruction in method.Body.Instructions) {
-							if (instruction.Operand is not string value)
-								continue;
-							var methodNode = GetMemberNode(method, moduleEntry);
-							if (Add(methodNode, "string", value, method.FullName, value))
-								return new SearchResponse(results, true);
-						}
-					}
-				}
-			}
-			return new SearchResponse(results, false);
 		}
 
 		public HexLengthResponse GetHexLength(string moduleId) => new(GetModule(moduleId).FileLength);
@@ -3855,17 +3812,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			EventDef => NodeKind.Event,
 			_ => throw new ArgumentOutOfRangeException(nameof(provider)),
 		};
-
-		static IEnumerable<IMDTokenProvider> EnumerateMembers(TypeDef type) {
-			foreach (var field in type.Fields)
-				yield return field;
-			foreach (var property in type.Properties)
-				yield return property;
-			foreach (var @event in type.Events)
-				yield return @event;
-			foreach (var method in type.Methods)
-				yield return method;
-		}
 
 		static string GetMemberDisplayName(IMDTokenProvider member) => member switch {
 			// Show only the type name in the tree (dnSpy behavior); the namespace already appears

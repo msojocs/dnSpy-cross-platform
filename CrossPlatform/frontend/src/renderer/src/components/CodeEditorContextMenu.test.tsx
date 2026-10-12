@@ -47,7 +47,9 @@ const commands = () => ({
   onToggleBreakpoint: vi.fn(),
   onSetBreakpointEnabled: vi.fn(),
   onShowNextStatement: vi.fn(),
-  onToggleMethodBreakpoint: vi.fn(),
+  onAddMethodBreakpoints: vi.fn(),
+  onAddClassBreakpoint: vi.fn(),
+  onAddClassTracepoint: vi.fn(),
   onDeleteNode: vi.fn(),
   onEditNode: vi.fn(),
   onCreateMember: vi.fn(),
@@ -126,8 +128,6 @@ const methodReferenceContext = (overrides: Partial<CodeEditorMenuContext> = {}):
 // which is asserted against a context rich enough to make everything else appear.
 const UNIMPLEMENTED = [
   'set-next-statement',
-  'add-class-breakpoint',
-  'add-class-tracepoint',
   'break-when-exception-thrown',
   'edit-il-instructions',
   'go-to-entry-point',
@@ -200,26 +200,19 @@ describe('buildCodeEditorMenuItems', () => {
     expect(keys).toContain('analyze')
   })
 
-  it('falls back to the statement when the caret is not on a reference', () => {
-    // A caret that landed between references — on the whitespace to the right of a line, say. The statement
-    // the IL map gives still stands in for a member: it carries the method's token and full name, which is
-    // what the copy commands and the method body dialog need. What is left out is everything that has to act
-    // on the node itself — the delete, create and edit commands — and Analyze, which opens the node's window,
-    // and "Open in New Tab", which dnSpy offers only on a reference.
+  it('keeps to the statement\'s and the document\'s commands when the caret is not on a reference', () => {
+    // A caret that landed between references — on the whitespace to the right of a line, say. The line
+    // breakpoint reads the statement, and the method body commands the document's method, as dnSpy's do.
+    // Everything that reads the TextReference at the caret is left out: the copies, Search MSDN, Add Method
+    // Breakpoint, the node's own delete, create and edit commands, Analyze, and "Open in New Tab".
     const keys = menuKeys(context({ statement: statement(), documentNode: methodNode }))
     expect(keys).toEqual([
       'toggle-breakpoint',
-      'add-method-breakpoint',
       'edit-method-body',
       'replace-method-body-with-stub',
-      'copy-md-token',
-      'copy-full-name',
       'hex-0',
-      'search-msdn',
       'find',
     ])
-    expect(keys).not.toContain('analyze')
-    expect(keys).not.toContain('copy')
   })
 
   it('offers only the method body and the editor commands in a document with neither spans nor statements', () => {
@@ -281,8 +274,8 @@ describe('buildCodeEditorMenuItems', () => {
     const breakpointKeys = (ctx: CodeEditorMenuContext): string[] =>
       menuKeys(ctx).filter((key) => key.includes('breakpoint'))
     // No breakpoint on the line yet: add one. Once there is one, Ctrl+F9 can drop it or raise it again.
-    expect(breakpointKeys(context({ statement: statement() }))).toEqual(['toggle-breakpoint', 'add-method-breakpoint'])
-    expect(breakpointKeys(context({ statement: statement(), breakpoint }))).toEqual(['toggle-breakpoint', 'enable-breakpoint', 'add-method-breakpoint'])
+    expect(breakpointKeys(context({ statement: statement() }))).toEqual(['toggle-breakpoint'])
+    expect(breakpointKeys(context({ statement: statement(), breakpoint }))).toEqual(['toggle-breakpoint', 'enable-breakpoint'])
     // The header flips with the breakpoint's state, and so does the command it runs.
     const disable = context({ statement: statement(), breakpoint })
     runEntry(disable, 'enable-breakpoint')
@@ -298,11 +291,7 @@ describe('buildCodeEditorMenuItems', () => {
       'toggle-breakpoint',
       'show-next-statement',
       'go-to-disassembly',
-      'add-method-breakpoint',
-      'copy-md-token',
-      'copy-full-name',
       'hex-0',
-      'search-msdn',
       'find',
     ])
   })
@@ -331,7 +320,40 @@ describe('buildCodeEditorMenuItems', () => {
     runEntry(ctx, 'edit-method-body')
     expect(ctx.onEditMethodBody).toHaveBeenCalledWith(methodNode)
     runEntry(ctx, 'add-method-breakpoint')
-    expect(ctx.onToggleMethodBreakpoint).toHaveBeenCalledWith('System.Console.WriteLine')
+    expect(ctx.onAddMethodBreakpoints).toHaveBeenCalledWith([methodNode])
+  })
+
+  it('adds a method breakpoint for the reference\'s method, or for the accessors a property or an event stands for', () => {
+    // dnSpy's GetMethodReferences reads the TextReference at the caret: a property or an event stands for its
+    // accessors, and a reference to a type or a field names no method at all.
+    const property: TreeNode = { id: 'n-prop', label: 'Out', kind: 'property', hasChildren: true, description: 'System.IO.TextWriter System.Console::Out()' }
+    const onProperty = methodReferenceContext({ referenceNode: property })
+    runEntry(onProperty, 'add-method-breakpoint')
+    expect(onProperty.onAddMethodBreakpoints).toHaveBeenCalledWith([property])
+    expect(menuKeys(methodReferenceContext({ referenceNode: typeNode }))).not.toContain('add-method-breakpoint')
+  })
+
+  it('offers the class breakpoint and tracepoint on a type reference, for that type', () => {
+    // dnSpy's GetTypeRef reads an ITypeDefOrRef off the reference at the caret; a method reference is no type.
+    expect(menuKeys(methodReferenceContext())).not.toContain('add-class-breakpoint')
+    const ctx = methodReferenceContext({ referenceNode: typeNode })
+    const keys = menuKeys(ctx).filter((key) => key.startsWith('add-'))
+    expect(keys).toEqual(['add-class-breakpoint', 'add-class-tracepoint'])
+    runEntry(ctx, 'add-class-breakpoint')
+    expect(ctx.onAddClassBreakpoint).toHaveBeenCalledWith(typeNode)
+    runEntry(ctx, 'add-class-tracepoint')
+    expect(ctx.onAddClassTracepoint).toHaveBeenCalledWith(typeNode)
+  })
+
+  it('copies the token of a reference into a module the workspace does not hold', () => {
+    // The reference carries its token whether or not the tree has a node for it, and the entry has no
+    // shortcut of its own: Ctrl+C copies the selected text.
+    const external: TextSpan = { start: 0, length: 9, kind: 'reference', targetModulePath: '/lib/System.Console.dll', targetMetadataToken: 0x06000123 }
+    const ctx = context({ referenceTarget: external })
+    runEntry(ctx, 'copy-md-token')
+    expect(ctx.copyText).toHaveBeenCalledWith('0x06000123')
+    const entry = buildCodeEditorMenuItems(ctx).find((item) => item.type !== 'divider' && item.key === 'copy-md-token')
+    expect(JSON.stringify(entry && 'content' in entry ? entry.content : '')).not.toContain('Ctrl+C')
   })
 
   it('shows no bookmark entry and no Select All', () => {

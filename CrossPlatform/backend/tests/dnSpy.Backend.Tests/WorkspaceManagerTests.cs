@@ -611,7 +611,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var opened = await OpenContractsAssemblyAsync();
 
 		var types = await manager.SearchAsync(
-			new SearchRequest(opened.WorkspaceId, "HexReadResponse", ["type"]),
+			new SearchRequest(opened.WorkspaceId, "HexReadResponse", SearchTypes.Type),
 			TestContext.Current.CancellationToken);
 		var type = Assert.Single(types.Results);
 		Assert.Equal("type", type.Kind);
@@ -620,7 +620,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			new OpenWorkspaceRequest([typeof(WorkspaceManagerTests).Assembly.Location]),
 			TestContext.Current.CancellationToken);
 		var strings = await manager.SearchAsync(
-			new SearchRequest(testAssembly.WorkspaceId, "HexReadResponse", ["string"]),
+			new SearchRequest(testAssembly.WorkspaceId, "HexReadResponse", SearchTypes.Literal),
 			TestContext.Current.CancellationToken);
 		Assert.NotEmpty(strings.Results);
 	}
@@ -969,7 +969,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 				new OpenWorkspaceRequest([destination]),
 				TestContext.Current.CancellationToken);
 			var results = await manager.SearchAsync(
-				new SearchRequest(reopened.WorkspaceId, "HelloRequestRenamed", ["type"]),
+				new SearchRequest(reopened.WorkspaceId, "HelloRequestRenamed", SearchTypes.Type),
 				TestContext.Current.CancellationToken);
 			Assert.Single(results.Results);
 		}

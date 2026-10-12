@@ -25,7 +25,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
-import { methodBreakpointName } from '../app-store'
+import type { MethodBreakpointTarget } from '../app-store'
 import { isAnalyzableNode, searchMsdnUrl } from './CodeEditorContextMenu'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
@@ -64,6 +64,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onMergeAssembly?(node: TreeNode): void
   /** Adds a breakpoint for every method of a type — dnSpy's "Add Class Breakpoint". */
   onAddClassBreakpoint?(node: TreeNode): void
+  /** Asks for the settings of a tracepoint, then puts one on every method of a type — "Add Class Tracepoint". */
+  onAddClassTracepoint?(node: TreeNode): void
   onLoadDependencies?(node: TreeNode, recursive: boolean): void
   onGoToEntryPoint?(node: TreeNode): void
   onGoToGlobalCctor?(node: TreeNode): void
@@ -73,7 +75,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onSaveResource?(node: TreeNode, raw: boolean): void
   onOpenContainingFolder?(node: TreeNode): void
   onSortAssemblies?(): void
-  onToggleMethodBreakpoint?(name: string): void
+  /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
+  onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
   onAnalyze?(node: TreeNode): void
   /** Opens an address in the browser, which is how dnSpy's Search MSDN command runs. */
   onOpenUrl?(url: string): void
@@ -139,7 +142,7 @@ const iconProps = { size: 14, strokeWidth: 1.7, 'aria-hidden': true as const }
 const fixedIcon = (node: ReactNode): AsmMenuIcon => () => node
 
 // Commands dnSpy shows only where this port has nothing to run: the assembly and netmodule editors, the
-// C# compile commands, merging an assembly, class tracepoints, exception-break settings, the string
+// C# compile commands, merging an assembly, exception-break settings, the string
 // searcher, creating resources, and disabling memory mapped I/O (this backend loads every image into
 // memory and has no `MemoryMappedFile` to turn off). They stay in the table so the menu keeps WPF's
 // shape, but never show. Commands that this port *can* run but has no plumbing for yet are not listed
@@ -183,9 +186,11 @@ const metadataTokenOf = (ctx: AssemblyExplorerMenuContext): number | undefined =
 
 const formatToken = (token: number): string => `0x${token.toString(16).toUpperCase().padStart(8, '0')}`
 
-/** What "Add Method Breakpoint" names: the method's own name, as the breakpoints window shows it. */
-const methodBreakpointTarget = (ctx: AssemblyExplorerMenuContext): string | undefined =>
-  ctx.node.kind === 'method' ? methodBreakpointName(ctx.node.description) : undefined
+/**
+ * What "Add Method Breakpoint" is for: dnSpy's GetMethodReferences takes a method, and a property or an
+ * event for the accessors it stands for. Any other row names no method to break in.
+ */
+const isMethodBreakpointTarget = kindIs('method', 'property', 'event')
 
 /**
  * The group folders that hold a module's references and resources, or a type's base types and subtypes.
@@ -360,15 +365,14 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
 
   // 10000 — Debugger (GROUP_CTX_DOCUMENTS_DEBUG). The class breakpoint is the function-breakpoint list:
   // dnSpy puts a breakpoint at the entry of every method of the type, and the methods are this tree row's
-  // own children. The other three stay hidden for reasons the port cannot supply a callback for — the
-  // tracepoint first opens its settings dialog, which lives in the Breakpoints window's own state, and
-  // "Break When Exception Thrown" is dnSpy's shortcut for adding a definition to the Exception Settings
-  // window, which this port reaches from that window instead: the tree row carries no base-type chain to
-  // tell an exception type from any other, which is the check dnSpy's CanExecute makes.
+  // own children; the class tracepoint does the same after asking for the trace's settings. "Break When
+  // Exception Thrown" stays hidden: it is dnSpy's shortcut for adding a definition to the Exception
+  // Settings window, which this port reaches from that window instead — the tree row carries no base-type
+  // chain to tell an exception type from any other, which is the check dnSpy's CanExecute makes.
   { group: GROUP_DEBUG, order: 0, key: 'break-when-exception-thrown', icon: fixedIcon(<Info {...iconProps} />), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
   { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => kindIs('type')(ctx) && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => ctx.onAddClassBreakpoint?.(ctx.node) },
-  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Tracepoint'), visible: never },
-  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onToggleMethodBreakpoint !== undefined, run: (ctx) => { const name = methodBreakpointTarget(ctx); if (name) ctx.onToggleMethodBreakpoint?.(name) } },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: fixedIcon(null), label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => kindIs('type')(ctx) && ctx.onAddClassTracepoint !== undefined, run: (ctx) => ctx.onAddClassTracepoint?.(ctx.node) },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => isMethodBreakpointTarget(ctx) && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => ctx.onAddMethodBreakpoints?.([ctx.node]) },
 
   // 11000 — Other (GROUP_CTX_DOCUMENTS_OTHER). "Find String References in Module" is dnSpy's string
   // searcher, a tool window of its own that this port has no equivalent of, so it stays in the table

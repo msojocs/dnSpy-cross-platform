@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The library the search tests look through: one of every kind of node dnSpy's search window finds,
+       a literal of every kind it reads, and resources. Never optimized, so its literals stay in the IL. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Optimize>false</Optimize>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="notes.txt" LogicalName="notes.txt" />
+    <EmbeddedResource Update="Strings.resx" LogicalName="SearchTarget.Strings.resources" />
+  </ItemGroup>
+</Project>

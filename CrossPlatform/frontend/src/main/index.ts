@@ -6,7 +6,7 @@ import path from 'node:path'
 import { BackendClient } from './backend-client'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
-import type { AnalyzeChildrenRequest, AnalyzerNode, BackendStatus, DebugLaunchOptions, UiLocale } from '../shared/protocol'
+import type { AnalyzeChildrenRequest, AnalyzerNode, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
@@ -16,6 +16,8 @@ let lastBackendStatus: BackendStatus = { state: 'starting' }
 // collapsed mid-search can call its search off, and what a search finds as it goes reaches the window that
 // asked: the map key is the progress token the backend hands back.
 const analyzerRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
+// The search window's searches still running, kept the same way: a new query calls the last one off.
+const searchRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -222,6 +224,11 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
     const request = analyzerRequests.get(progress.progressToken)
     if (request && !request.sender.isDestroyed())
       request.sender.send('analyze:progress', { requestKey: request.requestKey, start: progress.start, children: progress.children })
+  } else if (method === 'search/progress') {
+    const progress = parameters as { progressToken: string; start: number; results: SearchResult[] }
+    const request = searchRequests.get(progress.progressToken)
+    if (request && !request.sender.isDestroyed())
+      request.sender.send('search:progress', { requestKey: request.requestKey, start: progress.start, results: progress.results })
   }
 }
 
@@ -412,7 +419,22 @@ const registerIpc = (): void => {
   ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string) =>
     requireBackend().invoke('document/decompile', { workspaceId, nodeId, language }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
-  ipcMain.handle('search:run', (_event, workspaceId: string, query: string, kinds?: string[]) => requireBackend().invoke('search/run', { workspaceId, query, kinds }))
+  // A search walks every file it covers, which over the framework takes a while: it gets the long deadline,
+  // and the renderer calls it off by the key it named it with when the query or an option changes.
+  ipcMain.handle('search:run', async (event, workspaceId: string, request: SearchRequest, requestKey: string) => {
+    const key = `${event.sender.id}:${requestKey}`
+    const entry = { controller: new AbortController(), sender: event.sender, requestKey }
+    searchRequests.set(key, entry)
+    try {
+      return await requireBackend().invoke('search/run', { workspaceId, ...request, progressToken: key }, 600_000, entry.controller.signal)
+    } finally {
+      if (searchRequests.get(key) === entry)
+        searchRequests.delete(key)
+    }
+  })
+  ipcMain.handle('search:cancel', (event, requestKey: string) => {
+    searchRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
   ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds }))
   // An analyzer search walks every module that can see the member, which on a framework assembly takes a
   // while; it gets the long deadline, and the renderer can call it off by the key it named it with — a row

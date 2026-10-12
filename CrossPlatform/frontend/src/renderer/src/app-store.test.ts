@@ -315,6 +315,20 @@ describe('class breakpoints', () => {
     expect(useAppStore.getState().output.at(-1)).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
   })
 
+  it('puts the tracepoint\'s settings on every breakpoint a class tracepoint adds', async () => {
+    install([row('System.Void Ns.Type::Get()', 'method'), row('System.Void Ns.Type::Put()', 'method')])
+    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Put', enabled: true }] })
+    const settings = { trace: { message: 'entered {$FUNCTION}', continue: true } }
+
+    await useAppStore.getState().addClassBreakpoint(typeNode, settings)
+
+    // A method that already has a breakpoint keeps the one it has, the way dnSpy skips an existing location.
+    expect(useAppStore.getState().functionBreakpoints).toEqual([
+      { name: 'Ns.Type.Put', enabled: true },
+      { name: 'Ns.Type.Get', enabled: true, settings },
+    ])
+  })
+
   it('adds a method breakpoint for each method named, and for a property\'s accessors, never taking one away', async () => {
     const property: TreeNode = { ...row('System.Int32 Ns.Type::Code', 'property'), hasChildren: true }
     install([row('System.Int32 Ns.Type::get_Code()', 'method'), row('System.Void Ns.Type::set_Code(System.Int32)', 'method')])
@@ -325,14 +339,18 @@ describe('class breakpoints', () => {
       property,
       row('System.Int32 Ns.Type::count', 'field'),
       row('System.Void Ns.Type::Stop()', 'method'),
+      // The code viewer names the method a statement belongs to rather than handing a node.
+      'Ns.Type.Main',
+      'Ns.Type.Stop',
     ])
 
-    // The method that already has one keeps it as it is — this adds, where the tree's command toggles.
+    // The method that already has one keeps it as it is: the command adds, it never takes one away.
     expect(useAppStore.getState().functionBreakpoints).toEqual([
       { name: 'Ns.Type.Run', enabled: false },
       { name: 'Ns.Type.get_Code', enabled: true },
       { name: 'Ns.Type.set_Code', enabled: true },
       { name: 'Ns.Type.Stop', enabled: true },
+      { name: 'Ns.Type.Main', enabled: true },
     ])
     expect(getChildren).toHaveBeenCalledWith('ws1', property.id)
     expect(setFunctionBreakpoints).toHaveBeenCalledTimes(1)
@@ -2438,7 +2456,6 @@ describe('file commands', () => {
     documents: {},
     documentOrder: [],
     activeDocumentId: undefined,
-    searchResults: [],
     assemblyListRevision: 0,
     output: [],
     dirty: false,

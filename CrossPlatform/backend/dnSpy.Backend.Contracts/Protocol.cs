@@ -29,6 +29,9 @@ public static class RpcMethods {
 	public const string DocumentDecompile = "document/decompile";
 	public const string DocumentFindMember = "document/findMember";
 	public const string Search = "search/run";
+	/// <summary>A notification: the results a search found since the last one, sent while it still runs
+	/// when the request named a progress token.</summary>
+	public const string SearchProgress = "search/progress";
 	public const string AnalyzeNodes = "analyze/nodes";
 	public const string AnalyzeChildren = "analyze/children";
 	/// <summary>
@@ -241,21 +244,52 @@ public sealed record FindMemberRequest(string WorkspaceId, string ModulePath, in
 
 public sealed record FindMemberResponse(string? NodeId, string? Label, string? Description);
 
+/// <summary>
+/// dnSpy's search window. <paramref name="SearchType"/> is the "Search For" box — one of
+/// <see cref="SearchTypes"/> — and <paramref name="Location"/> the box beside it, one of
+/// <see cref="SearchLocations"/>; the locations other than all files read the tree nodes
+/// <paramref name="SelectedNodeIds"/> names — the tree's selection. The query is split on spaces into terms that must all match
+/// (any of them with <paramref name="MatchAnySearchTerm"/>), or is a regular expression between slashes.
+/// A search asked with a <paramref name="ProgressToken"/> sends what it finds ahead, in
+/// <see cref="RpcMethods.SearchProgress"/> notifications.
+/// </summary>
 public sealed record SearchRequest(
 	string WorkspaceId,
 	string Query,
-	IReadOnlyList<string>? Kinds = null,
-	bool MatchCase = false,
-	int MaxResults = 1000);
+	string SearchType = SearchTypes.Any,
+	string Location = SearchLocations.AllFiles,
+	IReadOnlyList<string>? SelectedNodeIds = null,
+	bool CaseSensitive = false,
+	bool MatchWholeWords = false,
+	bool MatchAnySearchTerm = false,
+	bool SearchDecompiledData = true,
+	bool SearchFrameworkAssemblies = true,
+	bool SearchCompilerGeneratedMembers = true,
+	int MaxResults = 10_000,
+	string? ProgressToken = null);
 
-public sealed record SearchResponse(IReadOnlyList<SearchResultDto> Results, bool Truncated);
+/// <summary>What a search found, in the order it found it. <paramref name="Truncated"/> says the search
+/// stopped at the limit — dnSpy's "too many results". <paramref name="Start"/> is where the first result
+/// stands among everything found: the ones sent ahead come before it.</summary>
+public sealed record SearchResponse(IReadOnlyList<SearchResultDto> Results, bool Truncated, int Start = 0);
 
+/// <summary>
+/// One result of dnSpy's search window: what matched, written the way its list writes it, and where it
+/// lives. <paramref name="NodeId"/> is the tree node following the result opens, absent for a module
+/// reference, which the tree has no row for. A match in a method body names the instruction's
+/// <paramref name="IlOffset"/>, which is where following it puts the caret.
+/// </summary>
 public sealed record SearchResultDto(
-	string NodeId,
+	string? NodeId,
 	string Kind,
 	string Name,
 	string Location,
-	string? Preview = null);
+	IReadOnlyList<TextPartDto>? NameParts = null,
+	IReadOnlyList<TextPartDto>? LocationParts = null,
+	string? Icon = null,
+	string? LocationIcon = null,
+	string? ToolTip = null,
+	int? IlOffset = null);
 
 public sealed record HexLengthRequest(string WorkspaceId, string ModuleId);
 
@@ -1209,4 +1243,49 @@ public static class TextColors {
 	public const string Assembly = "assembly";
 	public const string AssemblyExe = "assemblyExe";
 	public const string AssemblyModule = "assemblyModule";
+	public const string Parameter = "parameter";
+	public const string String = "string";
+	public const string DirectoryPart = "directoryPart";
+	public const string FileNameNoExtension = "fileNameNoExtension";
+	public const string FileExtension = "fileExtension";
 }
+
+/// <summary>The keys of the search window's "Search For" box, one per entry of dnSpy's SearchType.</summary>
+public static class SearchTypes {
+	public const string Assembly = "assembly";
+	public const string Module = "module";
+	public const string Namespace = "namespace";
+	public const string Type = "type";
+	public const string Field = "field";
+	public const string Method = "method";
+	public const string Property = "property";
+	public const string Event = "event";
+	public const string Parameter = "parameter";
+	public const string Local = "local";
+	public const string ParameterLocal = "parameterLocal";
+	public const string AssemblyRef = "assemblyRef";
+	public const string ModuleRef = "moduleRef";
+	public const string Resource = "resource";
+	public const string GenericType = "genericType";
+	public const string NonGenericType = "nonGenericType";
+	public const string Enum = "enum";
+	public const string Interface = "interface";
+	public const string Class = "class";
+	public const string Struct = "struct";
+	public const string Delegate = "delegate";
+	public const string Member = "member";
+	public const string Any = "any";
+	public const string Literal = "literal";
+}
+
+/// <summary>The search window's location box — dnSpy's SearchLocation.</summary>
+public static class SearchLocations {
+	public const string AllFiles = "allFiles";
+	public const string SelectedFiles = "selectedFiles";
+	public const string AllFilesInSameDir = "allFilesInSameDir";
+	public const string SelectedType = "selectedType";
+}
+
+/// <summary>The params of a <see cref="RpcMethods.SearchProgress"/> notification: results a search found
+/// while it was still running. <see cref="Start"/> is where the first of them stands among everything found.</summary>
+public sealed record SearchProgressNotification(string ProgressToken, int Start, IReadOnlyList<SearchResultDto> Results);

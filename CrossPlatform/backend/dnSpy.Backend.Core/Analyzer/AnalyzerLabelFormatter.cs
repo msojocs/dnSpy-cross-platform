@@ -39,7 +39,7 @@ static class AnalyzerLabelFormatter {
 			CSharpTypeName.Write(output, @event, @event.EventType, CSharpTypeName.Options.None, typeColor);
 			break;
 		case AssemblyDef assembly:
-			Assembly(output, assembly);
+			output.WriteAssembly(assembly);
 			break;
 		case ModuleDef module:
 			output.Write(TextColors.AssemblyModule, module.Name.String);
@@ -106,31 +106,5 @@ static class AnalyzerLabelFormatter {
 			CSharpTypeName.Write(output, null, parameter.ToTypeDefOrRef(), CSharpTypeName.Options.IncludeNamespace, typeColor);
 		}
 		output.Write(TextColors.Punctuation, "]");
-	}
-
-	/// <summary>The full assembly name the way dnSpy writes an <c>IAssembly</c>.</summary>
-	static void Assembly(TextPartsBuilder output, AssemblyDef assembly) {
-		var isExe = assembly.ManifestModule is { } manifest && (manifest.Characteristics & dnlib.PE.Characteristics.Dll) == 0;
-		output.Write(isExe ? TextColors.AssemblyExe : TextColors.Assembly, assembly.Name.String);
-		output.WriteCommaSpace();
-		output.Write(TextColors.InstanceProperty, "Version").Write(TextColors.Operator, "=").WriteVersion(assembly.Version);
-		output.WriteCommaSpace();
-		output.Write(TextColors.InstanceProperty, "Culture").Write(TextColors.Operator, "=");
-		output.Write(TextColors.EnumField, UTF8String.IsNullOrEmpty(assembly.Culture) ? "neutral" : assembly.Culture.String);
-		output.WriteCommaSpace();
-		var publicKey = PublicKeyBase.ToPublicKeyToken(assembly.PublicKeyOrToken);
-		output.Write(TextColors.InstanceProperty, publicKey is null || publicKey is PublicKeyToken ? "PublicKeyToken" : "PublicKey").Write(TextColors.Operator, "=");
-		if (PublicKeyBase.IsNullOrEmpty2(publicKey))
-			output.Write(TextColors.Keyword, "null");
-		else
-			output.Write(TextColors.Number, publicKey!.ToString());
-		if ((assembly.Attributes & AssemblyAttributes.Retargetable) != 0) {
-			output.WriteCommaSpace();
-			output.Write(TextColors.InstanceProperty, "Retargetable").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "Yes");
-		}
-		if ((assembly.Attributes & AssemblyAttributes.ContentType_Mask) == AssemblyAttributes.ContentType_WindowsRuntime) {
-			output.WriteCommaSpace();
-			output.Write(TextColors.InstanceProperty, "ContentType").Write(TextColors.Operator, "=").Write(TextColors.EnumField, "WindowsRuntime");
-		}
 	}
 }

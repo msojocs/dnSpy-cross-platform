@@ -838,6 +838,114 @@ select:focus-visible,
   color: var(--text-muted);
 }
 
+/* dnSpy's search window: the query and its two boxes, the options under the expander, then the list. */
+.search-pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.search-pane .search-controls {
+  flex: none;
+}
+
+.search-options-toggle,
+.search-for {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.search-options-toggle {
+  height: 24px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.search-for select,
+.search-location {
+  width: 130px;
+  height: 24px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.search-type-icon {
+  display: inline-flex;
+}
+
+.search-options {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.search-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* The list's border turns red when the search stopped at its limit, the way dnSpy's does. */
+.search-results {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid transparent;
+}
+
+.search-results.too-many {
+  border-color: var(--danger);
+}
+
+/* Every line is one row high: the list draws only the ones in sight and works out the rest from it. */
+.search-results .result-row {
+  display: flex;
+  gap: 0;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 2px;
+  min-width: max-content;
+}
+
+.result-icon {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 20px;
+}
+
+.search-results .result-name {
+  flex: none;
+}
+
+.search-results .result-location {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+.search-message {
+  height: 22px;
+  padding: 0 22px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.search-message-aborted {
+  color: var(--danger);
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

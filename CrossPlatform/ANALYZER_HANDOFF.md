@@ -1,6 +1,6 @@
-# 分析器对齐 WPF —— 交接文档
+# 分析器与搜索窗口对齐 WPF —— 交接文档
 
-基于提交 `ac27f0be3 fix: 分析器功能修复`（2026-10-12），并已完成该版交接文档里的余下任务（改动尚未提交）。新会话接着做需要知道的全部内容都在这里。
+基于提交 `d20f91c17 fix: 调整搜索等功能`（2026-10-12）。其后又做了三件事（改动尚未提交）：代码编辑器在引用上的右键命令、三处菜单的「添加类跟踪点」，以及**按 WPF `dnSpy/dnSpy/Search` 重写的搜索窗口**（见第八节）。新会话接着做需要知道的全部内容都在这里。
 
 ## 一、现状
 
@@ -11,7 +11,8 @@
 - 搜索类别已全部移植：使用、被使用（含虚方法版）、重写、重写于、实现于、读取于、赋值于、被触发于、被应用于、实例化于、被公开于、子类型、扩展方法。
 - 可见性范围规则、友元程序集（含 `IgnoresAccessChecksTo`）、lambda/迭代器回溯到所在方法、特性命名参数写入，也都已移植。
 - 右键菜单五组齐全：跳转、复制、**调试（添加类断点 / 添加方法断点）**、分析/MSDN/移除、选项（显示标记、**语法高亮**、单击展开）。
-- **搜索窗口**有了右键菜单（转到引用、新标签页打开、复制标记/全名、类/方法断点、分析、MSDN）和 Ctrl+Shift+R，结果列表可用方向键/Enter 操作。
+- **搜索窗口**已按 WPF 重写：边输入边搜（停顿 500ms）、「搜索」类型框（24 项）、位置框（4 项）、选项展开区（6 个复选框）、Ctrl+字母快捷键、按名称排序、结果语法高亮、边搜边出、一万条上限（红框 + 提示）、右键菜单五组齐全（含选项组）。详见第八节。
+- **添加类跟踪点**在程序集树、代码编辑器、分析器、搜索窗口的菜单里都有：先弹断点设置对话框，确定后给类型的每个方法加跟踪点。
 - 分析器树**按视口窗口化渲染**，两万行也只画可见的几十行。
 - 分析器与程序集树的行文本都有**语法高亮**（WPF 的 dark/light 主题配色；高对比度主题不着色），各自有开关。
 - **用户明确决定不做**：COM/NoPIA 类型等价（TIAHelper）和 COM vtable 槽匹配（ComUtils）。
@@ -20,9 +21,9 @@
 
 | 套件 | 结果 |
 |---|---|
-| 后端 | 322 |
-| 前端单测 | 869 |
-| e2e | 79 通过、3 跳过 |
+| 后端 | 336 |
+| 前端单测 | 893 |
+| e2e | 82 通过、3 跳过 |
 
 ## 二、架构速览
 
@@ -83,13 +84,13 @@
 | `components/ColoredText.tsx` | 分段文本渲染为 `tc-<color>` span；配色在 `styles.css` 的 `--tc-*` 变量 |
 | `components/app-options.ts` | `analyzer: { showToken, syntaxHighlight, singleClickExpandsChildren }`；程序集树用已有的 `assemblyExplorer.syntaxHighlight` |
 | `App.tsx` | `openAnalysis`；`analyzerCommands`（含类/方法断点）；`searchCommands`；`readNodes` |
-| `app-store.ts` | 新增 `addMethodBreakpoints(nodes)`：方法直接加，属性/事件加其访问器；**只加不删**（与 WPF 一致） |
+| `app-store.ts` | 新增 `addMethodBreakpoints(targets)`：节点（方法直接加，属性/事件加其访问器）或已写成断点名的字符串；**只加不删**（与 WPF 一致）。程序集树、代码编辑器、分析器、搜索窗口四处的「添加方法断点」都走它 |
 
 ## 三、必须知道的坑
 
 1. **Contracts 程序集是 e2e 夹具，token 被钉死。**
    - 新增的 record 只能追加在 `Protocol.cs` 末尾。
-   - 改 `RpcException` 之前的 record 也会挪动方法 token。这次给 `TreeNodeDto` 加了两个属性（4 个访问器方法），`get_Code` 从 `@06000896` 变成了 **`@0600089A`**，`RpcException` 仍是 `@02000073`。
+   - 改 `RpcException` 之前的 record 也会挪动方法 token。搜索协议重写（`SearchRequest` 13 个参数、`SearchResultDto` 10 个）后，`get_Code` 从 `@0600089A` 变成了 **`@060008B6`**，`RpcException` 仍是 `@02000073`。e2e 里除了 `@060008B6`，「Go to Token」那条还填了 `0x060008B6`，两种写法都要改。
    - 算新 token：在 `/tmp` 建一个引用 `dnlib 4.5.0` 的控制台项目（`<NuGetAudit>false</NuGetAudit>`，离线可还原），`ModuleDefMD.Load` 后 `Find(...).FindMethod(...).MDToken`。
 2. **dnlib 的 `Resolve*()` 跨不了程序集。** 分析器代码里一律用 `IAnalyzerHost.ResolveTypeDef/MethodDef/FieldDef`；着色用 `Workspace.TypeColor`（不加载）。
 3. **dnlib 对象只能在 workspace gate 内访问。**
@@ -103,7 +104,9 @@
 9. **键盘处理要 `stopPropagation`。** 分析器（含 Delete、F2）和搜索列表（含 Ctrl+Shift+R）都这样做，否则窗口级处理器会作用到程序集树的选中项。
 10. **语法高亮只画后端给了分段的行。** 测试夹具里不带 `labelParts` 的节点仍是纯文本，`getByText` 之类的断言不受影响；要测高亮就在夹具里给 `labelParts`。
 11. **切换语言不会改变 `t` 的引用。** 依赖翻译结果的 `useMemo` 要把 `locale` 放进依赖（分析器已修，e2e「words and sorts the searches in the language the window is in」覆盖）。
-12. **构建与测试环境**
+12. **Playwright 每次运行都会清空 `frontend/test-results/`。** 手动验证用的驱动脚本别放那里（上一版的 `drive-analyzer.mjs` 就这样丢了），放 `/tmp`，用 `createRequire(frontend/package.json)` 引 `@playwright/test`。
+13. **搜索窗口相关的 e2e 写法**：结果列表是窗口化的，`getByRole('option').count()` 只数画出来的行；类型框和位置框是原生 `<select>`，它们的 `<option>` 也是 `option` 角色，取结果行要先限定 `getByRole('listbox', { name: 'Search results' })`。Ctrl+T 等快捷键只在焦点位于搜索窗口内时生效（与 WPF 的 InputBindings 一致）。
+14. **构建与测试环境**
     - e2e：先构建 `dotnet build backend/dnSpy.Backend.Host`，再 `pnpm build`，然后运行 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pnpm test:e2e`。
     - e2e 运行中不要重新构建后端，测试每次都启动 `bin/Debug` 下的 Host。
     - 离线环境下新增 csproj 时，先用 `-p:NuGetAudit=false` 构建一次。
@@ -113,7 +116,7 @@
 
 | 原任务 | 结果 |
 |---|---|
-| A1 调试组 | 完成；菜单测试 + e2e（添加方法断点后出现在断点窗口） |
+| A1 调试组 | 完成；菜单测试 + e2e（添加方法断点后出现在断点窗口）。按用户决定，程序集树和代码编辑器原来是切换的「添加方法断点」也改成 WPF 的只加不删，并像 WPF 一样接受属性/事件（加访问器）；代码编辑器光标不在方法/属性/事件引用上时，仍按语句所在方法下断点（端口原有的约定） |
 | A2 搜索窗口分析 | 完成；`SearchPane.test.tsx` + e2e（右键菜单和 Ctrl+Shift+R） |
 | A3 边搜边出 | 完成；后端流式测试（批次 + 响应 = 一次性结果）、store 测试、实机验证 |
 | A4 虚拟化 | 完成；`AnalyzerPane.test.tsx` 窗口化测试 |
@@ -122,7 +125,7 @@
 | B 后端测试 | `WorkspaceAnalyzerScopeTests`（现场生成模块：非友元排除、`IgnoresAccessChecksTo` 包含、跨模块 DllImport、伪特性 `IncludeAllModules`）；搜索中途编辑抛 `EditConflict` |
 | B 前端/e2e | `backend-client` abort 单测；e2e 覆盖分析器菜单与显示标记/语法高亮开关、Monaco 里的 Ctrl+Shift+R、属性 get/set 行、中文类别名与排序 |
 
-实机验证（Playwright 驱动真实应用，驱动脚本留在 `frontend/test-results/run/drive-analyzer.mjs`，该目录被忽略）：
+实机验证（Playwright 驱动真实应用；当时的驱动脚本放在 `frontend/test-results/run/`，已被 Playwright 清掉，见「坑」第 12 条）：
 
 - 打开 System.Private.CoreLib + 24 个最大的框架程序集，分析 `System.Object` 的「被使用」：约 3.4–3.9s，分 16 批左右流入，停在 20,000 行，输出窗口出现「The analyzer stopped after 20000 result(s).」。
 - 同一搜索进行中，树请求等待 p50 约 15–20ms、最大约 200ms；同时反编译 `System.String` 约 1.6s，能正常完成。
@@ -130,11 +133,9 @@
 
 ## 五、余下任务
 
-1. **与 WPF 逐类别对比结果**：需要在 Windows 上同一程序集各分析几个成员对照，本机（Linux）做不了。
-2. **搜索窗口的其余选项组**（WPF `GROUP_CTX_SEARCH_OPTIONS`：语法高亮、全字匹配、区分大小写、匹配任一、搜索反编译资源、框架程序集、编译器生成成员）：端口的搜索框本身不支持这些选项，需要先扩展后端 `search/run`。
-3. **搜索结果的语法高亮**：`SearchResultDto` 还只有纯文本。
-4. **程序集树的「添加方法断点」仍是切换（toggle）**，分析器和搜索窗口的已改为 WPF 的「只加不删」；是否统一由用户决定。
-5. **类跟踪点（Add Class Tracepoint）**在三处菜单都没做：要先打开断点设置对话框，而对话框状态在断点窗口里。
+1. **与 WPF 逐类别对比结果**：分析器和搜索窗口都需要在 Windows 上对同一程序集对照，本机（Linux）做不了。
+2. 上一版的「搜索窗口选项组」「搜索结果语法高亮」「类跟踪点」三项已完成（第八节、第一节）。
+3. 搜索窗口与 WPF 仍有的差异见第八节末尾的表，都是有意或已知的，暂无待办。
 
 ## 六、已知与 WPF 的差异
 
@@ -158,3 +159,60 @@
 | 后端测试 | `WorkspaceAnalyzerTests.cs`（夹具：`backend/tests/AnalyzerTarget`、`AnalyzerTarget.Consumer`；该类的 manager 用 0 预算、0 间隔，每片一个类型）、`WorkspaceAnalyzerScopeTests.cs`、`WorkspaceManagerTests.AnalyzesAcrossOpenedModules` |
 | 前端测试 | `analyzer-model.test.ts`、`analyzer-store.test.ts`、`components/AnalyzerPane.test.tsx`、`components/AnalyzerContextMenu.test.tsx`、`components/SearchPane.test.tsx`、`components/AssemblyExplorer.test.tsx`、`app-store.test.ts`（class breakpoints）、`main/backend-client.test.ts` |
 | e2e | `tests/e2e/app.spec.ts`：`the workspace shell` 下的「analyzes a search result…」「opens an analyzed property onto its accessors…」；`the code viewer context menu` 下的「keeps the caret…」「opens an analyzed member onto its searches…」「lays the analyzer menu out…」「analyzes the reference under the caret with Ctrl+Shift+R」「words and sorts the searches in the language the window is in」 |
+
+## 八、搜索窗口（按 WPF `dnSpy/dnSpy/Search` 移植）
+
+### 后端：`backend/dnSpy.Backend.Core/Search/` 与 `WorkspaceManager.Search.cs`
+
+| 文件 | 移植自 | 作用 |
+|---|---|---|
+| `SearchComparers.cs` | `SearchComparer.cs` | 空格分词（全部匹配 / 匹配任一）、`/正则/`、字面量比较器（整数、浮点、字符串、加引号的字符串）；字段/参数的常量值经 `Unwrap` 参与字面量比较 |
+| `SearchFilter.cs` | `FlagsDocumentTreeNodeFilter`、`VisibleMembersFlags` | 每种节点「找它 / 只看里面 / 跳过」；`FlagsOf` 是 SearchControlVM 的 24 项表 |
+| `FilterSearcher.cs` | `FilterSearcher.cs` | 遍历器。写成迭代器，每个类型、资源、资源项之后 `yield`，所以能按切片跑。命中记成 `SearchHit`（Object / NameObject / LocationObject / 文件 / IL 指令） |
+| `SearchRun.cs` | `DocumentSearcher.cs` | 切片运行与上限：第 `MaxResults + 1` 条结束搜索并标 `Truncated` |
+| `SearchResultFormatter.cs` | `SearchResult.CreateUI` + `CSharpFormatter`（DefaultFormatterOptions） | 结果文本与分段着色：`string Describe(int, [string], params object[])`、`string Title { get; init; }`、`string Title.get`、`int this[int] { get; }`、`implicit operator string(Library)`、`int NativeCall() (native_entry)`；枚举常量不写类型；类型名走 `CSharpTypeName`（嵌套类型写成 `Library.Nested<T>`） |
+| `FrameworkAssemblies.cs` | `FrameworkFileUtils` | 「在框架程序集中搜索」关掉时排除的程序集（运行时目录 + 名单，没有 GAC） |
+| `CompilerGeneratedMembers.cs` | ILSpy `MemberIsHidden` 的近似 | 「搜索编译器生成的成员」关掉时隐藏的成员 |
+| `ResourceTexts.cs` | `GuessFileType` / `ResourceUtilities.TryGetString` | 资源是不是文本（BOM 或前 500KB 是合法 UTF-8） |
+| `WorkspaceManager.Search.cs` | `SearchControlVM.StartSearch`、`SearchService.FollowResult` | RPC 入口、切片循环（复用分析器的 `AnalyzerSliceBudget` / `AnalyzerProgressInterval` 和 `analyzerEpoch`）、四种位置、命中 → DTO（节点 id、图标、提示） |
+
+- 协议：`search/run` 的 `SearchRequest`（查询、`SearchType`、`Location`、`SelectedNodeIds`、6 个选项、`MaxResults`、`ProgressToken`），进度通知 `search/progress`，`SearchResultDto`（`NodeId` 可空、`NameParts` / `LocationParts`、`Icon` / `LocationIcon`、`ToolTip`、`IlOffset`）。`SearchTypes` / `SearchLocations` 常量追加在 `Protocol.cs` 末尾。
+- 参数、局部变量、方法体字面量命中时，结果是**所在方法**（与 WPF 一致）；特性参数命中时结果是挂特性的那个东西（参数则写参数名，位置是方法）。
+- 资源：按名称（含 `Uri.UnescapeDataString`）、嵌入文件的文本内容、`.resources` 项的内置值（字符串当名称比，数字当字面量比）、BAML 反编译出的 XAML（「反编译资源」开着时；每个模块只建一个 `XamlDecompiler`）。
+- **性能坑**：资源项的树节点要靠 `GetEmbeddedResourceChildren` 解码整个 `.resources` 才建得出来。每条命中都调一次会变成 O(n²)（CoreLib 的 Strings.resources 有几千项，一次「String」搜索从 9s 降到 1.7s 就是修的这个）。现在先按 `ResourceEntryKey` 查已有节点，没有才解码一次。
+- 测试：`WorkspaceSearchTests.cs`（14 条），夹具是新项目 `backend/tests/SearchTarget`（运算符、init、索引器、事件、DllImport、const、默认参数、params、lambda、迭代器、特性参数、嵌入文本资源、resx）。新增 csproj 离线首次构建要 `-p:NuGetAudit=false`。
+
+### 前端
+
+| 文件 | 作用 |
+|---|---|
+| `search-model.ts` | 类型框 24 项（顺序、图标、Ctrl 字母 `tfmpejinrubl`）、位置框 4 项（`gsdq`）、按名称排序（`Intl.Collator` 忽略大小写，同名保持发现顺序）、`findSearchResultCaret`（复用分析器的 `findReferenceCaret`，光标落在语句开头） |
+| `search-store.ts` | 独立 zustand store：`setQuery` 停顿 500ms 后搜；`restart` 取消上一个请求再搜；批次按 `start` 去重追加；工作区关闭清空、换工作区/编辑/撤销/重载/增删程序集时重搜；`updateSearchSettings` 改设置，只有影响搜索的设置才重搜（语法高亮不重搜）；`requestFocus` 供 Ctrl+Shift+K |
+| `components/SearchPane.tsx` | 搜索窗口：文本框、选项展开按钮、「搜索:」类型框（选中项前画图标）、位置框、6 个复选框、窗口化结果列表（行高 22px）、「搜索中…」和「搜索中止」两条消息排在最前、上限时红框；双击/Enter 跟随（Ctrl/Shift 新标签页），方法体命中把光标放到语句上；Ctrl+Shift+R 分析；Ctrl+字母切类型/位置并把焦点给文本框 |
+| `components/SearchContextMenu.tsx` | 加了选项组（`GROUP_CTX_SEARCH_OPTIONS` = 10000）：语法高亮、全词匹配、区分大小写、匹配任一、反编译资源、框架程序集、编译器生成成员，开着的打勾 |
+| `components/app-options.ts` | `search: SearchSettings`（类型、位置和 7 个开关），默认值同 WPF `SearchSettings` |
+| `main/index.ts`、`preload` | `search:run`（带 requestKey，600s 超时，可 `search:cancel`）、`search/progress` → `search:progress` |
+
+旧的 `app-store` 里的 `searchResults` / `runSearch` 和「Search returned N result(s).」输出已删除（WPF 不往输出窗口写）。
+
+### 实机验证（25 个框架程序集，驱动脚本 `/tmp/drive-search.mjs`）
+
+- 「以上所有」搜 `String`：约 0.7s 出第一行，约 3s 停在一万条，红框和「Search aborted, more than 10,000 results found.」都在。
+- 搜索进行中展开树节点约 65ms。
+- 字面量 `"Arg_ArgumentOutOfRangeException"`：1 条（`string Arg_ArgumentOutOfRangeException.get`，位置 `System.SR`），双击后光标落在 `return GetResourceString(...)` 语句开头，提示里有 `IL_0000: ldstr "..."` 和文件路径。
+- 选项展开区与右键菜单选项组截图核对过。
+
+### 与 WPF 的差异
+
+| 差异 | 是否有意 |
+|---|---|
+| 类型框是原生 `<select>`，下拉项里没有图标（选中项前有）；快捷键提示放在 `title` | 有意，换取可访问性和测试便利 |
+| 结果提示只有「名称 + IL 指令 + 文件」，没有反编译器的成员提示（声明类型、参数名） | 已知简化 |
+| 不搜 `<Module>` 全局类型 | 有意，端口的树不显示它，结果无处可跳 |
+| 模块引用结果没有节点可跳（`NodeId` 为空） | 端口的树没有模块引用行 |
+| 名称不经 `IdentifierEscaper` | 与程序集树一致 |
+| `FixTypeName` 处理嵌套泛型（`Outer`1/Inner`）时不吞掉后面的字符 | 有意，WPF 那里有 off-by-one |
+| 单线程按切片搜，WPF 每个程序集一个线程 | 有意，同分析器（「坑」第 4 条） |
+| 关闭搜索窗口不清空查询（WPF `OnClose` 会清） | 已知；flexlayout 挪动标签页也会卸载组件，不好区分 |
+| 搜索框按 Enter 立即搜 | 端口附加的便利，WPF 只靠停顿 |
+

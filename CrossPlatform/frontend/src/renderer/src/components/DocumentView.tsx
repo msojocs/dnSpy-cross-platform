@@ -87,6 +87,9 @@ export interface DocumentViewCommands {
   onEditMethodBody(node: TreeNode): void
   onReplaceMethodBodyWithStub(node: TreeNode): void
   onAnalyze(node: TreeNode): void
+  /** dnSpy's class breakpoint and class tracepoint for the type a reference names. */
+  onAddClassBreakpoint(node: TreeNode): void
+  onAddClassTracepoint(node: TreeNode): void
   /** Analyzes a reference into a module the workspace does not hold, opening that module to do it. */
   onAnalyzeReference(target: TextSpan): void
   /** Opens an address in the browser, which is how the menu's "Search MSDN" runs. */
@@ -106,7 +109,6 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const bookmarks = useAppStore((state) => state.bookmarks)
   const caretReveal = useAppStore((state) => state.caretReveal)
   const toggleLineBreakpoint = useAppStore((state) => state.toggleLineBreakpoint)
-  const toggleFunctionBreakpoint = useAppStore((state) => state.toggleFunctionBreakpoint)
   const stoppedLocation = useAppStore((state) => state.stoppedLocation)
   const activeDocumentId = useAppStore((state) => state.activeDocumentId)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | undefined>(undefined)
@@ -135,7 +137,6 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const breakpointsRef = useRef(lineBreakpoints)
   const bookmarksRef = useRef(bookmarks)
   const toggleLineBreakpointRef = useRef(toggleLineBreakpoint)
-  const toggleFunctionBreakpointRef = useRef(toggleFunctionBreakpoint)
   const { locale, t } = useLanguage()
   const tRef = useRef(t)
   tRef.current = t
@@ -144,7 +145,6 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   breakpointsRef.current = lineBreakpoints
   bookmarksRef.current = bookmarks
   toggleLineBreakpointRef.current = toggleLineBreakpoint
-  toggleFunctionBreakpointRef.current = toggleFunctionBreakpoint
 
   // Puts the caret on the stopped line and scrolls it into view. This lives apart from the effect below
   // because the layout change that gives the scroll somewhere to go arrives after the effect has run.
@@ -255,7 +255,9 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
           void useAppStore.getState().setLineBreakpointEnabled(breakpoint.id, enabled)
       },
       onShowNextStatement: () => void useAppStore.getState().revealStoppedLocation(),
-      onToggleMethodBreakpoint: (name) => void toggleFunctionBreakpointRef.current(name),
+      onAddMethodBreakpoints: (targets) => void useAppStore.getState().addMethodBreakpoints(targets),
+      onAddClassBreakpoint: (node) => commandsRef.current.onAddClassBreakpoint(node),
+      onAddClassTracepoint: (node) => commandsRef.current.onAddClassTracepoint(node),
       onDeleteNode: (node) => commandsRef.current.onDeleteNode(node),
       onEditNode: (node) => commandsRef.current.onEditNode(node),
       onCreateMember: (kind, nested, node) => commandsRef.current.onCreateMember(kind, nested, node),

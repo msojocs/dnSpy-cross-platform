@@ -18,6 +18,8 @@ export interface AnalyzerPaneCommands {
   openUrl(url: string): void
   /** Breaks on every method of the type a node names — dnSpy's Add Class Breakpoint. */
   addClassBreakpoint?(nodeId: string): void
+  /** The same as tracepoints, once their settings are asked for — dnSpy's Add Class Tracepoint. */
+  addClassTracepoint?(nodeId: string): void
   /** Breaks on the methods the nodes name, a property's or an event's accessors for one of those. */
   addMethodBreakpoints?(nodeIds: string[]): void
 }
@@ -279,6 +281,9 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
     setSingleClickExpandsChildren,
     addClassBreakpoint: commandsRef.current.addClassBreakpoint
       ? (row) => { if (row.node.nodeId) commandsRef.current.addClassBreakpoint?.(row.node.nodeId) }
+      : undefined,
+    addClassTracepoint: commandsRef.current.addClassTracepoint
+      ? (row) => { if (row.node.nodeId) commandsRef.current.addClassTracepoint?.(row.node.nodeId) }
       : undefined,
     addMethodBreakpoints: commandsRef.current.addMethodBreakpoints
       ? (targets) => commandsRef.current.addMethodBreakpoints?.(targets.flatMap((row) => row.node.nodeId ? [row.node.nodeId] : []))

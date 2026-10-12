@@ -27,7 +27,7 @@ const commands = (): AssemblyExplorerCommands => ({
   onRenameNamespace: vi.fn(),
   onMoveTypesToEmptyNamespace: vi.fn(),
   onSortAssemblies: vi.fn(),
-  onToggleMethodBreakpoint: vi.fn(),
+  onAddMethodBreakpoints: vi.fn(),
   onAnalyze: vi.fn(),
   onOpenUrl: vi.fn(),
   copyText: vi.fn(),
@@ -112,7 +112,6 @@ const UNIMPLEMENTED = [
   'go-to-resource',
   'disable-mmap-io',
   'break-when-exception-thrown',
-  'add-class-tracepoint',
   'find-string-references',
 ]
 
@@ -326,6 +325,19 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(ctx.onAddClassBreakpoint).toHaveBeenCalledWith(typeNode)
   })
 
+  it('offers Add Class Tracepoint beside the class breakpoint, on the same rows', () => {
+    const withTracepoint = (node: TreeNode) => richContext(node, { onAddClassBreakpoint: vi.fn(), onAddClassTracepoint: vi.fn() })
+    for (const node of [assemblyNode, moduleNode, namespaceNode, methodNode])
+      expect(menuKeys(withTracepoint(node))).not.toContain('add-class-tracepoint')
+
+    const ctx = withTracepoint(typeNode)
+    const keys = menuKeys(ctx)
+    // dnSpy orders it 101, right after the class breakpoint's 100.
+    expect(keys.indexOf('add-class-tracepoint')).toBe(keys.indexOf('add-class-breakpoint') + 1)
+    runEntry(ctx, 'add-class-tracepoint')
+    expect(ctx.onAddClassTracepoint).toHaveBeenCalledWith(typeNode)
+  })
+
   it('writes the token and the full name where dnSpy does', () => {
     const ctx = richContext(methodNode)
     runEntry(ctx, 'copy-md-token')
@@ -334,6 +346,22 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(ctx.copyText).toHaveBeenCalledWith('System.Void System.Console::WriteLine(System.String)')
     runEntry(ctx, 'search-msdn')
     expect(ctx.onOpenUrl).toHaveBeenCalledWith('https://learn.microsoft.com/dotnet/api/System.Console.WriteLine')
+  })
+
+  it('offers Add Method Breakpoint on the rows dnSpy reads methods off, and hands it the row', () => {
+    // dnSpy's GetMethodReferences takes a method, and a property or an event for the accessors it stands
+    // for; a type has its class breakpoint instead, and a field names no method at all.
+    const property: TreeNode = { id: 'n-prop', kind: 'property', label: 'Out', hasChildren: true, description: 'System.IO.TextWriter System.Console::Out()', metadataToken: 0x17000001 }
+    const event: TreeNode = { id: 'n-event', kind: 'event', label: 'CancelKeyPress', hasChildren: true, description: 'System.ConsoleCancelEventHandler System.Console::CancelKeyPress', metadataToken: 0x14000001 }
+    const field: TreeNode = { id: 'n-field', kind: 'field', label: 's_out', hasChildren: false, description: 'System.IO.TextWriter System.Console::s_out', metadataToken: 0x04000001 }
+    for (const node of [property, event])
+      expect(menuKeys(richContext(node))).toContain('add-method-breakpoint')
+    for (const node of [typeNode, field, moduleNode])
+      expect(menuKeys(richContext(node))).not.toContain('add-method-breakpoint')
+
+    const ctx = richContext(property)
+    runEntry(ctx, 'add-method-breakpoint')
+    expect(ctx.onAddMethodBreakpoints).toHaveBeenCalledWith([property])
   })
 
   it('offers no full name on a row that has none', () => {
@@ -353,7 +381,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
     runEntry(ctx, 'edit-method-body')
     expect(ctx.onEditMethodBody).toHaveBeenCalledWith(methodNode)
     runEntry(ctx, 'add-method-breakpoint')
-    expect(ctx.onToggleMethodBreakpoint).toHaveBeenCalledWith('System.Console.WriteLine')
+    expect(ctx.onAddMethodBreakpoints).toHaveBeenCalledWith([methodNode])
     runEntry(ctx, 'open-in-new-tab')
     expect(ctx.onOpenInNewTab).toHaveBeenCalledWith(methodNode)
     runEntry(ctx, 'create-method')

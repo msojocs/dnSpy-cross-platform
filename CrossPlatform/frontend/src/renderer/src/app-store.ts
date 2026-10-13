@@ -204,6 +204,8 @@ interface AppState {
   expanded: Record<string, boolean>
   loadingNodes: Record<string, boolean>
   selectedNode?: TreeNode
+  /** Multiple selected nodes for batch operations. The first one is the primary selection (selectedNode). */
+  selectedNodes: TreeNode[]
   documents: Record<string, DocumentState>
   /** The document tabs in the order the layout shows them, and the one that is selected. The shell owns
    * the layout and reports both here, because a restored session has to put the tabs back as they were. */
@@ -299,7 +301,7 @@ interface AppState {
   /** Materialises a node's children without expanding it, which is how a restore rebuilds the collapsed
    * branches that hold a restored tab or selection. Does nothing when they are already loaded. */
   loadChildren(node: TreeNode): Promise<void>
-  selectNode(node: TreeNode): void
+  selectNode(node: TreeNode, options?: { toggle?: boolean; range?: boolean }): void
   /** Collapse every expanded node except the selected node and its ancestors. */
   collapseTreeViewNodes(): void
   openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
@@ -574,6 +576,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   parents: {},
   expanded: {},
   loadingNodes: {},
+  selectedNodes: [],
   wordWrap: typeof localStorage === 'undefined' ? false : localStorage.getItem('dnspy.wordWrap') === 'true',
   highlightCurrentLine: typeof localStorage === 'undefined' ? true : localStorage.getItem('dnspy.highlightCurrentLine') !== 'false',
   documents: {},
@@ -637,11 +640,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!isCurrent()) return
         set((state) => {
           const known = new Set(state.roots.map((root) => root.id))
+          const newSelection = roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode
           return {
             modules: added.modules,
             roots: roots.nodes,
             // The first root that was not there before is the one the user just added.
-            selectedNode: roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode,
+            selectedNode: newSelection,
+            selectedNodes: newSelection ? [newSelection] : state.selectedNodes,
             workspaceStateId: added.stateId,
             savedStateId: added.stateId,
             recentWorkspaces: rememberWorkspace(added.modules.map((module) => module.path)),
@@ -673,6 +678,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         expanded: {},
         loadingNodes: {},
         selectedNode: roots.nodes[0],
+        selectedNodes: roots.nodes[0] ? [roots.nodes[0]] : [],
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
@@ -710,6 +716,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       expanded: {},
       loadingNodes: {},
       selectedNode: undefined,
+      selectedNodes: [],
       documents: {},
       documentOrder: [],
       activeDocumentId: undefined,
@@ -775,7 +782,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  selectNode: (node) => set({ selectedNode: node }),
+  selectNode: (node, options?: { toggle?: boolean; range?: boolean }) => {
+    const current = get()
+
+    // Toggle selection with Ctrl/Cmd click
+    if (options?.toggle) {
+      const isSelected = current.selectedNodes.some((n) => n.id === node.id)
+      if (isSelected) {
+        // Remove from selection
+        const newSelection = current.selectedNodes.filter((n) => n.id !== node.id)
+        set({
+          selectedNodes: newSelection,
+          selectedNode: newSelection[0],
+        })
+      } else {
+        // Add to selection
+        set({
+          selectedNodes: [...current.selectedNodes, node],
+          selectedNode: node,
+        })
+      }
+      return
+    }
+
+    // Range selection with Shift click
+    if (options?.range && current.selectedNode) {
+      const allNodes = collectVisibleNodes(current)
+      const startIndex = allNodes.findIndex((n) => n.id === current.selectedNode!.id)
+      const endIndex = allNodes.findIndex((n) => n.id === node.id)
+
+      if (startIndex >= 0 && endIndex >= 0) {
+        const [from, to] = startIndex < endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+        const rangeNodes = allNodes.slice(from, to + 1)
+        set({
+          selectedNodes: rangeNodes,
+          selectedNode: node,
+        })
+        return
+      }
+    }
+
+    // Single selection (default)
+    set({ selectedNode: node, selectedNodes: [node] })
+  },
 
   collapseTreeViewNodes: () => {
     const { selectedNode, parents, expanded, children } = get()
@@ -808,6 +857,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const documentId = node.id
     set((state) => ({
       selectedNode: node,
+      selectedNodes: [node],
       documents: {
         ...state.documents,
         [documentId]: {
@@ -1023,7 +1073,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     try {
-      set({ selectedNode: await window.dnSpy.getNode(workspaceId, nodeId) })
+      const node = await window.dnSpy.getNode(workspaceId, nodeId)
+      set({ selectedNode: node, selectedNodes: [node] })
     } catch {
       // A node the backend would not describe stays unselected rather than selected-and-blank.
     }
@@ -1042,7 +1093,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       await refreshAfterEdit(get, set, committed)
       // A removed node has no view model left, so refreshAfterEdit leaves the selection as it was;
       // dropping it here is what stops the shell from acting on a node that is gone.
-      set((state) => ({ selectedNode: state.selectedNode?.id === node.id ? undefined : state.selectedNode }))
+      set((state) => ({
+        selectedNode: state.selectedNode?.id === node.id ? undefined : state.selectedNode,
+        selectedNodes: state.selectedNodes.filter((n) => n.id !== node.id),
+      }))
       get().appendOutput(t('Deleted {name}.', { name: node.label }))
       return true
     } catch (error) {
@@ -1311,6 +1365,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         expanded: {},
         loadingNodes: {},
         selectedNode: roots.nodes[0],
+        selectedNodes: roots.nodes[0] ? [roots.nodes[0]] : [],
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
@@ -1362,6 +1417,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
           Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
         const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
+        const newSelection = selectionWent ? response.roots[0] : state.selectedNode
         return {
           roots: response.roots,
           documents: withoutRemoved(state.documents),
@@ -1370,7 +1426,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           expanded: withoutRemoved(state.expanded),
           loadingNodes: withoutRemoved(state.loadingNodes),
           // dnSpy leaves the tree on another document rather than on nothing at all.
-          selectedNode: selectionWent ? response.roots[0] : state.selectedNode,
+          selectedNode: newSelection,
+          selectedNodes: selectionWent ? (newSelection ? [newSelection] : []) : state.selectedNodes.filter((n) => !removed.has(n.id)),
           hexTarget: selectionWent ? undefined : state.hexTarget,
           assemblyListRevision: state.assemblyListRevision + 1,
         }
@@ -1477,12 +1534,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const roots = await window.dnSpy.getRoots(workspaceId)
       set((state) => {
         const known = new Set(state.roots.map((root) => root.id))
+        const newSelection = roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode
         return {
           modules: added.modules,
           roots: roots.nodes,
           // The first root the tree did not have before is one of the assemblies that just arrived; when
           // nothing could be resolved the selection stays on the row the command was run on.
-          selectedNode: roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode,
+          selectedNode: newSelection,
+          selectedNodes: newSelection ? [newSelection] : state.selectedNodes,
           assemblyListRevision: state.assemblyListRevision + 1,
         }
       })
@@ -2339,6 +2398,20 @@ export const findNode = (state: Pick<AppState, 'roots' | 'children'>, nodeId: st
       return found
   }
   return undefined
+}
+
+/** Collects all visible nodes in tree order (for range selection with Shift+click). */
+const collectVisibleNodes = (state: Pick<AppState, 'roots' | 'children' | 'expanded'>): TreeNode[] => {
+  const result: TreeNode[] = []
+  const visit = (nodes: TreeNode[]): void => {
+    for (const node of nodes) {
+      result.push(node)
+      if (state.expanded[node.id] && state.children[node.id])
+        visit(state.children[node.id])
+    }
+  }
+  visit(state.roots)
+  return result
 }
 
 const recentWorkspaceKey = 'dnspy.recentWorkspaces.v1'
@@ -4046,8 +4119,9 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
     if (parentId) parentIds.add(parentId)
     try {
       const node = await window.dnSpy.getNode(workspaceId, nodeId)
-      if (get().selectedNode?.id === nodeId)
-        set({ selectedNode: node })
+      if (get().selectedNode?.id === nodeId) {
+        set({ selectedNode: node, selectedNodes: [node] })
+      }
       const document = get().documents[nodeId]
       if (document)
         await get().openDocument(node, document.requestedLanguage)

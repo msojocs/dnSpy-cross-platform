@@ -133,6 +133,7 @@ const TreeRow = memo(({ node, depth, showToken, syntaxHighlight, onOpenNode, onC
   const expanded = useAppStore((state) => state.expanded[node.id] ?? false)
   const loading = useAppStore((state) => state.loadingNodes[node.id] ?? false)
   const selected = useAppStore((state) => state.selectedNode?.id === node.id)
+  const isInSelection = useAppStore((state) => state.selectedNodes.some((n) => n.id === node.id))
   const toggleNode = useAppStore((state) => state.toggleNode)
   const selectNode = useAppStore((state) => state.selectNode)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -158,15 +159,23 @@ const TreeRow = memo(({ node, depth, showToken, syntaxHighlight, onOpenNode, onC
     <>
       <div
         ref={rowRef}
-        className={`tree-row${selected ? ' selected' : ''}`}
+        className={`tree-row${selected ? ' selected' : ''}${isInSelection && !selected ? ' multi-selected' : ''}`}
         data-kind={node.kind}
         style={{ paddingLeft: `${6 + depth * 16}px` }}
         role="treeitem"
         aria-expanded={node.hasChildren ? expanded : undefined}
-        aria-selected={selected}
+        aria-selected={isInSelection}
         tabIndex={selected ? 0 : -1}
         title={node.description ?? label}
-        onClick={() => selectNode(node)}
+        onClick={(event) => {
+          if (event.ctrlKey || event.metaKey) {
+            selectNode(node, { toggle: true })
+          } else if (event.shiftKey) {
+            selectNode(node, { range: true })
+          } else {
+            selectNode(node)
+          }
+        }}
         onDoubleClick={open}
         onKeyDown={(event) => {
           if (event.key === 'Enter') open()

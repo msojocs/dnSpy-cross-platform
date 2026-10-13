@@ -88,14 +88,14 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     if (previous)
       void window.dnSpy.cancelSearch(previous).catch(() => undefined)
     const { query } = get()
-    const { workspaceId, selectedNode } = useAppStore.getState()
+    const { workspaceId, selectedNodes } = useAppStore.getState()
     if (!workspaceId || query.length === 0) {
       set({ results: [], searching: false, tooManyResults: false, requestKey: undefined })
       return
     }
     const requestKey = `search-${++nextRequestKey}`
     set({ results: [], searching: true, tooManyResults: false, requestKey })
-    const request = searchRequestOf(query, loadAppOptions().search, selectedNode ? [selectedNode.id] : [])
+    const request = searchRequestOf(query, loadAppOptions().search, selectedNodes.map(node => node.id))
     window.dnSpy.search(workspaceId, request, requestKey).then((response) => {
       if (get().requestKey !== requestKey)
         return

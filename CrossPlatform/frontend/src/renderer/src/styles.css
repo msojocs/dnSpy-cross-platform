@@ -417,6 +417,11 @@ select:focus-visible,
   color: var(--text);
 }
 
+.tree-row.multi-selected {
+  background: color-mix(in srgb, var(--selection) 75%, transparent);
+  color: var(--text);
+}
+
 .tree-expander {
   display: grid;
   place-items: center;

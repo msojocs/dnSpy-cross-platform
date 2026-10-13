@@ -39,8 +39,8 @@
 
 | 模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ | 一句话现状 |
 |---|---|---|---|---|---|---|
+| 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
-| 书签 | ~94% | 16 | 2 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；仅 IL/VB 书签不能持久化 |
 | 搜索窗口 | ~84% | 22 | 5 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；不搜 `<Module>`，命令行参数缺失 |
 | 应用壳与通用 UI | ~53% | 11 | 17 | 9 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
 | 程序集树 | ~48% | 6 | 16 | 7 | 1 | 懒加载树可用；单击不预览、单选、无拖放，Type References 是空壳 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 2 | 3 | 2 | 7 | 多为 WPF/Windows 基础设施；更新检查、打开列表缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，所有对照项合计 ✅ 163 / 🟡 130 / ❌ 185 / ⛔ 30，完成度约 **48%**。
+**整体**：除「工程基础设施」外，所有对照项合计 ✅ 165 / 🟡 128 / ❌ 185 / ⛔ 30，完成度约 **48%**。
 
 ### 1.2 按工作流看
 
@@ -304,7 +304,7 @@
 
 ### 4.6 书签
 
-完成度约 94%（✅ 16 / 🟡 2 / ❌ 0）。WPF 范围：`WPF/Bookmarks/`。
+完成度约 100%（✅ 18 / ❌ 0）。WPF 范围：`WPF/Bookmarks/`。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -315,7 +315,7 @@
 | 同标签的上一个 / 下一个 | `AppMenuCommands.cs` | `stepBookmark(sameLabel)` | ✅ | |
 | 文档内上一个 / 下一个、清除文档内全部 | `AppMenuCommands.cs` | `bookmark-commands.ts` | ✅ | |
 | 清除全部 | `AppMenuCommands.cs` | `clearBookmarks` | ✅ | |
-| 定位模型 | `Bookmarks/DotNet/DotNetMethodBodyBookmarkLocationImpl.cs` | `bookmarkIdentityOf` | 🟡 | IL/VB 文档与声明行只记行号，不能持久化 |
+| 定位模型 | `Bookmarks/DotNet/DotNetMethodBodyBookmarkLocationImpl.cs` | `bookmarkIdentityOf` | ✅ | C# 文档完全支持；IL/VB 文档允许临时书签（WPF 不允许） |
 | 持久化与重新关联 | `Bookmarks/Impl/BookmarksSerializer.cs` | `dnspy.bookmarks.v1` | ✅ | |
 | 书签窗口列表 | `Bookmarks/ToolWindows/Bookmarks/BookmarksVM.cs` | `BookmarksPane.tsx`、`bookmark-model.ts` | ✅ | 支持按列排序（大小写不敏感） |
 | 重命名、编辑标签 | `Bookmarks/ToolWindows/Bookmarks/Commands.cs` | `BookmarksPane.tsx` | ✅ | |
@@ -326,7 +326,7 @@
 | 导入 / 导出 | `BookmarksOperations.cs`（XML） | `BookmarksPane.tsx`、`BE/WorkspaceManager.Bookmarks.cs` | ✅ | 完全兼容 WPF XML 格式 |
 | Location 列格式化 | `DotNetBookmarkLocationFormatter.cs` | `BE/WorkspaceManager.Bookmarks.cs`、`CSharpMemberFormatter.cs` | ✅ | Token、成员签名、IL 偏移，支持全部显示选项 |
 | 显示选项 | `Commands.cs` | `options-pages.ts`、`bookmarkLocationFormat` | ✅ | 7 个选项：Token、模块名、参数类型/名称、声明类型、返回类型、命名空间、内置类型关键字 |
-| 书签选项页 | `Bookmarks/Settings/BookmarksAppSettingsPage.cs` | `options-pages.ts` | 🟡 | Location 列显示选项已生效；语法高亮选项不生效 |
+| 书签选项页 | `Bookmarks/Settings/BookmarksAppSettingsPage.cs` | `options-pages.ts`、`BookmarksPane.tsx` | ✅ | 所有选项已生效（语法高亮、Location 列显示） |
 
 测试：`BookmarksPane.test.tsx`、`app-store.test.ts`、`bookmark-model.test.ts`；后端 `BookmarkTests.cs`；e2e 覆盖边距添加、重载保留、导入导出、Ctrl+K 组合键。
 

@@ -3,7 +3,7 @@ import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, R
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
 import type { DecompilerLanguage, TextSpan, TreeNode } from '../../shared/protocol'
 import { enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
-import { clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
+import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { loadAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
@@ -203,18 +203,6 @@ const getTargetDocumentTabSet = (model: Model): TabSetNode | undefined => {
   return documents instanceof TabSetNode ? documents : model.getFirstTabSet()
 }
 
-// The second key of a Ctrl+K chord, as dnSpy binds it: Ctrl+K Ctrl+K toggles, Ctrl+K Ctrl+P and Ctrl+K
-// Ctrl+N walk the bookmarks, Ctrl+K Ctrl+L clears them, Ctrl+K Ctrl+E enables or disables the one under
-// the caret, and Ctrl+K Ctrl+W opens the window — the same keys Visual Studio uses.
-const bookmarkChords: Record<string, () => void> = {
-  k: toggleBookmarkAtCaret,
-  p: () => stepBookmark(-1),
-  n: () => stepBookmark(1),
-  l: clearBookmarks,
-  e: toggleBookmarkEnabledAtCaret,
-  w: showBookmarksWindow,
-}
-
 // The kinds dnSpy confirms before deleting, with its own wording (`AskDeleteType` and friends). Every
 // other deletable kind — property, event, resource, namespace — is removed without a prompt.
 const DELETE_CONFIRMATIONS: Record<string, string> = {
@@ -286,8 +274,9 @@ export const App = (): React.JSX.Element => {
     return component === 'document' ? 'code' : component === 'hex' || component === 'module-info' ? component : null
   }, [model, layoutVersion])
   const canShowCode = activeDocument === 'code'
-  // When a Ctrl+K chord stops waiting for its second key, as a timestamp so it needs no timer.
-  const bookmarkChord = useRef(0)
+  // The bookmark chord waiting for its second key — Ctrl+K or Ctrl+B — and, as a timestamp so it needs no
+  // timer, when it stops waiting.
+  const bookmarkChord = useRef<{ prefix: 'k' | 'b'; until: number } | undefined>(undefined)
   const workspaceId = useAppStore((state) => state.workspaceId)
   const backendStatus = useAppStore((state) => state.backendStatus)
   const busy = useAppStore((state) => state.busy)
@@ -713,24 +702,29 @@ export const App = (): React.JSX.Element => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const target = event.target as HTMLElement | null
       const editingText = target?.matches('input, textarea, select, [contenteditable="true"]') ?? false
-      // The bookmark commands are two-key chords: Ctrl+K arms them and the second key runs one. Monaco
-      // binds the same chords while the code editor has focus and stops the event there, so this path
-      // is the one that answers when the focus is in the tree, a tool window or the menu bar.
-      if (!editingText && !event.shiftKey && !event.altKey && event.ctrlKey && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        bookmarkChord.current = Date.now() + 2000
-        return
-      }
-      if (!editingText && bookmarkChord.current > Date.now() && event.ctrlKey && !event.shiftKey && !event.altKey) {
-        const chord = bookmarkChords[event.key.toLowerCase()]
+      // The bookmark commands are two-key chords: Ctrl+K or Ctrl+B arms them and the second key runs one.
+      // Monaco binds the same chords while the code editor has focus and stops the event there, so this
+      // path is the one that answers when the focus is in the tree, a tool window or the menu bar. The
+      // armed chord is read first, so Ctrl+K Ctrl+K toggles rather than arming again; a modifier pressed on
+      // its own between the two keys leaves the chord waiting.
+      const key = event.key.toLowerCase()
+      const armed = bookmarkChord.current
+      if (!editingText && armed && armed.until > Date.now() && !event.shiftKey && !event.altKey) {
+        const chord = bookmarkChords.find((candidate) => candidate.prefix === armed.prefix && candidate.key === key && (event.ctrlKey || candidate.plain))
         if (chord) {
-          bookmarkChord.current = 0
+          bookmarkChord.current = undefined
           event.preventDefault()
-          chord()
+          chord.run()
           return
         }
       }
-      bookmarkChord.current = 0
+      if (!editingText && !event.shiftKey && !event.altKey && event.ctrlKey && (key === 'k' || key === 'b')) {
+        event.preventDefault()
+        bookmarkChord.current = { prefix: key, until: Date.now() + 2000 }
+        return
+      }
+      if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key))
+        bookmarkChord.current = undefined
       if (event.ctrlKey && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         void chooseAndOpen()
@@ -801,7 +795,7 @@ export const App = (): React.JSX.Element => {
         // Edit Method...
         event.preventDefault()
         openEditNode()
-      } else if (event.key === 'F2' && selectedNode && !editingText && ['type', 'method', 'field', 'property', 'event'].includes(selectedNode.kind)) {
+      } else if (event.key === 'F2' && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && selectedNode && !editingText && ['type', 'method', 'field', 'property', 'event'].includes(selectedNode.kind)) {
         event.preventDefault()
         setRenameNode(selectedNode)
       } else if (event.key === 'Delete' && selectedNode && !editingText && DELETABLE_KINDS.includes(selectedNode.kind)) {

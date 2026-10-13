@@ -36,7 +36,7 @@ const launchApp = async (assemblies: string, options: LaunchOptions = {}): Promi
   userDataDirectory = options.userDataDirectory ?? mkdtempSync(path.join(os.tmpdir(), 'dnspy-e2e-'))
   savePath = path.join(userDataDirectory, 'saved-module.dll')
   saveCodePath = path.join(userDataDirectory, 'saved-code.cs')
-  importBookmarksPath = path.join(userDataDirectory, 'bookmarks-to-import.json')
+  importBookmarksPath = path.join(userDataDirectory, 'bookmarks-to-import.xml')
   showInFolderPath = path.join(userDataDirectory, 'show-in-folder.txt')
   saveResourcePath = path.join(userDataDirectory, 'saved-resource.bin')
   application = await electron.launch({
@@ -1104,10 +1104,10 @@ test.describe('the workspace shell', () => {
 
     await expect(glyphs).toHaveCount(1)
     await expect(rows).toHaveCount(1)
-    // The row names the method the statement sits in, the IL offset it was saved as, and its module.
-    await expect(rows.first()).toContainText('dnSpy.Backend.Contracts.RpcException::.ctor')
-    await expect(rows.first()).toContainText(/IL_[0-9A-F]{4}/)
-    await expect(rows.first()).toContainText('dnSpy.Backend.Contracts.dll')
+    // The row names the method the statement sits in and the IL offset it was saved as, the way dnSpy's
+    // Location column writes them — token, C# signature, "+ offset" — and the module's whole path.
+    await expect(rows.first().locator('.bookmark-location-cell')).toHaveText(/^0x060[0-9A-F]{5} RpcException\.RpcException\(int code, string message, \[object data\], \[Exception innerException\]\) \+ 0x[0-9A-F]{4}$/)
+    await expect(rows.first().locator('.bookmark-module-cell')).toHaveText(contractsAssemblyPath)
     // Making one selects it, and the go-to continues from there.
     await expect(rows.first()).toHaveClass(/active/)
 
@@ -1138,6 +1138,8 @@ test.describe('the workspace shell', () => {
     await showBookmarksWindow()
     const rows = page.locator('.bookmark-row')
     await expect(rows).toHaveCount(1)
+    // The Location column is written by the backend; the row is read once it has been.
+    await expect(rows.first()).toContainText('RpcException.RpcException(')
     const saved = await rows.first().textContent()
 
     // A bookmark is written down as module plus IL offset, never as the node ids this session handed
@@ -1173,10 +1175,12 @@ test.describe('the workspace shell', () => {
     await page.getByRole('button', { name: 'Export Bookmarks' }).click()
     await expect(status).toContainText('Exported 1 bookmark(s) to')
     const exported = readFileSync(saveCodePath, 'utf8')
-    // The file is the portable shape: module, token and IL offset, with nothing session-local in it.
-    const entries = JSON.parse(exported).bookmarks as Record<string, unknown>[]
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ modulePath: contractsAssemblyPath, metadataToken: expect.any(Number), ilOffset: expect.any(Number), labels: [], enabled: true })
+    // The file is dnSpy's own: its settings XML, with the bookmark named by module, token and IL offset and
+    // the member's name to check the token against — nothing session-local in it.
+    expect(exported).toMatch(/^<\?xml version="1\.0" encoding="utf-8"\?>\s*<settings>\s*<section _="eaa1be38-7a55-44af-ad93-5b7ee2327edd">/)
+    expect(exported).toMatch(/<section _="Bookmark" IsEnabled="True" Name="Bookmark \d+">/)
+    expect(exported).toContain(`ModuleName="${contractsAssemblyPath}"`)
+    expect(exported).toMatch(/__BMT="DotNetBody" AssemblyFullName="dnSpy\.Backend\.Contracts, Version=[^"]+" ModuleName="[^"]+" Offset="\d+" Token="\d+" TokenString="System\.Void dnSpy\.Backend\.Contracts\.RpcException::\.ctor\(/)
 
     await page.getByRole('button', { name: 'Clear Bookmarks' }).click()
     await expect(rows).toHaveCount(0)
@@ -1186,7 +1190,7 @@ test.describe('the workspace shell', () => {
 
     await expect(rows).toHaveCount(1)
     await expect(status).toContainText('Imported 1 bookmark(s).')
-    await expect(rows.first()).toContainText('IL_')
+    await expect(rows.first().locator('.bookmark-location-cell')).toContainText('RpcException.RpcException(int code')
   })
 
   test('toggles a bookmark with the Ctrl+K chord while the editor has focus', async () => {
@@ -1213,6 +1217,118 @@ test.describe('the workspace shell', () => {
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+k')
     await expect(page.locator('.bookmark-row')).toHaveCount(0)
+  })
+
+  test('bookmarks a declaration line by its member with Ctrl+F2, and walks back to it with F2', async () => {
+    await openAssemblyAndNamespace()
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ }).dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+
+    // The constructor's declaration line holds no statement, so dnSpy bookmarks the member it defines — a
+    // location named by token alone, which the Location column writes without an offset.
+    const declaration = page.locator('.monaco-editor .view-lines .view-line').filter({ hasText: /public\s+RpcException\(int\s+code/ }).first()
+    await expect(declaration).toBeVisible()
+    await declaration.click()
+    const activeLineNumber = page.locator('.monaco-editor .line-numbers.active-line-number')
+    const declarationLineNumber = (await activeLineNumber.textContent()) ?? ''
+    expect(declarationLineNumber).toMatch(/^\d+$/)
+    await page.keyboard.press('Control+F2')
+
+    await showBookmarksWindow()
+    const rows = page.locator('.bookmark-row')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first().locator('.bookmark-location-cell')).toHaveText(/^0x060[0-9A-F]{5} RpcException\.RpcException\(int code, string message, \[object data\], \[Exception innerException\]\)$/)
+    await expect(page.locator('.bookmark-glyph')).toHaveCount(1)
+
+    // F2 in the code viewer is dnSpy's Next Bookmark: from the body it wraps round to the declaration, and the
+    // Ctrl+F2 that follows lands on the bookmark again and takes it away.
+    const bodyLine = page.locator('.monaco-editor .view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    await bodyLine.click()
+    await expect(activeLineNumber).not.toHaveText(declarationLineNumber)
+    await page.keyboard.press('F2')
+    await expect(activeLineNumber).toHaveText(declarationLineNumber)
+    await page.keyboard.press('Control+F2')
+    await expect(rows).toHaveCount(0)
+    await expect(page.locator('.bookmark-glyph')).toHaveCount(0)
+  })
+
+  test('bookmarks an IL instruction and shows it on the C# statement that holds it', async () => {
+    await openAssemblyAndNamespace()
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ }).dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+    const editor = page.locator('.monaco-editor')
+    await expect.poll(async () => (await editor.locator('.view-lines').innerText()).replaceAll('\u00a0', ' ')).toContain('Code = code')
+
+    // The IL view has a statement per instruction, as dnSpy's has: the store into Code's backing field sits in
+    // the middle of the C# statement `Code = code;`.
+    await page.getByLabel('Decompiler language').selectOption('il')
+    const store = editor.locator('.view-lines .view-line').filter({ hasText: /stfld\s+System\.Int32\s+dnSpy\.Backend\.Contracts\.RpcException::<Code>k__BackingField/ }).first()
+    // Monaco draws only the lines in its viewport and the store is a few lines below it, so the caret is
+    // walked down from the constructor's first instruction until the line has been drawn.
+    const first = editor.locator('.view-lines .view-line').filter({ hasText: /IL_0000:/ }).first()
+    await expect(first).toBeVisible()
+    await first.click()
+    for (let step = 0; step < 30 && (await store.count()) === 0; step++)
+      await page.keyboard.press('ArrowDown')
+    await expect(store).toBeVisible()
+    await store.click()
+    await page.keyboard.press('Control+k')
+    await page.keyboard.press('Control+k')
+
+    await showBookmarksWindow()
+    const rows = page.locator('.bookmark-row')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first().locator('.bookmark-location-cell')).toHaveText(/RpcException\.RpcException\(.*\) \+ 0x00[0-9A-F]{2}$/)
+    await expect(page.locator('.bookmark-glyph')).toHaveCount(1)
+
+    // Back in C#, the bookmark is drawn on the statement whose IL holds the instruction.
+    await page.getByLabel('Decompiler language').selectOption('cSharp')
+    const bodyLine = editor.locator('.view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    const glyph = page.locator('.bookmark-glyph')
+    await expect(glyph).toHaveCount(1)
+    await expect(async () => {
+      const lineBox = await bodyLine.boundingBox()
+      const glyphBox = await glyph.boundingBox()
+      expect(lineBox && glyphBox && Math.abs((glyphBox.y + glyphBox.height / 2) - (lineBox.y + lineBox.height / 2)) < lineBox.height / 2).toBe(true)
+    }).toPass({ timeout: 10_000 })
+  })
+
+  test('writes the Location column with the display options the context menu switches', async () => {
+    await openAssemblyAndNamespace()
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @02000073$/ }).dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+    const bodyLine = page.locator('.monaco-editor .view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    await bodyLine.click()
+    await page.keyboard.press('Control+F2')
+
+    await showBookmarksWindow()
+    const row = page.locator('.bookmark-row').first()
+    const location = row.locator('.bookmark-location-cell')
+    await expect(location).toHaveText(/^0x060[0-9A-F]{5} RpcException\.RpcException\(int code/)
+    // dnSpy's syntax highlighting: the keywords in the theme's keyword color.
+    await expect(location.locator('.tc-keyword').first()).toHaveText('int')
+    await expect(location.locator('.tc-keyword').first()).toHaveCSS('color', 'rgb(86, 156, 214)')
+
+    const option = async (name: string): Promise<void> => {
+      await row.click({ button: 'right' })
+      const menu = page.getByRole('menu', { name: 'Bookmarks' })
+      await expect(menu).toBeVisible()
+      await menu.getByRole('menuitem', { name }).click()
+    }
+    await option('Show Tokens')
+    await expect(location).toHaveText(/^RpcException\.RpcException\(int code/)
+    await option('Show Module Names')
+    await expect(location).toHaveText(/^dnSpy\.Backend\.Contracts\.dll!RpcException\.RpcException\(int code/)
+    await option('Show Parameter Names')
+    await expect(location).toContainText('RpcException(int, string, [object], [Exception])')
+    // The options outlive the window: dnSpy keeps them with its settings.
+    await option('Show Tokens')
+    await option('Show Module Names')
+    await option('Show Parameter Names')
+    await expect(location).toHaveText(/^0x060[0-9A-F]{5} RpcException\.RpcException\(int code/)
   })
 
   test('toggles a breakpoint for the current method from the Debug menu', async () => {
@@ -1856,10 +1972,11 @@ test.describe('the code viewer context menu', () => {
     await expect(targetTab.last()).toHaveAttribute('aria-selected', 'true')
   })
 
-  test('still opens on a document that has neither spans nor a statement map', async () => {
-    // IL is decompiled without spans, and the IL map behind the statements is C# only — so a caret in such a
-    // document resolves to no member at all. The commands that read the document's own node stay, and the
-    // menu is what opens rather than nothing.
+  test('still opens on a line of the IL view that names no member', async () => {
+    // The IL view's spans are its definitions and its statements are its instructions, which only the
+    // bookmarks, the hex commands and the analyzer read — the breakpoints are placed by the C# map alone. A
+    // caret on `.maxstack` therefore resolves to no member and no breakpoint: the commands that read the
+    // document's own node stay, and the menu is what opens rather than nothing.
     await openMain()
     await page.getByLabel('Decompiler language').selectOption('il')
     const editor = page.locator('.monaco-editor')

@@ -350,8 +350,18 @@ export interface BackgroundImageSettings {
   maxHeight: number
 }
 
+/** dnSpy's BookmarksSettings — the options page's one box — together with its BookmarkDisplaySettings, the
+ * Bookmarks window's own Show... options that its context menu switches and its Location column reads. */
 export interface BookmarkSettings {
   syntaxHighlight: boolean
+  showTokens: boolean
+  showModuleNames: boolean
+  showParameterTypes: boolean
+  showParameterNames: boolean
+  showDeclaringTypes: boolean
+  showReturnTypes: boolean
+  showNamespaces: boolean
+  showIntrinsicTypeKeywords: boolean
 }
 
 /** dnSpy's AnalyzerSettings, which only the analyzer's own context menu changes — there is no page for them. */
@@ -666,6 +676,14 @@ export const defaultAppOptions: AppOptions = {
   },
   bookmarks: {
     syntaxHighlight: true,
+    showTokens: true,
+    showModuleNames: false,
+    showParameterTypes: true,
+    showParameterNames: true,
+    showDeclaringTypes: true,
+    showReturnTypes: true,
+    showNamespaces: false,
+    showIntrinsicTypeKeywords: true,
   },
   analyzer: {
     showToken: true,

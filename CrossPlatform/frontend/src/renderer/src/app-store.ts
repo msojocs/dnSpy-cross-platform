@@ -2,6 +2,7 @@ import { Actions, TabNode, TabSetNode, type Model } from 'flexlayout-react'
 import { create } from 'zustand'
 import type {
   BackendStatus,
+  BookmarkFileEntry,
   BreakpointConditionKind,
   BreakpointHitCountKind,
   BreakpointSettings,
@@ -30,6 +31,7 @@ import type {
   TextSpan,
   TreeNode,
 } from '../../shared/protocol'
+import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
 import { getActiveLocale, translate as t } from './localization'
 
 export type { BreakpointConditionKind, BreakpointHitCountKind, BreakpointSettings }
@@ -117,17 +119,29 @@ export interface StoppedLocation {
 }
 
 /**
- * A bookmark as the client tracks it, modelled on dnSpy's `DotNetMethodBodyBookmarkLocation`: a spot
- * inside one method, named by module and IL offset so it can be found again after a restart. `nodeId`
- * is only valid for the workspace that handed it out, so it is a cache — `identity` is the truth.
+ * Which of dnSpy's two .NET locations a bookmark is: a spot inside a method body, named by module, token
+ * and IL offset (`DotNetMethodBodyBookmarkLocation`), or a definition, named by module and token alone
+ * (`DotNetTokenBookmarkLocation`) — what a declaration line gets. `line` is this port's own: a line of a
+ * document that carries neither a statement map nor definitions (Visual Basic), which only this session
+ * can find again.
+ */
+export type BookmarkKind = 'body' | 'token' | 'line'
+
+/**
+ * A bookmark as the client tracks it, modelled on dnSpy's .NET bookmark locations: named by module and
+ * token (and IL offset) so it can be found again after a restart. `nodeId` is only valid for the workspace
+ * that handed it out, so it is a cache — `identity` is the truth.
  */
 export interface Bookmark {
   id: string
+  kind: BookmarkKind
   nodeId: string
-  /** `modulePath|token|ilOffset`, the stable key a restored bookmark is matched back on. */
+  /** `modulePath|token|ilOffset` (`modulePath|token|definition` for a definition), the stable key a restored
+   * bookmark is matched back on. */
   identity: string
   modulePath: string
   metadataToken: number
+  /** The IL offset inside the method body; 0 for a definition or a line. */
   ilOffset: number
   /** Line the marker is drawn on, refreshed from the IL map every time the document is decompiled. */
   line: number
@@ -166,9 +180,12 @@ export interface CaretPosition {
  * save, and the line is recomputed from the IL map when the document is opened again.
  */
 export interface BookmarkEntry {
+  /** A definition; a row without one is a spot in a method body, the only kind the first version stored. */
+  kind?: 'token'
   modulePath: string
   metadataToken: number
-  ilOffset: number
+  /** Where in the method body; a definition has none. */
+  ilOffset?: number
   description: string
   name: string
   labels: string[]
@@ -460,10 +477,10 @@ interface AppState {
   /** Brings a tool window to the front. Set by the shell, which owns the layout. */
   openToolWindow?: (tabId: string) => void
   setOpenToolWindow(open: ((tabId: string) => void) | undefined): void
-  /** Adds a bookmark at the position, or removes the one already there — dnSpy's Toggle Bookmark. */
-  toggleBookmark(nodeId: string, line: number, column?: number): void
-  /** Flips the enabled state of the bookmark at the position — dnSpy's Enable Bookmark. */
-  toggleBookmarkEnabledAt(nodeId: string, line: number, column?: number): void
+  /** Adds a bookmark on the line, or removes the one already there — dnSpy's Toggle Bookmark. */
+  toggleBookmark(nodeId: string, line: number): void
+  /** Flips the enabled state of the bookmark on the line — dnSpy's Enable Bookmark. */
+  toggleBookmarkEnabledAt(nodeId: string, line: number): void
   removeBookmark(id: string): void
   removeBookmarks(ids: string[]): void
   removeAllBookmarksInDocument(nodeId: string): void
@@ -476,7 +493,8 @@ interface AppState {
   setBookmarkLabels(id: string, labels: string[]): void
   /** Merges bookmarks read from a file, skipping the identities already known; returns how many were added. */
   importBookmarks(entries: BookmarkEntry[]): number
-  goToBookmark(id: string): Promise<void>
+  /** Shows the bookmark's place — in a tab of its own with `newTab`, dnSpy's Ctrl/Shift+double-click. */
+  goToBookmark(id: string, newTab?: boolean): Promise<void>
   selectNextBookmark(position?: CaretPosition): Promise<void>
   selectPreviousBookmark(position?: CaretPosition): Promise<void>
   selectNextBookmarkInDocument(documentId: string, line?: number): Promise<void>
@@ -821,10 +839,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             },
           },
         }))
-        // The document is what turns a bookmark's IL location back into a line and a node id.
-        attachBookmarks(set, documentId, document.codeStatements)
-        // And the same for a breakpoint restored from settings, whose node id died with its workspace.
-        attachLineBreakpoints(set, documentId, document.codeStatements)
+        // The document is what turns a bookmark's location back into a line and a node id.
+        attachBookmarks(set, documentId, document)
+        // And the same for a breakpoint restored from settings, whose node id died with its workspace. Only a
+        // C# line is what the backend resolves a breakpoint's line against, so an IL view's statements —
+        // one per instruction — must not become its line.
+        if (document.language === 'csharp')
+          attachLineBreakpoints(set, documentId, document.codeStatements)
       }
     } catch (error) {
       if (get().workspaceId !== workspaceId) return documentId
@@ -1925,7 +1946,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   toggleLineBreakpoint: async (nodeId, line, column) => {
-    const statement = codeStatementAt(get().documents[nodeId]?.codeStatements, line, column)
+    const statement = codeStatementAt(breakpointStatementsOf(get().documents[nodeId]), line, column)
     // The document already carries the IL range of every statement, so the identity is known before the backend
     // confirms it — which is what lets a second click on the snapped line remove the breakpoint it just created.
     const identity = statement
@@ -2026,13 +2047,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setRestoringSession: (value) => set({ restoringSession: value }),
 
-  toggleBookmark: (nodeId, line, column) => {
-    const statement = codeStatementAt(get().documents[nodeId]?.codeStatements, line, column)
-    // The IL map turns a second click on the same statement into a removal, the way line breakpoints
-    // behave. A position with no statement still gets a bookmark, but only this session can find it
-    // again — there is nothing stable to name it by.
-    const identity = statement ? bookmarkIdentityOf(statement) : `${nodeId}|${line}`
-    const existing = get().bookmarks.find((bookmark) => bookmark.identity === identity)
+  toggleBookmark: (nodeId, line) => {
+    // dnSpy names the bookmark after what the line holds — the statement on it, or the definition that
+    // starts there (or after it) — so a second toggle on the line where the marker is drawn finds it again.
+    const place = bookmarkPlaceAt(nodeId, get().documents[nodeId], line)
+    if (!place)
+      return
+    const existing = get().bookmarks.find((bookmark) => bookmark.identity === place.identity)
     if (existing) {
       set((state) => ({
         bookmarks: state.bookmarks.filter((bookmark) => bookmark.id !== existing.id),
@@ -2043,13 +2064,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const order = ++bookmarkOrder
     const created: Bookmark = {
       id: `bookmark${++bookmarkSequence}`,
+      kind: place.kind,
       nodeId,
-      identity,
-      modulePath: statement?.modulePath ?? '',
-      metadataToken: statement?.sourceMethodToken ?? 0,
-      ilOffset: statement?.ilOffset ?? 0,
-      line: statement?.startLine ?? line,
-      description: statement?.description ?? '',
+      identity: place.identity,
+      modulePath: place.modulePath,
+      metadataToken: place.metadataToken,
+      ilOffset: place.ilOffset,
+      line: place.line,
+      description: place.description,
       name: t('Bookmark {number}', { number: order }),
       labels: [],
       enabled: true,
@@ -2058,10 +2080,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({ bookmarks: [...state.bookmarks, created], activeBookmarkId: created.id }))
   },
 
-  toggleBookmarkEnabledAt: (nodeId, line, column) => {
-    const statement = codeStatementAt(get().documents[nodeId]?.codeStatements, line, column)
-    const identity = statement ? bookmarkIdentityOf(statement) : `${nodeId}|${line}`
-    const existing = get().bookmarks.find((bookmark) => bookmark.identity === identity)
+  toggleBookmarkEnabledAt: (nodeId, line) => {
+    const place = bookmarkPlaceAt(nodeId, get().documents[nodeId], line)
+    const existing = place && get().bookmarks.find((bookmark) => bookmark.identity === place.identity)
     if (existing)
       get().setBookmarkEnabled(existing.id, !existing.enabled)
   },
@@ -2140,41 +2161,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     const known = new Set(get().bookmarks.map((bookmark) => bookmark.identity))
     const imported: Bookmark[] = []
     for (const entry of entries) {
-      const identity = statementIdentity(entry.modulePath, entry.metadataToken, entry.ilOffset)
-      if (known.has(identity)) continue
-      known.add(identity)
-      imported.push({
-        id: `bookmark${++bookmarkSequence}`,
-        nodeId: '',
-        identity,
-        modulePath: entry.modulePath,
-        metadataToken: entry.metadataToken,
-        ilOffset: entry.ilOffset,
-        line: 0,
-        description: entry.description,
-        name: entry.name,
-        labels: entry.labels,
-        enabled: entry.enabled,
-        order: ++bookmarkOrder,
-      })
+      const bookmark = bookmarkFromEntry(entry, 0)
+      if (known.has(bookmark.identity)) continue
+      known.add(bookmark.identity)
+      imported.push({ ...bookmark, order: ++bookmarkOrder })
     }
     if (imported.length > 0)
       set((state) => ({ bookmarks: [...state.bookmarks, ...imported] }))
     return imported.length
   },
 
-  goToBookmark: async (id) => {
+  goToBookmark: async (id, newTab = false) => {
     const bookmark = get().bookmarks.find((candidate) => candidate.id === id)
     if (!bookmark) return
     set({ activeBookmarkId: id })
-    const documentId = await openBookmarkDocument(get, set, bookmark)
+    const documentId = await openBookmarkDocument(get, set, bookmark, newTab)
     if (!documentId) {
       // dnSpy shows a bookmark for a module that is not loaded too; it just cannot go there yet.
       get().appendOutput(t('Bookmark "{name}" is in a module that is not loaded.', { name: bookmark.name }))
       return
     }
-    const line = bookmarkLineInDocument(documentId, get().documents[documentId]?.codeStatements, bookmark) ?? bookmark.line
-    get().revealCaret(documentId, line, 1)
+    // dnSpy puts the caret where the location starts: the statement, or the definition's name.
+    const document = get().documents[documentId]
+    const position = bookmarkPositionInDocument(documentId, document, bookmark) ?? { line: bookmark.line, column: 1 }
+    get().revealCaret(documentId, position.line, position.column)
   },
 
   revealCaret: (documentId, line, column, viewId) => {
@@ -2429,6 +2439,14 @@ const isCloserStatement = (candidate: CodeStatement, current: CodeStatement, lin
   return distance === currentDistance ? candidate.startLine > current.startLine : distance < currentDistance
 }
 
+/**
+ * The statements a line breakpoint is placed by. The backend resolves a breakpoint's line against the C#
+ * statement map, so an IL view's statements — one per instruction, there for bookmarks, the hex commands and
+ * the analyzer — are not offered to the breakpoint commands; those keep working off the C# view alone.
+ */
+export const breakpointStatementsOf = (document: { language: string; codeStatements?: CodeStatement[] } | undefined): CodeStatement[] | undefined =>
+  document?.language === 'csharp' ? document.codeStatements : undefined
+
 // The IL identity a statement maps to. Two clicks that land on the same sequence point produce the same key, which
 // is what makes the second click a toggle even after the first one was snapped to a different line.
 export const statementIdentity = (modulePath: string, metadataToken: number, ilOffset: number): string =>
@@ -2478,33 +2496,171 @@ export const lineBreakpointAt = (
 ): LineBreakpoint | undefined =>
   breakpoints.find((breakpoint) => breakpointLineInDocument(nodeId, statements, breakpoint) === line)
 
-// A bookmark is named by the method it sits in and the IL offset inside it, which is what dnSpy's
+// A body bookmark is named by the method it sits in and the IL offset inside it, which is what dnSpy's
 // `DotNetMethodBodyBookmarkLocation` stores. The *source* method token is the one that matters: inside a
 // state machine a statement belongs to `MoveNext`, whose token resolves to a method nobody navigates to.
 const bookmarkIdentityOf = (statement: CodeStatement): string =>
   statementIdentity(statement.modulePath, statement.sourceMethodToken, statement.ilOffset)
 
-// Where a bookmark's marker goes: the IL map decides, so a bookmark whose method this document does not
-// contain draws nothing. A bookmark restored from disk has no line until its document has been opened.
-export const bookmarkLineInDocument = (
-  nodeId: string,
-  statements: CodeStatement[] | undefined,
-  bookmark: Bookmark,
-): number | undefined => {
-  const statement = statements?.find((candidate) => bookmarkIdentityOf(candidate) === bookmark.identity)
-  if (statement)
-    return statement.startLine
-  return bookmark.nodeId === nodeId && bookmark.line > 0 ? bookmark.line : undefined
+// A definition is named by its module and token alone — dnSpy's `DotNetTokenBookmarkLocation`.
+const definitionIdentity = (modulePath: string, metadataToken: number): string => `${modulePath}|${metadataToken}|definition`
+
+/** What of a decompiled document places a bookmark: its statement map, its definitions and its text. */
+export interface BookmarkDocument {
+  text: string
+  spans: TextSpan[]
+  codeStatements?: CodeStatement[]
 }
+
+/** Where a toggle on a line puts a bookmark, before there is one. */
+interface BookmarkPlace {
+  kind: BookmarkKind
+  identity: string
+  modulePath: string
+  metadataToken: number
+  ilOffset: number
+  line: number
+  description: string
+}
+
+const isDefinitionSpan = (span: TextSpan): boolean =>
+  span.kind === 'definition' && !!span.targetModulePath && !!span.targetMetadataToken
+
+/**
+ * The statement a line holds, the way dnSpy's `FindByTextPosition` reads it from the start of the line: one
+ * that began on an earlier line covers the line whole, and otherwise the first one that starts on it. A
+ * statement on another line is no answer — a bookmark goes where the user put it.
+ */
+const statementOnLine = (statements: CodeStatement[] | undefined, line: number): CodeStatement | undefined => {
+  let covering: CodeStatement | undefined
+  let first: CodeStatement | undefined
+  for (const statement of statements ?? []) {
+    if (statement.isHidden || line < statement.startLine || line > statement.endLine)
+      continue
+    if (statement.startLine < line) {
+      if (!covering || statement.startLine > covering.startLine)
+        covering = statement
+    } else if (!first || statement.startColumn < first.startColumn) {
+      first = statement
+    }
+  }
+  return covering ?? first
+}
+
+/**
+ * dnSpy's `TextViewBookmarkService.GetLocation`: the method body location of the statement on the line, or
+ * the definition location of the first member defined from the start of the line on — whichever starts
+ * first. A declaration line has no statement, so it gets its member; a blank line gets the next one.
+ */
+export const bookmarkLocationAt = (document: BookmarkDocument | undefined, line: number): BookmarkPlace | undefined => {
+  if (!document)
+    return undefined
+  const lineStart = offsetOfLineColumn(document.text, line, 1)
+  const statement = statementOnLine(document.codeStatements, line)
+  const statementStart = statement ? offsetOfLineColumn(document.text, statement.startLine, statement.startColumn) : Infinity
+  let definition: TextSpan | undefined
+  for (const span of document.spans) {
+    if (isDefinitionSpan(span) && span.start >= lineStart && (!definition || span.start < definition.start))
+      definition = span
+  }
+  if (definition && definition.start < statementStart) {
+    const modulePath = definition.targetModulePath ?? ''
+    const metadataToken = definition.targetMetadataToken ?? 0
+    return {
+      kind: 'token',
+      identity: definitionIdentity(modulePath, metadataToken),
+      modulePath,
+      metadataToken,
+      ilOffset: 0,
+      line: lineColumnOfOffset(document.text, definition.start).line,
+      description: document.text.slice(definition.start, definition.start + definition.length),
+    }
+  }
+  if (!statement)
+    return undefined
+  return {
+    kind: 'body',
+    identity: bookmarkIdentityOf(statement),
+    modulePath: statement.modulePath,
+    metadataToken: statement.sourceMethodToken,
+    ilOffset: statement.ilOffset,
+    line: statement.startLine,
+    description: statement.description,
+  }
+}
+
+/** Whether a document can name any location at all — Visual Basic, a resource or a header cannot. */
+const hasBookmarkLocations = (document: BookmarkDocument | undefined): boolean =>
+  !!document && ((document.codeStatements ?? []).some((statement) => !statement.isHidden) || document.spans.some(isDefinitionSpan))
+
+/**
+ * Where a toggle on a line puts a bookmark. In a document with nothing to name a location by, the line
+ * itself is all there is — such a bookmark lives for this session only. A document that can name locations
+ * but has none from this line on gets nothing, as in dnSpy.
+ */
+const bookmarkPlaceAt = (nodeId: string, document: BookmarkDocument | undefined, line: number): BookmarkPlace | undefined => {
+  if (hasBookmarkLocations(document))
+    return bookmarkLocationAt(document, line)
+  return { kind: 'line', identity: `${nodeId}|${line}`, modulePath: '', metadataToken: 0, ilOffset: 0, line, description: '' }
+}
+
+/**
+ * The statement a body bookmark shows on: the one it was made on, or — for a spot another view made, an IL
+ * instruction inside a C# statement — the statement whose IL holds the offset, as dnSpy's
+ * `GetSourceStatementByCodeOffset` finds it. A state machine's statements live in another body, where the
+ * offset means something else, so only the exact match counts there.
+ */
+const bookmarkStatementIn = (statements: CodeStatement[] | undefined, bookmark: Bookmark): CodeStatement | undefined => {
+  let holding: CodeStatement | undefined
+  for (const statement of statements ?? []) {
+    if (statement.isHidden || statement.sourceMethodToken !== bookmark.metadataToken || statement.modulePath !== bookmark.modulePath)
+      continue
+    if (statement.ilOffset === bookmark.ilOffset)
+      return statement
+    if (statement.metadataToken === statement.sourceMethodToken && statement.sequencePointIlOffset <= bookmark.ilOffset && bookmark.ilOffset < statement.ilEndOffset
+      && (!holding || statement.sequencePointIlOffset > holding.sequencePointIlOffset))
+      holding = statement
+  }
+  return holding
+}
+
+const bookmarkDefinitionIn = (spans: TextSpan[] | undefined, bookmark: Bookmark): TextSpan | undefined =>
+  spans?.find((span) => isDefinitionSpan(span) && span.targetModulePath === bookmark.modulePath && span.targetMetadataToken === bookmark.metadataToken)
+
+/** Where a bookmark is in a document — the start of its statement or of its definition's name — if there. */
+export const bookmarkPositionInDocument = (
+  nodeId: string,
+  document: BookmarkDocument | undefined,
+  bookmark: Bookmark,
+): { line: number; column: number } | undefined => {
+  switch (bookmark.kind) {
+    case 'line':
+      return bookmark.nodeId === nodeId && bookmark.line > 0 ? { line: bookmark.line, column: 1 } : undefined
+    case 'token': {
+      const definition = bookmarkDefinitionIn(document?.spans, bookmark)
+      return definition && document ? lineColumnOfOffset(document.text, definition.start) : undefined
+    }
+    default: {
+      const statement = bookmarkStatementIn(document?.codeStatements, bookmark)
+      return statement ? { line: statement.startLine, column: statement.startColumn } : undefined
+    }
+  }
+}
+
+// Where a bookmark's marker goes: the document's own maps decide, so a bookmark whose method or member this
+// document does not contain draws nothing. A bookmark restored from disk has no line until its document has
+// been opened.
+export const bookmarkLineInDocument = (nodeId: string, document: BookmarkDocument | undefined, bookmark: Bookmark): number | undefined =>
+  bookmarkPositionInDocument(nodeId, document, bookmark)?.line
 
 export const bookmarkMarkers = (
   nodeId: string,
-  statements: CodeStatement[] | undefined,
+  document: BookmarkDocument | undefined,
   bookmarks: Bookmark[],
 ): { line: number; enabled: boolean; message: string }[] => {
   const markers: { line: number; enabled: boolean; message: string }[] = []
   for (const bookmark of bookmarks) {
-    const line = bookmarkLineInDocument(nodeId, statements, bookmark)
+    const line = bookmarkLineInDocument(nodeId, document, bookmark)
     if (line !== undefined)
       markers.push({ line, enabled: bookmark.enabled, message: bookmark.name })
   }
@@ -2512,19 +2668,20 @@ export const bookmarkMarkers = (
 }
 
 // The tool window's search box: whitespace separates terms and all of them have to match, each either
-// anywhere in the row or — with a one-letter prefix — in one field of it.
-export const filterBookmarks = (bookmarks: Bookmark[], query: string): Bookmark[] => {
+// anywhere in the row or — with a one-letter prefix — in one field of it. The Location column is matched as
+// the window writes it, which only the window knows; without that the stored description stands in.
+export const filterBookmarks = (bookmarks: Bookmark[], query: string, locationOf?: (bookmark: Bookmark) => string): Bookmark[] => {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  return terms.length === 0 ? bookmarks : bookmarks.filter((bookmark) => terms.every((term) => matchesBookmarkTerm(bookmark, term)))
+  return terms.length === 0 ? bookmarks : bookmarks.filter((bookmark) => terms.every((term) => matchesBookmarkTerm(bookmark, term, locationOf)))
 }
 
-const matchesBookmarkTerm = (bookmark: Bookmark, term: string): boolean => {
+const matchesBookmarkTerm = (bookmark: Bookmark, term: string, locationOf?: (bookmark: Bookmark) => string): boolean => {
   const prefix = term.length > 1 && term[1] === ':' && 'nlom'.includes(term[0]) ? term[0] : ''
   const text = prefix ? term.slice(2) : term
   if (!text) return true
   const inName = bookmark.name.toLowerCase().includes(text)
   const inLabels = bookmark.labels.some((label) => label.toLowerCase().includes(text))
-  const inLocation = bookmark.description.toLowerCase().includes(text)
+  const inLocation = (locationOf?.(bookmark) ?? bookmark.description).toLowerCase().includes(text)
   const inModule = bookmark.modulePath.toLowerCase().includes(text)
   switch (prefix) {
     case 'n': return inName
@@ -2584,34 +2741,41 @@ const stepBookmark = async (
     await get().goToBookmark(target.id)
 }
 
-/** Whether a document that has just been opened is the one a bookmark's IL identity belongs to. */
+/** Whether a document that has just been opened is the one a bookmark's identity belongs to. */
 const documentHasBookmark = (get: StoreGet, documentId: string, bookmark: Bookmark): boolean => {
-  const statements = get().documents[documentId]?.codeStatements
-  // A document with no statement table — an IL view, a resource — cannot contradict the node id.
-  if (!statements || statements.length === 0)
+  const document = get().documents[documentId]
+  // A document that names no locations — a Visual Basic view, a resource — cannot contradict the node id.
+  if (bookmark.kind === 'line' || !hasBookmarkLocations(document))
     return true
-  return statements.some((statement) => bookmarkIdentityOf(statement) === bookmark.identity)
+  return bookmarkLineInDocument(documentId, document, bookmark) !== undefined
 }
 
 /**
  * Brings a bookmark's document up, resolving the target first. The node id is only a hint — it dies
  * with the workspace that issued it — so a miss is answered by asking the backend to look the module
  * and token up again in the current one. An id that still resolves is not proof either, because ids
- * are reissued from the same counter: the bookmark's own IL identity has the final say.
+ * are reissued from the same counter: the bookmark's own identity has the final say. A new tab is only
+ * opened once the node is known to be right, so a stale id never leaves a stray tab behind.
  */
 const openBookmarkDocument = async (
   get: StoreGet,
   set: StoreSet,
   bookmark: Bookmark,
+  newTab: boolean,
 ): Promise<string | undefined> => {
-  const open = get().openNodeById
+  const open = newTab ? get().openNodeInNewTabById : get().openNodeById
   if (!open)
     return undefined
-  const direct = await open(bookmark.nodeId)
-  if (direct && (bookmark.metadataToken === 0 || documentHasBookmark(get, direct, bookmark)))
-    return direct
+  if (newTab) {
+    if (bookmark.kind === 'line' || (bookmark.nodeId && get().documents[bookmark.nodeId] && documentHasBookmark(get, bookmark.nodeId, bookmark)))
+      return await open(bookmark.nodeId)
+  } else {
+    const direct = await open(bookmark.nodeId)
+    if (direct && documentHasBookmark(get, direct, bookmark))
+      return direct
+  }
   const workspaceId = get().workspaceId
-  if (!workspaceId)
+  if (!workspaceId || bookmark.kind === 'line')
     return undefined
   const found = await window.dnSpy.findMember(workspaceId, bookmark.modulePath, bookmark.metadataToken)
   if (!found.nodeId)
@@ -2624,23 +2788,22 @@ const openBookmarkDocument = async (
 }
 
 /**
- * Relinks the bookmarks to a document that has just been decompiled. Only identity matches count, so a
- * bookmark for another method is left alone even though this document is now the open one.
+ * Relinks the bookmarks to a document that has just been decompiled. Only the document's own maps count,
+ * so a bookmark for another method is left alone even though this document is now the open one.
  */
-const attachBookmarks = (set: StoreSet, nodeId: string, statements: CodeStatement[] | undefined): void => {
-  if (!statements || statements.length === 0)
+const attachBookmarks = (set: StoreSet, nodeId: string, document: BookmarkDocument): void => {
+  if (!hasBookmarkLocations(document))
     return
-  const byIdentity = new Map<string, CodeStatement>()
-  for (const statement of statements)
-    byIdentity.set(bookmarkIdentityOf(statement), statement)
   set((state) => {
     let changed = false
     const bookmarks = state.bookmarks.map((bookmark) => {
-      const statement = byIdentity.get(bookmark.identity)
-      if (!statement || (bookmark.nodeId === nodeId && bookmark.line === statement.startLine))
+      if (bookmark.kind === 'line')
+        return bookmark
+      const line = bookmarkLineInDocument(nodeId, document, bookmark)
+      if (line === undefined || (bookmark.nodeId === nodeId && bookmark.line === line))
         return bookmark
       changed = true
-      return { ...bookmark, nodeId, line: statement.startLine }
+      return { ...bookmark, nodeId, line }
     })
     return changed ? { bookmarks } : {}
   })
@@ -2707,16 +2870,17 @@ function loadBookmarks(): Bookmark[] {
 }
 
 /**
- * The bookmarks in the shape they are stored and exported. A bookmark with no IL location only exists
- * for this session — there is nothing on disk to point at — so it is left out rather than written as a
- * row that could never navigate anywhere.
+ * The bookmarks in the shape they are stored and exported. A bookmark with no location only exists for
+ * this session — there is nothing on disk to point at — so it is left out rather than written as a row
+ * that could never navigate anywhere.
  */
 export const bookmarkEntries = (bookmarks: Bookmark[]): BookmarkEntry[] => bookmarks
-  .filter((bookmark) => bookmark.modulePath !== '' && bookmark.metadataToken !== 0)
+  .filter((bookmark) => bookmark.kind !== 'line' && bookmark.modulePath !== '' && bookmark.metadataToken !== 0)
   .map((bookmark) => ({
+    ...(bookmark.kind === 'token' ? { kind: 'token' as const } : {}),
     modulePath: bookmark.modulePath,
     metadataToken: bookmark.metadataToken,
-    ilOffset: bookmark.ilOffset,
+    ...(bookmark.kind === 'token' ? {} : { ilOffset: bookmark.ilOffset }),
     description: bookmark.description,
     name: bookmark.name,
     labels: bookmark.labels,
@@ -2727,41 +2891,74 @@ function saveBookmarks(bookmarks: Bookmark[]): void {
   localStorage.setItem(bookmarksStorageKey, JSON.stringify(bookmarkEntries(bookmarks)))
 }
 
-const bookmarkFromEntry = (entry: BookmarkEntry, order: number): Bookmark => ({
-  id: `bookmark${++bookmarkSequence}`,
-  nodeId: '',
-  identity: statementIdentity(entry.modulePath, entry.metadataToken, entry.ilOffset),
-  modulePath: entry.modulePath,
-  metadataToken: entry.metadataToken,
-  ilOffset: entry.ilOffset,
-  line: 0,
-  description: entry.description,
-  name: entry.name,
-  labels: entry.labels,
-  enabled: entry.enabled,
-  order,
-})
+const bookmarkFromEntry = (entry: BookmarkEntry, order: number): Bookmark => {
+  const isToken = entry.kind === 'token'
+  return {
+    id: `bookmark${++bookmarkSequence}`,
+    kind: isToken ? 'token' : 'body',
+    nodeId: '',
+    identity: isToken ? definitionIdentity(entry.modulePath, entry.metadataToken) : statementIdentity(entry.modulePath, entry.metadataToken, entry.ilOffset ?? 0),
+    modulePath: entry.modulePath,
+    metadataToken: entry.metadataToken,
+    ilOffset: isToken ? 0 : entry.ilOffset ?? 0,
+    line: 0,
+    description: entry.description,
+    name: entry.name,
+    labels: entry.labels,
+    enabled: entry.enabled,
+    order,
+  }
+}
 
 /** A row read off disk, or undefined when it is damaged beyond the point of being worth keeping. */
 const toBookmarkEntry = (value: unknown): BookmarkEntry | undefined => {
   if (typeof value !== 'object' || value === null)
     return undefined
   const entry = value as Record<string, unknown>
-  // A module and a token are what a row is found by later; without both there is nothing to navigate to,
-  // which is the same test `bookmarkEntries` applies when it writes a row out.
-  if (typeof entry.modulePath !== 'string' || entry.modulePath === '' || typeof entry.metadataToken !== 'number' || entry.metadataToken === 0 || typeof entry.ilOffset !== 'number')
+  const isToken = entry.kind === 'token'
+  // A module and a token are what a row is found by later, and a spot in a method body needs its offset
+  // too; without them there is nothing to navigate to, which is the same test `bookmarkEntries` applies
+  // when it writes a row out.
+  if (typeof entry.modulePath !== 'string' || entry.modulePath === '' || typeof entry.metadataToken !== 'number' || entry.metadataToken === 0)
+    return undefined
+  if (!isToken && typeof entry.ilOffset !== 'number')
     return undefined
   const name = typeof entry.name === 'string' ? entry.name.trim() : ''
   return {
+    ...(isToken ? { kind: 'token' as const } : {}),
     modulePath: entry.modulePath,
     metadataToken: entry.metadataToken,
-    ilOffset: entry.ilOffset,
+    ...(isToken ? {} : { ilOffset: entry.ilOffset as number }),
     description: typeof entry.description === 'string' ? entry.description : '',
     name: name || t('Bookmark'),
     labels: Array.isArray(entry.labels) ? entry.labels.filter((label): label is string => typeof label === 'string') : [],
     enabled: entry.enabled !== false,
   }
 }
+
+/** A row of a dnSpy bookmark file, in the shape the store keeps. */
+export const bookmarkEntryOfFile = (entry: BookmarkFileEntry): BookmarkEntry => ({
+  ...(entry.ilOffset == null ? { kind: 'token' as const } : {}),
+  modulePath: entry.modulePath,
+  metadataToken: entry.metadataToken,
+  ...(entry.ilOffset == null ? {} : { ilOffset: entry.ilOffset }),
+  description: entry.description ?? '',
+  name: entry.name.trim() || t('Bookmark'),
+  labels: entry.labels,
+  enabled: entry.enabled,
+})
+
+/** The bookmarks as a dnSpy bookmark file holds them, in the order they were made. */
+export const bookmarkFileEntries = (bookmarks: Bookmark[]): BookmarkFileEntry[] => bookmarkEntries([...bookmarks].sort((left, right) => left.order - right.order))
+  .map((entry) => ({
+    modulePath: entry.modulePath,
+    metadataToken: entry.metadataToken,
+    ilOffset: entry.kind === 'token' ? null : entry.ilOffset ?? 0,
+    name: entry.name,
+    labels: entry.labels,
+    enabled: entry.enabled,
+    description: entry.description || null,
+  }))
 
 const sameLabels = (left: string[], right: string[]): boolean =>
   left.length === right.length && left.every((label, index) => label === right[index])

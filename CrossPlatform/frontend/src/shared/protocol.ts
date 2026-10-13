@@ -176,6 +176,52 @@ export interface FindMemberResponse {
   description?: string
 }
 
+/**
+ * Where a bookmark is, the way dnSpy's two .NET locations name it: a module and a metadata token, plus
+ * the IL offset for a spot inside a method body (`DotNetMethodBodyBookmarkLocation`). Without the offset
+ * it is the definition itself (`DotNetTokenBookmarkLocation`) — what a bookmark on a declaration line is.
+ */
+export interface BookmarkLocation {
+  modulePath: string
+  metadataToken: number
+  ilOffset?: number | null
+}
+
+/** The Bookmarks window's display options — dnSpy's `BookmarkDisplaySettings`, which its Location column is
+ *  written with. */
+export interface BookmarkLocationFormat {
+  showTokens: boolean
+  showModuleNames: boolean
+  showParameterTypes: boolean
+  showParameterNames: boolean
+  showDeclaringTypes: boolean
+  showReturnTypes: boolean
+  showNamespaces: boolean
+  showIntrinsicTypeKeywords: boolean
+}
+
+/** One Location cell. `resolved` is false when the module could not be read or the token names nothing in
+ *  it; the parts are then only the token, the way dnSpy writes a location it cannot resolve. */
+export interface BookmarkLocationText {
+  parts: TextPart[]
+  resolved: boolean
+}
+
+/** A bookmark as dnSpy's bookmark files hold it — what the export writes and the import reads back. */
+export interface BookmarkFileEntry extends BookmarkLocation {
+  name: string
+  labels: string[]
+  enabled: boolean
+  /** The member the token named when the file was written (dnSpy's `TokenString`), if the file says. */
+  description?: string | null
+}
+
+export interface ImportBookmarksResponse {
+  bookmarks: BookmarkFileEntry[]
+  /** The entries the file holds that cannot be used: an in-memory module, or a token that names another member now. */
+  skipped: number
+}
+
 /** The search window's "Search For" box — one entry of dnSpy's SearchType each. */
 export type SearchType =
   | 'assembly' | 'module' | 'namespace' | 'type' | 'field' | 'method' | 'property' | 'event'
@@ -1055,6 +1101,15 @@ export interface DnSpyApi {
   decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage): Promise<DecompileResponse>
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
+  /**
+   * The Bookmarks window's Location cells, written the way dnSpy's C# formatter writes them with the display
+   * options given. A module the workspace does not hold is read from its file, so no workspace is needed.
+   */
+  formatBookmarkLocations(workspaceId: string | undefined, locations: BookmarkLocation[], format: BookmarkLocationFormat): Promise<BookmarkLocationText[]>
+  /** The bookmarks as a dnSpy bookmark file (its settings XML), ready to be written out. */
+  exportBookmarks(workspaceId: string | undefined, bookmarks: BookmarkFileEntry[]): Promise<string>
+  /** Reads a dnSpy bookmark file — or a whole dnSpy settings file, which keeps them in the same section. */
+  importBookmarks(workspaceId: string | undefined, xml: string): Promise<ImportBookmarksResponse>
   /** Runs a search; `requestKey` names it to `cancelSearch` and to the batches `onSearchProgress` hands over. */
   search(workspaceId: string, request: SearchRequest, requestKey: string): Promise<SearchResponse>
   cancelSearch(requestKey: string): Promise<void>

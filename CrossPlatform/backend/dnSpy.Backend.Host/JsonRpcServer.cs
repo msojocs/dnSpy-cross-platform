@@ -270,6 +270,12 @@ internal sealed class JsonRpcServer {
 				return await workspaces.GetResourceDataAsync(DeserializeParams<ResourceDataRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceLoadDependencies:
 				return await workspaces.LoadDependenciesAsync(DeserializeParams<LoadDependenciesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.BookmarksFormatLocations:
+				return await workspaces.FormatBookmarkLocationsAsync(DeserializeParams<FormatBookmarkLocationsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.BookmarksExport:
+				return await workspaces.ExportBookmarksAsync(DeserializeParams<ExportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.BookmarksImport:
+				return await workspaces.ImportBookmarksAsync(DeserializeParams<ImportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptEvaluate:
 				return await scripts.EvaluateAsync(DeserializeParams<ScriptEvaluateRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptReset:

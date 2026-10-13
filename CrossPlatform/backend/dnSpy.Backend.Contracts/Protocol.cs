@@ -93,6 +93,12 @@ public static class RpcMethods {
 	public const string ExceptionApply = "exceptions/apply";
 	/// <summary>Drops every change and answers with the default list.</summary>
 	public const string ExceptionReset = "exceptions/reset";
+	/// <summary>The Bookmarks window's Location column for a list of bookmark locations.</summary>
+	public const string BookmarksFormatLocations = "bookmarks/formatLocations";
+	/// <summary>Writes bookmarks as a WPF dnSpy bookmark file.</summary>
+	public const string BookmarksExport = "bookmarks/export";
+	/// <summary>Reads the bookmarks out of a WPF dnSpy bookmark (or settings) file.</summary>
+	public const string BookmarksImport = "bookmarks/import";
 }
 
 public static class ErrorCodes {
@@ -224,7 +230,11 @@ public sealed record DecompileResponse(
 	string Text,
 	IReadOnlyList<TextSpanDto> Spans,
 	IReadOnlyList<DiagnosticDto> Diagnostics) {
-	/// <summary>Per-statement IL mapping for languages whose decompiled text we can map (currently C# only).</summary>
+	/// <summary>
+	/// Per-statement IL mapping for the languages whose text can be mapped: C#, whose statements are the
+	/// decompiler's sequence points, and IL (with or without C#), which has one statement per instruction
+	/// the way dnSpy's disassembler records them. Visual Basic, a conversion of the C# text, has none.
+	/// </summary>
 	public IReadOnlyList<CodeStatementDto>? CodeStatements { get; init; }
 }
 
@@ -1289,3 +1299,60 @@ public static class SearchLocations {
 /// <summary>The params of a <see cref="RpcMethods.SearchProgress"/> notification: results a search found
 /// while it was still running. <see cref="Start"/> is where the first of them stands among everything found.</summary>
 public sealed record SearchProgressNotification(string ProgressToken, int Start, IReadOnlyList<SearchResultDto> Results);
+
+/// <summary>
+/// Where a bookmark sits, the way WPF dnSpy names it: a module and a metadata token, plus the IL offset for a
+/// spot inside a method body (dnSpy's <c>DotNetMethodBody</c> location). Without an offset it is the member
+/// itself — the <c>DotNetToken</c> location a bookmark on a declaration line gets.
+/// </summary>
+public sealed record BookmarkLocationDto(string ModulePath, int MetadataToken, int? IlOffset);
+
+/// <summary>The Bookmarks window's display options (dnSpy's BookmarkDisplaySettings), which the Location column is written with.</summary>
+public sealed record BookmarkLocationFormatDto(
+	bool ShowTokens,
+	bool ShowModuleNames,
+	bool ShowParameterTypes,
+	bool ShowParameterNames,
+	bool ShowDeclaringTypes,
+	bool ShowReturnTypes,
+	bool ShowNamespaces,
+	bool ShowIntrinsicTypeKeywords);
+
+/// <summary>
+/// The Location column of the Bookmarks window for each of <see cref="Locations"/>. A module the workspace
+/// holds is read through it, any other one from its file — a bookmark is listed whether or not its
+/// assembly is open, and so is a request without a workspace.
+/// </summary>
+public sealed record FormatBookmarkLocationsRequest(string? WorkspaceId, IReadOnlyList<BookmarkLocationDto> Locations, BookmarkLocationFormatDto Format);
+
+/// <summary>One location written out, in syntax-highlighting parts. <see cref="Resolved"/> is false when the
+/// member could not be read — the text is then the token alone (or the token and "???"), as dnSpy writes it.</summary>
+public sealed record BookmarkLocationTextDto(IReadOnlyList<TextPartDto> Parts, bool Resolved);
+
+/// <summary>The locations of a <see cref="FormatBookmarkLocationsRequest"/>, in the order they were asked for.</summary>
+public sealed record FormatBookmarkLocationsResponse(IReadOnlyList<BookmarkLocationTextDto> Locations);
+
+/// <summary>
+/// A bookmark as a bookmark file holds it. <paramref name="IlOffset"/> is null for a token location; the
+/// description is what the file says the token named (WPF's TokenString) and is only read, never written.
+/// </summary>
+public sealed record BookmarkFileEntryDto(
+	string ModulePath,
+	int MetadataToken,
+	int? IlOffset,
+	string Name,
+	IReadOnlyList<string> Labels,
+	bool Enabled,
+	string? Description = null);
+
+/// <summary>Writes bookmarks in WPF dnSpy's XML settings format, so its Import Bookmarks reads the file back.</summary>
+public sealed record ExportBookmarksRequest(string? WorkspaceId, IReadOnlyList<BookmarkFileEntryDto> Bookmarks);
+
+public sealed record ExportBookmarksResponse(string Xml);
+
+/// <summary>Reads a bookmark file WPF dnSpy exported — or its whole settings file, which holds the same section.</summary>
+public sealed record ImportBookmarksRequest(string? WorkspaceId, string Xml);
+
+/// <summary>The bookmarks a file held. <see cref="Skipped"/> counts the ones this port cannot take: in-memory or
+/// dynamic modules, unknown location kinds, missing data, and tokens that no longer name what they named.</summary>
+public sealed record ImportBookmarksResponse(IReadOnlyList<BookmarkFileEntryDto> Bookmarks, int Skipped);

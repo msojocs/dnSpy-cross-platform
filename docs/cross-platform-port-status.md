@@ -1,0 +1,936 @@
+# dnSpy 跨平台移植进度（对照 WPF 版）
+
+> 审计日期：2026-10-12
+>
+> 代码基线：`linux` 分支，提交 `adeb8c1a9`
+>
+> 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
+
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。
+
+## 0. 约定
+
+**状态标记**
+
+| 标记 | 含义 |
+|---|---|
+| ✅ | 已完成，行为基本对齐 WPF |
+| 🟡 | 部分完成：有实现，但缺子功能、做了简化或行为有差异 |
+| ❌ | 未实现（包括只有灰显菜单或占位面板的情况） |
+| ⛔ | 不适用：Linux 上不存在该能力，或文档、代码中明确决定不做 |
+
+**完成度算法**：✅ 记 1 分，🟡 记 0.5 分，❌ 记 0 分，⛔ 不计入分母。各模块功能点的粒度不完全一致，少数功能点在两个模块里各算了一次，所以百分比只用于比较量级，不是精确指标。
+
+**路径缩写**
+
+| 缩写 | 实际路径 |
+|---|---|
+| `WPF/` | `dnSpy/dnSpy/` |
+| `AE/` | `Extensions/dnSpy.AsmEditor/` |
+| `DBG/` | `Extensions/dnSpy.Debugger/` |
+| `FE/` | `CrossPlatform/frontend/src/renderer/src/` |
+| `MAIN/` | `CrossPlatform/frontend/src/main/` |
+| `BE/` | `CrossPlatform/backend/dnSpy.Backend.Core/` |
+| `CDS/` | `CrossPlatform/backend/dnSpy.Backend.Debugging.CorDebug/` |
+
+## 1. 总览
+
+### 1.1 各模块完成度
+
+| 模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ | 一句话现状 |
+|---|---|---|---|---|---|---|
+| 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
+| 书签 | ~94% | 16 | 2 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；仅 IL/VB 书签不能持久化 |
+| 搜索窗口 | ~84% | 22 | 5 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；不搜 `<Module>`，命令行参数缺失 |
+| 应用壳与通用 UI | ~53% | 11 | 17 | 9 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
+| 程序集树 | ~48% | 6 | 16 | 7 | 1 | 懒加载树可用；单击不预览、单选、无拖放，Type References 是空壳 |
+| 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
+| 程序集编辑（AsmEditor） | ~46% | 25 | 13 | 31 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
+| C# 交互窗口 | ~42% | 5 | 11 | 9 | 2 | REPL 主流程可用；脚本访问不到 dnSpy，输出一次性返回 |
+| 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
+| 反编译与语言 | ~37% | 3 | 13 | 10 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
+| 代码编辑器与文档标签 | ~33% | 4 | 12 | 14 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
+| Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
+| Roslyn 语言服务 | ~25% | 0 | 4 | 4 | 0 | 只有词法着色，没有补全、悬停、诊断 |
+| 字符串引用窗口 | 0% | 0 | 0 | 19 | 0 | 完全未移植，只留两个隐藏或灰显的菜单占位 |
+| dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
+| 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
+| 其他杂项 | 不计 | 2 | 3 | 2 | 7 | 多为 WPF/Windows 基础设施；更新检查、打开列表缺失 |
+| 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
+
+**整体**：除「工程基础设施」外，所有对照项合计 ✅ 163 / 🟡 130 / ❌ 185 / ⛔ 30，完成度约 **48%**。
+
+### 1.2 按工作流看
+
+| 工作流 | 可用程度 | 说明 |
+|---|---|---|
+| 打开程序集、浏览树、看 C# 代码、F12 跳转 | 日常可用 | 交互模型与 WPF 不同：双击才打开，每个节点一个标签 |
+| 看 IL / VB | 能看，不好用 | IL 是简化格式，IL/VB 都不能跳转、不能下断点 |
+| 搜索、分析引用 | 日常可用 | 两块是移植最完整的部分 |
+| 改名、改元数据、增删成员 | 日常可用 | 五类成员的选项对话框与 WPF 逐页对齐 |
+| 改方法体 | 风险大 | 无 C# 编辑；IL 编辑器不能编辑局部变量和异常处理器，带 try/catch 的方法会丢 EH |
+| 保存 | 基本可用，有缺陷 | 多模块时保存目标错误；无写出选项，不保留 RID，混合模式程序集无法正确保存 |
+| 调试 .NET (CoreCLR) 程序 | 基础可用 | 断点、单步、调用栈、Locals 可用；看不了对象字段，没有 Watch |
+| 元数据表、Hex 修改 | 基本不可用 | 只有 PE 头只读文本与只读 hex 转储 |
+| 脚本、批处理导出 | 很有限 | REPL 不能操作已打开的程序集，没有 CLI，也没有导出项目 |
+
+## 2. 跨模块问题
+
+这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
+
+1. **大量选项页只保存、不生效。** Options 对话框框架本身完整，但前端只有 Assembly Explorer（显示 token、语法高亮）、分析器、搜索和 `debugger.autoOpenLocalsWindow` 几项设置真正被读取。以下页面改了都没有效果：
+   - Environment 的 General 和 Font、Background Image、Output；
+   - C#/VB、IL、BAML 反编译器选项，DecompileFullType、RestoreTabs；
+   - 文本编辑器、Hex 编辑器、Disassembler / Code Style、书签语法高亮、REPL；
+   - 调试器选项（JIT 优化抑制、Just My Code、忽略 Debugger.Break、忽略未处理异常等）；
+   - Assembly Explorer 页的版本号、PublicKeyToken、单击展开、成员顺序。
+
+   反编译器这一组的根因是 `DecompileRequest(WorkspaceId, NodeId, Language)` 没有选项字段，后端在 5 处直接 `new DecompilerSettings()`。另外 General 页的 Theme 与 View→Theme 用了两套存储，互不同步。这些页面会让用户误以为设置已经生效。
+
+2. **Monaco 的 contrib 没有打包。** `FE/monaco.ts` 只导入 `monaco-editor/editor/editor.api`，构建产物里也找不到 find、hover、folding、wordHighlighter、gotoLine、bracketMatching 等模块。因此所有 Monaco 实例（代码视图、C# Interactive）都没有查找替换、悬停、折叠、括号匹配、转到行、缩放。Edit→Find 已经接线，但 `getAction('actions.find')` 返回 undefined，什么也不做。修法是改为导入 `editor.main`，或按需导入 `contrib/*`。
+
+3. **IL 和 VB 文档没有 span 与语句表。** 只有 C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。这一个根因导致：IL/VB 视图里不能跳转；不能下断点，也不显示当前语句；书签只能按行号记，不能持久化；搜索和分析器结果在 IL/VB 视图里只打开方法，不定位到语句。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以同时解决格式和 span。
+
+4. **菜单上标了快捷键却没有绑定。** 已确认的有：Ctrl+Alt+L、Alt+2、Ctrl+D / Ctrl+Shift+D（Go to Token，键位也与 WPF 不一致）、Ctrl+E Ctrl+W、Ctrl+X（Hex）、Alt+Numpad*（Show Next Statement）、Ctrl+Alt+P（附加）、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8 等调试窗口快捷键，以及对程序集按 Del。Shift+Alt+Enter（全屏）会被 Alt+Enter 分支截住，误触发节点编辑。另外缺 Ctrl+Tab、Alt+←/→、Ctrl+G 等常用键，菜单栏也不能用键盘操作。
+
+5. **程序集树只能单选。** 位置为「选中文件 / 选中类型」的搜索、批量删除、多节点合并反编译、一次分析多个成员都受此限制。
+
+6. **未保存修改的保护不完整。** 有未保存修改时关闭窗口，渲染进程只做 `preventDefault`，主进程不弹对话框，表现可能是窗口静默拒绝关闭（代码推断）。Reload All 和移除程序集会直接丢弃修改，不提示。
+
+7. **图标与本地化。** 没有复用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images`），改用 lucide-react 和手绘 SVG，class/enum/struct/delegate 没有专用图标，也没有访问修饰符叠加图标。界面语言只有 English 和简体中文，WPF 有 15 种。
+
+## 3. 审计中发现的疑似缺陷
+
+下表是审计过程中顺带发现的行为问题，不是缺失功能。「已核实」表示读代码确认了因果链，「代码推断」表示没有完整核实或依赖运行时行为。
+
+| # | 问题 | 位置 | 依据 |
+|---|---|---|---|
+| 1 | 打开多个程序集时，File→Save / Save Module… 总是保存第一个模块。`currentModule` 要求选中节点是 `module` 且 id 等于 `OpenedModule.id`，但 `OpenedModule.id` 是 `assembly` 根节点的 id，二者永远对不上，总是退回 `modules[0]`。单测夹具把模块行当成了根节点，所以没暴露 | `FE/app-store.ts` 的 `currentModule`；`BE/WorkspaceManager.cs` 中 `module.Id = root.Id` | 已核实 |
+| 2 | 停止调试会杀掉附加的进程。WPF 对附加的进程默认分离；移植版 `stopDebug` 一律以 `terminateDebuggee=true` 断开，前端也没有 Detach 入口 | `FE/app-store.ts` 的 `stopDebug` | 已核实 |
+| 3 | 保存单个模块会清掉全局 `dirty`，即使其他模块仍有修改 | `FE/app-store.ts` 保存逻辑 | 代码推断 |
+| 4 | IL 编辑器从不重算 MaxStack。前端总是回传 `maxStack`，后端因此设 `KeepOldMaxStack = true`，加指令后栈深可能不够 | `BE/WorkspaceManager.cs` 方法体替换 | 代码推断 |
+| 5 | Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数 | `MAIN/index.ts` 的 `edit:saveResource` | 代码推断 |
+| 6 | PE-only、ELF、未知文件的 Open Hex Editor 读不出数据：`GetHexLength` / `ReadHexAsync` 走 `GetModule()`，对这三类文件抛异常 | `BE/WorkspaceManager.cs` | 代码推断 |
+| 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
+| 8 | C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志 | `BE/Scripting/CSharpScriptService.cs` | 代码推断 |
+| 9 | 基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持 | `FE/components/CodeEditorContextMenu.tsx` | 代码推断 |
+| 10 | 编辑器里单击引用时光标显示为手形，但只有 Ctrl+单击才跳转，而且在同一标签里跳（WPF 单击跳转，Ctrl+单击开新标签） | `FE/components/DocumentView.tsx` 的 `onMouseDown` | 代码推断 |
+
+## 4. 各模块明细
+
+### 4.1 应用壳与通用 UI 框架
+
+完成度约 53%（✅ 11 / 🟡 17 / ❌ 9 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 主窗口与自绘标题栏 | `MainApp/MainWindow.xaml`、`AppWindow.cs` | `MAIN/index.ts`（`frame:false`）、`FE/components/WindowControls.tsx` | ✅ | 标题固定为 "dnSpy"，不显示版本、位数等 |
+| 窗口位置、尺寸、最大化记忆 | `MainApp/SavedWindowState.cs` | 无 | ❌ | 固定 1000×600；计划文档把它列为验收条件 |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/index.ts` 的 `parseInitialPaths` | 🟡 | 只认 `--open` 和 `--no-load-files`；裸文件路径被忽略 |
+| 单实例与参数转发 | `MainApp/App.xaml.cs` | 无 | ❌ | 多开时 localStorage 中的会话互相覆盖 |
+| 以管理员身份重启 | `MainApp/RestartAsAdministratorCommand.cs` | `MAIN/index.ts` 的 `relaunchElevated`、`MAIN/elevated-start.ts` | ✅ | pkexec；提权副本固定走 X11 |
+| 退出时的未保存提示 | `MainApp/ViewCommands.cs` | `FE/App.tsx` 的 `beforeunload` | 🟡 | 不弹对话框，可能静默拒绝关闭 |
+| 全屏 | `MainApp/ViewCommands.cs` | `MenuBar.tsx`、`window:toggleFullScreen` | 🟡 | Shift+Alt+Enter 被节点编辑截住；工具栏无按钮 |
+| 主菜单 | `Menus/MenuService.cs` | `MenuBar.tsx`、`file-menu.ts`、`edit-menu.ts` | 🟡 | 分组、顺序、启用规则照搬；不能用键盘操作 |
+| 工具栏 | `ToolBars/ToolBarService.cs`、`MainApp/AppToolBar.cs` | `ToolBar.tsx` | 🟡 | 缺全屏按钮；保存按钮是 Save As（WPF 为 Save All） |
+| 状态栏 | `MainApp/AppStatusBar.cs` | `FE/App.tsx` | ✅ | |
+| 停靠工具窗口框架 | `ToolWindows/*`、`MainApp/MainWindowControl.cs` | `FE/App.tsx`（flexlayout）、`DockPane.tsx` | ✅ | |
+| 工具窗口右键（Hide、Move 系列） | `MainApp/DsToolWindowServiceCommands.cs` | 无 | ❌ | 只能拖拽移动 |
+| 布局持久化与迁移 | `MainApp/MainWindowControl.cs` | `FE/App.tsx` 的 `loadLayout`（`dnspy.layout.v3`） | ✅ | 损坏时回退默认布局 |
+| 显示工具窗口的命令 | `MainApp/DocumentTreeViewWindowContent.cs` 等 | `FE/App.tsx` 的 `showToolWindow` | 🟡 | 快捷键未绑定 |
+| 文档标签组（Window 菜单） | `Documents/Tabs/TabCommands.cs`、`Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | |
+| Window 菜单窗口列表 | `Documents/Tabs/TabCommands.cs` | `MenuBar.tsx` | ✅ | |
+| 文档标签右键菜单 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | 🟡 | 缺移动、合并、关闭组等组命令 |
+| Windows 对话框 | `Documents/Tabs/Dialogs/TabsDlg.xaml` | `WindowsDialog.tsx` | ✅ | |
+| 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | 🟡 | 有 Ctrl+T、Ctrl+F4；缺 Ctrl+Tab |
+| 标签内容缩放 | `Tabs/TabElementZoomer.cs` | 无 | ❌ | |
+| 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | 🟡 | 不恢复光标与滚动位置；忽略 RestoreTabs 选项 |
+| 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberWorkspace` | ✅ | 记的是每次打开的整组路径 |
+| 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `file-menu.ts`（恒灰） | ❌ | |
+| 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `file-menu.ts`（恒灰） | ❌ | 也发布 Windows 包，不能算平台不适用 |
+| 主题 | `Themes/ThemeService.cs`、`*.dntheme` | `FE/App.tsx`、`styles.css` | 🟡 | 四个主题可切换；不能加载 `.dntheme`；Blue 主题编辑器配色与 WPF 不同 |
+| 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx` | 🟡 | 只有 English、简体中文 |
+| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；大部分页面不生效，见第 2 节 |
+| Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ❌ | 6 个选项都不生效 |
+| Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs` | `options-pages.ts` | ❌ | 字体写死为 Cascadia Mono 13 |
+| 背景图片 | `BackgroundImage/*` | `options-pages.ts` | ❌ | 只有选项页，没有渲染 |
+| Output 窗口 | `Output/*` | `ToolWindows.tsx` 的 `OutputPane` | 🟡 | 只读日志；没有来源切换、清空、复制、保存 |
+| 消息框 | `MainApp/MessageBoxService.cs` | `window.confirm`、各自的对话框 | 🟡 | 没有「不再提示」 |
+| 关于 | `MainApp/AboutScreen.cs`、`LicenseInfo/*` | `AboutDialog.tsx` | 🟡 | 版本号写死为 1.0.0；不显示鸣谢、第三方许可 |
+| 帮助链接 | `MainApp/AboutCommands.cs` | `MenuBar.tsx` | 🟡 | 缺 Wiki |
+| 启动时检查更新 | `MainApp/StartupUpdateCheck.cs` | 无 | ⛔ | 计划写明「更新机制不进入 MVP」；但 General 页仍留着无效的复选框 |
+| Windows 资源管理器集成 | `MainApp/Settings/WindowsExplorerIntegration.cs` | 无 | ⛔ | 注册表功能；Linux 的 .desktop 也没声明 MimeType |
+| MEF 扩展加载 | `Extension/ExtensionService.cs` | 无 | ⛔ | 见 4.16 |
+| 图标服务 | `Images/ImageService.cs` | lucide-react、手绘 SVG | 🟡 | 见第 2 节 |
+| 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | 🟡 | 见第 2 节 |
+| 设置存储 | `Settings/SettingsService.cs` | localStorage 的 `dnspy.*` 键 | ✅ | 不支持 `--settings-file` 和便携模式 |
+
+测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`app-store-session.test.ts` 等；e2e `layout.spec.ts`、`session-close.spec.ts`。设置是否生效、Output 窗口、命令行解析、未保存退出都没有测试。
+
+### 4.2 工程基础设施（新增，WPF 无对应）
+
+完成度约 83%（✅ 8 / 🟡 4）。
+
+| 项目 | 实现 | 状态 | 备注 |
+|---|---|---|---|
+| JSON-RPC 传输 | `MAIN/backend-client.ts`、`dnSpy.Backend.Host/JsonRpcServer.cs` | ✅ | stdio + Content-Length 分帧，单条上限 32 MiB |
+| 握手 | `JsonRpcServer.cs` 的 `Hello` | ✅ | 协议版本校验、nonce 常量时间比较、capability 表 |
+| 取消与超时 | `system/cancel` | ✅ | 默认 60 秒，反编译、搜索、分析、脚本 600 秒 |
+| 后端进程监管 | `backend-client.ts`、`Host/Program.cs` | 🟡 | 后端随父进程退出；后端崩溃后不自动重启、不能恢复工作区，日志不落盘 |
+| DTO 契约 | `Protocol.cs` ↔ `FE/../shared/protocol.ts` | 🟡 | 两边手写，没有代码生成或契约测试；`JsonRpcServer` 本身没有单测 |
+| Electron 安全配置 | `MAIN/index.ts`、`packaging/electron-builder.yml` | ✅ | sandbox、contextIsolation、CSP、fuses；生产 CSP 仍留着 `ws:` 和 `http://127.0.0.1:*` |
+| Linux 打包 | `scripts/package-platform.mjs` | ✅ | AppImage、deb，仅 x64 |
+| Windows 打包 | 同上 | ✅ | nsis、zip，未签名 |
+| macOS 打包 | 同上 | 🟡 | 只有 arm64，没有公证 |
+| SBOM、许可证、校验和 | `scripts/generate-sbom.mjs`、`packaging/licenses` | ✅ | CycloneDX 1.6 |
+| CI | `.github/workflows/cross-platform.yml` | 🟡 | Linux 跑后端测试、依赖审计、e2e、打包冒烟；**不跑前端 vitest 单测**，Windows/macOS 只打包 |
+| 发布流水线 | 同上 | ✅ | push 到 `linux` 更新预发布，`v*` tag 正式发布 |
+
+### 4.3 程序集树（Assembly Explorer）
+
+完成度约 48%（✅ 6 / 🟡 16 / ❌ 7 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 打开程序集（含 PE、未知文档） | `Documents/Tabs/Commands.cs`、`Dialogs/OpenDocumentsHelper.cs` | `file-menu.ts`、`MAIN/index.ts`，RPC `workspace/open`、`workspace/addModules` | ✅ | 另新增 ELF 文档 |
+| Open from GAC / Open List | `Documents/Tabs/Dialogs/OpenFromGAC*`、`OpenDocumentList*` | `file-menu.ts`（恒灰） | ❌ | |
+| 最近文件 | `Documents/TreeView/AssemblyExplorerMostRecentlyUsedList.cs` | `rememberWorkspace` | 🟡 | 按整组路径记录 |
+| Reload All | `Documents/Tabs/DocumentListLoader.cs` | RPC `workspace/reload` | 🟡 | 不恢复标签；不询问就丢弃未保存修改 |
+| Close All / Sort Assemblies | `Documents/Tabs/Commands.cs`、`DocumentTreeView.cs` | RPC `workspace/sortAssemblies` | ✅ | |
+| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | `file-menu.ts`（恒灰） | ❌ | |
+| Close Old In-Memory Modules / Disable MMF | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 隐藏 | ⛔ | 后端整读镜像，没有 MMF，也不建模内存模块 |
+| Remove Assembly | `AE/Assembly/AssemblyCommands.cs` | RPC `workspace/removeModule` | 🟡 | Del 键不生效；PE/ELF/未知文档不能移除 |
+| 会话恢复 | `Documents/Tabs/DocumentTabServiceLoader.cs` | `dnspy.session.v1` | ✅ | |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `parseInitialPaths` | 🟡 | 见 4.1 |
+| 拖放（文件、节点） | `Documents/TreeView/DocumentTreeView.cs` | 无 | ❌ | |
+| 程序集解析 | `Documents/AssemblyResolver.cs` | `BE/WorkspaceManager.cs` 的 `AssemblyReferenceResolver` | 🟡 | 不查 GAC；解析出的程序集不作为自动加载节点进树 |
+| Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | |
+| 程序集 / 模块节点 | `AssemblyDocumentNodeImpl.cs`、`ModuleDocumentNodeImpl.cs` | `GetAssemblyChildren`、`GetModuleChildren` | 🟡 | 看不到 netmodule；`<Module>` 不在命名空间里列出 |
+| 命名空间 / 类型 / 成员，访问器嵌套 | `NamespaceNodeImpl.cs`、`TypeNodeImpl.cs` 等 | `GetTypeChildren` 等 | ✅ | |
+| 成员分组顺序 | `DocumentTreeViewSettings.cs` | `GetTypeChildren` 写死 | ❌ | 顺序与 WPF 默认相反，不可配置 |
+| 隐藏编译器生成的成员 | `TypeNodeImpl.cs` | 无 | ❌ | 会列出 `<>c`、`<…>d__N` |
+| References 文件夹 | `ReferencesFolderNodeImpl.cs`、`ModuleReferenceNodeImpl.cs` | `GetReferenceChildren` | 🟡 | 没有 ModuleRef；双击引用不跳到被引用的程序集 |
+| Type References 文件夹 | `TypeReferencesFolderNodeImpl.cs` | `GetTypeReferenceChildren` 恒为空 | ❌ | 有展开箭头，展开后为空 |
+| 资源节点 | `Documents/TreeView/Resources/*` | `GetResourceChildren` | 🟡 | 没有图片、序列化元素等专用节点 |
+| Base Type / Derived Types | `BaseTypeFolderNodeImpl.cs`、`DerivedTypesFinder.cs` | `GetBaseTypeChildren`、`FindDerivedTypes` | 🟡 | 双击打开注释文档，而不是跳到类型定义 |
+| 节点外观（文本、token、图标、提示） | 各 `*NodeImpl` | `AssemblyExplorer.tsx` | 🟡 | 图标见第 2 节；提示不带框架和架构 |
+| Assembly Explorer 选项页 | `Documents/Tabs/Settings/AssemblyExplorerAppSettingsPage.cs` | `options-pages.ts` | 🟡 | 只有 showToken、syntaxHighlight 生效 |
+| 选中、激活与多选 | `Documents/Tabs/DocumentTabService.cs` | `AssemblyExplorer.tsx` | 🟡 | 单击不预览；双击或 Enter 打开，每节点一个标签；不能多选 |
+| 键盘导航 | `TreeView/TreeViewImpl.cs` | `TreeRow` 的 `onKeyDown` | 🟡 | 只有 Enter、→、← |
+| Open in New Tab、Open Containing Folder、折叠全部、同步选中 | `TabCommands.cs`、`Commands.cs` | 右键菜单、`revealNode` | ✅ | |
+| Go to Entry Point / Global Cctor / Token | `EntryPointCommands.cs`、`GoToTokenCommand.cs` | RPC `module/getSpecialNode`、`tree/findByToken` | 🟡 | 只在树里选中，不打开文档 |
+| Copy MD Token / Full Name、Search MSDN | `CopyTokenCommand.cs` 等 | `AssemblyExplorerContextMenu.tsx` | 🟡 | 属性和事件只拿到短名 |
+| Save Resource / Raw Save Resource | `AE/Resources/ResourceCommands.cs` | RPC `resource/getData` | 🟡 | 只能单个保存；Raw 与普通保存相同（缺陷 #5） |
+| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 隐藏 | ❌ | |
+
+测试：后端 `WorkspaceManagerTests.cs`（懒加载、基类型/派生类型、FindByToken、PE/ELF、Reload 等）；前端 `AssemblyExplorer.test.tsx`、`AssemblyExplorerContextMenu.test.tsx`；e2e `app.spec.ts`、`assembly-tree-performance.spec.ts`。键盘导航、Reload 后的标签表现没有测试。
+
+### 4.4 反编译与语言
+
+完成度约 37%（✅ 3 / 🟡 13 / ❌ 10 / ⛔ 1）。WPF 范围：`WPF/Decompiler/`、`WPF/Language/`、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
+
+后端没有沿用仓库里的 ILSpy 分支，而是用 NuGet 上的 `ICSharpCode.Decompiler 11.1`、`ICSharpCode.BamlDecompiler`，VB 由 `ICSharpCode.CodeConverter` 从 C# 文本转换得到。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| C# 反编译 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core/CSharp/CSharpDecompiler.cs` | `BE/WorkspaceManager.cs` 的 `DecompileCSharp`，RPC `document/decompile` | ✅ | 有引用 span 和语句表 |
+| Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `ConvertToVisualBasicAsync`（CodeConverter） | 🟡 | 无 span、无语句表；方法文档会变成空壳类 |
+| IL | `.../IL/ILDecompiler.cs` | 自写 `ILFormatter` | 🟡 | 没有 `.try`、`.custom`、`.override` 等；修饰符不是 ilasm 语法；无 span |
+| IL with C# | `.../Mixed/ILWithCSharpDecompiler.cs` | `DecompileILWithCSharp` | 🟡 | 同上 |
+| ILAst | `.../ILAst/ILAstDecompiler.cs` | 无 | ⛔ | WPF 只在 DEBUG 构建注册 |
+| 语言下拉与持久化 | `MainApp/ToolBarCommands.cs`、`Decompiler/DecompilerServiceSettings.cs` | `ToolBar.tsx` | 🟡 | 语言跟着标签走，新标签固定 C# |
+| C#/VB 反编译选项 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy/Settings/CSharpDecompilerSettingsPage.cs` | `options-pages.ts` | ❌ | 不传给后端，见第 2 节 |
+| IL 选项 | `.../Settings/ILDecompilerSettingsPage.cs` | `options-pages.ts` | ❌ | 同上 |
+| DecompileFullType | `Documents/Tabs/DocumentTabServiceSettings.cs` | `app-options.ts` | ❌ | 没人读取 |
+| 源码与 IL 的语句映射 | `Decompiler/MethodDebugService.cs` | `BuildCodeStatements`、`BE/StatementIlRanges.cs` | 🟡 | 只有 C# |
+| 异步反编译与取消 | `Documents/Tabs/AsyncShowResult.cs` | `DocumentView.tsx` 加载提示 | 🟡 | 没有取消按钮 |
+| 反编译缓存 | `Documents/Tabs/DecompilationCache.cs` | 无 | 🟡 | 已开标签保留文本；重开同一节点会重新反编译 |
+| 换语言或编辑后刷新 | `Documents/Tabs/RedecompileTabs.cs` | `changeDocumentLanguage` | ✅ | |
+| 多节点合并反编译 | `Documents/Tabs/DocumentTreeNodeDecompiler.cs` | 无 | ❌ | |
+| 程序集 / 模块节点输出 | `dnSpy.Decompiler/DecompilerBase.cs` | `DecompileWholeModuleAsSingleFile` | 🟡 | 反编译整个模块，大程序集很慢 |
+| 命名空间节点输出 | `DecompilerBase.DecompileNamespace` | 同上 | 🟡 | 输出全部类型的完整代码（WPF 只列类型名） |
+| 其他非代码节点 | `Documents/Tabs/NodeDecompiler.cs` | `DecompilePEInfo` 等 | 🟡 | 文件夹节点不打开文档 |
+| Save Code | `Documents/Tabs/NodeTabSaver.cs` | `saveCode` | ✅ | BAML 存为 `.xml` |
+| Export to Project | `Documents/Tabs/Dialogs/ExportToProjectDlg.xaml` | `file-menu.ts`（恒灰） | ❌ | 库自带的 `WholeProjectDecompiler` 没用上 |
+| `.resources` 条目显示 | `Documents/TreeView/Resources/BuiltInResourceElementNodeImpl.cs` | `DecompileResourceEntry` | 🟡 | 非字符串条目显示原始十六进制 |
+| 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 无 | ❌ | |
+| 嵌入资源文本识别 | `ResourceUtilities.cs` | `DescribeResource` | ❌ | 只显示 "Embedded resource, N bytes" |
+| 保存资源 | `AE/Resources/ResourceCommands.cs` | RPC `resource/getData` | 🟡 | 与 4.3 重复计入 |
+| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 隐藏 | ❌ | 与 4.3 重复计入 |
+| BAML → XAML | `BamlDecompiler/XamlDecompiler.cs` | `DecompileResourceEntry` | 🟡 | 无 span、无悬停 |
+| Disassemble BAML | `BamlDecompiler/BamlDisassembler.cs` | 无 | ❌ | |
+| BAML 选项页 | `BamlDecompiler/BamlSettings.cs` | `options-pages.ts` | ❌ | 后端写死设置 |
+
+测试：后端 `WorkspaceManagerTests.cs`（C#/IL、语句表、BAML、资源数据）、`DecompilationConcurrencyTests.cs`；e2e `app.spec.ts`（切换 IL、Save Code、保存资源）。VB 方法级、选项生效、资源预览没有测试。
+
+### 4.5 代码编辑器与文档标签
+
+完成度约 33%（✅ 4 / 🟡 12 / ❌ 14）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 打开节点的标签模型 | `Documents/Tabs/DocumentTabService.cs` | `FE/App.tsx` 的 `addDocumentTab` | 🟡 | WPF 在活动标签里替换内容；这里每节点一个标签 |
+| 单击 / Ctrl+单击引用 | `DocViewer/DocumentViewerMouseProcessor.cs` | `DocumentView.tsx` 的 `onMouseDown` | 🟡 | 见缺陷 #10 |
+| F12 / Ctrl+F12 / Enter | `Text/Editor/TextReferenceCommandInfoProvider.cs` | `DocumentView.tsx` | 🟡 | 只绑了 F12 |
+| 跳转落点 | `Documents/Tabs/TreeNodeReferenceDocumentTabContentProvider.cs` | `openReferenceTarget` | ❌ | 总是打开成员自己的文档，光标在顶部；同文档内不移动光标 |
+| 引用指向未加载模块时按需打开 | `Documents/Tabs/DocTabReferenceNavigator.cs` | RPC `document/findMember` | ✅ | |
+| IL/VB 引用、局部变量与参数引用 | `DocViewer/DocumentViewerDotNetSpanMap.cs` | `SpanTextOutput` | ❌ | 见第 2 节 |
+| 引用高亮、相关关键字高亮 | `DocViewer/DocumentViewerHighlightReferencesTagger.cs` | 无 | ❌ | |
+| 在引用间移动（Tab、Ctrl+Shift+↑↓） | `DocViewer/DocumentViewerCommandTargetFilter.cs` | 无 | ❌ | |
+| Quick Info 悬停 | `Documents/Tabs/DocViewer/ToolTips/*` | 固定文本 "Go to definition (F12)" | ❌ | hover contrib 也没打包 |
+| 后退 / 前进 | `Documents/Tabs/NavigationCommands.cs`、`TabHistory.cs` | `goBack`、`goForward` | 🟡 | 只有工具栏按钮；历史是全局的，不记光标 |
+| 查找 / 替换 / F3 | `Text/Editor/Search/SearchService.cs` | `editor-registry.ts` | ❌ | 已接线但无效，见第 2 节 |
+| 转到行 | `Text/Editor/GoToCommand.cs` | 无 | ❌ | |
+| 折叠 / 大纲 | `Text/Editor/BlockStructureService.cs` | 无 | ❌ | 后端 `MarkFoldStart/End` 是空实现 |
+| 块结构线 | 同上 | Monaco 缩进参考线 | 🟡 | 按缩进画线 |
+| 括号匹配 | `DocViewer/BracePairService.cs` | 无 | ❌ | |
+| 方法分隔线 | `DocViewer/LineSeparator*` | 无 | ❌ | |
+| 缩放 | `Text/Editor/ZoomControlMargin.cs` | 无 | ❌ | |
+| 行号 | `Text/Editor/LineNumberMargin.cs` | Monaco 默认 | 🟡 | 选项开关不生效 |
+| 高亮当前行 | `DocViewer/Commands.cs` | `highlightCurrentLine` | ✅ | |
+| 自动换行 | `DocViewer/Commands.cs` | `DocumentView.tsx` | 🟡 | 快捷键未绑定，与选项页不同步 |
+| 显示空白 | `Text/Editor/DefaultTextEditorCommandInfoProvider.cs` | 写死 | ❌ | |
+| 带格式复制 | `Text/Editor/CopyWpfTextViewCreationListener.cs` | `DocumentView.tsx` 的 `onCopy` | 🟡 | 右键 Copy 只写纯文本 |
+| 语法着色 | `DocViewer/DecompilerTabContentClassifierContext.cs` | `csharp-highlighting.ts`（Shiki）、`il-language.ts` | 🟡 | 只有词法着色，没有语义着色 |
+| 文本编辑器选项与字体 | `Text/Settings/*` | `options-pages.ts` | ❌ | `DocumentView` 不读任何字段 |
+| 右键 Open in New Tab / Copy Token / Full Name / MSDN | `TabCommands.cs` 等 | `CodeEditorContextMenu.tsx` | ✅ | |
+| 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs` | 隐藏 | ❌ | 只在树菜单里有 |
+| 标签右键与快捷键 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | 🟡 | 见 4.1 |
+| 标签组与 Window 菜单 | `Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | 与 4.1 重复计入 |
+| 会话恢复标签 | `Documents/Tabs/DocumentTabSerializer.cs` | `buildSession`、`loadSession` | 🟡 | 与 4.1 重复计入 |
+| Show Code | `Documents/Tabs/Commands.cs` | `showCode` | 🟡 | 会把语言切回 C# |
+
+测试：`CodeEditorContextMenu.test.tsx`、`csharp-highlighting.test.ts`、`il-language.test.ts`；e2e `app.spec.ts`（F12 与历史、外部引用、编辑器右键）、`csharp-highlighting.spec.ts`。查找、悬停、折叠、缩放没有测试，这也是 contrib 缺失一直没被发现的原因。
+
+### 4.6 书签
+
+完成度约 94%（✅ 16 / 🟡 2 / ❌ 0）。WPF 范围：`WPF/Bookmarks/`。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 切换书签 | `Bookmarks/Commands/AppMenuCommands.cs` | `FE/bookmark-commands.ts`、`DocumentView.tsx` | ✅ | Ctrl+K,K 可用；Ctrl+F2、Ctrl+B,T 未绑定 |
+| 边距点击与图标 | `Bookmarks/TextEditor/BookmarkGlyphTextMarkerHandler.cs` | `DocumentView.tsx` | ✅ | |
+| 启用 / 禁用（单个、全部） | `AppMenuCommands.cs` | `toggleBookmarkEnabledAt` 等 | ✅ | |
+| 上一个 / 下一个 | `Bookmarks/Navigator/BookmarkNavigatorImpl.cs` | `stepBookmark` | ✅ | F2、Shift+F2 未绑定（F2 用于重命名） |
+| 同标签的上一个 / 下一个 | `AppMenuCommands.cs` | `stepBookmark(sameLabel)` | ✅ | |
+| 文档内上一个 / 下一个、清除文档内全部 | `AppMenuCommands.cs` | `bookmark-commands.ts` | ✅ | |
+| 清除全部 | `AppMenuCommands.cs` | `clearBookmarks` | ✅ | |
+| 定位模型 | `Bookmarks/DotNet/DotNetMethodBodyBookmarkLocationImpl.cs` | `bookmarkIdentityOf` | 🟡 | IL/VB 文档与声明行只记行号，不能持久化 |
+| 持久化与重新关联 | `Bookmarks/Impl/BookmarksSerializer.cs` | `dnspy.bookmarks.v1` | ✅ | |
+| 书签窗口列表 | `Bookmarks/ToolWindows/Bookmarks/BookmarksVM.cs` | `BookmarksPane.tsx`、`bookmark-model.ts` | ✅ | 支持按列排序（大小写不敏感） |
+| 重命名、编辑标签 | `Bookmarks/ToolWindows/Bookmarks/Commands.cs` | `BookmarksPane.tsx` | ✅ | |
+| 搜索（n:/l:/o:/m: 前缀） | `BookmarksVM.cs` | `filterBookmarks` | ✅ | |
+| 跳转 | `BookmarksOperations.cs` | `goToBookmark` | ✅ | 双击或 Enter 跳转 |
+| 删除、启用、禁用匹配项 | `BookmarksOperations.cs` | `BookmarksPane.tsx` | ✅ | |
+| 复制、全选 | `Commands.cs` | `BookmarksPane.tsx`、`bookmark-model.ts` | ✅ | 四列制表符分隔格式 |
+| 导入 / 导出 | `BookmarksOperations.cs`（XML） | `BookmarksPane.tsx`、`BE/WorkspaceManager.Bookmarks.cs` | ✅ | 完全兼容 WPF XML 格式 |
+| Location 列格式化 | `DotNetBookmarkLocationFormatter.cs` | `BE/WorkspaceManager.Bookmarks.cs`、`CSharpMemberFormatter.cs` | ✅ | Token、成员签名、IL 偏移，支持全部显示选项 |
+| 显示选项 | `Commands.cs` | `options-pages.ts`、`bookmarkLocationFormat` | ✅ | 7 个选项：Token、模块名、参数类型/名称、声明类型、返回类型、命名空间、内置类型关键字 |
+| 书签选项页 | `Bookmarks/Settings/BookmarksAppSettingsPage.cs` | `options-pages.ts` | 🟡 | Location 列显示选项已生效；语法高亮选项不生效 |
+
+测试：`BookmarksPane.test.tsx`、`app-store.test.ts`、`bookmark-model.test.ts`；后端 `BookmarkTests.cs`；e2e 覆盖边距添加、重载保留、导入导出、Ctrl+K 组合键。
+
+### 4.7 Hex 编辑器（浏览与交互）
+
+完成度约 31%（✅ 6 / 🟡 7 / ❌ 18）。WPF 范围：`WPF/Hex/`，以及 `AE/Hex/` 中的「Show in Hex Editor」等定位命令。从节点出发的 Hex 写入见 4.12。
+
+Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的分页转储：每页 4 KiB、每行 16 字节，带 ASCII 列，可以高亮一段范围，没有光标和选区。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Open Hex Editor | `AE/Hex/Commands.cs` | `hex-menu.ts`，RPC `hex/getLength`、`hex/readRange` | 🟡 | 托管模块可用；PE-only/ELF/未知文件读不出（缺陷 #6） |
+| Show Instructions in Hex Editor（当前语句） | 同上 | RPC `hex/resolveStatement` | ✅ | |
+| Show Instructions / Method Body / Initial Value | 同上 | RPC `hex/resolveTarget`、`BE/HexTargets.cs` | ✅ | |
+| Show in Hex Editor（资源） | 同上 | `ResolveResourceTarget` | 🟡 | 只认 EmbeddedResource |
+| Show in Hex Editor（地址引用） | 同上 | 隐藏 | ❌ | |
+| Hex Write return true/false/空方法体 | 同上 | `edit/hexPatch` | ✅ | 与 4.13 重复计入 |
+| Hex Copy / Paste Method Body | 同上 | `hexCopyMethodBody` 等 | ✅ | 与 4.13 重复计入 |
+| 字节显示 | `Hex/Editor/WpfHexViewImpl.cs` | `HexView` | 🟡 | 每行字节数、大小写写死；列不能开关 |
+| 滚动 | `Hex/Editor/HexViewScrollerImpl.cs` | 翻页按钮 | 🟡 | 只能按 4 KiB 翻页 |
+| Go to Position | `Hex/Commands/GoToPositionDlg.xaml` | 工具栏偏移框 | 🟡 | 只认十六进制文件偏移 |
+| Go to Metadata | `Hex/Commands/GoToMetadataDlg.xaml` | 无 | ❌ | |
+| Select | `Hex/Commands/SelectDlg.xaml` | 无 | ❌ | |
+| 光标与选区 | `Hex/Editor/HexCaretImpl.cs`、`HexSelectionImpl.cs` | 无 | ❌ | |
+| 直接键入改字节 | `Hex/Operations/HexEditorOperationsImpl.cs` | 无 | ❌ | 后端 `edit/hexPatch` 已能接受模块级补丁，缺界面 |
+| 撤销 / 重做 | `AE/Hex/HexBufferUndoRedo.cs` | `edit/undo`、`edit/redo` | ✅ | |
+| 删除 / 清零 | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
+| Fill Selection | 同上 | 无 | ❌ | |
+| Copy / Copy Special | 同上、`Hex/Operations/ClipboardUtils.cs` | 无 | ❌ | |
+| Paste / Paste Special | 同上 | 无 | ❌ | |
+| 查找 / 替换 | `Hex/Editor/Search/HexViewSearchService.cs` | 无 | ❌ | |
+| 右键「每行字节数」「值格式」 | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | 视图没有右键菜单 |
+| 本地设置对话框 | `Hex/Commands/LocalSettingsDlg.xaml` | 无 | ❌ | |
+| Save Selection | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
+| 只显示选中字节 | 同上 | 无 | ❌ | |
+| Refresh | 同上 | 编辑后自动重读 | 🟡 | |
+| 结构信息（悬停、结构高亮） | `Hex/Files/*`、`Hex/Intellisense/*` | 无 | ❌ | |
+| F12 跳到代码、Follow 引用、Edit Field | `Hex/ContextMenuCommands/*` | 无 | ❌ | |
+| 命中范围高亮 | `Hex/Editor/HexMarkerService.cs` | `hex-byte-marked` | ✅ | |
+| Hex 选项页 | `Hex/HexEditor/*AppSettingsPage.cs` | `options-pages.ts` | 🟡 | 不生效 |
+| 当前行高亮、列分隔线、缩放 | `Hex/Editor/CurrentLineHighlighter.cs` 等 | 无 | ❌ | |
+| Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs` | 无 | ❌ | |
+
+测试：后端 `WorkspaceManagerTests.cs`（有界读取、目标解析、补丁读回）；`SpecialDocuments.test.tsx`；e2e 覆盖 hex 写方法体并撤销、在 hex 中打开指令、`4D 5A` 断言。PE-only/ELF 的读取没有测试。
+
+### 4.8 元数据/PE 视图与本机反汇编
+
+完成度约 38%（✅ 7 / 🟡 2 / ❌ 12）。WPF 范围：`AE/Hex/Nodes/`、`AE/Hex/PE/`、`WPF/Metadata/`、`WPF/Disassembly/`。ELF 结构视图和右键「Module Information」是移植版新增的，不计入。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 托管模块下的 PE 节点 | `AE/Hex/Nodes/PETreeNodeDataProvider.cs` | `GetPEChildren` | ✅ | |
+| 本机 PE 文件的 PE 节点 | 同上 | `GetPeDocumentChildren`、`BE/PeOnlyModuleEntry.cs` | ✅ | |
+| PE 节点整体文档 | `AE/Hex/Nodes/PENode.cs` | `AppendPeStructures` | ✅ | |
+| DOS / File / Optional 头 | `AE/Hex/Nodes/ImageDosHeaderNode.cs` 等 | `BE/PeStructureFormatter.cs` | ✅ | |
+| 节表头 | `AE/Hex/Nodes/ImageSectionHeaderNode.cs` | 同上 | ✅ | |
+| COR20 头 | `AE/Hex/Nodes/ImageCor20HeaderNode.cs` | 同上 | ✅ | |
+| Storage Signature / Header / 流 | `AE/Hex/Nodes/Storage*Node.cs` | 同上 | ✅ | |
+| 字段网格与就地编辑 | `AE/Hex/Nodes/HexDocumentTabContent.cs`、`AE/Hex/PE/HexField.cs` | 无 | ❌ | 只有只读文本 |
+| #~ 表流头 | `AE/Hex/Nodes/TablesStreamNode.cs` | 无 | ❌ | |
+| 元数据表节点 | `AE/Hex/Nodes/MetadataTableNode.cs` | 无 | ❌ | |
+| 元数据表视图（行×列） | `AE/Hex/PE/MetadataTableVM.cs` | 无 | ❌ | |
+| 元数据行节点 | `AE/Hex/Nodes/MetadataTableRecordNode.cs` | 无 | ❌ | |
+| Sort Table / Sort Selection | `AE/Hex/MDTableContextMenuCommands.cs` | `edit-menu.ts`（灰显） | ❌ | |
+| Go to RID | 同上 | 灰显 | ❌ | |
+| MD 表 Show in Hex Editor | 同上 | 灰显 | ❌ | |
+| MD 表 Copy as Text / Copy / Paste | 同上 | 灰显 | ❌ | |
+| Go to MD Table Row | `AE/Hex/Commands.cs` | 灰显 | ❌ | |
+| PE 结构节点 Show in Hex Editor | 同上 | 隐藏 | ❌ | PE 结构与 hex 视图没有联动 |
+| 本机反汇编查看器 | `WPF/Disassembly/Viewer/*`、`DBG/dnSpy.Debugger/Disassembly/*` | `DebugPlaceholder` | ❌ | 没有反汇编器 |
+| Disassembler 选项页 | `WPF/Disassembly/Viewer/DisassemblyAppSettingsPage.cs` | `options-pages.ts` | 🟡 | 只有持久化 |
+| Code Style（MASM/NASM/GAS） | `WPF/Disassembly/X86/*` | `options-pages.ts` | 🟡 | 只有持久化 |
+
+`docs/linux-release-1.0.md` 中的「ECMA-335 Metadata Tables」实际只是 Module Information 里的各表行数。
+
+测试：后端 PE 结构 5 条、ELF 5 条；e2e `pe-structure.spec.ts`、`elf-structure.spec.ts`。
+
+### 4.9 搜索窗口
+
+完成度约 84%（✅ 22 / 🟡 5 / ❌ 2）。WPF 范围：`WPF/Search/`。后端的匹配器、过滤器、遍历器（`BE/Search/`）逐段对照 WPF 移植。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 打开窗口（Ctrl+Shift+K、菜单、工具栏） | `Search/Commands.cs` | `FE/App.tsx`、`edit-menu.ts`、`ToolBar.tsx` | ✅ | |
+| 打开后聚焦并全选 | `Search/SearchService.cs` | `search-store.ts` 的 `requestFocus` | ✅ | |
+| 边输入边搜（500ms） | `Search/SearchControlVM.cs` | `search-store.ts` | ✅ | 另加 Enter 立即搜 |
+| 搜索类型 24 项 | `Search/SearchType.cs` | `FE/search-model.ts`、`BE/Search/SearchFilter.cs` | ✅ | 原生 select，下拉项无图标 |
+| 位置 4 项 | `Search/SearchControlVM.cs` | `BE/WorkspaceManager.Search.cs` | 🟡 | 树单选，只按一个节点算 |
+| 选项 6 个复选框 | `Search/SearchControl.xaml` | `SearchPane.tsx` | ✅ | |
+| 名称匹配（分词、全词、大小写、正则） | `dnSpy.Contracts.DnSpy/Search/SearchComparers.cs` | `BE/Search/SearchComparers.cs` | ✅ | |
+| 字面量匹配 | 同上、`Search/FilterSearcher.cs` | `SearchComparers.cs`、`FilterSearcher.cs` | ✅ | |
+| 遍历与过滤语义 | `Search/FilterSearcher.cs` | `BE/Search/FilterSearcher.cs` | 🟡 | 跳过 `<Module>`，全局函数和字段搜不到；模块引用结果无法跳转 |
+| 资源搜索（含 BAML） | `Search/FilterSearcher.cs` | `ResourceTexts.cs`、`DecompileBaml` | ✅ | |
+| 在框架程序集中搜索 | `FrameworkFileUtils` | `BE/Search/FrameworkAssemblies.cs` | ✅ | |
+| 搜索编译器生成的成员 | `FilterSearcher.IsCompilerGenerated` | `BE/Search/CompilerGeneratedMembers.cs` | ✅ | 不随反编译器选项变化 |
+| 结果列表（图标、高亮、排序） | `Search/SearchResult.cs` | `SearchResultFormatter.cs`、`SearchPane.tsx` | ✅ | 按视口渲染 |
+| 结果文本随语言变化 | `Search/SearchService.cs` | 无 | 🟡 | 固定 C# 写法 |
+| 结果提示 | `SearchResult.CreateToolTipUI` | `SearchToolTip` | 🟡 | 纯文本，缺成员签名 |
+| 边搜边出 | `Search/DocumentSearcher.cs` | RPC `search/run` + `search/progress` | ✅ | 单线程切片 |
+| 上限 10,000 与红框 | 同上 | `BE/Search/SearchRun.cs` | ✅ | |
+| 跟随结果（含方法体内定位） | `SearchService.FollowResult` | `SearchPane.tsx`、`findSearchResultCaret` | 🟡 | 只在 C# 视图定位到语句 |
+| 右键：转到引用 / 新标签 | `Search/Commands.cs` | `SearchContextMenu.tsx` | ✅ | |
+| 右键：复制 token / 全名 | `CopyTokenCommand.cs` 等 | 同上 | ✅ | |
+| 右键：类断点 / 跟踪点 / 方法断点 | `DBG/.../ClassBreakpointCommands.cs` | 同上 | ✅ | |
+| 右键：分析 / MSDN | `Extensions/dnSpy.Analyzer/TreeNodes/Commands.cs` | 同上 | ✅ | |
+| 右键：选项组 | `Search/Commands.cs` | 同上 | ✅ | |
+| 窗口内 Ctrl+字母快捷键 | `Search/SearchService.cs` | `SearchPane.tsx` | ✅ | |
+| Ctrl+Shift+R 分析结果 | `Analyzer/TreeNodes/Commands.cs` | `SearchPane.tsx` | ✅ | |
+| 设置持久化 | `Search/SearchSettings.cs` | `app-options.ts` | ✅ | |
+| 文档变化时清空或重搜 | `Search/SearchService.cs` | `search-store.ts` | ✅ | |
+| 关闭窗口时停止并清空 | `Search/SearchToolWindowContent.cs` | 无 | ❌ | 窗口隐藏时照样搜索 |
+| 命令行 `--search*` | `Search/AppCommandLineArgsHandler.cs` | 无 | ❌ | |
+
+测试：后端 `WorkspaceSearchTests.cs` 14 条；前端 `search-model.test.ts`、`search-store.test.ts`、`SearchPane.test.tsx`；e2e 3 条。
+
+### 4.10 分析器
+
+完成度约 93%（✅ 25 / 🟡 4 / ⛔ 1）。WPF 范围：`Extensions/dnSpy.Analyzer/`。后端在 `BE/Analyzer/`，详细设计见 `CrossPlatform/ANALYZER_HANDOFF.md`。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 工具窗口，关闭即清空 | `AnalyzerToolWindowContent.cs` | `FE/App.tsx` | ✅ | |
+| 添加：每成员一行，重复分析回到已有行 | `AnalyzerService.cs` | `FE/analyzer-store.ts` | ✅ | |
+| 行文本、图标、显示标记 | `TreeNodes/*Node.cs` | `BE/Analyzer/AnalyzerLabelFormatter.cs` | ✅ | |
+| 属性、事件访问器行 | `TreeNodes/PropertyAccessorNode.cs` 等 | `AnalyzerEntityChildren.cs` | ✅ | |
+| 类型的 6 个搜索类别 | `TreeNodes/TypeNode.cs` 等 | `Searches/TypeSearches.cs` | ✅ | |
+| 方法的 5 个搜索类别 | `TreeNodes/MethodNode.cs` 等 | `Searches/MethodSearches.cs` | ✅ | |
+| 字段：读取于 / 赋值于 | `TreeNodes/FieldNode.cs` | `Searches/FieldAccessSearch.cs` | ✅ | |
+| 属性：重写 / 重写于 / 实现于 | `TreeNodes/Property*Node.cs` | `Searches/PropertySearches.cs` | ✅ | |
+| 事件：被触发于 / 重写 / 重写于 / 实现于 | `TreeNodes/Event*Node.cs` | `Searches/EventSearches.cs` | ✅ | |
+| 扫描范围（可见性、友元、IgnoresAccessChecksTo） | `TreeNodes/ScopedWhereUsedAnalyzer.cs` | `BE/Analyzer/ScopedWhereUsedAnalyzer.cs` | ✅ | |
+| lambda / 迭代器回溯到所在方法 | `TreeNodes/Helpers.cs` | `AnalyzerHelpers.cs` | ✅ | |
+| COM/NoPIA 类型等价、vtable 槽匹配 | `TreeNodes/TIAHelper.cs`、`ComUtils.cs` | 无 | ⛔ | 用户明确决定不做 |
+| 异步搜索：展开才搜、边搜边出、收起取消 | `TreeNodes/AsyncFetchChildrenHelper.cs` | RPC `analyze/children` + `analyze/progress` | ✅ | |
+| 结果规模与并行 | `TreeNodes/SearchNode.cs` | `WorkspaceManager.Analyzer.cs` | 🟡 | 有意设 20,000 上限，默认单线程 |
+| 激活行 | `AnalyzerService.OnActivated` | `AnalyzerPane.tsx` | ✅ | |
+| 显示方法内的引用 | `AnalyzerService.GoTo` | `findReferenceCaret` | 🟡 | 只在 C# 视图定位 |
+| 右键：跳转组、复制（多选按层级缩进）、复制 token / 全名 | `Analyzer/Commands.cs` | `AnalyzerContextMenu.tsx` | ✅ | 按 3 项统计 |
+| 右键：断点、分析、MSDN、移除 | 同上 | 同上 | ✅ | 按 2 项统计 |
+| 选项组与持久化 | `AnalyzerSettings.cs` | `app-options.ts` | ✅ | |
+| 从程序集树分析 | `TreeNodes/Commands.cs` | `AssemblyExplorerContextMenu.tsx` | 🟡 | 基类型行不能分析（缺陷 #9）；单选 |
+| 从代码编辑器、搜索窗口、分析器分析 | 同上 | `CodeEditorContextMenu.tsx` 等 | ✅ | 按 3 项统计 |
+| 没有目标时 Ctrl+Shift+R 显示窗口 | 同上 | `FE/App.tsx` | ✅ | |
+| 多选与键盘导航 | WPF TreeView | `AnalyzerPane.tsx` | ✅ | 按视口渲染 |
+| 模型变化后失效与重建 | `AnalyzerService.cs` | `analyzer-store.ts`、后端 `analyzerEpoch` | ✅ | |
+| 语言切换时重写行文本 | `AnalyzerService.DecompilerChanged` | 无 | 🟡 | 固定 C# 写法 |
+
+尚未做过与 WPF 对同一程序集的逐类别结果对照（需要 Windows 环境）。
+
+测试：后端 `WorkspaceAnalyzerTests.cs` 27 条、`WorkspaceAnalyzerScopeTests.cs` 3 条；前端 `analyzer-model.test.ts`、`analyzer-store.test.ts`、`AnalyzerPane.test.tsx`、`AnalyzerContextMenu.test.tsx`；e2e 约 7 条。
+
+### 4.11 字符串引用窗口
+
+完成度 0%（❌ 19）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。
+
+跨平台版没有窗口、没有 RPC、没有后端扫描，只留了两处占位：程序集树右键「查找模块中的全部字符串」（隐藏）和编辑菜单同名项（灰显）。WPF 的功能点如下，全部未实现：
+
+- 程序集树右键与编辑菜单入口；字符串引用工具窗口；
+- 扫描选中节点所在程序集的全部模块；不输入查询时列出全部字符串；
+- 三类来源：IL `ldstr`（每条一行，带 IL 偏移）、常量（字段、属性、参数默认值）、自定义特性参数（含命名参数和泛型参数）；
+- 子串过滤、大小写、正则（含非法正则提示）、按转义后的字符串匹配；
+- 四列（种类、字面量、引用者、模块）与列头排序；
+- 跟随（双击、Enter、新标签），右键转到引用；
+- 复制格式化字面量、复制原始字面量；
+- 刷新按钮与自动刷新；设置持久化（3 项）；隐藏编译器生成成员。
+
+**替代方案**：普通搜索选「数字/字符串」能找到 ldstr、常量和特性里的字符串，按同样口径约覆盖 40%。主要不足是：结果行显示的是所在成员而非字符串本身；每个方法只报第一条命中；空查询不搜，不能「列出全部」。
+
+### 4.12 程序集编辑（AsmEditor）与保存
+
+整体完成度约 46%（✅ 25 / 🟡 13 / ❌ 31 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
+
+元数据编辑最完整：五类成员的编辑、新建、删除对话框与 WPF 逐页对齐，命名空间操作和事务式撤销也很扎实。差距集中在 Roslyn 源码编辑、方法体编辑器、资源新建与元素编辑、程序集/模块对话框、保存选项。
+
+| 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
+|---|---|---|---|---|---|
+| Namespace | ~100% | 3 | 0 | 0 | 0 |
+| Types / Method / Field / Property / Event | ~100% | 5 | 0 | 0 | 0 |
+| 通用对话框（DnlibDialogs、ViewHelpers） | ~79% | 5 | 1 | 1 | 0 |
+| Commands（菜单落位与杂项命令） | ~58% | 3 | 1 | 2 | 1 |
+| UndoRedo | ~50% | 2 | 2 | 2 | 0 |
+| Hex（修改能力） | ~44% | 3 | 1 | 4 | 0 |
+| Module | ~38% | 1 | 1 | 2 | 0 |
+| SaveModule | ~33% | 1 | 2 | 3 | 0 |
+| MethodBody | ~28% | 1 | 3 | 5 | 0 |
+| Resources | ~21% | 1 | 1 | 5 | 0 |
+| Assembly | ~17% | 0 | 1 | 2 | 1 |
+| Compiler（C# 编辑） | 0% | 0 | 0 | 5 | 0 |
+
+#### Assembly、Module、Namespace
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Edit Assembly… | `AE/Assembly/AssemblyCommands.cs`、`AssemblyOptionsVM.cs` | `edit-menu.ts`（灰显） | ❌ | 后端选项模型不含 assembly |
+| Create Assembly… | 同上 | 灰显 | ❌ | |
+| Remove Assembly | 同上 | RPC `workspace/removeModule` | 🟡 | 不可撤销，不询问保存 |
+| Disable Memory Mapped I/O | 同上 | 隐藏 | ⛔ | 后端没有内存映射 |
+| Edit Module… | `AE/Module/ModuleCommands.cs`、`ModuleOptionsVM.cs` | 灰显 | ❌ | |
+| NetModule 新建、添加、移除 | 同上、`NetModuleOptionsVM.cs` | 隐藏 | ❌ | 树分不清 netmodule 与程序集模块 |
+| 程序集转 NetModule | 同上 | RPC `edit/convertModule` | ✅ | 可撤销 |
+| NetModule 转程序集 | 同上 | 后端已实现，前端无入口 | 🟡 | |
+| Delete Namespace | `AE/Namespace/NamespaceCommands.cs` | RPC `edit/delete` | ✅ | |
+| Rename Namespace | 同上 | `EditDialogs.tsx`，RPC `edit/setNamespace` | ✅ | 还会改写其他模块里的 TypeRef |
+| Move Types to Empty Namespace | 同上 | 同上 | ✅ | |
+
+#### 类型与成员
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Edit Type…（6 个页签） | `AE/Types/TypeOptionsDlg.xaml` | `TypeOptionsDialog.tsx`，RPC `edit/getOptions`、`edit/setOptions`；`BE/Editing/TypeDefEditor.cs` | ✅ | |
+| Edit Method…（8 个页签） | `AE/Method/MethodOptionsDlg.xaml` | `MethodOptionsDialog.tsx`、`BE/Editing/MethodDefEditor.cs` | ✅ | |
+| Edit Field / Property / Event… | `AE/{Field,Property,Event}/*OptionsDlg.xaml` | `FieldOptionsDialog.tsx` 等 | ✅ | |
+| 新建类型、嵌套类型、方法、字段、属性、事件 | `*DefCommands.cs` | RPC `edit/create` | ✅ | 撤销后重做回到同一个 token |
+| 删除类型与成员 | `*DefCommands.cs`、`AE/Commands/Deleted*Updater.cs` | RPC `edit/delete` | ✅ | 删除属性/事件会连带删除访问器 |
+
+另新增了 WPF 没有的简易重命名框（RPC `edit/rename`）。
+
+#### 方法体（MethodBody）
+
+「Edit Method Body…」打开的是 `FE/components/EditDialogs.tsx` 的 `MethodBodyEditor`：四列文本网格，通过 RPC `edit/replaceMethodBody` 整体替换。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 方法体类型（None/CIL/Native）、给无体方法加 body | `AE/MethodBody/MethodBodyVM.cs` | 无体时直接报错 | ❌ | 只能先 Replace with stub 再编辑 |
+| CIL 头选项 | `CilBodyVM.cs` | MaxStack、InitLocals | 🟡 | 实际恒保留旧 MaxStack（缺陷 #4） |
+| 指令表编辑 | `InstructionsListHelper.cs` | 文本网格 | 🟡 | 只能追加或删除行；没有插入、移动、剪贴板 |
+| 操作数编辑 | `InstructionOperandVM.cs`、`SwitchOperandDlg` | 十六进制 token、标签、索引 | 🟡 | 没有选择器；不能新建 MemberRef；不支持 calli 的 `InlineSig` |
+| 局部变量页 | `LocalVM.cs` | 无 | ❌ | 不能增删局部变量 |
+| 异常处理器页 | `ExceptionHandlerVM.cs` | 只有「清空异常处理器」 | ❌ | 编辑带 try/catch 的方法必然丢掉全部 EH |
+| 指令宏（Simplify/Optimize、NOP、反转分支等） | `InstructionsListHelper.cs` | 无 | ❌ | |
+| Edit IL Instructions（按选中语句） | `MethodBodyCommands.cs` | 隐藏 | ❌ | |
+| Replace Method Body with stub | `MethodBodyCommands.cs` | RPC `edit/replaceMethodBodyWithStub`、`BE/MethodBodyStub.cs` | ✅ | |
+
+#### Compiler（Roslyn 源码编辑）
+
+以下 5 项全部未实现，菜单只有灰显占位：Edit Method (C#)、Edit Class / Add Class Members / Add Class (C#)、Edit Assembly Attributes (C#)、Merge with Assembly、编译器选项页。WPF 实现在 `AE/Compiler/`（`EditMethodCodeVM.cs`、`ModuleImporter.cs`、`ModulePatcher.cs` 等）。
+
+文档里没有「不做」的决定，后端也已引用 `Microsoft.CodeAnalysis.CSharp.Scripting`，Roslyn 在 Linux 上可用，所以记为 ❌ 而不是 ⛔。这是 dnSpy 最常用的编辑方式之一，也是本模块最大的缺口。
+
+#### 资源、Hex 修改、保存、撤销
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Delete Resource | `AE/Resources/ResourceCommands.cs` | RPC `edit/delete` | ✅ | |
+| Delete Resource Element | 同上 | 灰显 | ❌ | |
+| Edit Resource（名称、可见性、链接属性） | `ResourceVM.cs` | 同名菜单实为「用文件替换字节」，RPC `edit/replaceResource` | 🟡 | 属性改不了；字节替换是新增能力 |
+| Edit Resource Element（字符串、图片、序列化对象等） | `ResourceElementVM.cs` 等 | 灰显 | ❌ | |
+| Create File / Multi File Resource | `ResourceCommands.cs` | 灰显 | ❌ | |
+| Create Assembly / File Linked Resource | 同上 | 灰显 | ❌ | |
+| 新建资源元素 | 同上 | 灰显 | ❌ | |
+| Hex Write return true/false/空方法体 | `AE/Hex/Commands.cs` | `hex-menu.ts` → RPC `edit/hexPatch` | ✅ | |
+| Hex Copy / Paste Method Body | 同上 | 剪贴板传十六进制文本 | ✅ | |
+| Hex 修改接入撤销与保存 | `AE/Hex/HexBufferUndoRedo.cs` | 补丁作为事务操作，保存时重定位 | ✅ | 见缺陷 #7 |
+| Hex 视图里直接改写、粘贴、填充 | `WPF/Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
+| Go to Offset / Metadata / 选择 | 同上 | 偏移输入框 | 🟡 | |
+| 单独保存 Hex 文档、改非 .NET 文件 | `AE/Hex/HexTabSaver.cs` | 后端拒绝 PE-only 文件 | ❌ | |
+| 编辑 PE 头与元数据表字段 | `AE/Hex/Nodes/*`、`AE/Hex/PE/*VM.cs` | 无 | ❌ | |
+| MD 表命令与 Go to MD Table Row | `AE/Hex/MDTableContextMenuCommands.cs` | 灰显 | ❌ | |
+| Save Module… | `AE/SaveModule/SaveModuleCommand.cs` | 原生另存为对话框，RPC `module/saveAs` | 🟡 | 没有选项；多模块时目标错误（缺陷 #1） |
+| Save All | 同上、`SaveMultiModuleVM.cs` | RPC `module/saveAll` | 🟡 | 不列出模块、无进度、不能取消 |
+| 原地覆盖原文件 | `AE/SaveModule/DocumentSaver.cs` | RPC `module/save` | ✅ | 写临时文件、重新加载校验后原子替换 |
+| Mixed-mode 保存 | `SaveModuleOptionsVM.cs` | 只调 `Module.Write` | ❌ | C++/CLI 程序集无法正确保存 |
+| 写 PDB | 同上 | 无 | ❌ | |
+| 写出选项（保留 RID/堆、校验和、Win32 资源等） | 同上 | 无，全用 dnlib 默认值 | ❌ | 保存后 token 会被重排 |
+| Undo / Redo | `AE/UndoRedo/*` | RPC `edit/undo`、`edit/redo` | ✅ | |
+| 编辑命令统一进撤销栈并刷新界面 | `UndoCommandService.cs` | `refreshAfterEdit` | ✅ | 后端有版本冲突检测 |
+| 修改标记 | 同上 | 前端只有一个工作区级 `dirty` | 🟡 | 见缺陷 #3；撤销回保存点后不复位 |
+| 退出时询问保存 | `AE/UndoRedo/Commands.cs` | `beforeunload` | 🟡 | 没有「保存后退出」 |
+| 重新加载前提示 | `UndoRedoDocumentListListener.cs` | 无 | ❌ | |
+| 移除已修改的程序集时询问 | `AE/Assembly/AssemblyCommands.cs` | 无 | ❌ | |
+
+#### 通用对话框与命令
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 签名构造器（TypeSig、MethodSig、属性签名） | `AE/DnlibDialogs/TypeSigCreatorVM.cs` 等 | `widgets/TypeSigEditor.tsx` 等、`BE/Editing/SignatureCodec.cs` | ✅ | |
+| 成员选择器 | `MemberPickerVM.cs`、`ViewHelpers/DnlibTypePicker.cs` | `TypePickerDialog.tsx` | 🟡 | 没有搜索框 |
+| 自定义特性、命名参数、常量 | `CustomAttributeVM.cs`、`ConstantVM.cs` | `widgets/CustomAttributeDialog.tsx` 等 | ✅ | |
+| 泛型参数、DeclSecurity、TypeDefOrRefAndCA | `GenericParamVM.cs`、`DeclSecurityVM.cs` | 对应的 Dialog 与 Codec | ✅ | |
+| ParamDef、P/Invoke、Marshal、MethodOverride | `ParamDefVM.cs`、`ImplMapVM.cs`、`MarshalTypeVM.cs` | 对应的 Dialog 与 Editor | ✅ | |
+| 手工构造 MemberRef / MethodSpec | `MemberRefVM.cs`、`MethodSpecVM.cs` | 无 | ❌ | |
+| 列表编辑控件 | `ListVM.cs` | `ListEditor.tsx` | ✅ | |
+| 命令在三处菜单里的落位 | `AE/Commands/*MenuHandler.cs` | `edit-menu.ts`、两个右键菜单 | ✅ | |
+| 多选批量操作 | `AE/Commands/DeletableNodes.cs` | 树单选 | 🟡 | |
+| Copy MD Token / Full Name | `WPF/Documents/Tabs/CopyTokenCommand.cs` | 树和代码视图菜单 | ✅ | |
+| Copy IL Bytes | `AE/Commands/InstructionCommands.cs` | 无 | ❌ | |
+| Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | 与 4.3 重复计入 |
+| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | 灰显 | ❌ | 与 4.3 重复计入 |
+| Close Old In-Memory Modules | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 灰显 | ⛔ | 不建模内存模块 |
+
+测试：后端 `WorkspaceEditCreateTests.cs`、`WorkspaceEditOptionsTests.cs`、`Editing/NodeOptionsRoundTripTests.cs`、`Editing/SignatureRoundTripTests.cs`，以及 `WorkspaceManagerTests.cs` 中的方法体、资源、hex、保存用例；前端 `*OptionsDialog.test.tsx` 与 `widgets/*.test.ts(x)` 约 430 条；e2e 覆盖新建类型并保存、IL 与元数据编辑、hex 写入并撤销、模块转换。`MethodBodyEditor` 没有组件测试，退出提示和修改标记粒度没有测试。
+
+### 4.13 调试器
+
+整体完成度约 47%（✅ 30 / 🟡 21 / ❌ 35 / ⛔ 4）。WPF 范围：`Extensions/dnSpy.Debugger/` 全部子项目、`dnSpy/Roslyn/Roslyn.ExpressionCompiler`。
+
+跨平台版只有一个引擎：后端进程内直连 ICorDebug（`CDS/`），只支持 CoreCLR。核心思路是在没有 PDB 的情况下，用反编译语句到 IL 偏移的映射（`BE/StatementIlRanges.cs`）提供断点、单步落点和局部变量名。
+
+| 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
+|---|---|---|---|---|---|
+| 异常设置 | ~85% | 8 | 1 | 1 | 1 |
+| 断点 | ~68% | 7 | 9 | 1 | 0 |
+| 单步与执行点 | ~60% | 5 | 2 | 3 | 0 |
+| 会话控制 | ~46% | 5 | 3 | 6 | 1 |
+| 运行时与代码映射 | ~40% | 2 | 0 | 3 | 1 |
+| 调试工具窗口 | ~33% | 1 | 4 | 4 | 0 |
+| 调试器选项 | ~28% | 2 | 1 | 6 | 1 |
+| 变量与表达式求值 | ~4% | 0 | 1 | 11 | 0 |
+
+按计数是 47%，但缺口集中在最常用的变量窗口，实际调试体验比这个数字差。
+
+#### 会话控制
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Debug Program 对话框（.NET 页） | `DBG/dnSpy.Debugger/Dialogs/DebugProgram/*`、`dnSpy.Debugger.DotNet.CorDebug/Dialogs/DebugProgram/DotNetStartDebuggingOptionsPage.cs` | `DebugProgramDialog.tsx`，RPC `debug/launch` | ✅ | 支持宿主可执行文件；缺 ConnectionTimeout |
+| Break at（4 种） | `DotNetCommonStartDebuggingOptionsPage.cs` | `CDS/CorDebugSession.Entry.cs` | ✅ | |
+| .NET Framework 启动页 | `DotNetFrameworkStartDebuggingOptionsPage.cs` | 无 | ⛔ | Linux 上没有 .NET Framework |
+| Mono / Unity 启动与 connect | `dnSpy.Debugger.DotNet.Mono/Dialogs/DebugProgram/*` | 无 | ❌ | 计划列为后续方向 |
+| 启动选项 MRU | `DbgUI/StartDebuggingOptionsMru.cs` | 无 | ❌ | 参数每次重填 |
+| Start Without Debugging | `DbgUI/DebugMenuCommands.cs` | 无 | ❌ | |
+| Attach to Process | `Dialogs/AttachToProcess/*` | `AttachDialog.tsx`，RPC `debug/listProcesses`、`debug/attach` | 🟡 | 列出所有进程，不按 CLR 过滤；信息列少 |
+| Unity 附加 | `dnSpy.Debugger.DotNet.Mono/Dialogs/AttachToProcess/Unity*` | 无 | ❌ | |
+| Continue | `DebugMenuCommands.cs` | `continueDebug` | ✅ | |
+| Break All | 同上 | `pauseDebug` | ✅ | |
+| Stop Debugging | 同上 | `stopDebug` | 🟡 | 附加的进程也会被杀掉（缺陷 #2） |
+| Detach All / Terminate All | 同上 | 后端支持 Detach，前端无入口 | ❌ | |
+| Restart | 同上 | 停止后重新打开对话框 | 🟡 | 不保留参数 |
+| 多进程调试 | 同上 | 只有一个会话 | ❌ | |
+| 调试状态提示 | `DbgUI/DebuggerImpl.cs` | 状态栏 | ✅ | |
+
+#### 单步与执行点
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Step Into / Over / Out | `Steppers/DbgStepperImpl.cs` | `CDS/CorDebugSession.Stepping.cs` | ✅ | 按 3 项统计；在源级顺序点挂临时断点 |
+| 跨 await 单步 | `dnSpy.Debugger.DotNet/Steppers` | 语句级断点 | 🟡 | continuation 不做判定，分支或异常路径上可能多停一次 |
+| Show Next Statement | `DbgUI/DocumentViewerCommands.cs` | `revealStoppedLocation` | ✅ | 快捷键未绑定 |
+| Set Next Statement | 同上 | 隐藏；后端没有 SetIP | ❌ | |
+| Run to Cursor | `ToolWindows/CallStack/CallStackOperations.cs` | 无 | ❌ | |
+| Unwind To This Frame | `ToolWindows/CallStack/Commands.cs` | 无 | ❌ | |
+| 当前语句与调用栈帧高亮 | `CallStack/TextEditor/ActiveStatementService.cs` | `DocumentView.tsx` | 🟡 | 不区分当前语句与其他帧；总切到 C# 视图 |
+| 停在工作区外的模块时自动加载 | `dnSpy.Debugger.DotNet/Modules/DbgLoadModuleReferenceHandlerImpl.cs` | `openDebugModule` | ✅ | |
+
+#### 断点
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 行断点 | `Breakpoints/Code/TextEditor/GlyphMarginOperations.cs` | `toggleLineBreakpoint`、`CDS/CorDebugSession.Breakpoints.cs` | 🟡 | 只有 C# 视图能下断点 |
+| 启用 / 禁用 | `DbgUI/DocumentViewerCommands.cs` | 右键、面板复选框 | ✅ | |
+| 绑定状态 | `Breakpoints/Code/BoundCodeBreakpointsService.cs` | `breakpoint` 事件 | ✅ | 运行时拒绝偏移时退回顺序点 |
+| 断点字形外观 | `BreakpointGlyphTextMarkerHandler.cs` | 三种样式 | 🟡 | 条件断点、跟踪点没有专用图标 |
+| 边距右键与悬停工具条 | `GlyphMarginCommands.cs` | 编辑器右键 | 🟡 | 没有 Settings…、Export… |
+| Add Method Breakpoint | `dnSpy.Debugger.DotNet/Breakpoints/Code/TextEditor/ClassBreakpointCommands.cs` | RPC `setFunctionBreakpoints` | 🟡 | 按名称匹配，重载只绑一个 |
+| Add Class Breakpoint / Tracepoint | 同上 | `addClassBreakpoint` | 🟡 | 同上 |
+| 条件 | `Breakpoints/Code/CondChecker/DbgCodeBreakpointConditionChecker.cs` | `BreakpointSettingsDialog.tsx`、`CDS/BreakpointExpression.cs` | 🟡 | 自研子集：没有成员访问与调用 |
+| 命中计数 | `CondChecker/DbgCodeBreakpointHitCountChecker.cs` | `CDS/BreakpointBreakDecision.cs` | ✅ | |
+| 筛选器 | `CondChecker/DbgCodeBreakpointFilterChecker.cs` | `CDS/CorDebugSession.BreakpointChecks.cs` | ✅ | |
+| 跟踪点消息 | `CondChecker/TracepointMessageParser.cs` | `CDS/TracepointMessage.cs` | 🟡 | `{表达式}` 同样是子集 |
+| 标签 | 设置对话框 | 设置对话框 | ✅ | |
+| Enable / Disable / Delete All | `DebugMenuCommands.cs` | `MenuBar.tsx` | ✅ | |
+| Breakpoints 窗口 | `ToolWindows/CodeBreakpoints/*` | `BreakpointsPane` | 🟡 | 无多列、搜索、双击跳转、右键菜单 |
+| 导入 / 导出 | `Breakpoints/Code/BreakpointsSerializer.cs` | 面板按钮 | 🟡 | JSON 格式，与 WPF 的 XML 不互通 |
+| 持久化 | 同上 | `dnspy.breakpoints.v1` | ✅ | |
+| 模块断点 | `Breakpoints/Modules/*` | 占位面板 | ❌ | |
+
+另新增：Breakpoints 面板可按名称输入函数断点。
+
+#### 异常设置
+
+后端读取与 WPF 相同的 `DotNet.ex.xml`，客户端只持久化与默认值的差异，开会话时重放给引擎。`docs/linux-release-1.0.md` 中「不含异常断点」的说法已经过时。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 异常列表 | `ToolWindows/Exceptions/*`、`Exceptions/DefaultExceptionDefinitionsProvider.cs` | `ExceptionSettingsPane.tsx`，RPC `exceptions/get`；`CDS/ExceptionSettingsService.cs` | ✅ | 工具栏代替右键菜单 |
+| 勾选「抛出时中断」与批量开关 | 同上 | RPC `exceptions/apply` | ✅ | |
+| 添加 / 删除异常 | 同上 | `addExceptionDefinition` 等 | ✅ | |
+| 条件（模块名） | `Exceptions/ExceptionConditionsChecker.cs` | 条件对话框 | ✅ | |
+| 搜索、类别筛选、只显示已启用 | `ToolWindows/Exceptions` | 有 | ✅ | |
+| 恢复默认 | 同上 | RPC `exceptions/reset` | ✅ | |
+| 设置持久化 | `Exceptions/ExceptionListSettings.cs` | `dnspy.exceptions.v1` | ✅ | |
+| 首次机会 / 未处理异常中断 | CorDebug 异常回调 | `CDS/CorDebugSession.Exceptions.cs` | ✅ | |
+| MDA 类别 | `DotNet.ex.xml` | 列出但不会触发 | ⛔ | MDA 只存在于 .NET Framework |
+| 异常中断后的提示 | `DbgUI/DebuggerImpl.cs` | Output 与状态栏 | 🟡 | 未处理异常没有对话框；读不到 Message；没有 `$exception` |
+| 右键 Break When Exception Thrown | `dnSpy.Debugger.DotNet/Exceptions/BreakWhenThrownExceptionCommand.cs` | 隐藏 | ❌ | |
+
+#### 调试工具窗口
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Call Stack | `ToolWindows/CallStack/*` | `DebugToolWindows.tsx` 的 `CallStackPane` | 🟡 | 只解析前 24 帧的名称；无 Copy、显示选项 |
+| Threads | `ToolWindows/Threads/*` | `ThreadsPane` | 🟡 | 只显示编号；无冻结/解冻、重命名 |
+| Modules | `ToolWindows/Modules/*` | `ModulesPane` | 🟡 | 只有名称、路径；无 Go to Module、从内存打开 |
+| Processes | `ToolWindows/Processes/*` | 占位面板 | ❌ | |
+| Memory 1–4 | `ToolWindows/Memory/*` | 占位面板 | ❌ | |
+| Disassembly | `Disassembly/*` | 占位面板 | ❌ | 与 4.8 重复计入 |
+| Output：程序 stdout/stderr | `ToolWindows/Logger/OutputLogger.cs` | `output` 事件 | ✅ | 附加的进程不能重定向 |
+| Output：Debugger.Log | 同上 | 后端没有 LogMessage 分支 | ❌ | |
+| Output：模块、线程、进程消息与过滤开关 | `ToolWindows/Logger/Commands.cs` | 只有退出码与异常 | 🟡 | |
+
+#### 变量与表达式求值
+
+后端的 `evaluate` 直接返回 `MethodNotFound`，能力声明 `supportsEvaluate=false`。Locals 只能读基元、字符串和数组，对象显示为 `{object}` 且不能展开（`CDS/ManagedValueFormatter.cs`）。
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Locals | `ToolWindows/Locals/*` | `LocalsPane` | 🟡 | 变量名来自反编译器，无需 PDB；对象不能展开 |
+| Autos | `ToolWindows/Autos/*` | 占位面板 | ❌ | |
+| Watch 1–4 | `ToolWindows/Watch/*` | 一个禁用输入的 `WatchPane` | ❌ | |
+| Static Fields | `ToolWindows/StaticFields/*` | 占位面板 | ❌ | |
+| 表达式求值（C#/VB） | `dnSpy/Roslyn/Roslyn.ExpressionCompiler`、`Evaluation/*` | 无 | ❌ | 断点条件用的是自研子集 |
+| 编辑变量值 | Locals 的 EditValue | 无 | ❌ | |
+| 属性求值、ToString、函数调用 | `dnSpy.Debugger.DotNet.CorDebug/Impl/Evaluation` | 无 | ❌ | |
+| DebuggerDisplay / DebuggerTypeProxy | `dnSpy.Debugger.DotNet/Evaluation/Engine/*` | 无 | ❌ | |
+| Raw / Results / Dynamic View | `dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/*` | 无 | ❌ | |
+| 十六进制显示 | 各窗口命令 | 无 | ❌ | |
+| Make Object ID | `Evaluation/DbgObjectIdServiceImpl.cs` | 无 | ❌ | |
+| 显示返回值 | ShowReturnValues 设置 | 无 | ❌ | |
+
+#### 调试器选项
+
+`options-pages.ts` 一对一还原了 WPF `Settings/DebuggerAppSettingsPage.cs` 的全部分组，但只有「启动时显示 Locals」被读取，其余设置不传给后端。
+
+| 功能点 | 状态 | 备注 |
+|---|---|---|
+| 选项页界面与持久化 | ✅ | |
+| 启动调试时显示 Locals | ✅ | |
+| 抑制 JIT 优化 | ❌ | 后端未调用 `SetJITCompilerFlags` |
+| Just My Code 与步进过滤 | ❌ | `stepper.SetJMC(false)` 写死 |
+| 忽略 Debugger.Break() | ❌ | |
+| 忽略未处理异常 | ❌ | |
+| 变量窗口显示选项 | ❌ | |
+| 焦点相关选项 | ❌ | |
+| 重定向 GUI 程序的控制台输出 | 🟡 | 总是重定向，不读选项 |
+| 启用 MDA | ⛔ | 只存在于 .NET Framework |
+
+#### 运行时、平台与代码映射
+
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Windows 反反调试（IsDebuggerPresent 等） | `DBG/dnSpy.Debugger/AntiAntiDebug/*` | 选项在，无实现 | ⛔ | Windows API，计划明确不支持 |
+| 阻止托管代码检测调试器 | `dnSpy.Debugger.DotNet.CorDebug/AntiAntiDebug/ManagedDebuggerHook.cs` | 选项在，无实现 | ❌ | 在 Linux CoreCLR 上同样有意义 |
+| 从内存打开模块 | `Code/GoToInMemoryModuleStatement.cs` | 只按磁盘路径 | ❌ | |
+| 动态模块与 Reload All Method Bodies | `dnSpy.Debugger.DotNet/Metadata/Commands.cs` | 无 | ❌ | |
+| 反编译源码上的断点、单步、定位 | `dnSpy.Debugger.DotNet/Code/DbgMethodDebugInfoProvider.cs` | `BE/StatementIlRanges.cs`、`IDebugSymbolResolver` | ✅ | 只有 C# |
+| 无 PDB 时变量名取自反编译器 | `Evaluation/DbgLocalsValueNodeProviderImpl.cs` | `GetVariableNamesAsync` | ✅ | |
+
+Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `libdbgshim.so` 并在缺失时按能力降级、按名称的函数断点。附加失败时没有 ptrace 权限诊断，只返回 HRESULT。
+
+测试：后端 `DebugSessionManagerTests.cs`（启动、Break kind、附加与分离、单步、异常中断）、`BreakpointExpressionTests.cs`、`BreakpointBreakDecisionTests.cs`、`TracepointMessageTests.cs`、`ExceptionSettingsTests.cs`；前端 `DebugProgramDialog.test.tsx`、`ExceptionSettingsPane.test.tsx`、`BreakpointsPane.test.tsx`；e2e 覆盖断点、单步、帧切换、Locals、异常中断、断点持久化。Pause、附加对话框、断点设置对话框、Modules/Threads 面板没有测试。
+
+### 4.14 C# 交互窗口（Scripting）
+
+完成度约 42%（✅ 5 / 🟡 11 / ❌ 9 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`BE/Scripting/CSharpScriptService.cs`，RPC `script/evaluate`、`script/reset`。
+
+脚本在后端 Host 进程内执行；计划文档 §3.2 写的是「独立子进程隔离执行环境」，与实现不符。
+
+| 功能点 | WPF 来源 | 状态 | 备注 |
+|---|---|---|---|
+| 打开窗口（Ctrl+Alt+N） | `CSharp/CSharpToolWindowContent.cs` | ✅ | |
+| 持久会话，变量跨提交保留 | `Common/ScriptControlVM.cs` | ✅ | |
+| 返回值、诊断、异常格式化 | 同上 | ✅ | |
+| 横幅与提示语 | `CSharp/CSharpControlVM.cs` | ✅ | |
+| `#help` | `Common/HelpCommand.cs` | ✅ | |
+| 清屏 | `Common/ClearCommand.cs` | 🟡 | 没有 Ctrl+L 和右键菜单 |
+| 重置 | `Common/ResetCommand.cs` | 🟡 | 见缺陷 #8 |
+| `#r` / `#load` 与搜索路径 | `ScriptControlVM.cs` | 🟡 | 相对路径只在后端安装目录解析 |
+| 预置引用与 `.rsp` | `CSharpInteractive.rsp` | 🟡 | 写死 9 个 using，用户不能配置 |
+| 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | 🟡 | Enter 无条件提交 |
+| 历史 | `Text/Editor/ReplCommandInfoProvider.cs` | 🟡 | 只有 Alt+↑/↓，没有前缀匹配 |
+| Escape 清空输入、Ctrl+A 两段选择 | `ReplCommandTargetFilter.cs` | ❌ | |
+| 输入代码语义着色 | `ScriptControlVM.cs` | 🟡 | 只有词法着色 |
+| Print / PrintLine / PrintError | `dnSpy.Contracts.DnSpy/Scripting/Roslyn/IScriptGlobals.cs` | 🟡 | 每次 Print 单独成行；缺部分重载 |
+| 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ❌ | |
+| 输出实时出现 | 同上 | 🟡 | 整次提交结束后一次返回 |
+| PrintOptions | `Common/PrintOptionsImpl.cs` | ❌ | |
+| `Resolve<T>` 访问 dnSpy 服务 | `WPF/Scripting/ServiceLocator.cs` | ❌ | 脚本读不到已打开的程序集 |
+| 消息框与输入框 | `ScriptGlobals.cs` | ❌ | |
+| UI 线程（UIDispatcher、`UI(...)`） | 同上 | ⛔ | WPF Dispatcher 专属 |
+| 生命周期与协作取消（Token、Break） | 同上 | ❌ | |
+| 复制、Copy Code、剪切、粘贴 | `Common/Commands.cs` | 🟡 | 没有 Copy Code 和右键菜单 |
+| 保存文本 / 保存代码 | `Commands/RoslynReplIds.cs` | ❌ | |
+| 自动换行开关 | `Common/ReplSettings.cs` | ❌ | 写死为开 |
+| 显示行号开关 | `Common/Commands.cs` | ❌ | 写死为关 |
+| REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | 🟡 | 不生效 |
+| VB Interactive | `VisualBasic/*` | ⛔ | WPF 自己在 csproj 中排除了 VB 文件 |
+
+测试：后端 `CSharpScriptServiceTests.cs` 11 条；前端 `app-store.test.ts` 中约 10 条；e2e 1 个完整场景。
+
+### 4.15 Roslyn 语言服务
+
+完成度约 25%（🟡 4 / ❌ 4）。WPF 范围：`dnSpy/Roslyn/dnSpy.Roslyn*`。跨平台版没有接入任何语言服务：Monaco 上没有 completion、hover、signature help、marker provider，后端没有 Roslyn Workspace。
+
+WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」编辑器（REPL 缓冲区不在 Roslyn Workspace 里），所以这一块的优先级取决于是否移植 4.12 的 Compiler 子模块。
+
+| 功能点 | WPF 来源 | 状态 | 备注 |
+|---|---|---|---|
+| 语义分类着色 | `dnSpy.Roslyn/Text/Classification/RoslynClassifier.cs` | 🟡 | Shiki TextMate 词法着色；不复用 dnSpy 主题色 |
+| 补全 | `dnSpy.Roslyn/Intellisense/Completions/*` | ❌ | |
+| Quick Info | `Intellisense/QuickInfo/*` | ❌ | |
+| 签名帮助 | `Intellisense/SignatureHelp/*` | ❌ | |
+| 智能缩进 | `dnSpy.Roslyn.EditorFeatures/SmartIndent/*` | 🟡 | Monaco 内置规则 |
+| 文本结构导航 | `dnSpy.Roslyn.EditorFeatures/TextStructureNavigation/*` | 🟡 | 不基于语法树 |
+| 编译诊断 | `dnSpy.Roslyn/Compiler/RoslynLanguageCompiler.cs` | ❌ | |
+| 代码编辑器选项页 | `dnSpy.Roslyn/Compiler/CodeEditorOptionsDefinitions.cs` | 🟡 | 有页面，但不存在 C# 代码编辑器 |
+
+### 4.16 扩展系统
+
+不计完成度（✅ 1 / ❌ 1 / ⛔ 9）。`docs/linux-support-plan.md` §3.2、§10 与 `docs/linux-release-1.0.md` 写明：不兼容 WPF/MEF 扩展二进制，首版只装载随产品发布的内置模块，第三方扩展 SDK 不在 1.0 范围内。这是延期而不是放弃。
+
+- ✅ 内置功能（分析器、编辑、调试、脚本、BAML、反编译）直接编进 `dnSpy.Backend.*` 和前端，不能单独卸载或替换。
+- ❌ 关于页不列出已加载的模块（WPF `MainApp/AboutScreen.cs`）。
+- ⛔ 扩展发现（`*.x.dll`）、`--extension-directory`、兼容性检查、MEF 组合与缓存、资源字典注入、第三方后端插件、第三方前端扩展点、扩展生命周期事件、示例扩展（`Extensions/Examples`）。
+
+目前没有新扩展协议的任何骨架（后端插件接口、前端清单贡献点）。若把延期项计为 ❌，完成度约 17%。
+
+### 4.17 命令行版 dnSpy.Console
+
+完成度 0%（❌ 12）。WPF 范围：`dnSpy/dnSpy.Console/Program.cs`。
+
+`dnSpy.CrossPlatform.slnx` 里没有 CLI 项目；`dnSpy.Backend.Host` 只接受内部用的 `--nonce`、`--parent-pid`，只能以 stdio JSON-RPC 方式运行。后端也没有导出项目的能力，所以 GUI 的「Export to Project」同样缺失。WPF 的以下功能全部没有对应：
+
+- 批量导出为项目（`-o`）、递归与通配符（`-r`）、生成 .sln（`--sln-name`、`--no-sln`）；
+- 项目格式（`--sdk-project`、`--vs`、`--project-guid`）、语言选择（`-l`）、反编译器选项透传；
+- 资源开关（`--no-resources`、`--no-resx`、`--no-baml`）、程序集解析（`--asm-path`、`--no-stdlib` 等）；
+- 单个类型或成员输出到 stdout（`-t`、`--md`）、彩色输出、`--spaces`、`--threads`、用法帮助。
+
+后端引用的 `ICSharpCode.Decompiler 11.1` 自带 `WholeProjectDecompiler`，可以作为 CLI 与 GUI 导出项目的共同实现基础。GUI 启动参数的情况见 4.1。
+
+### 4.18 其他杂项
+
+不计完成度（✅ 2 / 🟡 3 / ❌ 2 / ⛔ 7）。
+
+| 项目 | WPF 来源 | 状态 | 备注 |
+|---|---|---|---|
+| 本地化资源（15 种语言） | `WPF/Properties/*.resx` 等 | 🟡 | 只有 2 种 |
+| 许可证与鸣谢 | `WPF/LicenseInfo/*` | 🟡 | 安装包里齐全；应用内看不到 |
+| 图标库 `dnSpy.Images` | `dnSpy/dnSpy.Images/` | 🟡 | 改用 lucide-react |
+| 更新检查 | `WPF/MainApp/UpdateService.cs` | ❌ | 选项页复选框无效，会误导用户 |
+| 打开列表与默认列表 | `WPF/FileLists/*` | ❌ | 与 4.1 重复 |
+| netcorefiles（dbgshim） | `DBG/netcorefiles/` | ✅ | 改用 `Microsoft.Diagnostics.DbgShim` NuGet 包 |
+| 以管理员身份重启 | `WPF/MainApp/RestartAsAdministratorCommand.cs` | ✅ | 与 4.1 重复 |
+| 弱事件、MVVM 辅助、启动优化、WineFixes、DevBuildWarning | `WPF/Events`、`WPF/MVVM`、`WPF/MainApp/*` | ⛔ | 基础设施或 WPF 专属 |
+| `dnSpy-x86` 32 位宿主 | `dnSpy/dnSpy-x86/` | ⛔ | 目标平台是 x64 |
+| AppHostInfoGenerator | `DBG/AppHostInfoGenerator/` | ⛔ | 后端直接运行 apphost，不需要识别表 |
+
+## 5. 建议的推进顺序
+
+按「风险 × 使用频率 ÷ 工作量」粗排，供排期参考。
+
+**P0：正确性与数据安全**（工作量小，影响大）
+
+1. 修 Save / Save Module 的目标模块（缺陷 #1），以及保存单个模块清掉全局 `dirty`（缺陷 #3）。
+2. 停止调试时区分启动的进程与附加的进程，后者走 Detach，并在菜单里加 Detach All（缺陷 #2）。
+3. 关闭窗口、Reload All、移除程序集前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框。
+4. 修 Raw Save Resource（缺陷 #5）和 PE-only/ELF 文件的 hex 读取（缺陷 #6）。
+5. IL 编辑器默认重算 MaxStack（缺陷 #4）。
+
+**P1：让已有界面生效**（UI 已经做好，只差接线）
+
+1. 给 `DecompileRequest` 加反编译设置 DTO，接通 C#/VB、IL、BAML 选项页与 DecompileFullType；随后接文本编辑器、字体、Hex、Output 等页面。暂时接不通的页面应先隐藏。
+2. Monaco 改为完整导入（或按需导入 contrib），补一条查找功能的 e2e 防回归。
+3. 调试器选项传给后端：JIT 优化抑制、Just My Code、忽略 Debugger.Break、忽略未处理异常。
+4. 绑定菜单上已标出的快捷键，修正 Go to Token 的键位与 Shift+Alt+Enter 冲突。
+5. 记忆窗口位置和尺寸；接受裸文件路径参数并加单实例锁（同时修复 .desktop 打开文件）。
+6. CI 增加前端 vitest 单测。
+
+**P2：补齐核心能力**
+
+1. IL 输出改用 `ReflectionDisassembler` 并生成 span 与语句表，一次解决 IL 视图的跳转、断点、书签持久化。
+2. 方法体编辑器支持局部变量与异常处理器，以及指令插入、移动和操作数选择器。
+3. 调试器的表达式求值与 func-eval、对象字段展开（Watch、Autos、DebuggerDisplay、完整断点条件都依赖它）。
+4. Roslyn 源码编辑（Edit Method / Class (C#)），连带 ModuleImporter 与 Merge with Assembly。
+5. 元数据表子树与表格视图；Hex 视图的光标、选区与直接改写。
+6. Export to Project 与 CLI（共用 `WholeProjectDecompiler`）。
+7. 保存选项：保留 RID/堆、写 PDB、混合模式模块。
+
+**P3：扩展范围**
+
+字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor；Mono/Unity 调试；脚本 `Resolve<T>` API；扩展系统；更多界面语言；更新检查。
+
+## 6. 测试基线
+
+以下数字取自 `CrossPlatform/ANALYZER_HANDOFF.md`（2026-10-12），本次审计没有重新运行：
+
+| 套件 | 结果 |
+|---|---|
+| 后端 `dotnet test` | 336 通过 |
+| 前端 vitest | 893 通过 |
+| e2e（Playwright Electron） | 82 通过、3 跳过 |
+
+覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、断点判定与跟踪点、异常设置、书签。
+
+明显的测试盲区：选项是否生效（多数本来就没有消费方）、Monaco 编辑器功能（查找、悬停、折叠）、命令行解析、未保存修改时退出、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。另外 CI 不运行前端单测，这 893 条只在本地跑。
+
+## 7. 与现有文档的出入
+
+| 文档 | 说法 | 实际情况 |
+|---|---|---|
+| `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 异常设置已实现（4.13）；表达式求值确实没有 |
+| `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 336 / 893 / 82，见第 6 节 |
+| `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
+| `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
+| `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 两项都未实现 |
+| `docs/linux-support-plan.md` §8.2 | DTO 由 schema 生成 C# 与 TypeScript，CI 检查漂移 | 两边手写，没有生成与漂移检查（4.2） |
+| `CrossPlatform/ASSEMBLY_EXPLORER_CHANGES.md` | PE 与 Type References 节点为「占位实现」 | PE 节点已完整；Type References 仍为空（4.3） |

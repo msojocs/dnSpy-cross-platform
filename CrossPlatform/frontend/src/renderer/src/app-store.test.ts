@@ -1,6 +1,6 @@
 import { Actions, DockLocation, Model, TabSetNode } from 'flexlayout-react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, TreeNode } from '../../shared/protocol'
+import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, TextSpan, TreeNode } from '../../shared/protocol'
 import { isNavigableSpan } from '../../shared/protocol'
 import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadSession, methodBreakpointName, orderedDocumentKeys, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
 import type { Bookmark, DocumentState, LineBreakpoint, SessionSource } from './app-store'
@@ -990,6 +990,7 @@ describe('bookmarks', () => {
 
   const bookmark = (extra: Partial<Bookmark> = {}): Bookmark => ({
     id: 'bookmark1',
+    kind: 'body',
     nodeId: 'method-1',
     identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 4),
     modulePath: '/app/DebugTarget.dll',
@@ -1022,12 +1023,12 @@ describe('bookmarks', () => {
 
   const stored = (): unknown => JSON.parse(localStorage.getItem('dnspy.bookmarks.v1') ?? 'null')
 
-  it('names a bookmark by the statement it landed on, not the line that was clicked', () => {
-    // Line 8 is blank; the nearest statement is the one below it on line 9.
-    useAppStore.getState().toggleBookmark('method-1', 8)
+  it('names a bookmark by the statement on the line', () => {
+    useAppStore.getState().toggleBookmark('method-1', 9)
 
     const [created] = useAppStore.getState().bookmarks
     expect(created).toMatchObject({
+      kind: 'body',
       nodeId: 'method-1',
       identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7),
       modulePath: '/app/DebugTarget.dll',
@@ -1043,12 +1044,79 @@ describe('bookmarks', () => {
   })
 
   it('removes the bookmark when the same statement is clicked again', () => {
-    useAppStore.getState().toggleBookmark('method-1', 8)
-    // The user now clicks the marker where it was drawn, not the blank line they started on.
+    useAppStore.getState().toggleBookmark('method-1', 9)
     useAppStore.getState().toggleBookmark('method-1', 9)
 
     expect(useAppStore.getState().bookmarks).toEqual([])
     expect(useAppStore.getState().activeBookmarkId).toBeUndefined()
+  })
+
+  it('puts nothing on a line that holds no statement and starts no definition', () => {
+    // dnSpy does not borrow another line's statement: the line is blank and nothing is defined after it.
+    useAppStore.getState().toggleBookmark('method-1', 8)
+
+    expect(useAppStore.getState().bookmarks).toEqual([])
+  })
+
+  // `class C` on line 1, `void M()` on line 3 with its body below — the two definitions carry their module
+  // and token, the way the backend writes a definition span.
+  const declared = (): never => {
+    const text = 'class C\n{\n\tvoid M()\n\t{\n\t\tCall();\n\t}\n\n\tint P => 5;\n}\n'
+    const spanOf = (name: string, token: number): TextSpan => ({
+      start: text.indexOf(name),
+      length: name.length,
+      kind: 'definition',
+      targetNodeId: `n${token}`,
+      targetModulePath: '/app/DebugTarget.dll',
+      targetMetadataToken: token,
+    })
+    return {
+      ...(doc([
+        statement(5, 5, { startColumn: 3, endColumn: 10, ilOffset: 1, sequencePointIlOffset: 1, ilEndOffset: 6 }),
+        statement(8, 8, { startColumn: 11, endColumn: 12, ilOffset: 0, sequencePointIlOffset: 0, ilEndOffset: 2, metadataToken: 0x06000002, sourceMethodToken: 0x06000002 }),
+      ]) as DocumentState),
+      text,
+      spans: [spanOf('C', 0x02000002), spanOf('M', 0x06000001), spanOf('P', 0x17000001)],
+    } as never
+  }
+
+  it('bookmarks the member a declaration line defines, and writes it down by token alone', () => {
+    useAppStore.setState({ documents: { 'method-1': declared() } })
+
+    useAppStore.getState().toggleBookmark('method-1', 3)
+
+    const [created] = useAppStore.getState().bookmarks
+    expect(created).toMatchObject({ kind: 'token', modulePath: '/app/DebugTarget.dll', metadataToken: 0x06000001, ilOffset: 0, line: 3, description: 'M' })
+    expect(stored()).toEqual([{ kind: 'token', modulePath: '/app/DebugTarget.dll', metadataToken: 0x06000001, description: 'M', name: created.name, labels: [], enabled: true }])
+    expect(bookmarkLineInDocument('method-1', declared(), { ...created, nodeId: '' })).toBe(3)
+
+    // The second toggle on the line finds it again.
+    useAppStore.getState().toggleBookmark('method-1', 3)
+    expect(useAppStore.getState().bookmarks).toEqual([])
+  })
+
+  it('takes the next definition for a blank line, and the definition that starts before the statement', () => {
+    useAppStore.setState({ documents: { 'method-1': declared() } })
+
+    // Line 7 is blank: dnSpy looks for a definition from the start of the line on, and finds P.
+    useAppStore.getState().toggleBookmark('method-1', 7)
+    // `int P => 5;` starts its definition before the expression's statement, so the line is P's too.
+    useAppStore.getState().toggleBookmark('method-1', 8)
+    expect(useAppStore.getState().bookmarks).toHaveLength(0)
+
+    // The body statement on line 5 starts before any definition after it.
+    useAppStore.getState().toggleBookmark('method-1', 5)
+    expect(useAppStore.getState().bookmarks).toEqual([expect.objectContaining({ kind: 'body', ilOffset: 1, line: 5 })])
+  })
+
+  it('shows a spot another view made on the statement whose IL holds it', () => {
+    // An IL view's bookmark sits on an instruction inside the C# statement that runs from offset 1 to 6.
+    const fromIl = bookmark({ id: 'b1', nodeId: '', line: 0, ilOffset: 3, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 3) })
+
+    expect(bookmarkLineInDocument('method-1', declared(), fromIl)).toBe(5)
+    // A state machine's statements belong to another body, where offset 3 means something else.
+    const asyncBody = { ...(doc([statement(5, 5, { ilOffset: 1, sequencePointIlOffset: 1, ilEndOffset: 6, metadataToken: 0x06000009 })]) as DocumentState), text: '', spans: [] } as never
+    expect(bookmarkLineInDocument('method-1', asyncBody, fromIl)).toBeUndefined()
   })
 
   it('keeps a bookmark whose line has no statement, but only for this session', () => {
@@ -1056,6 +1124,7 @@ describe('bookmarks', () => {
     useAppStore.getState().toggleBookmark('method-1', 30)
 
     expect(useAppStore.getState().bookmarks[0]).toMatchObject({
+      kind: 'line',
       identity: 'method-1|30',
       modulePath: '',
       metadataToken: 0,
@@ -1105,7 +1174,7 @@ describe('bookmarks', () => {
     useAppStore.getState().toggleBookmarkEnabledAt('method-1', 9)
     expect(useAppStore.getState().bookmarks[0].enabled).toBe(false)
 
-    useAppStore.getState().toggleBookmarkEnabledAt('method-1', 8)
+    useAppStore.getState().toggleBookmarkEnabledAt('method-1', 9)
     expect(useAppStore.getState().bookmarks[0].enabled).toBe(true)
 
     useAppStore.getState().setBookmarkEnabled(created.id, false)
@@ -1123,7 +1192,7 @@ describe('bookmarks', () => {
     useAppStore.setState({
       bookmarks: [
         bookmark({ id: 'b1', order: 1 }),
-        bookmark({ id: 'b2', order: 2, line: 9, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
+        bookmark({ id: 'b2', order: 2, line: 9, ilOffset: 7, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
         bookmark({ id: 'b3', order: 3, nodeId: 'method-2', modulePath: '/app/Other.dll' }),
       ],
     })
@@ -1190,8 +1259,8 @@ describe('bookmarks', () => {
     useAppStore.setState({
       bookmarks: [
         bookmark({ id: 'b1', order: 1, line: 4 }),
-        bookmark({ id: 'b2', order: 2, line: 9, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
-        bookmark({ id: 'b3', order: 3, line: 14, identity: statementIdentity('/app/DebugTarget.dll', 0x06000002, 11), enabled: false }),
+        bookmark({ id: 'b2', order: 2, line: 9, ilOffset: 7, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
+        bookmark({ id: 'b3', order: 3, line: 14, metadataToken: 0x06000002, ilOffset: 11, identity: statementIdentity('/app/DebugTarget.dll', 0x06000002, 11), enabled: false }),
       ],
     })
 
@@ -1224,8 +1293,8 @@ describe('bookmarks', () => {
     useAppStore.setState({
       bookmarks: [
         bookmark({ id: 'b1', order: 1, line: 4, labels: ['hot'] }),
-        bookmark({ id: 'b2', order: 2, line: 9, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
-        bookmark({ id: 'b3', order: 3, line: 14, identity: statementIdentity('/app/DebugTarget.dll', 0x06000002, 11), labels: ['hot'] }),
+        bookmark({ id: 'b2', order: 2, line: 9, ilOffset: 7, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) }),
+        bookmark({ id: 'b3', order: 3, line: 14, metadataToken: 0x06000002, ilOffset: 11, identity: statementIdentity('/app/DebugTarget.dll', 0x06000002, 11), labels: ['hot'] }),
       ],
       activeBookmarkId: 'b1',
     })
@@ -1281,22 +1350,53 @@ describe('bookmarks', () => {
   })
 
   it('finds a restored bookmark by identity once its document is open', () => {
-    const restored = bookmark({ id: 'b1', nodeId: '', line: 0, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) })
+    const restored = bookmark({ id: 'b1', nodeId: '', line: 0, ilOffset: 7, identity: statementIdentity('/app/DebugTarget.dll', 0x06000001, 7) })
 
-    expect(bookmarkLineInDocument('method-1', statements, restored)).toBe(9)
+    expect(bookmarkLineInDocument('method-1', doc(statements), restored)).toBe(9)
     // A document whose IL map does not contain the identity gets no marker, even though its own
     // statements are perfectly good.
-    expect(bookmarkLineInDocument('method-2', [statement(3, 3, { ilOffset: 2 })], restored)).toBeUndefined()
+    expect(bookmarkLineInDocument('method-2', doc([statement(3, 3, { ilOffset: 2, ilEndOffset: 3, metadataToken: 0x06000002, sourceMethodToken: 0x06000002 })]), restored)).toBeUndefined()
     // Nor does a document that has not been decompiled yet, since a restored bookmark has no line.
     expect(bookmarkLineInDocument('method-1', undefined, restored)).toBeUndefined()
   })
 
   it('falls back to the cached line for a session-only bookmark', () => {
-    const sessionOnly = bookmark({ id: 'b1', nodeId: 'method-1', line: 30, identity: 'method-1|30' })
+    const sessionOnly = bookmark({ id: 'b1', kind: 'line', nodeId: 'method-1', line: 30, identity: 'method-1|30' })
 
-    expect(bookmarkLineInDocument('method-1', statements, sessionOnly)).toBe(30)
-    expect(bookmarkLineInDocument('method-2', statements, sessionOnly)).toBeUndefined()
-    expect(bookmarkMarkers('method-1', statements, [sessionOnly])).toEqual([{ line: 30, enabled: true, message: 'First' }])
+    expect(bookmarkLineInDocument('method-1', doc(statements), sessionOnly)).toBe(30)
+    expect(bookmarkLineInDocument('method-2', doc(statements), sessionOnly)).toBeUndefined()
+    expect(bookmarkMarkers('method-1', doc(statements), [sessionOnly])).toEqual([{ line: 30, enabled: true, message: 'First' }])
+  })
+
+  it('opens a tab of its own for the bookmark only once the node is known to be right', async () => {
+    const openNodeInNewTabById = vi.fn(async (nodeId: string) => nodeId)
+    const findMember = vi.fn(async () => ({ nodeId: 'n42', label: 'M', description: 'System.Void Ns.Type::M()' }))
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, findMember } })
+    useAppStore.setState({ bookmarks: [bookmark({ id: 'b1', nodeId: 'method-1', line: 4 })], openNodeInNewTabById })
+
+    await useAppStore.getState().goToBookmark('b1', true)
+
+    // The document that is up already names the bookmark, so its node gets the new tab and the plain
+    // follow is never asked.
+    expect(openNodeInNewTabById).toHaveBeenCalledWith('method-1')
+    expect(openNodeById).not.toHaveBeenCalled()
+    expect(findMember).not.toHaveBeenCalled()
+    expect(useAppStore.getState().caretReveal).toMatchObject({ documentId: 'method-1', line: 4, column: 1 })
+
+    // A node id nothing confirms is looked up again before a tab is opened for it.
+    openNodeInNewTabById.mockClear()
+    useAppStore.setState({ bookmarks: [bookmark({ id: 'b1', nodeId: 'gone', line: 4 })] })
+    await useAppStore.getState().goToBookmark('b1', true)
+    expect(findMember).toHaveBeenCalledOnce()
+    expect(openNodeInNewTabById).toHaveBeenCalledOnce()
+    expect(openNodeInNewTabById).toHaveBeenCalledWith('n42')
+  })
+
+  it('reads a definition row back, and refuses a body row without its offset', () => {
+    expect(parseBookmarkEntries([{ kind: 'token', modulePath: '/a.dll', metadataToken: 0x02000002 }])).toEqual([
+      { kind: 'token', modulePath: '/a.dll', metadataToken: 0x02000002, description: '', name: translate('Bookmark'), labels: [], enabled: true },
+    ])
+    expect(parseBookmarkEntries([{ modulePath: '/a.dll', metadataToken: 0x06000001 }])).toEqual([])
   })
 
   it('takes the token, name, location and module prefixes in the search box', () => {

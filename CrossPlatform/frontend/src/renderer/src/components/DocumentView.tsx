@@ -5,9 +5,9 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
 import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
-import { bookmarkMarkers, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
-import { clearBookmarks, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from '../bookmark-commands'
-import type { Bookmark, HexBodyKind, LineBreakpoint } from '../app-store'
+import { bookmarkMarkers, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
+import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
+import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
@@ -40,11 +40,11 @@ const breakpointDecorations = (
 // each other. A disabled bookmark keeps its mark, drawn faint.
 const bookmarkDecorations = (
   nodeId: string,
-  statements: CodeStatement[] | undefined,
+  document: BookmarkDocument | undefined,
   bookmarks: Bookmark[],
   translate: (message: string) => string,
 ): MonacoEditor.IModelDeltaDecoration[] =>
-  bookmarkMarkers(nodeId, statements, bookmarks).map((marker) => ({
+  bookmarkMarkers(nodeId, document, bookmarks).map((marker) => ({
     range: { startLineNumber: marker.line, startColumn: 1, endLineNumber: marker.line, endColumn: 1 },
     options: {
       linesDecorationsClassName: marker.enabled ? 'bookmark-glyph' : 'bookmark-glyph-disabled',
@@ -133,7 +133,9 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const stoppedDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   // onMount registers the mouse handler once, so it reads the current values through refs instead of the closure.
   const spansRef = useRef(document?.spans ?? [])
-  const statementsRef = useRef(document?.codeStatements)
+  const documentRef = useRef(document)
+  // The statements the breakpoint commands work off — the C# view's alone, see `breakpointStatementsOf`.
+  const statementsRef = useRef(breakpointStatementsOf(document))
   const breakpointsRef = useRef(lineBreakpoints)
   const bookmarksRef = useRef(bookmarks)
   const toggleLineBreakpointRef = useRef(toggleLineBreakpoint)
@@ -141,7 +143,8 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   const tRef = useRef(t)
   tRef.current = t
   spansRef.current = document?.spans ?? []
-  statementsRef.current = document?.codeStatements
+  documentRef.current = document
+  statementsRef.current = breakpointStatementsOf(document)
   breakpointsRef.current = lineBreakpoints
   bookmarksRef.current = bookmarks
   toggleLineBreakpointRef.current = toggleLineBreakpoint
@@ -322,12 +325,12 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
   }, [document?.spans, document?.text, locale, editorReady])
 
   useEffect(() => {
-    breakpointDecorationsRef.current?.set(breakpointDecorations(documentId, document?.codeStatements, lineBreakpoints, t))
-  }, [documentId, lineBreakpoints, document?.codeStatements, document?.text, locale, editorReady])
+    breakpointDecorationsRef.current?.set(breakpointDecorations(documentId, breakpointStatementsOf(document), lineBreakpoints, t))
+  }, [documentId, lineBreakpoints, document?.codeStatements, document?.language, document?.text, locale, editorReady])
 
   useEffect(() => {
-    bookmarkDecorationsRef.current?.set(bookmarkDecorations(documentId, document?.codeStatements, bookmarks, t))
-  }, [documentId, bookmarks, document?.codeStatements, document?.text, locale, editorReady])
+    bookmarkDecorationsRef.current?.set(bookmarkDecorations(documentId, document, bookmarks, t))
+  }, [documentId, bookmarks, document?.codeStatements, document?.spans, document?.text, locale, editorReady])
 
   // The editor is taken down while the document is decompiled again — reopened, or switched to another
   // language — and a new one is mounted when the text is back. The effects that wait for `editorReady` have
@@ -455,7 +458,7 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
               breakpointDecorationsRef.current = editor.createDecorationsCollection()
               breakpointDecorationsRef.current.set(breakpointDecorations(documentId, statementsRef.current, breakpointsRef.current, tRef.current))
               bookmarkDecorationsRef.current = editor.createDecorationsCollection()
-              bookmarkDecorationsRef.current.set(bookmarkDecorations(documentId, statementsRef.current, bookmarksRef.current, tRef.current))
+              bookmarkDecorationsRef.current.set(bookmarkDecorations(documentId, documentRef.current, bookmarksRef.current, tRef.current))
               stoppedDecorationsRef.current = editor.createDecorationsCollection()
               const model = editor.getModel()
               if (!model) return
@@ -548,24 +551,27 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
               // breakpoint: "Add Method Breakpoint" there is the way left to say "break wherever this method
               // starts", so the action that only fed Monaco's menu is gone.
               // The commands act on the caret of the focused editor, which is this one whenever a chord
-              // arrives here, so they can go through the same path the menu and the window use. The chords
-              // are the keyboard path and stay; only their Monaco menu entries went with the menu.
-              const bookmarkCommands: [number, string, () => void][] = [
-                [monaco.KeyCode.KeyK, 'Toggle Bookmark', toggleBookmarkAtCaret],
-                // Visual Studio's chord, kept here because it is the one dnSpy's users have in their fingers.
-                [monaco.KeyCode.KeyP, 'Previous Bookmark', () => stepBookmark(-1)],
-                [monaco.KeyCode.KeyN, 'Next Bookmark', () => stepBookmark(1)],
-                [monaco.KeyCode.KeyL, 'Clear Bookmarks', clearBookmarks],
-                [monaco.KeyCode.KeyE, 'Enable/Disable Bookmark', toggleBookmarkEnabledAtCaret],
-                [monaco.KeyCode.KeyW, 'Bookmarks Window', showBookmarksWindow],
-              ]
-              for (const [key, label, run] of bookmarkCommands) {
-                editor.addAction({
-                  id: `dnspy.bookmark.${label.replace(/\W+/g, '')}`,
-                  label: tRef.current(label),
-                  run,
-                })
-                editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, monaco.KeyMod.CtrlCmd | key), run)
+              // arrives here, so they can go through the same path the menu and the window use. The keys are
+              // dnSpy's document viewer table — its Ctrl+K and Ctrl+B chords and the F2 family, F2 here walking
+              // the bookmarks rather than renaming — and only their Monaco menu entries went with the menu.
+              const bookmarkActions = new Set<string>()
+              const addBookmarkAction = (label: string, run: () => void): void => {
+                if (bookmarkActions.has(label))
+                  return
+                bookmarkActions.add(label)
+                editor.addAction({ id: `dnspy.bookmark.${label.replace(/\W+/g, '')}`, label: tRef.current(label), run })
+              }
+              const letter = (key: string): number => monaco.KeyCode[`Key${key.toUpperCase()}` as keyof typeof monaco.KeyCode]
+              for (const chord of bookmarkChords) {
+                addBookmarkAction(chord.label, chord.run)
+                const prefix = monaco.KeyMod.CtrlCmd | letter(chord.prefix)
+                editor.addCommand(monaco.KeyMod.chord(prefix, monaco.KeyMod.CtrlCmd | letter(chord.key)), chord.run)
+                if (chord.plain)
+                  editor.addCommand(monaco.KeyMod.chord(prefix, letter(chord.key)), chord.run)
+              }
+              for (const binding of bookmarkFunctionKeys) {
+                addBookmarkAction(binding.label, binding.run)
+                editor.addCommand((binding.ctrl ? monaco.KeyMod.CtrlCmd : 0) | (binding.shift ? monaco.KeyMod.Shift : 0) | monaco.KeyCode.F2, binding.run)
               }
               editor.onMouseDown((event) => {
                 // Monaco leaves the right button to the browser, which takes the focus off the editor and so hides

@@ -3157,6 +3157,17 @@ fieldset.options-group {
   color: var(--text-muted);
 }
 
+/* A header sorts by its column — dnSpy's GridViewColumnSorter, which cycles up, down and unsorted. */
+.bookmarks-header > span {
+  cursor: pointer;
+  user-select: none;
+}
+
+.bookmarks-sort-arrow {
+  margin-left: 4px;
+  font-size: 9px;
+}
+
 .bookmarks-header > span,
 .bookmark-row > span {
   overflow: hidden;
@@ -3226,3 +3237,27 @@ fieldset.options-group {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The window's own syntax highlighting (BookmarksSettings.SyntaxHighlight): the name in dnSpy's BookmarkName
+   color, bold for the active bookmark, parameter names bold, and the module path in the file name colors of
+   WriteFilename. The Location column's other classes are the shared ones above. */
+:root {
+  --tc-bookmark-name: #d69d85;
+  --tc-directory-part: inherit;
+  --tc-file-name: #569cd6;
+  --tc-file-extension: #9b9b82;
+}
+
+:root[data-theme="light"] {
+  --tc-bookmark-name: #a31515;
+  --tc-file-name: #990000;
+  --tc-file-extension: #3366cc;
+}
+
+:root:not([data-theme="hc"]) .bookmarks-pane .tc-bookmarkName,
+:root:not([data-theme="hc"]) .bookmarks-pane .tc-activeBookmarkName { color: var(--tc-bookmark-name); }
+.bookmarks-pane .tc-activeBookmarkName,
+.bookmarks-pane .tc-parameter { font-weight: 600; }
+:root:not([data-theme="hc"]) .bookmarks-pane .tc-directoryPart { color: var(--tc-directory-part); }
+:root:not([data-theme="hc"]) .bookmarks-pane .tc-fileNameNoExtension { color: var(--tc-file-name); }
+:root:not([data-theme="hc"]) .bookmarks-pane .tc-fileExtension { color: var(--tc-file-extension); }

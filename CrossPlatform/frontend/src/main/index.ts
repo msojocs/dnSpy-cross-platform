@@ -33,6 +33,7 @@ const nativeMessages = {
     openAssembly: '打开程序集',
     dotNetAssemblies: '.NET 程序集',
     allFiles: '所有文件',
+    xmlFiles: 'XML 文件',
     replaceResource: '替换嵌入的资源',
     resourceTooLarge: '资源文件不能超过 64 MiB。',
     saveModuleAs: '模块另存为',
@@ -53,6 +54,7 @@ const nativeMessages = {
     openAssembly: 'Open Assembly',
     dotNetAssemblies: '.NET Assemblies',
     allFiles: 'All Files',
+    xmlFiles: 'XML Files',
     replaceResource: 'Replace Embedded Resource',
     resourceTooLarge: 'Resource files are limited to 64 MiB.',
     saveModuleAs: 'Save Module As',
@@ -419,6 +421,15 @@ const registerIpc = (): void => {
   ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string) =>
     requireBackend().invoke('document/decompile', { workspaceId, nodeId, language }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
+  // The Bookmarks window's Location column, and dnSpy's bookmark files. None of them needs a workspace: a
+  // module the workspace does not hold — or a bookmark restored before anything was opened — is read from
+  // its file.
+  ipcMain.handle('bookmarks:formatLocations', async (_event, workspaceId: string | undefined, locations: unknown[], format: unknown) =>
+    (await requireBackend().invoke<{ locations: unknown[] }>('bookmarks/formatLocations', { workspaceId: workspaceId ?? null, locations, format })).locations)
+  ipcMain.handle('bookmarks:export', async (_event, workspaceId: string | undefined, bookmarks: unknown[]) =>
+    (await requireBackend().invoke<{ xml: string }>('bookmarks/export', { workspaceId: workspaceId ?? null, bookmarks })).xml)
+  ipcMain.handle('bookmarks:import', (_event, workspaceId: string | undefined, xml: string) =>
+    requireBackend().invoke('bookmarks/import', { workspaceId: workspaceId ?? null, xml }))
   // A search walks every file it covers, which over the framework takes a while: it gets the long deadline,
   // and the renderer calls it off by the key it named it with when the query or an option changes.
   ipcMain.handle('search:run', async (event, workspaceId: string, request: SearchRequest, requestKey: string) => {
@@ -571,7 +582,10 @@ const registerIpc = (): void => {
       title: kind === 'breakpoints' ? nativeText().openBreakpoints : nativeText().openBookmarks,
       defaultPath: dialogPathHistory?.openDirectory,
       properties: ['openFile'],
-      filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
+      // dnSpy's bookmark files are its settings XML; the JSON an earlier build of this port wrote still reads.
+      filters: kind === 'bookmarks'
+        ? [{ name: nativeText().xmlFiles, extensions: ['xml'] }, { name: nativeText().allFiles, extensions: ['*'] }]
+        : [{ name: nativeText().allFiles, extensions: ['*'] }],
     })
     if (result.canceled || result.filePaths.length === 0)
       return undefined

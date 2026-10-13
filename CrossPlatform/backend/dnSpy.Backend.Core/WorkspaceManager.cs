@@ -2546,7 +2546,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return File.Exists(path) ? new SpanTarget(null, path, unchecked((int)token)) : null;
 		}
 
-		/// <summary>A node for a handle that belongs to a module the workspace holds, or nothing to point at.</summary>
+		/// <summary>
+		/// A node for a handle that belongs to a module the workspace holds, or nothing to point at. The module
+		/// and token come along too: a definition keeps them, since a bookmark set on it has to name it by
+		/// something that outlives the node id (<see cref="SpanTextOutput"/> drops them from a reference).
+		/// </summary>
 		SpanTarget? ResolveInModule(ModuleEntry module, uint token) {
 			IMDTokenProvider? provider;
 			try {
@@ -2559,7 +2563,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// Only members the tree can show are navigable.
 			if (provider is not (TypeDef or MethodDef or FieldDef or PropertyDef or EventDef))
 				return null;
-			return new SpanTarget(GetMemberNode(provider, module).Id, null, null);
+			return new SpanTarget(GetMemberNode(provider, module).Id, module.Path, unchecked((int)provider.MDToken.Raw));
 		}
 
 		static bool SameFile(string left, string right) =>
@@ -2568,12 +2572,16 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		internal static System.Reflection.Metadata.EntityHandle ToEntityHandle(IMDTokenProvider provider) =>
 			MetadataTokens.EntityHandle(unchecked((int)provider.MDToken.Raw));
 
-		DecompileResponse DecompileIL(NodeEntry node) => new(
-			GetDocumentTitle(node),
-			"il",
-			ILFormatter.Format(node),
-			Array.Empty<TextSpanDto>(),
-			Array.Empty<DiagnosticDto>());
+		DecompileResponse DecompileIL(NodeEntry node) {
+			var document = ILFormatter.Format(node, ResolveILDefinition(node));
+			return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, Array.Empty<DiagnosticDto>()) {
+				CodeStatements = document.Statements,
+			};
+		}
+
+		/// <summary>The definition span target of a member the IL view declares — its node, module and token.</summary>
+		Func<IMemberDef, SpanTarget?>? ResolveILDefinition(NodeEntry node) =>
+			node.AsModuleEntry is { } module ? member => ResolveInModule(module, member.MDToken.Raw) : null;
 
 		/// <summary>
 		/// A PE structure is a header of the image rather than code, so there is no IL to interleave — and no
@@ -2620,11 +2628,13 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			try {
 				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
 				var sourceProvider = new DecompiledSourceProvider(session.Decompiler, settings, cancellationToken);
-				var text = ILFormatter.Format(node, sourceProvider.GetStatements);
+				var document = ILFormatter.Format(node, ResolveILDefinition(node), sourceProvider.GetStatements);
 				var diagnostics = session.Decompiler.Errors
 					.Select(error => new DiagnosticDto("warning", error.ToString()))
 					.ToArray();
-				return new DecompileResponse(GetDocumentTitle(node), "il", text, Array.Empty<TextSpanDto>(), diagnostics);
+				return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, diagnostics) {
+					CodeStatements = document.Statements,
+				};
 			}
 			catch (OperationCanceledException) {
 				throw;
@@ -4617,6 +4627,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				// on it has nowhere to go — dnSpy's own output writer skips the reference the same way.
 				if (text.Length == 0 || resolveTarget(reference) is not { } target)
 					return;
+				// A definition is where dnSpy's token bookmark sits, and a bookmark is written down as module and
+				// token — so a definition keeps both beside its node id. A reference into the workspace only
+				// needs the node; the module and token are what a reference outside it is followed by.
+				if (!isDefinition && target.NodeId is not null)
+					target = target with { ModulePath = null, MetadataToken = null };
 				spans.Add(new TextSpanDto(start, text.Length, isDefinition ? "definition" : "reference", target.NodeId, target.ModulePath, target.MetadataToken));
 			}
 
@@ -4697,128 +4712,192 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			Event,
 		}
 
-		static class ILFormatter {
-			public static string Format(NodeEntry node, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
-				var builder = new StringBuilder();
+		/// <summary>The IL view's text and what dnSpy's IL disassembler records beside it.</summary>
+		internal sealed record ILDocument(string Text, IReadOnlyList<TextSpanDto> Spans, IReadOnlyList<CodeStatementDto> Statements);
+
+		/// <summary>
+		/// The IL view. Beside the text it records what dnSpy's disassembler does: a statement per instruction —
+		/// the IL view's sequence points, which a bookmark, a hex lookup or a search hit at the caret resolves
+		/// to — and a definition span over the name of every member it declares, which is where a token bookmark
+		/// sits. Every line goes through <see cref="WriteLine"/>, so the line a statement is recorded at is the one
+		/// its text lands on.
+		/// </summary>
+		sealed class ILFormatter {
+			readonly StringBuilder builder = new();
+			readonly List<TextSpanDto> spans = [];
+			readonly List<CodeStatementDto> statements = [];
+			readonly string? modulePath;
+			readonly Func<IMemberDef, SpanTarget?>? resolveDefinition;
+			readonly Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider;
+			int line = 1;
+
+			ILFormatter(string? modulePath, Func<IMemberDef, SpanTarget?>? resolveDefinition, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
+				this.modulePath = modulePath;
+				this.resolveDefinition = resolveDefinition;
+				this.sourceProvider = sourceProvider;
+			}
+
+			public static ILDocument Format(NodeEntry node, Func<IMemberDef, SpanTarget?>? resolveDefinition = null, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
+				var formatter = new ILFormatter(node.AsModuleEntry?.Path, resolveDefinition, sourceProvider);
+				formatter.FormatNode(node);
+				return new ILDocument(formatter.builder.ToString(), formatter.spans, formatter.statements);
+			}
+
+			void FormatNode(NodeEntry node) {
 				// A PE node and its structures are headers of the image, not code, so the node's own name is
 				// all there is to say about them. The ELF structures are the same thing.
 				if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.Elf or NodeKind.ElfStructure) {
-					builder.AppendLine($"// {GetLabel(node)}");
-					return builder.ToString();
+					WriteLine($"// {GetLabel(node)}");
+					return;
 				}
 				switch (node.Value) {
 					case ModuleDef module:
-						builder.AppendLine($"// {module.Assembly?.FullName ?? module.Name.String}");
-						builder.AppendLine($".module {module.Name}");
+						WriteLine($"// {module.Assembly?.FullName ?? module.Name.String}");
+						WriteLine($".module {module.Name}");
 						foreach (var type in module.Types.Where(t => !t.IsGlobalModuleType))
-							FormatTypeHeader(builder, type);
+							FormatTypeHeader(type);
 						break;
 					case NamespaceValue ns:
-						builder.AppendLine($"// namespace {ns.Name}");
+						WriteLine($"// namespace {ns.Name}");
 						foreach (var type in ns.Types)
-							FormatType(builder, type, sourceProvider);
+							FormatType(type);
 						break;
 					case TypeDef type:
-						FormatType(builder, type, sourceProvider);
+						FormatType(type);
 						break;
 					case MethodDef method:
-						FormatMethod(builder, method, sourceProvider: sourceProvider);
+						FormatMethod(method);
 						break;
 					case FieldDef field:
-						builder.AppendLine($".field {field.Attributes} {field.FieldType.FullName} {field.Name}");
+						FormatField(field, string.Empty);
 						break;
 					case PropertyDef property:
-						FormatProperty(builder, property, sourceProvider);
+						FormatProperty(property);
 						break;
 					case EventDef @event:
-						FormatEvent(builder, @event, sourceProvider);
+						FormatEvent(@event);
 						break;
 					case AssemblyRef reference:
-						builder.AppendLine($".assembly extern {reference.Name}");
-						builder.AppendLine("{");
-						builder.AppendLine($"  .ver {reference.Version}");
-						builder.AppendLine("}");
+						WriteLine($".assembly extern {reference.Name}");
+						WriteLine("{");
+						WriteLine($"  .ver {reference.Version}");
+						WriteLine("}");
 						break;
 					case Resource resource:
-						builder.AppendLine($".mresource {resource.Attributes} '{resource.Name}'");
+						WriteLine($".mresource {resource.Attributes} '{resource.Name}'");
 						break;
 					// A PE-only or unreadable file has no metadata, so it has no IL either. Its own name is
 					// what the C# document shows as well, and it beats the generic error below.
 					case IModuleEntry entry:
-						builder.AppendLine($"// {Path.GetFileName(entry.Path)}");
+						WriteLine($"// {Path.GetFileName(entry.Path)}");
 						break;
 					default:
 						throw new RpcException(ErrorCodes.UnsupportedDocument, "This tree node has no IL representation.");
 				}
-				return builder.ToString();
 			}
 
-			static void FormatTypeHeader(StringBuilder builder, TypeDef type) => builder.AppendLine($".class {type.Attributes} {type.FullName}");
+			void WriteLine(string text) {
+				builder.AppendLine(text);
+				// A name is written as it is in the metadata, and nothing stops a name from holding a line break.
+				line += 1 + text.Count(ch => ch == '\n');
+			}
 
-			static void FormatType(StringBuilder builder, TypeDef type, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
-				FormatTypeHeader(builder, type);
-				builder.AppendLine("{");
+			/// <summary>A line declaring a member: the definition span covers the name, as dnSpy's disassembler writes it.</summary>
+			void WriteDefinitionLine(string prefix, string name, string suffix, IMemberDef member) {
+				if (name.Length > 0 && resolveDefinition?.Invoke(member) is { } target)
+					spans.Add(new TextSpanDto(builder.Length + prefix.Length, name.Length, "definition", target.NodeId, target.ModulePath, target.MetadataToken));
+				WriteLine(prefix + name + suffix);
+			}
+
+			void FormatTypeHeader(TypeDef type) => WriteDefinitionLine($".class {type.Attributes} ", type.FullName, string.Empty, type);
+
+			void FormatType(TypeDef type) {
+				FormatTypeHeader(type);
+				WriteLine("{");
 				foreach (var field in type.Fields)
-					builder.AppendLine($"  .field {field.Attributes} {field.FieldType.FullName} {field.Name}");
+					FormatField(field, "  ");
 				foreach (var method in type.Methods) {
-					builder.AppendLine();
-					FormatMethod(builder, method, "  ", sourceProvider);
+					WriteLine(string.Empty);
+					FormatMethod(method, "  ");
 				}
-				builder.AppendLine("}");
+				WriteLine("}");
 			}
 
-			static void FormatProperty(StringBuilder builder, PropertyDef property, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
-				builder.AppendLine($".property {property.PropertySig?.RetType.FullName ?? "<unknown>"} {property.Name}");
+			void FormatField(FieldDef field, string indent) =>
+				WriteDefinitionLine($"{indent}.field {field.Attributes} {field.FieldType.FullName} ", field.Name, string.Empty, field);
+
+			void FormatProperty(PropertyDef property) {
+				WriteDefinitionLine($".property {property.PropertySig?.RetType.FullName ?? "<unknown>"} ", property.Name, string.Empty, property);
 				foreach (var method in new[] { property.GetMethod, property.SetMethod }.Concat(property.OtherMethods).OfType<MethodDef>().Distinct()) {
-					builder.AppendLine();
-					FormatMethod(builder, method, sourceProvider: sourceProvider);
+					WriteLine(string.Empty);
+					FormatMethod(method);
 				}
 			}
 
-			static void FormatEvent(StringBuilder builder, EventDef @event, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
-				builder.AppendLine($".event {@event.EventType.FullName} {@event.Name}");
+			void FormatEvent(EventDef @event) {
+				WriteDefinitionLine($".event {@event.EventType.FullName} ", @event.Name, string.Empty, @event);
 				foreach (var method in new[] { @event.AddMethod, @event.RemoveMethod, @event.InvokeMethod }.Concat(@event.OtherMethods).OfType<MethodDef>().Distinct()) {
-					builder.AppendLine();
-					FormatMethod(builder, method, sourceProvider: sourceProvider);
+					WriteLine(string.Empty);
+					FormatMethod(method);
 				}
 			}
 
-			static void FormatMethod(
-				StringBuilder builder,
-				MethodDef method,
-				string indent = "",
-				Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
-				builder.AppendLine($"{indent}.method {method.Attributes} {method.ReturnType.FullName} {method.Name}{FormatParameterList(method)}");
-				builder.AppendLine($"{indent}{{");
+			void FormatMethod(MethodDef method, string indent = "") {
+				WriteDefinitionLine($"{indent}.method {method.Attributes} {method.ReturnType.FullName} ", method.Name, FormatParameterList(method), method);
+				WriteLine($"{indent}{{");
 				if (method.HasBody) {
-					builder.AppendLine($"{indent}  .maxstack {method.Body.MaxStack}");
+					WriteLine($"{indent}  .maxstack {method.Body.MaxStack}");
 					if (method.Body.HasVariables) {
-						builder.AppendLine($"{indent}  .locals {string.Join(", ", method.Body.Variables.Select(v => $"[{v.Index}] {v.Type.FullName}"))}");
+						WriteLine($"{indent}  .locals {string.Join(", ", method.Body.Variables.Select(v => $"[{v.Index}] {v.Type.FullName}"))}");
 					}
-					var statements = sourceProvider?.Invoke(method) ?? Array.Empty<ILSourceStatement>();
-					var statementIndex = 0;
-					foreach (var instruction in method.Body.Instructions) {
-						while (statementIndex < statements.Count && statements[statementIndex].Offset <= instruction.Offset) {
-							if (instruction.Offset < statements[statementIndex].EndOffset)
-								AppendSourceComment(builder, indent + "  ", statements[statementIndex].Text);
-							statementIndex++;
+					var sources = sourceProvider?.Invoke(method) ?? Array.Empty<ILSourceStatement>();
+					var sourceIndex = 0;
+					var instructions = method.Body.Instructions;
+					var token = unchecked((int)method.MDToken.Raw);
+					var description = method.FullName;
+					var prefix = $"{indent}  ";
+					for (var index = 0; index < instructions.Count; index++) {
+						var instruction = instructions[index];
+						while (sourceIndex < sources.Count && sources[sourceIndex].Offset <= instruction.Offset) {
+							if (instruction.Offset < sources[sourceIndex].EndOffset)
+								AppendSourceComment(prefix, sources[sourceIndex].Text);
+							sourceIndex++;
 						}
-						builder.AppendLine($"{indent}  IL_{instruction.Offset:X4}: {instruction.OpCode.Name,-12} {FormatOperand(instruction.Operand)}".TrimEnd());
+						var text = $"{prefix}IL_{instruction.Offset:X4}: {instruction.OpCode.Name,-12} {FormatOperand(instruction.Operand)}".TrimEnd();
+						// dnSpy's IL view has a statement per instruction: the line covers the instruction's bytes
+						// and nothing else, from its offset to the next one's.
+						if (modulePath is not null) {
+							var end = index + 1 < instructions.Count ? instructions[index + 1].Offset : instruction.Offset + (uint)instruction.GetSize();
+							statements.Add(new CodeStatementDto(
+								line,
+								line,
+								prefix.Length + 1,
+								text.Length + 1,
+								unchecked((int)instruction.Offset),
+								unchecked((int)end),
+								unchecked((int)instruction.Offset),
+								modulePath,
+								token,
+								token,
+								description,
+								false));
+						}
+						WriteLine(text);
 					}
 				}
-				builder.AppendLine($"{indent}}}");
+				WriteLine($"{indent}}}");
 			}
 
-			static void AppendSourceComment(StringBuilder builder, string indent, string source) {
-				builder.AppendLine();
-				foreach (var line in source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
-					builder.Append(indent).Append("// ").AppendLine(line.TrimEnd());
-				builder.AppendLine();
+			void AppendSourceComment(string indent, string source) {
+				WriteLine(string.Empty);
+				foreach (var sourceLine in source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+					WriteLine($"{indent}// {sourceLine.TrimEnd()}");
+				WriteLine(string.Empty);
 			}
 
 			static string FormatOperand(object? operand) => operand switch {
 				null => string.Empty,
-				string text => $"\"{text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"",
+				string text => QuoteString(text),
 				Instruction instruction => $"IL_{instruction.Offset:X4}",
 				IList<Instruction> instructions => string.Join(", ", instructions.Select(i => $"IL_{i.Offset:X4}")),
 				IMemberRef member => member.FullName,
@@ -4830,6 +4909,29 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				IFormattable value => value.ToString(null, CultureInfo.InvariantCulture),
 				_ => operand.ToString() ?? string.Empty,
 			};
+
+			/// <summary>A string operand in quotes, with every control character escaped — an instruction is one line,
+			/// whatever the string it loads.</summary>
+			static string QuoteString(string text) {
+				var quoted = new StringBuilder(text.Length + 2).Append('"');
+				foreach (var ch in text) {
+					switch (ch) {
+						case '\\': quoted.Append(@"\\"); break;
+						case '"': quoted.Append("\\\""); break;
+						case '\n': quoted.Append(@"\n"); break;
+						case '\r': quoted.Append(@"\r"); break;
+						case '\t': quoted.Append(@"\t"); break;
+						case '\0': quoted.Append(@"\0"); break;
+						default:
+							if (char.IsControl(ch) || ch is '\u0085' or '\u2028' or '\u2029')
+								quoted.Append(@"\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+							else
+								quoted.Append(ch);
+							break;
+					}
+				}
+				return quoted.Append('"').ToString();
+			}
 		}
 	}
 

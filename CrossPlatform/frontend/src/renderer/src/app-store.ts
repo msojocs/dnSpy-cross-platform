@@ -352,6 +352,37 @@ interface AppState {
    */
   removeModule(node: TreeNode): Promise<string[]>
   /**
+   * Removes several assemblies from the tree at once — dnSpy's Remove Assembly over a multiple selection,
+   * and its Close All Framework Assemblies / Close All Missing Files sweeps. Returns the node ids that
+   * were removed.
+   */
+  removeModules(nodeIds: string[]): Promise<string[]>
+  /**
+   * Which of the workspace's modules hold edits that have not been saved — what dnSpy asks about before
+   * Reload All. Returns the subset of node ids that are modified.
+   */
+  getModifiedModules(nodeIds: string[]): Promise<string[]>
+  /**
+   * The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the documents that
+   * are not PE images (a missing file is one of those).
+   */
+  getCloseCandidates(): Promise<{ frameworkNodeIds: string[]; missingNodeIds: string[] }>
+  /**
+   * Moves roots to another place in the tree — what dragging them does. Returns the new root list.
+   */
+  moveRoots(nodeIds: string[], index: number): Promise<TreeNode[]>
+  /**
+   * What activating a row — a double click, Enter — goes to: the definition a reference row names, or
+   * the assembly an assembly reference names, opened when it has to be. Returns null when the row is not
+   * one that activates to somewhere else.
+   */
+  activateNode(nodeId: string): Promise<string | null>
+  /**
+   * Opens the files dropped on the tree at the place they were dropped, filtered the way the Assembly
+   * Explorer's "dragged items" option says. Returns the modules that were opened and their insertion index.
+   */
+  dropFiles(paths: string[], index: number, filter: string): Promise<{ modules: OpenedModule[]; roots: TreeNode[]; index: number }>
+  /**
    * Brings the module's entry point, or the static constructor of its global type, into view — dnSpy's
    * two "Go to ..." commands. Answers false when the module has no such member.
    */
@@ -365,6 +396,17 @@ interface AppState {
    * cancelled or the write failed.
    */
   saveResource(node: TreeNode, raw: boolean): Promise<boolean>
+  /**
+   * Writes several resource nodes' bytes to files the user picks — dnSpy's Save Resource over a multiple
+   * selection. Returns false when the dialog was cancelled or any write failed.
+   */
+  saveResources(nodes: TreeNode[], raw: boolean): Promise<boolean>
+  /**
+   * The resource node that holds the data a Resources property or method reads — dnSpy's Go to Resource.
+   * Returns null when the type is not a Resources class, the method body does not name a resource, or the
+   * .resources file is not in the tree.
+   */
+  findResource(nodeId: string): Promise<string | null>
   /**
    * Opens every assembly the module's references name — dnSpy's Load Dependencies. `recursive` follows the
    * closure instead of stopping at the module's own references. Nothing is edited, so the dirty flag and
@@ -1441,6 +1483,117 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  removeModules: async (nodeIds) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId || nodeIds.length === 0)
+      return []
+    try {
+      const response = await window.dnSpy.removeModules(workspaceId, nodeIds)
+      const removed = new Set(response.removedNodeIds)
+      set((state) => {
+        const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
+          Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
+        const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
+        const newSelection = selectionWent ? response.roots[0] : state.selectedNode
+        return {
+          roots: response.roots,
+          documents: withoutRemoved(state.documents),
+          children: withoutRemoved(state.children),
+          parents: withoutRemoved(state.parents),
+          expanded: withoutRemoved(state.expanded),
+          loadingNodes: withoutRemoved(state.loadingNodes),
+          selectedNode: newSelection,
+          selectedNodes: selectionWent ? (newSelection ? [newSelection] : []) : state.selectedNodes.filter((n) => !removed.has(n.id)),
+          hexTarget: selectionWent ? undefined : state.hexTarget,
+          assemblyListRevision: state.assemblyListRevision + 1,
+        }
+      })
+      return response.removedNodeIds
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Remove failed: {message}', { message }))
+      return []
+    }
+  },
+
+  getModifiedModules: async (nodeIds) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return []
+    try {
+      const response = await window.dnSpy.getModifiedModules(workspaceId, nodeIds)
+      return response.modifiedNodeIds
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return []
+    }
+  },
+
+  getCloseCandidates: async () => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return { frameworkNodeIds: [], missingNodeIds: [] }
+    try {
+      return await window.dnSpy.getCloseCandidates(workspaceId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return { frameworkNodeIds: [], missingNodeIds: [] }
+    }
+  },
+
+  moveRoots: async (nodeIds, index) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return []
+    try {
+      const response = await window.dnSpy.moveRoots(workspaceId, nodeIds, index)
+      set({ roots: response.nodes, assemblyListRevision: get().assemblyListRevision + 1 })
+      return response.nodes
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return []
+    }
+  },
+
+  activateNode: async (nodeId) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return null
+    try {
+      const response = await window.dnSpy.activateNode(workspaceId, nodeId)
+      // If a module was auto-loaded to follow a reference, add it to the roots
+      if (response.addedModule) {
+        await get().refreshRoots()
+      }
+      return response.nodeId ?? null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return null
+    }
+  },
+
+  dropFiles: async (paths, index, filter) => {
+    const workspaceId = get().workspaceId
+    try {
+      const response = await window.dnSpy.dropFiles(workspaceId ?? null, paths, index, filter)
+      // If this created a new workspace, update the workspace ID
+      if (response.workspaceId && response.workspaceId !== workspaceId) {
+        set({ workspaceId: response.workspaceId })
+      }
+      set({ roots: response.roots, assemblyListRevision: get().assemblyListRevision + 1 })
+      return { modules: response.modules, roots: response.roots, index: response.index }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return { modules: [], roots: [], index: -1 }
+    }
+  },
+
   goToSpecialNode: async (node, kind) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
@@ -1485,6 +1638,59 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ error: message })
       get().appendOutput(t('Save failed: {message}', { message }))
       return false
+    }
+  },
+
+  saveResources: async (nodes, raw) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId || nodes.length === 0)
+      return false
+    try {
+      const response = await window.dnSpy.getResourceItems(workspaceId, nodes.map(n => n.id), raw)
+      if (response.items.length === 0)
+        return false
+
+      // Ask user to select a directory
+      const directory = await window.dnSpy.selectDirectory()
+      if (!directory)
+        return false
+
+      // Save each resource item to the directory
+      let savedCount = 0
+      for (const item of response.items) {
+        try {
+          const data = Uint8Array.from(atob(item.base64Data), c => c.charCodeAt(0))
+          const path = await window.dnSpy.writeFile(directory, item.name, data)
+          if (path) {
+            savedCount++
+            get().appendOutput(t('Saved {name} to {path}.', { name: item.name, path }))
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          get().appendOutput(t('Failed to save {name}: {message}', { name: item.name, message: msg }))
+        }
+      }
+
+      return savedCount > 0
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Save failed: {message}', { message }))
+      return false
+    }
+  },
+
+  findResource: async (nodeId) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return null
+    try {
+      const response = await window.dnSpy.findResource(workspaceId, nodeId)
+      return response.nodeId
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return null
     }
   },
 

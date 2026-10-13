@@ -47,6 +47,7 @@ const nativeMessages = {
     selectDebugHost: '选择宿主可执行文件',
     executables: '可执行文件',
     selectWorkingDirectory: '选择工作目录',
+    selectDirectory: '选择目录',
     restartFailed: '无法以管理员身份重启',
     restartNoResponse: '以管理员身份启动的窗口始终没有出现',
   },
@@ -68,6 +69,7 @@ const nativeMessages = {
     selectDebugHost: 'Select Host Executable',
     executables: 'Executables',
     selectWorkingDirectory: 'Select Working Directory',
+    selectDirectory: 'Select Directory',
     restartFailed: 'Could not restart with elevated rights',
     restartNoResponse: 'The window started with elevated rights never appeared',
   },
@@ -402,6 +404,16 @@ const registerIpc = (): void => {
   ipcMain.handle('workspace:reload', (_event, workspaceId: string) => requireBackend().invoke('workspace/reload', { workspaceId }))
   ipcMain.handle('workspace:sortAssemblies', (_event, workspaceId: string) => requireBackend().invoke('workspace/sortAssemblies', { workspaceId }))
   ipcMain.handle('workspace:removeModule', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('workspace/removeModule', { workspaceId, nodeId }))
+  ipcMain.handle('workspace:removeModules', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('workspace/removeModules', { workspaceId, nodeIds }))
+  ipcMain.handle('workspace:getModifiedModules', (_event, workspaceId: string, nodeIds?: string[]) => requireBackend().invoke('workspace/getModifiedModules', { workspaceId, nodeIds }))
+  ipcMain.handle('workspace:getCloseCandidates', (_event, workspaceId: string) => requireBackend().invoke('workspace/getCloseCandidates', { workspaceId }))
+  ipcMain.handle('workspace:moveRoots', (_event, workspaceId: string, nodeIds: string[], index: number) => requireBackend().invoke('workspace/moveRoots', { workspaceId, nodeIds, index }))
+  ipcMain.handle('workspace:dropFiles', (_event, workspaceId: string | null, paths: string[], index: number, filter: string) => requireBackend().invoke('workspace/dropFiles', { workspaceId, paths, index, filter }))
+  ipcMain.handle('tree:activate', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('tree/activate', { workspaceId, nodeId }))
+  ipcMain.handle('gac:list', () => requireBackend().invoke('gac/list', {}))
+  ipcMain.handle('gac:getDetails', (_event, path: string) => requireBackend().invoke('gac/getDetails', { path }))
+  ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw }))
+  ipcMain.handle('resource:find', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/find', { workspaceId, nodeId }))
   ipcMain.handle('module:specialNode', (_event, workspaceId: string, nodeId: string, kind: string) => requireBackend().invoke('module/getSpecialNode', { workspaceId, nodeId, kind }))
   ipcMain.handle('tree:findByToken', (_event, workspaceId: string, nodeId: string, token: string) => requireBackend().invoke('tree/findByToken', { workspaceId, nodeId, token }))
   ipcMain.handle('tree:roots', (_event, workspaceId: string) => requireBackend().invoke('tree/getRoots', { workspaceId }))
@@ -591,6 +603,26 @@ const registerIpc = (): void => {
       return undefined
     await dialogPathHistory?.rememberOpenedFile(result.filePaths[0])
     return await readFile(result.filePaths[0], 'utf8')
+  })
+  ipcMain.handle('dialog:selectDirectory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: nativeText().selectDirectory,
+      defaultPath: dialogPathHistory?.openDirectory,
+      properties: ['openDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0)
+      return undefined
+    await dialogPathHistory?.rememberOpenedFile(result.filePaths[0])
+    return result.filePaths[0]
+  })
+  ipcMain.handle('file:write', async (_event, directory: string, fileName: string, data: Uint8Array) => {
+    try {
+      const filePath = path.join(directory, fileName)
+      await writeFile(filePath, data)
+      return filePath
+    } catch {
+      return undefined
+    }
   })
   ipcMain.handle('debug:chooseTarget', async () => {
     if (!app.isPackaged && process.env.DNSPY_E2E_DEBUG_TARGET)

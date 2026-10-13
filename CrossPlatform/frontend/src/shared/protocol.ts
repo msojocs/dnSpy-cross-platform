@@ -94,6 +94,83 @@ export interface RemoveModuleResponse {
   roots: TreeNode[]
 }
 
+/** What is left after several assemblies are removed at once — dnSpy's Remove Assembly over a multiple
+ *  selection, and its Close All Framework Assemblies / Close All Missing Files sweeps. */
+export interface RemoveModulesResponse {
+  removedNodeIds: string[]
+  roots: TreeNode[]
+}
+
+/** The modules that hold edits that have not been saved — what dnSpy asks about before Reload All. */
+export interface ModifiedModulesResponse {
+  /** The root node ids of modified modules, subset of the ids given in the request. */
+  modifiedNodeIds: string[]
+}
+
+/** The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the documents
+ *  that are not PE images (a missing file is one of those). */
+export interface CloseCandidatesResponse {
+  frameworkNodeIds: string[]
+  missingNodeIds: string[]
+}
+
+/** What activating a row — a double click, Enter — goes to: the definition a reference row names,
+ *  or the assembly an assembly reference names, opened when it has to be. Null when the row is not
+ *  one that activates to somewhere else. */
+export interface ActivateNodeResponse {
+  nodeId: string | null
+  /** The module that was auto-loaded to follow a reference into it, which the client adds to its roots. */
+  addedModule: OpenedModule | null
+}
+
+/** Dropping files on the tree: the modules that were opened and where they went. `index` is where
+ *  the first one was inserted among the roots; `-1` means they were appended. */
+export interface DropFilesResponse {
+  workspaceId: string | null
+  stateId: string | null
+  modules: OpenedModule[]
+  roots: TreeNode[]
+  index: number
+}
+
+/** Every assembly in the global assembly caches on this machine. */
+export interface GacListResponse {
+  assemblies: GacAssemblyDto[]
+}
+
+export interface GacAssemblyDto {
+  name: string
+  version: string
+  culture: string
+  publicKeyToken: string
+  path: string
+}
+
+/** The company and file version of one GAC file, which the dialog shows for its selection. */
+export interface GacDetailsResponse {
+  createdBy: string | null
+  fileVersion: string | null
+}
+
+/** One resource to save, or one entry inside a .resources file. */
+export interface ResourceItemDto {
+  nodeId: string
+  name: string
+  base64Data: string
+}
+
+/** The bytes several resource nodes hold — what Save Resource writes, one file per item. */
+export interface ResourceItemsResponse {
+  items: ResourceItemDto[]
+}
+
+/** The resource node that holds the data a Resources property or method reads — dnSpy's Go to
+ *  Resource. Null when the type is not a Resources class, the method body does not name a
+ *  resource, or the .resources file is not in the tree. */
+export interface FindResourceResponse {
+  nodeId: string | null
+}
+
 /** The bytes one resource node holds, and the name a Save dialog should suggest for them. */
 export interface ResourceDataResponse {
   name: string
@@ -1068,6 +1145,30 @@ export interface DnSpyApi {
   sortAssemblies(workspaceId: string): Promise<TreeNodesResponse>
   /** Removes one assembly from the tree — dnSpy's Remove Assembly — and answers with what is left. */
   removeModule(workspaceId: string, nodeId: string): Promise<RemoveModuleResponse>
+  /** Removes several documents from the tree at once — dnSpy's Remove Assembly over a multiple
+   *  selection, and its Close All Framework Assemblies / Close All Missing Files sweeps. */
+  removeModules(workspaceId: string, nodeIds: string[]): Promise<RemoveModulesResponse>
+  /** Which of the workspace's modules hold edits that have not been saved. */
+  getModifiedModules(workspaceId: string, nodeIds?: string[]): Promise<ModifiedModulesResponse>
+  /** The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the
+   *  documents that are not PE images (a missing file is one of those). */
+  getCloseCandidates(workspaceId: string): Promise<CloseCandidatesResponse>
+  /** Moves roots to another place in the tree — what dragging them does. */
+  moveRoots(workspaceId: string, nodeIds: string[], index: number): Promise<TreeNodesResponse>
+  /** What activating a row — a double click, Enter — goes to: the definition a reference row names,
+   *  or the assembly an assembly reference names, opened when it has to be. */
+  activateNode(workspaceId: string, nodeId: string): Promise<ActivateNodeResponse>
+  /** Opens the files dropped on the tree at the place they were dropped, filtered the way the
+   *  Assembly Explorer's "dragged items" option says. */
+  dropFiles(workspaceId: string | null, paths: string[], index: number, filter: string): Promise<DropFilesResponse>
+  /** Every assembly in the global assembly caches on this machine. */
+  listGacAssemblies(): Promise<GacListResponse>
+  /** The company and file version of one GAC file, which the dialog shows for its selection. */
+  getGacDetails(path: string): Promise<GacDetailsResponse>
+  /** The bytes several resource nodes hold — what Save Resource writes, one file per item. */
+  getResourceItems(workspaceId: string, nodeIds: string[], raw: boolean): Promise<ResourceItemsResponse>
+  /** The resource node that holds the data a Resources property or method reads — dnSpy's Go to Resource. */
+  findResource(workspaceId: string, nodeId: string): Promise<FindResourceResponse>
   /**
    * The module's entry point, or the static constructor of its global type — dnSpy's "Go to Entry
    * Point" and "Go to Global Cctor". The node names which module to look in; any node inside it does.
@@ -1172,6 +1273,10 @@ export interface DnSpyApi {
    * only titles the dialog — the two importers that use this read the same kind of JSON file.
    */
   readTextFile(kind?: 'bookmarks' | 'breakpoints'): Promise<string | undefined>
+  /** Opens a directory chooser dialog for saving multiple resources. */
+  selectDirectory(): Promise<string | undefined>
+  /** Writes a file to the specified directory. Returns the full path if successful, undefined otherwise. */
+  writeFile(directory: string, fileName: string, data: Uint8Array): Promise<string | undefined>
   chooseDebugTarget(): Promise<string | undefined>
   chooseDebugDirectory(): Promise<string | undefined>
   /** Picks the host executable for the Debug Program dialog's "Use host executable" field. */

@@ -238,7 +238,7 @@ public sealed partial class WorkspaceManager {
 					label.ToString(),
 					HasChildren: true,
 					NodeId: GetMemberNode(member, entry).Id,
-					Icon: member is TypeDef type ? TypeIcon(type) : kind.ToString().ToLowerInvariant(),
+					Icon: member is TypeDef type ? DotNetImages.Of(type) : kind.ToString().ToLowerInvariant(),
 					MetadataToken: unchecked((int)member.MDToken.Raw),
 					HidesParent: hidesParent,
 					FullName: member.FullName,

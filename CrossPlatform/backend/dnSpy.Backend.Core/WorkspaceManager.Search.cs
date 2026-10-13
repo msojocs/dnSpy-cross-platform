@@ -249,7 +249,7 @@ public sealed partial class WorkspaceManager {
 			AssemblyDef => "assembly",
 			ModuleDef => "module",
 			SearchNamespace => "namespace",
-			TypeDef type => TypeIcon(type),
+			TypeDef type => DotNetImages.Of(type),
 			MethodDef => "method",
 			FieldDef => "field",
 			PropertyDef => "property",

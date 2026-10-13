@@ -981,40 +981,20 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// offered twice without producing two trees. Loading nothing is not an error here: the Open command
 		/// raises one instead, while adding to an open workspace is content to have had nothing to do.
 		/// </summary>
-		public async Task<IReadOnlyList<IModuleEntry>> LoadModulesAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken) {
+		public async Task<IReadOnlyList<IModuleEntry>> LoadModulesAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken, bool autoLoaded = false) {
 			var added = new List<IModuleEntry>();
 			foreach (var path in paths) {
 				cancellationToken.ThrowIfCancellationRequested();
 				var fullPath = Path.GetFullPath(path);
-				if (IsOpen(fullPath))
+				if (IsOpen(fullPath)) {
+					// dnSpy's loader clears the auto-loaded flag of a document the user opens on purpose.
+					if (!autoLoaded)
+						MarkOpenedByUser(fullPath);
 					continue;
+				}
 
 				var entry = await Task.Run(() => LoadEntry(fullPath), cancellationToken).ConfigureAwait(false);
-				var root = entry switch {
-					ModuleEntry module => GetOrAddNode($"assembly:{fullPath}", NodeKind.Assembly, module.Module.Assembly ?? (object)module.Module, entry),
-					PeOnlyModuleEntry peModule => GetOrAddNode($"pe:{fullPath}", NodeKind.PEDocument, peModule, peModule),
-					ElfFileEntry elf => GetOrAddNode($"elf:{fullPath}", NodeKind.ElfDocument, elf, elf),
-					_ => GetOrAddNode($"unknown:{fullPath}", NodeKind.UnknownDocument, entry, entry),
-				};
-				switch (entry) {
-					case ModuleEntry module:
-						module.Id = root.Id;
-						modules.Add(module.Id, module);
-						break;
-					case PeOnlyModuleEntry peModule:
-						peModule.Id = root.Id;
-						peModules.Add(peModule.Id, peModule);
-						break;
-					case ElfFileEntry elf:
-						elf.Id = root.Id;
-						elfFiles.Add(elf.Id, elf);
-						break;
-					case UnknownFileEntry unknown:
-						unknown.Id = root.Id;
-						unknownFiles.Add(unknown.Id, unknown);
-						break;
-				}
-				rootOrder.Add(root.Id);
+				AddRoot(entry, autoLoaded);
 				added.Add(entry);
 			}
 			return added;
@@ -1108,10 +1088,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					module.Id,
 					module.Module.Assembly?.Name.String ?? module.Module.Name.String,
 					module.Path,
-					File.Exists(Path.ChangeExtension(module.Path, ".pdb"))),
+					File.Exists(Path.ChangeExtension(module.Path, ".pdb")),
+					IsAutoLoaded(module)),
 				// A PE-only file and an unknown one have no assembly name to show or symbols to load, so
 				// they are listed under their file name the way the tree lists them.
-				_ => new OpenedModule(entry.Id, Path.GetFileName(entry.Path), entry.Path, false),
+				_ => new OpenedModule(entry.Id, Path.GetFileName(entry.Path), entry.Path, false, IsAutoLoaded(entry)),
 			}).ToList();
 			return new OpenWorkspaceResponse(Id, opened, stateId);
 		}
@@ -1141,12 +1122,16 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		/// <summary>
 		/// Sorts the root nodes by the name the tree shows, case-insensitively, with the current position
-		/// as the tie-breaker so two identical names keep the order they were loaded in. This is dnSpy's
-		/// Sort Assemblies (IDocumentTreeView.SortTopNodes).
+		/// as the tie-breaker so two identical names keep the order they were loaded in. The roots the user
+		/// opened come before the ones the workspace auto-loaded, the way dnSpy's DsDocumentNodeComparer puts
+		/// them. This is dnSpy's Sort Assemblies (IDocumentTreeView.SortTopNodes).
 		/// </summary>
 		public TreeNodesResponse SortAssemblies() {
 			var position = rootOrder.Select((id, index) => (id, index)).ToDictionary(entry => entry.id, entry => entry.index, StringComparer.Ordinal);
 			rootOrder.Sort((left, right) => {
+				var byOrigin = autoLoadedRoots.Contains(left).CompareTo(autoLoadedRoots.Contains(right));
+				if (byOrigin != 0)
+					return byOrigin;
 				var byName = StringComparer.OrdinalIgnoreCase.Compare(GetLabel(nodes[left]), GetLabel(nodes[right]));
 				return byName != 0 ? byName : position[left].CompareTo(position[right]);
 			});
@@ -1155,23 +1140,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		/// <summary>
-		/// Removes the document a node belongs to — dnSpy's Remove Assembly. The node may be the assembly
-		/// root or anything under it, and the whole assembly goes either way, because that is the document
-		/// the tree holds. A file that is not a managed assembly has no such document here, which is why the
-		/// command is only offered on the assembly and module rows.
+		/// Removes the document a node belongs to — dnSpy's Remove Assembly for one node. The node may be the
+		/// root or anything under it, and the whole document goes either way.
 		/// </summary>
-		public RemoveModuleResponse RemoveModule(string nodeId) {
-			var node = GetNode(nodeId);
-			if (node.AsModuleEntry is not { } module)
-				throw new RpcException(ErrorCodes.InvalidParams, "Only a managed assembly can be removed.");
-			if (!modules.Remove(module.Id))
-				throw new RpcException(ErrorCodes.NodeNotFound, "The selected assembly is no longer open.");
-			rootOrder.Remove(module.Id);
-			NoteModelChanged();
-			var removed = DropModule(module);
-			version++;
-			return new RemoveModuleResponse(removed, GetRoots().Nodes);
-		}
+		public RemoveModuleResponse RemoveModule(string nodeId) => RemoveRoots([nodeId]);
 
 		/// <summary>
 		/// Forgets everything the workspace held for one module: the nodes of its own tree, and the caches
@@ -1181,15 +1153,27 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// removed module's place.
 		/// </summary>
 		IReadOnlyList<string> DropModule(ModuleEntry module) {
+			// The net modules hanging off the assembly go with it, and their rows with them.
+			var owned = netModules.Values.Where(entry => entry.Id == module.Id).ToArray();
+			foreach (var netModule in owned) {
+				netModules.Remove(netModule.Path);
+				namespaceIndexes.Remove(netModule.Path);
+				typeIndexes.Remove(netModule.Path);
+				typeReferenceIndexes.Remove(netModule.Path);
+			}
 			// The module's own nodes are the ones whose owner is this entry: its assembly root, its module
 			// row, and everything the tree has listed under them so far.
-			var removed = nodes.Values.Where(entry => ReferenceEquals(entry.Module, module)).Select(entry => entry.Id).ToArray();
+			var removed = nodes.Values
+				.Where(entry => ReferenceEquals(entry.Module, module) || owned.Any(netModule => ReferenceEquals(entry.Module, netModule)))
+				.Select(entry => entry.Id)
+				.ToArray();
 			foreach (var id in removed) {
 				nodeIdsByKey.Remove(nodes[id].Key);
 				nodes.Remove(id);
 			}
 			namespaceIndexes.Remove(module.Path);
 			typeIndexes.Remove(module.Path);
+			typeReferenceIndexes.Remove(module.Path);
 			// The resolver holds the module's file open, and nothing reads it once the module is gone.
 			if (referenceResolvers.Remove(module.Path, out var resolver))
 				resolver?.Dispose();
@@ -1226,9 +1210,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		/// <summary>
 		/// The node a metadata token names — dnSpy's "Go to Token". The token is read the way the tree and
-		/// the copy commands write it ("0x06000001" or "06000001"), and the table it belongs to picks the
-		/// kind, so a caller only has to pass on what the user typed. A token the module has no row for, or
-		/// one naming a row the tree does not show, is answered with no node at all.
+		/// the copy commands write it ("0x06000001" or "06000001", or VB's "&amp;H06000001"), and the table it
+		/// belongs to picks the kind, so a caller only has to pass on what the user typed. A reference token —
+		/// a TypeRef, a TypeSpec, a MemberRef or a MethodSpec — goes to the definition it names, the way dnSpy's
+		/// GoToTokenCommand resolves it, opening the assembly that defines it when it has to. A token with no
+		/// row answers with dnSpy's "Invalid metadata token", one whose reference resolves to nothing with its
+		/// "Could not resolve member reference token".
 		/// </summary>
 		public FindByTokenResponse FindByToken(FindByTokenRequest request) {
 			var module = ModuleOf(GetNode(request.NodeId));
@@ -1236,42 +1223,26 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not part of a managed assembly.");
 			if (!TryParseToken(request.Token, out var token))
 				throw new RpcException(ErrorCodes.InvalidParams, "A metadata token is a 32-bit value such as 0x06000001.");
-			return new FindByTokenResponse(ResolveInModule(module, token)?.NodeId);
-		}
-
-		/// <summary>
-		/// The bytes a resource node holds, for dnSpy's Save Resource commands. A resource node answers with
-		/// the manifest resource's own bytes; an entry inside a .resources file answers with the value that
-		/// entry decodes to, which is what dnSpy's deserialized save writes. The name comes back with them so
-		/// the dialog can suggest it.
-		/// </summary>
-		public ResourceDataResponse GetResourceData(ResourceDataRequest request) {
-			var node = GetNode(request.NodeId);
-			return node.Value switch {
-				EmbeddedResource resource => new ResourceDataResponse(resource.Name.String, Convert.ToBase64String(ReadResourceBytes(resource))),
-				ResourceEntryValue entry => new ResourceDataResponse(entry.Name, Convert.ToBase64String(ResourceEntryBytes(entry))),
-				_ => throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not a resource."),
+			IMDTokenProvider? provider;
+			try {
+				provider = module.Module.ResolveToken(token);
+			}
+			catch (Exception) {
+				provider = null;
+			}
+			if (provider is null)
+				return new FindByTokenResponse(null, string.Format(CultureInfo.InvariantCulture, "Invalid metadata token: 0x{0:X8}", token));
+			var target = provider switch {
+				TypeDef or MethodDef or FieldDef or PropertyDef or EventDef => ResolveInModule(module, token)?.NodeId,
+				ITypeDefOrRef type => ResolveTypeInWorkspace(type, module) is var (resolved, resolvedModule) ? GetMemberNode(resolved, resolvedModule).Id : null,
+				MemberRef { IsFieldRef: true } field => ResolveFieldInWorkspace(field, module)?.Id,
+				IMethod method => ResolveMethodInWorkspace(method, module)?.Id,
+				_ => null,
 			};
+			if (target is null && provider is ITypeDefOrRef or MemberRef or MethodSpec)
+				return new FindByTokenResponse(null, string.Format(CultureInfo.InvariantCulture, "Could not resolve member reference token: 0x{0:X8}", token));
+			return new FindByTokenResponse(target);
 		}
-
-		/// <summary>
-		/// The manifest resource's bytes as they sit in the module. They are read out of the in-memory module
-		/// rather than off the file, so an edit that has not been saved yet is what gets saved.
-		/// </summary>
-		static byte[] ReadResourceBytes(EmbeddedResource resource) {
-			using var stream = resource.CreateReader().AsStream();
-			using var buffer = new MemoryStream();
-			stream.CopyTo(buffer);
-			return buffer.ToArray();
-		}
-
-		/// <summary>The serialized form of one .resources entry: its decoded value, written back out the way
-		/// the value would be stored. An entry that decodes to nothing writes an empty file.</summary>
-		static byte[] ResourceEntryBytes(ResourceEntryValue entry) => entry.Value switch {
-			byte[] bytes => bytes,
-			string text => Encoding.UTF8.GetBytes(text),
-			_ => Array.Empty<byte>(),
-		};
 
 		/// <summary>The managed module a node belongs to, or null when it belongs to a file the tree holds
 		/// as something other than an assembly.</summary>
@@ -1285,8 +1256,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			token = 0;
 			if (string.IsNullOrWhiteSpace(text))
 				return false;
-			var digits = text.Trim();
-			if (digits.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+			var digits = text.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
+			if (digits.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || digits.StartsWith("&H", StringComparison.OrdinalIgnoreCase))
 				digits = digits[2..];
 			// Eight digits is what the tree writes; a shorter one is still read the same way, the way
 			// dnSpy's token box accepts "0x6000001".
@@ -1308,6 +1279,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				NodeKind.Elf => GetElfChildren(node),
 				NodeKind.Namespace => GetNamespaceChildren(node),
 				NodeKind.TypeReferencesGroup => GetTypeReferenceChildren(node),
+				NodeKind.TypeReference => GetTypeReferenceNodeChildren(node),
+				NodeKind.TypeSpecsFolder or NodeKind.MethodReferencesFolder or NodeKind.PropertyReferencesFolder
+					or NodeKind.EventReferencesFolder or NodeKind.FieldReferencesFolder => GetTypeReferenceFolderChildren(node),
 				NodeKind.ReferencesGroup => GetReferenceChildren(node),
 				NodeKind.AssemblyReference => GetAssemblyReferenceChildren(node),
 				NodeKind.ResourcesGroup => GetResourceChildren(node),
@@ -1346,9 +1320,23 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				return [];
 			// A type hierarchy node hangs off the type whose chain it lists, and that type is not named by
 			// its own value — a base type holds the reference, a derived type holds a type that may live in
-			// another module. No chain from a root can be assembled from the node here.
-			if (node.Kind is NodeKind.BaseTypeFolder or NodeKind.BaseType or NodeKind.DerivedTypesFolder or NodeKind.DerivedType)
+			// another module. No chain from a root can be assembled from the node here. The same goes for the
+			// rows of the Type References folder and for the references an assembly reference expands into:
+			// each hangs off a row its own value does not name.
+			if (node.Kind is NodeKind.BaseTypeFolder or NodeKind.BaseType or NodeKind.DerivedTypesFolder or NodeKind.DerivedType
+				or NodeKind.TypeReference or NodeKind.TypeSpecsFolder or NodeKind.MethodReferencesFolder or NodeKind.PropertyReferencesFolder
+				or NodeKind.EventReferencesFolder or NodeKind.FieldReferencesFolder or NodeKind.MethodReference or NodeKind.PropertyReference
+				or NodeKind.EventReference or NodeKind.FieldReference)
 				return [];
+			if (node.Kind == NodeKind.AssemblyReference && node.Key.Contains(":ref:", StringComparison.Ordinal))
+				return [];
+			// A net module hangs off the root of the assembly it belongs to, which shares its id.
+			if (netModules.TryGetValue(module.Path, out var netModule) && ReferenceEquals(netModule, module)) {
+				if (!nodes.TryGetValue(module.Id, out var assemblyRoot))
+					return [];
+				var netModuleNode = GetOrAddNode($"module:{module.Path}", NodeKind.Module, module.Module, module);
+				return node.Kind == NodeKind.Module ? [assemblyRoot, node] : PathBelowModule(assemblyRoot, netModuleNode, node, module);
+			}
 			// An open module owns the module node hanging off its assembly root, which is the node
 			// LoadModulesAsync created. A module reached through an assembly reference has no root of its
 			// own, so no chain leads to its nodes and the caller walks its own tree instead.
@@ -1359,13 +1347,30 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			if (node.Kind == NodeKind.Module)
 				return [root, node];
 			var moduleNode = GetOrAddNode($"module:{module.Path}", NodeKind.Module, module.Module, module);
+			return PathBelowModule(root, moduleNode, node, module);
+		}
+
+		IReadOnlyList<NodeEntry> PathBelowModule(NodeEntry root, NodeEntry moduleNode, NodeEntry node, ModuleEntry module) {
 			var chain = new List<NodeEntry> { root, moduleNode };
 			switch (node.Kind) {
 				case NodeKind.Namespace or NodeKind.PE or NodeKind.ReferencesGroup or NodeKind.ResourcesGroup or NodeKind.TypeReferencesGroup:
 					chain.Add(node);
 					return chain;
-				case NodeKind.AssemblyReference:
+				case NodeKind.AssemblyReference or NodeKind.ModuleReference:
 					chain.Add(GetOrAddNode($"{moduleNode.Key}:references", NodeKind.ReferencesGroup, module.Module, module));
+					chain.Add(node);
+					return chain;
+				case NodeKind.Resource:
+					chain.Add(GetOrAddNode($"{moduleNode.Key}:resources", NodeKind.ResourcesGroup, module.Module, module));
+					chain.Add(node);
+					return chain;
+				case NodeKind.ResourceEntry:
+					var resources = GetOrAddNode($"{moduleNode.Key}:resources", NodeKind.ResourcesGroup, module.Module, module);
+					var ownerResource = ((ResourceEntryValue)node.Value).Owner;
+					if (GetResourceChildren(resources).FirstOrDefault(child => ReferenceEquals(child.Value, ownerResource)) is not { } resourceNode)
+						return [];
+					chain.Add(resources);
+					chain.Add(resourceNode);
 					chain.Add(node);
 					return chain;
 			}
@@ -1387,8 +1392,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				types.Insert(0, type);
 			var outermost = types[0];
 			// Only a top-level type sits in a namespace; a nested one is listed under the type that
-			// declares it. The global <Module> type is in no namespace either — GetNamespaceIndex skips it.
-			if (outermost.DeclaringType is null && !outermost.IsGlobalModuleType) {
+			// declares it. The global <Module> type sits in the empty namespace, where dnSpy lists it.
+			if (outermost.DeclaringType is null) {
 				var ns = outermost.Namespace.String ?? string.Empty;
 				if (GetNamespaceIndex(module).Groups.TryGetValue(ns, out var group))
 					chain.Add(GetOrAddNode($"{moduleNode.Key}:namespace:{ns}", NodeKind.Namespace, new NamespaceValue(ns, group), module));
@@ -1406,35 +1411,20 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return chain;
 		}
 
-		IReadOnlyList<NodeEntry> GetAssemblyChildren(NodeEntry node) {
-			// Assembly node contains the Module node as its only child
-			var moduleEntry = node.AsModuleEntry!;
-			var module = moduleEntry.Module;
-			var moduleNode = GetOrAddNode($"module:{moduleEntry.Path}", NodeKind.Module, module, moduleEntry);
-			return new[] { moduleNode };
-		}
-
 		IReadOnlyList<NodeEntry> GetModuleChildren(NodeEntry node) {
 			var module = (ModuleDefMD)node.Value;
 			var result = new List<NodeEntry>();
 
-			// Order matches WPF version:
-			// 1. PE node (if applicable)
+			// The order dnSpy's tree node groups give a module's children: the PE node, Type References,
+			// References, Resources, then the namespaces — the empty one, "-", first.
 			if (module.Metadata?.PEImage is { } peImage)
 				result.Add(GetOrAddNode($"{node.Key}:pe", NodeKind.PE, peImage, node.Module));
-
-			// 2. Type References folder
 			result.Add(GetOrAddNode($"{node.Key}:typerefs", NodeKind.TypeReferencesGroup, module, node.Module));
-
-			// 3. Assembly References folder
-			if (module.GetAssemblyRefs().Any())
+			// dnSpy's two folders check their children, so an empty one is not shown.
+			if (HasReferences(module))
 				result.Add(GetOrAddNode($"{node.Key}:references", NodeKind.ReferencesGroup, module, node.Module));
-
-			// 4. Resources folder
 			if (module.Resources.Count != 0)
 				result.Add(GetOrAddNode($"{node.Key}:resources", NodeKind.ResourcesGroup, module, node.Module));
-
-			// 5. Namespaces (including empty namespace shown as "-")
 			result.AddRange(GetNamespaceNodes(node.Key, node.AsModuleEntry!));
 
 			return result;
@@ -1458,8 +1448,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		NamespaceIndex GetNamespaceIndex(ModuleEntry module) {
 			if (namespaceIndexes.TryGetValue(module.Path, out var cached) && cached.StateId == stateId)
 				return cached;
+			// Every top-level type, the global <Module> type included: dnSpy groups them all by namespace, which
+			// puts <Module> in the empty one.
 			var groups = module.Module.Types
-				.Where(t => t.DeclaringType is null && !t.IsGlobalModuleType)
+				.Where(t => t.DeclaringType is null)
 				.GroupBy(t => t.Namespace.String ?? string.Empty, StringComparer.Ordinal)
 				.ToDictionary(g => g.Key, g => (IReadOnlyList<TypeDef>)g.ToArray(), StringComparer.Ordinal);
 			var index = new NamespaceIndex(stateId, groups);
@@ -1475,8 +1467,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var value = (NamespaceValue)node.Value;
 			if (!GetNamespaceIndex(moduleEntry).Groups.TryGetValue(value.Name, out var types))
 				return Array.Empty<NodeEntry>();
-			return types
-				.OrderBy(t => t.Name.String, StringComparer.OrdinalIgnoreCase)
+			return SortTypes(types)
 				.Select(t => GetMemberNode(t, moduleEntry))
 				.ToArray();
 		}
@@ -1576,48 +1567,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NodeKind.ElfStructure,
 			value,
 			elfNode.Module);
-
-		IReadOnlyList<NodeEntry> GetTypeReferenceChildren(NodeEntry node) {
-			var module = (ModuleDefMD)node.Value;
-			// Type references are types that this module references from other assemblies
-			// For now, return empty array as this requires more complex implementation
-			return Array.Empty<NodeEntry>();
-		}
-
-		IReadOnlyList<NodeEntry> GetReferenceChildren(NodeEntry node) => ((ModuleDefMD)node.Value)
-			.GetAssemblyRefs()
-			.OrderBy(r => r.Name.String, StringComparer.OrdinalIgnoreCase)
-			.Select(r => GetOrAddNode(MemberKey(node.AsModuleEntry!, "reference", r.MDToken.Raw), NodeKind.AssemblyReference, r, node.Module))
-			.ToArray();
-
-		/// <summary>
-		/// The types of the assembly a reference points at, grouped into namespaces the way a module's own
-		/// are. A reference to a module the workspace already has open hands back that module's own children,
-		/// so the two subtrees are literally one and no node id appears twice; anything else is read from the
-		/// file the reference resolves to, loaded once and kept for as long as the workspace lives.
-		/// </summary>
-		IReadOnlyList<NodeEntry> GetAssemblyReferenceChildren(NodeEntry node) {
-			var reference = (AssemblyRef)node.Value;
-			if (FindOpenModuleByName(reference.Name.String) is { } open) {
-				// The workspace root is an assembly node whose value is AssemblyDef. The
-				// module children are owned by the separate module node, so do not pass the
-				// assembly root to GetModuleChildren (it expects ModuleDefMD).
-				var moduleNode = GetOrAddNode($"module:{open.Path}", NodeKind.Module, open.Module, open);
-				return GetModuleChildren(moduleNode);
-			}
-			return LoadReferenceModule(node.AsModuleEntry!, reference) is { } module
-				? [.. GetNamespaceNodes(node.Key, module)]
-				: Array.Empty<NodeEntry>();
-		}
-
-		/// <summary>Whether a reference can be expanded. The file is looked up but never loaded here,
-		/// because this runs for every reference node of every response the tree is asked for; the load
-		/// happens when the node is actually opened.</summary>
-		bool HasAssemblyReferenceChildren(NodeEntry node) {
-			var reference = (AssemblyRef)node.Value;
-			return FindOpenModuleByName(reference.Name.String) is not null
-				|| ReferencePath(node.AsModuleEntry!, reference) is not null;
-		}
 
 		/// <summary>An open module whose assembly goes by this simple name. Matching on the name alone is
 		/// what dnSpy does: a reference and the assembly it names can differ in version and still be the
@@ -1744,48 +1693,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		IReadOnlyList<NodeEntry> GetResourceChildren(NodeEntry node) => ((ModuleDefMD)node.Value)
-			.Resources
-			.OrderBy(r => r.Name.String, StringComparer.OrdinalIgnoreCase)
-			.Select((r, index) => GetOrAddNode($"resource:{node.AsModuleEntry!.Path}:{index}:{r.Name}", NodeKind.Resource, r, node.Module))
-			.ToArray();
-
-		IReadOnlyList<NodeEntry> GetEmbeddedResourceChildren(NodeEntry node) {
-			if (node.Value is not EmbeddedResource embedded || !embedded.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
-				return Array.Empty<NodeEntry>();
-			var values = new List<ResourceEntryValue>();
-			using var stream = embedded.CreateReader().AsStream();
-			using var reader = new ResourceReader(stream);
-			var enumerator = reader.GetEnumerator();
-			while (enumerator.MoveNext()) {
-				var name = enumerator.Key?.ToString() ?? string.Empty;
-				reader.GetResourceData(name, out var typeName, out var data);
-				values.Add(new ResourceEntryValue(name, DecodeResourceData(typeName, data), typeName));
-			}
-			return values
-				.OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
-				.Select(value => GetOrAddNode(ResourceEntryKey(node.AsModuleEntry!, embedded, value.Name), NodeKind.ResourceEntry, value, node.Module))
-				.ToArray();
-		}
-
-		static string ResourceEntryKey(ModuleEntry module, EmbeddedResource resource, string name) => $"resource-entry:{module.Path}:{resource.Name}:{name}";
-
-		static object? DecodeResourceData(string typeName, byte[] data) {
-			if (typeName == "ResourceTypeCode.Null")
-				return null;
-			using var stream = new MemoryStream(data, writable: false);
-			using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
-			if (typeName == "ResourceTypeCode.String")
-				return reader.ReadString();
-			if (typeName is "ResourceTypeCode.ByteArray" or "ResourceTypeCode.Stream") {
-				var length = reader.ReadInt32();
-				if (length < 0 || length > stream.Length - stream.Position)
-					throw new BadImageFormatException($"Resource entry has an invalid byte length: {length}");
-				return reader.ReadBytes(length);
-			}
-			return data;
-		}
-
 		IReadOnlyList<NodeEntry> GetTypeChildren(NodeEntry node) {
 			var type = (TypeDef)node.Value;
 			var moduleEntry = node.AsModuleEntry!;
@@ -1794,19 +1701,18 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// always there whether or not the type has a base type or a subtype.
 			result.Add(GetOrAddNode($"{node.Key}:basetypes", NodeKind.BaseTypeFolder, type, moduleEntry));
 			result.Add(GetOrAddNode($"{node.Key}:derivedtypes", NodeKind.DerivedTypesFolder, type, moduleEntry));
-			result.AddRange(type.NestedTypes.OrderBy(t => t.Name.String, StringComparer.OrdinalIgnoreCase).Select(t => GetMemberNode(t, moduleEntry)));
-			result.AddRange(type.Fields.OrderBy(f => f.Name.String, StringComparer.OrdinalIgnoreCase).Select(f => GetMemberNode(f, moduleEntry)));
-			result.AddRange(type.Properties.OrderBy(p => p.Name.String, StringComparer.OrdinalIgnoreCase).Select(p => GetMemberNode(p, moduleEntry)));
-			result.AddRange(type.Events.OrderBy(e => e.Name.String, StringComparer.OrdinalIgnoreCase).Select(e => GetMemberNode(e, moduleEntry)));
+			// The member groups in dnSpy's default order — methods, properties, events, fields, nested types —
+			// each sorted the way its tree node group sorts it. The Assembly Explorer options can put the
+			// groups in another order, which the client applies, since the groups stay together either way.
 			// A property's or an event's accessor methods are not listed beside the member they implement:
 			// dnSpy keeps them under it, so the tree shows one row per member instead of "Code" followed by
 			// a loose "get_Code()" that repeats it.
 			var accessors = GetPropertyAndEventMethods(type);
-			result.AddRange(type.Methods
-				.Where(m => !accessors.Contains(m))
-				.OrderBy(m => m.Name.String, StringComparer.OrdinalIgnoreCase)
-				.ThenBy(m => m.MethodSig?.Params.Count ?? 0)
-				.Select(m => GetMemberNode(m, moduleEntry)));
+			result.AddRange(SortMethods(type.Methods.Where(m => !accessors.Contains(m))).Select(m => GetMemberNode(m, moduleEntry)));
+			result.AddRange(SortByNameAndToken(type.Properties).Select(p => GetMemberNode(p, moduleEntry)));
+			result.AddRange(SortByNameAndToken(type.Events).Select(e => GetMemberNode(e, moduleEntry)));
+			result.AddRange(SortByNameAndToken(type.Fields).Select(f => GetMemberNode(f, moduleEntry)));
+			result.AddRange(SortTypes(type.NestedTypes).Select(t => GetMemberNode(t, moduleEntry)));
 			return result;
 		}
 
@@ -1870,11 +1776,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<NodeEntry> GetPropertyChildren(NodeEntry node) {
 			var property = (PropertyDef)node.Value;
 			var moduleEntry = node.AsModuleEntry!;
-			var result = new List<NodeEntry>();
-			result.AddRange(property.GetMethods.Select(m => GetMemberNode(m, moduleEntry)));
-			result.AddRange(property.SetMethods.Select(m => GetMemberNode(m, moduleEntry)));
-			result.AddRange(property.OtherMethods.Select(m => GetMemberNode(m, moduleEntry)));
-			return result;
+			// dnSpy files the accessors in one group and sorts it the way it sorts methods, by name first.
+			return SortMethods(property.GetMethods.Concat(property.SetMethods).Concat(property.OtherMethods).Distinct())
+				.Select(m => GetMemberNode(m, moduleEntry))
+				.ToArray();
 		}
 
 		/// <summary>
@@ -1884,15 +1789,16 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<NodeEntry> GetEventChildren(NodeEntry node) {
 			var @event = (EventDef)node.Value;
 			var moduleEntry = node.AsModuleEntry!;
-			var result = new List<NodeEntry>();
+			var accessors = new List<MethodDef>();
 			if (@event.AddMethod is { } add)
-				result.Add(GetMemberNode(add, moduleEntry));
+				accessors.Add(add);
 			if (@event.RemoveMethod is { } remove)
-				result.Add(GetMemberNode(remove, moduleEntry));
+				accessors.Add(remove);
 			if (@event.InvokeMethod is { } invoke)
-				result.Add(GetMemberNode(invoke, moduleEntry));
-			result.AddRange(@event.OtherMethods.Select(m => GetMemberNode(m, moduleEntry)));
-			return result;
+				accessors.Add(invoke);
+			accessors.AddRange(@event.OtherMethods);
+			// Sorted like methods, by name, the way dnSpy's group sorts them: add_, raise_, remove_.
+			return SortMethods(accessors.Distinct()).Select(m => GetMemberNode(m, moduleEntry)).ToArray();
 		}
 
 		/// <summary>Whether a property or an event owns any accessor method at all — a member without one
@@ -1911,11 +1817,20 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<NodeEntry> GetBaseTypeChildren(NodeEntry node) {
 			var type = (TypeDef)node.Value;
 			var moduleEntry = node.AsModuleEntry!;
+			return BaseTypeRows(node, type, moduleEntry);
+		}
+
+		/// <summary>The base type, then the interfaces sorted by name — dnSpy's BaseTypeTreeNodeGroup, which puts
+		/// the two kinds in groups of their own.</summary>
+		IReadOnlyList<NodeEntry> BaseTypeRows(NodeEntry parent, TypeDef type, ModuleEntry moduleEntry) {
 			var result = new List<NodeEntry>();
 			if (type.BaseType is not null)
-				result.Add(GetBaseTypeNode(node, type.BaseType, true, moduleEntry));
-			foreach (var iface in type.Interfaces)
-				result.Add(GetBaseTypeNode(node, iface.Interface, false, moduleEntry));
+				result.Add(GetBaseTypeNode(parent, type.BaseType, true, moduleEntry));
+			result.AddRange(type.Interfaces
+				.Select(iface => iface.Interface)
+				.Where(iface => iface is not null)
+				.OrderBy(iface => iface.Name.String, StringComparer.OrdinalIgnoreCase)
+				.Select(iface => GetBaseTypeNode(parent, iface, false, moduleEntry)));
 			return result;
 		}
 
@@ -1927,14 +1842,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<NodeEntry> GetBaseTypeNodeChildren(NodeEntry node) {
 			var moduleEntry = node.AsModuleEntry!;
 			var resolved = ResolveTypeForHierarchy(((BaseTypeValue)node.Value).TypeDefOrRef);
-			if (resolved is null)
-				return [];
-			var result = new List<NodeEntry>();
-			if (resolved.BaseType is not null)
-				result.Add(GetBaseTypeNode(node, resolved.BaseType, true, moduleEntry));
-			foreach (var iface in resolved.Interfaces)
-				result.Add(GetBaseTypeNode(node, iface.Interface, false, moduleEntry));
-			return result;
+			return resolved is null ? [] : BaseTypeRows(node, resolved, moduleEntry);
 		}
 
 		/// <summary>
@@ -1968,21 +1876,25 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<NodeEntry> FindDerivedTypes(NodeEntry parent, TypeDef type) {
 			var moduleEntry = parent.AsModuleEntry!;
 			var comparer = new SigComparer();
-			var result = new List<NodeEntry>();
+			var result = new List<(TypeDef Type, ModuleEntry Module)>();
 			foreach (var module in OrderedModules()) {
 				foreach (var candidate in module.Module.GetTypes()) {
 					if (candidate == type)
 						continue;
 					if (!DerivesFrom(type, candidate, comparer))
 						continue;
-					result.Add(GetOrAddNode(
-						$"{parent.Key}:derived:{module.Path}:{candidate.MDToken.Raw:X8}",
-						NodeKind.DerivedType,
-						candidate,
-						moduleEntry));
+					result.Add((candidate, module));
 				}
 			}
-			return result;
+			// dnSpy's DerivedTypeTreeNodeGroup sorts the rows by the type's name.
+			return result
+				.OrderBy(found => found.Type.Name.String, StringComparer.OrdinalIgnoreCase)
+				.Select(found => GetOrAddNode(
+					$"{parent.Key}:derived:{found.Module.Path}:{found.Type.MDToken.Raw:X8}",
+					NodeKind.DerivedType,
+					found.Type,
+					moduleEntry))
+				.ToArray();
 		}
 
 		/// <summary>dnSpy's DerivedTypesFinder.QuickCheck: only an interface or a non-sealed type can be
@@ -2122,12 +2034,16 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		public async Task<DecompileResponse> DecompileAsync(DecompileRequest request, CancellationToken cancellationToken) {
 			var node = GetNode(request.NodeId);
 			cancellationToken.ThrowIfCancellationRequested();
-			if (node.Kind == NodeKind.ResourceEntry)
-				return DecompileResourceEntry(node, cancellationToken);
-			// A type hierarchy node has no code in any language: dnSpy's NodeDecompiler writes a comment
-			// per row whatever decompiler is chosen, so the language request does not change the document.
-			if (node.Kind is NodeKind.BaseTypeFolder or NodeKind.BaseType or NodeKind.DerivedTypesFolder or NodeKind.DerivedType)
-				return new DecompileResponse(GetDocumentTitle(node), "csharp", FormatTypeHierarchyComments(node), Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
+			if (node.Kind is NodeKind.Resource or NodeKind.ResourceEntry)
+				return DecompileResource(node, request.Language, cancellationToken);
+			// A type hierarchy node, a reference and the folders that hold them have no code in any language:
+			// dnSpy's NodeDecompiler writes a comment per row whatever decompiler is chosen, so the language
+			// request only picks how a comment starts.
+			if (CommentDocumentLines(node) is { } lines) {
+				var comment = request.Language == DecompilerLanguage.VisualBasic ? "'" : "//";
+				var text = string.Concat(lines.Select(line => $"{comment} {line}\n"));
+				return new DecompileResponse(GetDocumentTitle(node), request.Language == DecompilerLanguage.VisualBasic ? "visual-basic" : "csharp", text, Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
+			}
 			return request.Language switch {
 				DecompilerLanguage.CSharp => DecompileCSharp(node, cancellationToken),
 				DecompilerLanguage.IL => DecompileIL(node),
@@ -2137,63 +2053,50 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			};
 		}
 
-		DecompileResponse DecompileResourceEntry(NodeEntry node, CancellationToken cancellationToken) {
-			var resource = (ResourceEntryValue)node.Value;
-			var moduleEntry = node.AsModuleEntry!;
-			if (resource.Name.EndsWith(".baml", StringComparison.OrdinalIgnoreCase) && resource.Value is byte[] baml) {
-				try {
-					var decompiler = new XamlDecompiler(moduleEntry.Path, new BamlDecompilerSettings {
-						ThrowOnAssemblyResolveErrors = false,
-					}) {
-						CancellationToken = cancellationToken,
-					};
-					using var stream = new MemoryStream(baml, writable: false);
-					var result = decompiler.Decompile(stream);
-					return new DecompileResponse(resource.Name, "xml", result.Xaml.ToString(), Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
-				}
-				catch (Exception ex) when (ex is not OperationCanceledException) {
-					return new DecompileResponse(resource.Name, "xml", string.Empty, Array.Empty<TextSpanDto>(), [new DiagnosticDto("error", ex.Message)]);
-				}
-			}
-			if (resource.Value is string text)
-				return new DecompileResponse(resource.Name, GuessResourceLanguage(resource.Name), text, Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
-			if (resource.Value is byte[] bytes)
-				return new DecompileResponse(resource.Name, "plaintext", Convert.ToHexString(bytes), Array.Empty<TextSpanDto>(), [new DiagnosticDto("info", $"Binary resource, {bytes.Length:N0} bytes")]);
-			return new DecompileResponse(resource.Name, "plaintext", resource.Value?.ToString() ?? string.Empty, Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
-		}
-
-		static string GuessResourceLanguage(string name) => Path.GetExtension(name).ToLowerInvariant() switch {
-			".xaml" or ".xml" => "xml",
-			".json" => "json",
-			".cs" => "csharp",
-			".vb" => "visual-basic",
-			_ => "plaintext",
-		};
-
 		/// <summary>
-		/// The document a node of the type hierarchy shows — what dnSpy's NodeDecompiler writes for one: a
-		/// comment per row. A folder lists what its rows name, and a row names itself.
+		/// The lines of a document that is only comments — what dnSpy's NodeDecompiler writes for a node that
+		/// is no code: a type hierarchy row its type's reflection name, an assembly reference its full name, a
+		/// module reference its name, and a folder one line per row it holds. A row dnSpy has no decompiler for
+		/// at all — the rows of the Type References folder — writes the text it wears. Null for every node
+		/// that is code.
 		/// </summary>
-		string FormatTypeHierarchyComments(NodeEntry node) {
-			var builder = new StringBuilder();
-			var children = node.Kind switch {
-				NodeKind.BaseTypeFolder => GetBaseTypeChildren(node),
-				NodeKind.DerivedTypesFolder => GetDerivedTypesChildren(node),
-				_ => null,
-			};
-			if (children is null)
-				builder.AppendLine($"// {HierarchyFullName(node)}");
-			else
-				foreach (var child in children)
-					builder.AppendLine($"// {HierarchyFullName(child)}");
-			return builder.ToString();
+		IReadOnlyList<string>? CommentDocumentLines(NodeEntry node) {
+			switch (node.Kind) {
+				case NodeKind.BaseType or NodeKind.DerivedType or NodeKind.AssemblyReference or NodeKind.ModuleReference:
+					return [CommentLine(node)];
+				case NodeKind.BaseTypeFolder:
+					return GetBaseTypeChildren(node).Select(CommentLine).ToArray();
+				case NodeKind.DerivedTypesFolder:
+					return GetDerivedTypesChildren(node).Select(CommentLine).ToArray();
+				case NodeKind.ReferencesGroup:
+					return GetReferenceChildren(node).Select(CommentLine).ToArray();
+				case NodeKind.TypeReferencesGroup or NodeKind.TypeReference or NodeKind.TypeSpecsFolder or NodeKind.MethodReferencesFolder
+					or NodeKind.PropertyReferencesFolder or NodeKind.EventReferencesFolder or NodeKind.FieldReferencesFolder
+					or NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference or NodeKind.FieldReference:
+					return [RowText(node)];
+				default:
+					return null;
+			}
 		}
 
-		static string HierarchyFullName(NodeEntry node) => node.Value switch {
-			BaseTypeValue value => value.TypeDefOrRef.FullName,
-			TypeDef type => type.FullName,
+		string CommentLine(NodeEntry node) => node.Value switch {
+			BaseTypeValue value => value.TypeDefOrRef.ReflectionFullName,
+			TypeDef type => type.ReflectionFullName,
+			AssemblyRef reference => reference.FullName,
+			ModuleRef reference => reference.Name.String,
 			_ => GetLabel(node),
 		};
+
+		/// <summary>The text a row wears — its label, the type after a colon and its token — which is what dnSpy
+		/// writes for a node it has no decompiler for.</summary>
+		string RowText(NodeEntry node) {
+			var text = new StringBuilder(GetLabel(node));
+			if (GetMemberReturnType(node) is { } returnType)
+				text.Append(" : ").Append(returnType);
+			if (GetMetadataToken(node) is { } token)
+				text.Append(" @").Append(unchecked((uint)token).ToString("X8", CultureInfo.InvariantCulture));
+			return text.ToString();
+		}
 
 		DecompileResponse DecompileCSharp(NodeEntry node, CancellationToken cancellationToken) {
 			// A PE node and its structures are not decompiled code: they are the headers, sections and metadata
@@ -2218,26 +2121,15 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
 				var decompiler = session.Decompiler;
 
-				string text;
-				if (node.Kind == NodeKind.AssemblyReference)
-					text = ((AssemblyRef)node.Value).FullName;
-				else if (node.Kind == NodeKind.Resource)
-					text = DescribeResource((Resource)node.Value);
-				else {
-					var syntaxTree = node.Kind switch {
-						NodeKind.Assembly => decompiler.DecompileWholeModuleAsSingleFile(),
-						NodeKind.Module => decompiler.DecompileWholeModuleAsSingleFile(),
-						NodeKind.Namespace => decompiler.Decompile(GetNamespaceIndex(moduleEntry).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle)),
-						NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event =>
-							decompiler.Decompile([ToEntityHandle((IMDTokenProvider)node.Value)]),
-						_ => throw new RpcException(ErrorCodes.UnsupportedDocument, "This tree node cannot be decompiled."),
-					};
-					return FinishCSharpDecompilation(node, decompiler, syntaxTree, settings, cancellationToken);
-				}
-				var diagnostics = decompiler.Errors
-					.Select(e => new DiagnosticDto("warning", e.ToString()))
-					.ToArray();
-				return new DecompileResponse(GetDocumentTitle(node), "csharp", text, Array.Empty<TextSpanDto>(), diagnostics);
+				var syntaxTree = node.Kind switch {
+					NodeKind.Assembly => decompiler.DecompileWholeModuleAsSingleFile(),
+					NodeKind.Module => decompiler.DecompileWholeModuleAsSingleFile(),
+					NodeKind.Namespace => decompiler.Decompile(GetNamespaceIndex(moduleEntry).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle)),
+					NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event =>
+						decompiler.Decompile([ToEntityHandle((IMDTokenProvider)node.Value)]),
+					_ => throw new RpcException(ErrorCodes.UnsupportedDocument, "This tree node cannot be decompiled."),
+				};
+				return FinishCSharpDecompilation(node, decompiler, syntaxTree, settings, cancellationToken);
 			}
 			catch (OperationCanceledException) {
 				throw;
@@ -2327,7 +2219,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// The document of a file that is an ELF image. dnSpy has no such document, but on Linux this is what
 		/// a native binary the user picked turns out to be, and its headers are all there is to show.
 		/// </summary>
-		static DecompileResponse DecompileElfInfo(NodeEntry node, ElfFileEntry elfEntry) {
+		DecompileResponse DecompileElfInfo(NodeEntry node, ElfFileEntry elfEntry) {
 			var builder = new StringBuilder();
 			builder.AppendLine($"// ELF File: {Path.GetFileName(elfEntry.Path)}");
 			builder.AppendLine($"// Path: {elfEntry.Path}");
@@ -2573,7 +2465,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			MetadataTokens.EntityHandle(unchecked((int)provider.MDToken.Raw));
 
 		DecompileResponse DecompileIL(NodeEntry node) {
-			var document = ILFormatter.Format(node, ResolveILDefinition(node));
+			var document = ILFormatter.Format(node, this, ResolveILDefinition(node));
 			return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, Array.Empty<DiagnosticDto>()) {
 				CodeStatements = document.Statements,
 			};
@@ -2628,7 +2520,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			try {
 				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
 				var sourceProvider = new DecompiledSourceProvider(session.Decompiler, settings, cancellationToken);
-				var document = ILFormatter.Format(node, ResolveILDefinition(node), sourceProvider.GetStatements);
+				var document = ILFormatter.Format(node, this, ResolveILDefinition(node), sourceProvider.GetStatements);
 				var diagnostics = session.Decompiler.Errors
 					.Select(error => new DiagnosticDto("warning", error.ToString()))
 					.ToArray();
@@ -3373,7 +3265,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// until the commit, so its <c>FullName</c> is still the bare name here and the nested form has to be
 		/// spelled out — which is exactly what <c>FullName</c> will say once the list holds it.
 		/// </summary>
-		static string LabelOf(IMDTokenProvider created, TypeDef? ownerType, NodeEntry node) =>
+		string LabelOf(IMDTokenProvider created, TypeDef? ownerType, NodeEntry node) =>
 			created is TypeDef type && ownerType is not null ? $"{ownerType.Name}+{type.Name}" : GetLabel(node);
 
 		/// <summary>
@@ -3823,18 +3715,32 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			_ => throw new ArgumentOutOfRangeException(nameof(provider)),
 		};
 
-		static string GetMemberDisplayName(IMDTokenProvider member) => member switch {
-			// Show only the type name in the tree (dnSpy behavior); the namespace already appears
-			// on the parent namespace node, and the full name stays available via the tooltip.
-			TypeDef type => type.Name.String,
-			// The WPF tree writes a method's parameters through the decompiler too, so the label
-			// reads "Calculate(int, int)" rather than "Calculate(Int32, Int32)".
-			MethodDef method => $"{method.Name}{CSharpTypeName.ParameterList(method)}",
-			FieldDef field => field.Name.String,
-			PropertyDef property => property.Name.String,
-			EventDef @event => @event.Name.String,
-			_ => member.ToString() ?? string.Empty,
-		};
+		/// <summary>
+		/// The name a member's row wears — what dnSpy's NodeFormatter writes through the C# decompiler: a type
+		/// with its own type parameters ("List&lt;T&gt;"), a method with its parameter types — a constructor named
+		/// after its type — an indexer as "this[int]", anything else by its name. The namespace is on the row
+		/// above and the full signature in the tooltip.
+		/// </summary>
+		static string GetMemberDisplayName(IMDTokenProvider member) {
+			switch (member) {
+				case TypeDef type:
+					return TypeRowName(type);
+				case MethodDef method:
+					var methodName = new TextPartsBuilder();
+					WriteMethodRowName(methodName, method, null);
+					return methodName.ToString();
+				case PropertyDef property:
+					var propertyName = new TextPartsBuilder();
+					WritePropertyRowName(propertyName, property, null);
+					return propertyName.ToString();
+				case FieldDef field:
+					return field.Name.String;
+				case EventDef @event:
+					return @event.Name.String;
+				default:
+					return member.ToString() ?? string.Empty;
+			}
+		}
 
 		/// <summary>
 		/// The label a method's tab wears. dnSpy's <c>MethodNode.Write</c> with <c>DocumentNodeWriteOptions.Title</c>
@@ -3852,7 +3758,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// the parameter list — dnSpy's tab for one reads "name(params) : return" — while every other
 		/// kind keeps what the tree shows.
 		/// </summary>
-		static string GetDocumentTitle(NodeEntry node) =>
+		string GetDocumentTitle(NodeEntry node) =>
 			node.Kind == NodeKind.Method && node.Value is MethodDef method ? GetMethodTabTitle(method) : GetLabel(node);
 
 		static string FormatParameterList(MethodDef method) => $"({string.Join(", ", method.Parameters.Where(p => !p.IsHiddenThisParameter).Select(p => p.Type.TypeName))})";
@@ -3868,32 +3774,50 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			GetMetadataToken(node),
 			GetMemberReturnType(node),
 			GetLabelParts(node),
-			GetMemberReturnTypeParts(node));
+			GetMemberReturnTypeParts(node),
+			GetToolTip(node),
+			GetMsdnName(node),
+			IsCompilerGenerated(node),
+			node.Module is IModuleEntry entry && entry.Id == node.Id && IsAutoLoaded(entry),
+			node.Kind == NodeKind.Assembly && node.Value is AssemblyDef { Version: { } version } ? version.ToString() : null,
+			node.Kind == NodeKind.Assembly && node.Value is AssemblyDef assembly ? PublicKeyTokenText(assembly) : null);
+
+		/// <summary>The public key token an assembly row may write after its version: the token, "null" when it
+		/// has none — dnSpy's NodeFormatter only writes one that is not empty, which the client decides.</summary>
+		static string? PublicKeyTokenText(AssemblyDef assembly) {
+			var token = assembly.PublicKeyToken;
+			return PublicKeyBase.IsNullOrEmpty2(token) ? null : token.ToString();
+		}
 
 		// The token the WPF tree appends as "@06000004" — every node whose value is a metadata row
-		// (assemblies, modules, assembly references, types and members); namespaces, the group folders,
-		// resources and the PE/ELF structures get none, same as dnSpy's NodeFormatter.
+		// (assemblies, modules, assembly and module references, types, members and the references the
+		// module makes to other assemblies' types and members); namespaces, the group folders, resources and
+		// the PE/ELF structures get none, same as dnSpy's NodeFormatter.
 		static int? GetMetadataToken(NodeEntry node) => node.Value switch {
 			// A base type row carries the reference it names, so the token is that reference's row — what
 			// dnSpy's NodeFormatter writes for the node.
 			BaseTypeValue value => unchecked((int)value.TypeDefOrRef.MDToken.Raw),
+			TypeReferenceValue value => unchecked((int)value.Type.MDToken.Raw),
 			IMDTokenProvider provider => unchecked((int)provider.MDToken.Raw),
 			_ => null,
 		};
 
 		// The type a member's row names after the colon — through the C# decompiler's spelling, the
 		// way dnSpy's tree writes it ("int", "Task<int>"). dnSpy writes it for methods, fields,
-		// properties and events; everything else has nothing to name.
+		// properties and events, and for the references to them; everything else has nothing to name.
 		static string? GetMemberReturnType(NodeEntry node) => node.Value switch {
 			// WPF passes the return parameter for a method, so a "dynamic" return is read off it.
 			MethodDef method => CSharpTypeName.Of(method.Parameters.ReturnParameter.ParamDef, method.ReturnType),
 			FieldDef field => CSharpTypeName.Of(field, field.FieldSig?.Type),
 			PropertyDef property => CSharpTypeName.Of(property, property.PropertySig?.GetRetType()),
 			EventDef @event => CSharpTypeName.Of(@event, @event.EventType),
+			MemberRef { IsFieldRef: true } field when node.Kind == NodeKind.FieldReference => CSharpTypeName.Of(null, field.FieldSig?.Type) ?? "???",
+			IMethod method when node.Kind is NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference =>
+				CSharpTypeName.Of(null, (method is MethodSpec spec ? spec.Method : method).MethodSig?.RetType),
 			_ => null,
 		};
 
-		static string GetLabel(NodeEntry node) => node.Kind switch {
+		string GetLabel(NodeEntry node) => node.Kind switch {
 			NodeKind.Assembly => GetAssemblyLabel(node),
 			NodeKind.Module => GetModuleLabel((ModuleDefMD)node.Value),
 			NodeKind.PE => "PE",
@@ -3903,12 +3827,19 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// dnSpy names these nodes after the file, so the tree says which file could not be read.
 			NodeKind.PEDocument or NodeKind.UnknownDocument or NodeKind.ElfDocument => Path.GetFileName(((IModuleEntry)node.Module).Path),
 			NodeKind.Namespace => string.IsNullOrEmpty(((NamespaceValue)node.Value).Name) ? "-" : ((NamespaceValue)node.Value).Name,
+			// The folders dnSpy labels from its resources; the client translates them.
 			NodeKind.TypeReferencesGroup => "Type References",
-			NodeKind.ReferencesGroup => "Assembly References",
+			NodeKind.ReferencesGroup => "References",
 			NodeKind.ResourcesGroup => "Resources",
-			NodeKind.AssemblyReference => GetAssemblyReferenceLabel((AssemblyRef)node.Value),
-			NodeKind.Resource => ((Resource)node.Value).Name,
-			NodeKind.ResourceEntry => ((ResourceEntryValue)node.Value).Name,
+			NodeKind.TypeSpecsFolder => "Types",
+			NodeKind.MethodReferencesFolder => "Methods",
+			NodeKind.PropertyReferencesFolder => "Properties",
+			NodeKind.EventReferencesFolder => "Events",
+			NodeKind.FieldReferencesFolder => "Fields",
+			// NodeFormatter writes an assembly or module reference by its name alone.
+			NodeKind.AssemblyReference => ((AssemblyRef)node.Value).Name.String,
+			NodeKind.ModuleReference => ((ModuleRef)node.Value).Name.String,
+			NodeKind.Resource or NodeKind.ResourceEntry => ResourceLabel(node),
 			NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event => GetMemberDisplayName((IMDTokenProvider)node.Value),
 			// dnSpy spells a base type the way the decompiler writes it — "object", "IEnumerable<int>" —
 			// while a derived type is a definition the tree names as it names any other type.
@@ -3916,8 +3847,19 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NodeKind.DerivedTypesFolder => "Derived Types",
 			NodeKind.BaseType => GetBaseTypeLabel(((BaseTypeValue)node.Value).TypeDefOrRef),
 			NodeKind.DerivedType => GetMemberDisplayName((TypeDef)node.Value),
+			NodeKind.TypeReference => GetBaseTypeLabel(((TypeReferenceValue)node.Value).Type),
+			NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference => MethodReferenceLabel((IMethod)node.Value),
+			NodeKind.FieldReference => ((MemberRef)node.Value).Name.String,
 			_ => node.Kind.ToString(),
 		};
+
+
+
+		string MethodReferenceLabel(IMethod method) {
+			var output = new TextPartsBuilder();
+			WriteMethodReferenceName(output, method);
+			return output.ToString();
+		}
 
 		static string GetBaseTypeLabel(ITypeDefOrRef type) =>
 			CSharpTypeName.Of(null, type) ?? type.Name.String;
@@ -3937,41 +3879,38 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				: value.Kind.ToString();
 		}
 
-		static string GetAssemblyLabel(NodeEntry node) {
-			// Assembly node's value could be AssemblyDef or ModuleDefMD (for modules without assembly)
-			if (node.Value is AssemblyDef assembly) {
-				var name = assembly.Name.String;
-				var version = assembly.Version;
-				return version != null ? $"{name} ({version})" : name;
-			}
-			// Fallback to module label for modules without assembly
-			return GetModuleLabel((ModuleDefMD)node.Value);
-		}
+		/// <summary>
+		/// An assembly row's label is the assembly's name. Its version and public key token are sent apart
+		/// (<see cref="TreeNodeDto.AssemblyVersion"/>, <see cref="TreeNodeDto.PublicKeyToken"/>) because the
+		/// Assembly Explorer options say whether the row writes them. A module with no assembly is named
+		/// after itself.
+		/// </summary>
+		static string GetAssemblyLabel(NodeEntry node) =>
+			node.Value is AssemblyDef assembly ? assembly.Name.String : GetModuleLabel((ModuleDefMD)node.Value);
 
 		static string GetModuleLabel(ModuleDefMD module) {
 			// Module node shows just the file name (e.g., mscorlib.dll)
 			return module.Name.String;
 		}
 
-		static string GetAssemblyReferenceLabel(AssemblyRef reference) {
-			var name = reference.Name.String;
-			var version = reference.Version;
-			return version != null ? $"{name} ({version})" : name;
-		}
-
+		/// <summary>
+		/// A row's description: the file a document row was read from — which Open Containing Folder hands
+		/// to the shell — the full name of a definition or a reference — which Copy Full Name copies — and a
+		/// resource's own line.
+		/// </summary>
 		static string? GetDescription(NodeEntry node) => node.Kind switch {
 			NodeKind.Assembly or NodeKind.Module or NodeKind.PEDocument or NodeKind.UnknownDocument or NodeKind.ElfDocument => ((IModuleEntry)node.Module).Path,
 			// dnSpy's hex nodes show the file they read the structure out of as their tooltip, and the ELF
 			// structures do the same.
 			NodeKind.PE or NodeKind.PeStructure or NodeKind.Elf or NodeKind.ElfStructure => ((IModuleEntry)node.Module).Path,
 			NodeKind.AssemblyReference => ((AssemblyRef)node.Value).FullName,
+			NodeKind.ModuleReference => ((ModuleRef)node.Value).FullName,
 			NodeKind.Resource => DescribeResource((Resource)node.Value),
 			NodeKind.ResourceEntry => DescribeResourceEntry((ResourceEntryValue)node.Value),
-			NodeKind.Type => ((TypeDef)node.Value).FullName,
-			NodeKind.Method => ((MethodDef)node.Value).FullName,
-			NodeKind.Field => ((FieldDef)node.Value).FullName,
+			NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event or NodeKind.DerivedType => ((IFullName)node.Value).FullName,
 			NodeKind.BaseType => ((BaseTypeValue)node.Value).TypeDefOrRef.FullName,
-			NodeKind.DerivedType => ((TypeDef)node.Value).FullName,
+			NodeKind.TypeReference => ((TypeReferenceValue)node.Value).Type.FullName,
+			NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference or NodeKind.FieldReference => ((IFullName)node.Value).FullName,
 			_ => null,
 		};
 
@@ -3992,69 +3931,54 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NodeKind.ElfDocument => node.Module is ElfFileEntry,
 			NodeKind.Elf => true,
 			NodeKind.AssemblyReference => HasAssemblyReferenceChildren(node),
-			NodeKind.Resource => node.Value is EmbeddedResource resource && resource.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase),
+			NodeKind.Resource => ShapeOf((Resource)node.Value) == ResourceShape.ResourceSet,
+			// A referenced type only expands when the module uses something of it; its folders only exist
+			// when they hold something.
+			NodeKind.TypeReference => ((TypeReferenceValue)node.Value).Info.HasChildren,
+			NodeKind.TypeSpecsFolder or NodeKind.MethodReferencesFolder or NodeKind.PropertyReferencesFolder or NodeKind.EventReferencesFolder or NodeKind.FieldReferencesFolder => true,
 			_ => false,
 		};
 
+		/// <summary>The image a row wears, named after dnSpy's own image set — see <see cref="DotNetImages"/>.</summary>
 		string GetIcon(NodeEntry node) => node.Kind switch {
-			// WPF uses different images for the assembly container and its module. An executable
-			// gets the small gold overlay used by AssemblyExe.
-			NodeKind.Assembly => IsExecutable(node) ? "assembly-exe" : "assembly",
-			NodeKind.Module => "module",
-			// Every hex structure node dnSpy creates uses DsImages.BinaryFile.
-			NodeKind.PE or NodeKind.PeStructure => "binary",
-			NodeKind.PEDocument => "binary",
-			// An ELF image is read the same way and shown the same way: it is a binary whose headers are
-			// what there is to see.
-			NodeKind.Elf or NodeKind.ElfStructure or NodeKind.ElfDocument => "binary",
+			NodeKind.Assembly => node.Value is AssemblyDef assembly ? DotNetImages.Of(assembly) : DotNetImages.Module,
+			NodeKind.Module => DotNetImages.Module,
+			// Every hex structure node dnSpy creates uses DsImages.BinaryFile, and a PE document wears the
+			// image an assembly would. An ELF image is read and shown the same way.
+			NodeKind.PE or NodeKind.PeStructure => DotNetImages.BinaryFile,
+			NodeKind.PEDocument => node.Module is PeOnlyModuleEntry { PEImage: { } peImage } ? DotNetImages.Of(peImage.ImageNTHeaders.FileHeader.Characteristics) : DotNetImages.BinaryFile,
+			NodeKind.Elf or NodeKind.ElfStructure or NodeKind.ElfDocument => DotNetImages.BinaryFile,
 			// dnSpy shows an unknown document with DsImages.AssemblyError.
-			NodeKind.UnknownDocument => "error",
-			NodeKind.Namespace => "namespace",
-			NodeKind.TypeReferencesGroup => "reference",
-			NodeKind.ReferencesGroup or NodeKind.AssemblyReference => "reference",
-			NodeKind.ResourcesGroup or NodeKind.BaseTypeFolder or NodeKind.DerivedTypesFolder => "folder",
-			NodeKind.Resource or NodeKind.ResourceEntry => "resource",
-			NodeKind.Type => TypeIcon((TypeDef)node.Value),
+			NodeKind.UnknownDocument => DotNetImages.AssemblyError,
+			NodeKind.Namespace => DotNetImages.Namespace,
+			NodeKind.TypeReferencesGroup or NodeKind.ReferencesGroup or NodeKind.AssemblyReference or NodeKind.ModuleReference => DotNetImages.Reference,
+			NodeKind.ResourcesGroup or NodeKind.BaseTypeFolder or NodeKind.DerivedTypesFolder => DotNetImages.FolderClosed,
+			NodeKind.Resource or NodeKind.ResourceEntry => ResourceIcon(node),
+			NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event or NodeKind.DerivedType => DotNetImages.Of((IMemberDef)node.Value),
 			// dnSpy shows a base type with the image of the type it resolves to, and falls back to the
-			// class or interface image when it cannot resolve one. A derived type is always a definition
-			// the workspace read out of a module, so its own image is right there.
+			// class or interface image when it cannot resolve one.
 			NodeKind.BaseType => GetBaseTypeIcon(node),
-			NodeKind.DerivedType => TypeIcon((TypeDef)node.Value),
-			NodeKind.Method => "method",
-			NodeKind.Field => "field",
-			NodeKind.Property => "property",
-			NodeKind.Event => "event",
-			_ => "item",
+			// A referenced type or member wears its definition's image when the module that defines it is
+			// loaded already, and the plain image of its kind otherwise — never a reason to load one.
+			NodeKind.TypeReference => FindLoadedType(GetScopeType(((TypeReferenceValue)node.Value).Type), 0) is { } typeDef ? DotNetImages.Of(typeDef) : DotNetImages.Type,
+			NodeKind.TypeSpecsFolder => DotNetImages.Template,
+			NodeKind.MethodReferencesFolder => DotNetImages.MethodPublic,
+			NodeKind.PropertyReferencesFolder => DotNetImages.Property,
+			NodeKind.EventReferencesFolder => DotNetImages.EventPublic,
+			NodeKind.FieldReferencesFolder => DotNetImages.FieldPublic,
+			NodeKind.MethodReference => FindLoadedMethod((IMethod)node.Value) is { } methodDef ? DotNetImages.Of(methodDef) : DotNetImages.MethodPublic,
+			NodeKind.PropertyReference => OwnerOfAccessor(FindLoadedMethod((IMethod)node.Value), node.Kind) is PropertyDef propertyDef ? DotNetImages.Of(propertyDef) : DotNetImages.Property,
+			NodeKind.EventReference => OwnerOfAccessor(FindLoadedMethod((IMethod)node.Value), node.Kind) is EventDef eventDef ? DotNetImages.Of(eventDef) : DotNetImages.EventPublic,
+			NodeKind.FieldReference => FindLoadedField((MemberRef)node.Value) is { } fieldDef ? DotNetImages.Of(fieldDef) : DotNetImages.FieldPublic,
+			_ => DotNetImages.Type,
 		};
-
-		static string TypeIcon(TypeDef type) => type.IsInterface ? "interface" : type.IsEnum ? "enum" : "class";
 
 		string GetBaseTypeIcon(NodeEntry node) {
 			var value = (BaseTypeValue)node.Value;
 			return ResolveTypeForHierarchy(value.TypeDefOrRef) is { } resolved
-				? TypeIcon(resolved)
-				: value.IsBaseType ? "class" : "interface";
+				? DotNetImages.Of(resolved)
+				: value.IsBaseType ? DotNetImages.ClassPublic : DotNetImages.InterfacePublic;
 		}
-
-		static bool IsExecutable(NodeEntry node) => node.Value switch {
-			AssemblyDef assembly => assembly.ManifestModule is { } module && (module.Characteristics & dnlib.PE.Characteristics.Dll) == 0,
-			ModuleDefMD module => (module.Characteristics & dnlib.PE.Characteristics.Dll) == 0,
-			_ => false,
-		};
-
-		static string DescribeResource(Resource resource) => resource switch {
-			EmbeddedResource embedded => $"Embedded resource, {embedded.Length:N0} bytes",
-			AssemblyLinkedResource linked => $"Assembly-linked resource: {linked.Assembly?.FullName}",
-			LinkedResource linked => $"Linked resource: {linked.File}",
-			_ => resource.ResourceType.ToString(),
-		};
-
-		static string DescribeResourceEntry(ResourceEntryValue value) => value.Value switch {
-			byte[] bytes => $"{Path.GetExtension(value.Name).TrimStart('.').ToUpperInvariant()} resource, {bytes.Length:N0} bytes",
-			string text => $"Text resource, {text.Length:N0} characters",
-			null => "Null resource",
-			_ => value.Value.GetType().FullName ?? "Resource",
-		};
 
 		// The statement map is derived from the decompiled text, so an edit invalidates every entry at once.
 		void RefreshStatementCache() {
@@ -4551,7 +4475,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// dnSpy keeps to pick the icon when the reference cannot be resolved to a type definition: the
 		/// base type shows the class image and an interface shows the interface one.</summary>
 		sealed record BaseTypeValue(ITypeDefOrRef TypeDefOrRef, bool IsBaseType);
-		sealed record ResourceEntryValue(string Name, object? Value, string TypeName);
+	
 		sealed record MetadataReference(DecompilerMetadataFile Metadata, System.Reflection.Metadata.Handle Handle);
 		/// <summary>
 		/// Where a piece of decompiled text points: a node of this workspace, or — for a reference into a
@@ -4697,6 +4621,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			ReferencesGroup,
 			ResourcesGroup,
 			AssemblyReference,
+			ModuleReference,
 			Resource,
 			ResourceEntry,
 			Type,
@@ -4710,6 +4635,18 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			Field,
 			Property,
 			Event,
+			// Type References folder contents: referenced types, their generic instances, and the members
+			// the module calls — the five folders under a type, and the rows they hold.
+			TypeReference,
+			TypeSpecsFolder,
+			MethodReferencesFolder,
+			PropertyReferencesFolder,
+			EventReferencesFolder,
+			FieldReferencesFolder,
+			MethodReference,
+			PropertyReference,
+			EventReference,
+			FieldReference,
 		}
 
 		/// <summary>The IL view's text and what dnSpy's IL disassembler records beside it.</summary>
@@ -4727,18 +4664,20 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			readonly List<TextSpanDto> spans = [];
 			readonly List<CodeStatementDto> statements = [];
 			readonly string? modulePath;
+			readonly Workspace workspace;
 			readonly Func<IMemberDef, SpanTarget?>? resolveDefinition;
 			readonly Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider;
 			int line = 1;
 
-			ILFormatter(string? modulePath, Func<IMemberDef, SpanTarget?>? resolveDefinition, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
+			ILFormatter(string? modulePath, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
 				this.modulePath = modulePath;
+				this.workspace = workspace;
 				this.resolveDefinition = resolveDefinition;
 				this.sourceProvider = sourceProvider;
 			}
 
-			public static ILDocument Format(NodeEntry node, Func<IMemberDef, SpanTarget?>? resolveDefinition = null, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
-				var formatter = new ILFormatter(node.AsModuleEntry?.Path, resolveDefinition, sourceProvider);
+			public static ILDocument Format(NodeEntry node, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition = null, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
+				var formatter = new ILFormatter(node.AsModuleEntry?.Path, workspace, resolveDefinition, sourceProvider);
 				formatter.FormatNode(node);
 				return new ILDocument(formatter.builder.ToString(), formatter.spans, formatter.statements);
 			}
@@ -4747,7 +4686,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				// A PE node and its structures are headers of the image, not code, so the node's own name is
 				// all there is to say about them. The ELF structures are the same thing.
 				if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.Elf or NodeKind.ElfStructure) {
-					WriteLine($"// {GetLabel(node)}");
+					WriteLine($"// {workspace.GetLabel(node)}");
 					return;
 				}
 				switch (node.Value) {

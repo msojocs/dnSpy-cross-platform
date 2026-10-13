@@ -436,7 +436,7 @@ static class FrameworkAssemblies {
 	};
 
 	/// <summary>A file in one of the .NET runtime directories — three levels under a folder that holds
-	/// Microsoft.NETCore.App — or an assembly dnSpy knows by name as a framework one.</summary>
+	/// Microsoft.NETCore.App — an assembly dnSpy knows by name as a framework one, or a file in a GAC.</summary>
 	public static bool IsFrameworkAssembly(string? fileName, string? assemblySimpleName) {
 		if (!string.IsNullOrWhiteSpace(fileName) && Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(fileName))) is { } baseDir
 			&& Directory.Exists(Path.Combine(baseDir, "Microsoft.NETCore.App")))
@@ -449,6 +449,6 @@ static class FrameworkAssemblies {
 					return true;
 			}
 		}
-		return false;
+		return !string.IsNullOrWhiteSpace(fileName) && GacInfo.IsGacPath(fileName);
 	}
 }

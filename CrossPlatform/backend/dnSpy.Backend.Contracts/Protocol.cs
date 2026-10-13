@@ -99,6 +99,30 @@ public static class RpcMethods {
 	public const string BookmarksExport = "bookmarks/export";
 	/// <summary>Reads the bookmarks out of a WPF dnSpy bookmark (or settings) file.</summary>
 	public const string BookmarksImport = "bookmarks/import";
+	/// <summary>Removes several documents from the tree at once — dnSpy's Remove Assembly over a multiple
+	/// selection, and its Close All Framework Assemblies / Close All Missing Files sweeps.</summary>
+	public const string WorkspaceRemoveModules = "workspace/removeModules";
+	/// <summary>Which of the workspace's modules hold edits that have not been saved.</summary>
+	public const string WorkspaceGetModifiedModules = "workspace/getModifiedModules";
+	/// <summary>The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the
+	/// documents that are not PE images (a missing file is one of those).</summary>
+	public const string WorkspaceGetCloseCandidates = "workspace/getCloseCandidates";
+	/// <summary>Moves roots to another place in the tree — what dragging them does.</summary>
+	public const string WorkspaceMoveRoots = "workspace/moveRoots";
+	/// <summary>Opens the files dropped on the tree at the place they were dropped, filtered the way the
+	/// Assembly Explorer's "dragged items" option says.</summary>
+	public const string WorkspaceDropFiles = "workspace/dropFiles";
+	/// <summary>What activating a row — a double click, Enter — goes to: the definition a reference row names,
+	/// or the assembly an assembly reference names, opened when it has to be.</summary>
+	public const string TreeActivate = "tree/activate";
+	/// <summary>Every assembly in the global assembly caches, for dnSpy's Open from GAC dialog.</summary>
+	public const string GacList = "gac/list";
+	/// <summary>The company and file version of one GAC file, which the dialog shows for its selection.</summary>
+	public const string GacGetDetails = "gac/getDetails";
+	/// <summary>The files one or more resource nodes save as — dnSpy's Save and Raw Save over a selection.</summary>
+	public const string ResourceGetItems = "resource/getItems";
+	/// <summary>The .resources entry a resource accessor reads — dnSpy's Go to Resource.</summary>
+	public const string ResourceFind = "resource/find";
 }
 
 public static class ErrorCodes {
@@ -140,7 +164,9 @@ public sealed record AddModulesRequest(string WorkspaceId, IReadOnlyList<string>
 
 public sealed record AddModulesResponse(IReadOnlyList<OpenedModule> Modules, IReadOnlyList<string> Skipped, string StateId);
 
-public sealed record OpenedModule(string Id, string Name, string Path, bool HasPdb);
+/// <summary>One file the workspace holds. <paramref name="AutoLoaded"/> is set on a file the workspace opened
+/// by itself to resolve a reference — dnSpy's auto-loaded documents, which a saved list leaves out.</summary>
+public sealed record OpenedModule(string Id, string Name, string Path, bool HasPdb, bool AutoLoaded = false);
 
 public sealed record WorkspaceRequest(string WorkspaceId);
 
@@ -160,6 +186,14 @@ public sealed record TreeNodesResponse(IReadOnlyList<TreeNodeDto> Nodes);
 /// <para><paramref name="LabelParts"/> and <paramref name="ReturnTypeParts"/> are the same two texts cut
 /// where dnSpy's syntax highlighting changes color; a row whose text dnSpy writes in one plain color — a
 /// folder, a resource — carries none.</para>
+/// <para><paramref name="Icon"/> names the picture in dnSpy's own image set ("ClassPublic",
+/// "MethodPrivate"). <paramref name="ToolTip"/> is the row's tooltip, one line per line dnSpy writes.
+/// <paramref name="MsdnName"/> is the address "Search MSDN" opens for the row, present only on the public
+/// members and namespaces dnSpy offers the command on. <paramref name="CompilerGenerated"/> marks a member
+/// the C# and VB decompilers hide unless their "show hidden compiler generated types and methods" option is
+/// on. <paramref name="AutoLoaded"/> marks a root the workspace opened by itself to resolve a reference,
+/// rather than one the user opened. <paramref name="AssemblyVersion"/> and <paramref name="PublicKeyToken"/>
+/// are the two parts an assembly row may write after its name, which the client's options pick from.</para>
 /// </summary>
 public sealed record TreeNodeDto(
 	string Id,
@@ -172,7 +206,13 @@ public sealed record TreeNodeDto(
 	int? MetadataToken = null,
 	string? ReturnType = null,
 	IReadOnlyList<TextPartDto>? LabelParts = null,
-	IReadOnlyList<TextPartDto>? ReturnTypeParts = null);
+	IReadOnlyList<TextPartDto>? ReturnTypeParts = null,
+	string? ToolTip = null,
+	string? MsdnName = null,
+	bool CompilerGenerated = false,
+	bool AutoLoaded = false,
+	string? AssemblyVersion = null,
+	string? PublicKeyToken = null);
 
 public enum DecompilerLanguage {
 	CSharp,
@@ -236,6 +276,26 @@ public sealed record DecompileResponse(
 	/// the way dnSpy's disassembler records them. Visual Basic, a conversion of the C# text, has none.
 	/// </summary>
 	public IReadOnlyList<CodeStatementDto>? CodeStatements { get; init; }
+
+	/// <summary>
+	/// What dnSpy draws into a resource's document besides text: the image an image resource holds, and the
+	/// Save button under a resource's line. Each sits between two lines of the text.
+	/// </summary>
+	public IReadOnlyList<DocumentAttachmentDto>? Attachments { get; init; }
+}
+
+/// <summary>
+/// Something a document shows between its lines — dnSpy's <c>AddUIElement</c> and <c>AddButton</c>.
+/// <paramref name="AfterLine"/> is the 1-based line it goes under (0 puts it above the first one).
+/// <paramref name="Kind"/> is <see cref="DocumentAttachmentKinds.Image"/>, with the picture in
+/// <paramref name="Base64Data"/> and its <paramref name="MimeType"/>, or <see cref="DocumentAttachmentKinds.SaveButton"/>,
+/// which saves the resource <paramref name="NodeId"/> names.
+/// </summary>
+public sealed record DocumentAttachmentDto(int AfterLine, string Kind, string? Base64Data = null, string? MimeType = null, string? NodeId = null);
+
+public static class DocumentAttachmentKinds {
+	public const string Image = "image";
+	public const string SaveButton = "saveButton";
 }
 
 public sealed record DiagnosticDto(string Severity, string Message, int? Start = null, int? Length = null);
@@ -1089,8 +1149,9 @@ public sealed record SpecialNodeResponse(string? NodeId);
 /// way the tree writes it ("0x06000001") or as bare hexadecimal.</summary>
 public sealed record FindByTokenRequest(string WorkspaceId, string NodeId, string Token);
 
-/// <summary>The node the token names, or null when it names no row the tree shows.</summary>
-public sealed record FindByTokenResponse(string? NodeId);
+/// <summary>The node the token names, or null when it names no row the tree shows — and then the
+/// message dnSpy's box shows for it: an invalid token, or a reference that does not resolve.</summary>
+public sealed record FindByTokenResponse(string? NodeId, string? Error = null);
 
 /// <summary>
 /// What is left after an assembly is removed, plus the ids of the nodes that went with it. A client holds
@@ -1101,7 +1162,7 @@ public sealed record RemoveModuleResponse(IReadOnlyList<string> RemovedNodeIds, 
 
 /// <summary>Asks for the bytes one resource node holds, for dnSpy's two Save commands. The node may be
 /// the resource itself or a single entry inside a .resources file.</summary>
-public sealed record ResourceDataRequest(string WorkspaceId, string NodeId);
+public sealed record ResourceDataRequest(string WorkspaceId, string NodeId, bool Raw = false);
 
 /// <summary>The bytes to save, and the name the file should be saved under. The bytes travel base64
 /// because a resource is not text and JSON-RPC carries strings.</summary>
@@ -1356,3 +1417,79 @@ public sealed record ImportBookmarksRequest(string? WorkspaceId, string Xml);
 /// <summary>The bookmarks a file held. <see cref="Skipped"/> counts the ones this port cannot take: in-memory or
 /// dynamic modules, unknown location kinds, missing data, and tokens that no longer name what they named.</summary>
 public sealed record ImportBookmarksResponse(IReadOnlyList<BookmarkFileEntryDto> Bookmarks, int Skipped);
+
+/// <summary>Removes the documents the nodes belong to. Every node has to be a root — an assembly, a module
+/// standing on its own, a PE, ELF or unknown document — the rule dnSpy's Remove command has.</summary>
+public sealed record RemoveModulesRequest(string WorkspaceId, IReadOnlyList<string> NodeIds);
+
+/// <summary>Asks which modules hold unsaved edits: those the nodes belong to, or all of them when no node is
+/// named. dnSpy asks before a Remove or a Reload throws such edits away.</summary>
+public sealed record ModifiedModulesRequest(string WorkspaceId, IReadOnlyList<string>? NodeIds = null);
+
+/// <summary>The files of the modified modules the request was about.</summary>
+public sealed record ModifiedModulesResponse(IReadOnlyList<string> Paths);
+
+/// <summary>The roots the two Close All sweeps would remove: <see cref="FrameworkNodeIds"/> are the framework
+/// DLLs (dnSpy's FrameworkFileUtils), <see cref="MissingNodeIds"/> the unknown documents — a file that is not
+/// there any more, or one that is not a PE image.</summary>
+public sealed record CloseCandidatesResponse(IReadOnlyList<string> FrameworkNodeIds, IReadOnlyList<string> MissingNodeIds);
+
+/// <summary>Moves roots so they sit in front of the root that is at <see cref="Index"/> now, keeping their own
+/// order — what dropping them there does. An index at the end, or past it, moves them to the end.</summary>
+public sealed record MoveRootsRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, int Index);
+
+/// <summary>The dragged-items filter of the Assembly Explorer options: every file, every file that is a PE
+/// image (dnSpy's default), or only .NET modules.</summary>
+public static class DropFilters {
+	public const string All = "all";
+	public const string AllSupported = "allSupported";
+	public const string DotNetOnly = "dotNetOnly";
+}
+
+/// <summary>
+/// Files dropped on the tree. A directory stands for every file under it. The files are inserted in front of
+/// the root at <see cref="Index"/>, sorted by name; a file that is open already is not opened again. With
+/// more than one file the <see cref="Filter"/> leaves out what it does not accept. No workspace yet means
+/// the drop opens one.
+/// </summary>
+public sealed record DropFilesRequest(string? WorkspaceId, IReadOnlyList<string> Paths, int Index, string Filter);
+
+/// <summary>What the drop did: the workspace (made by the drop when there was none), the modules it now
+/// holds, the files it added (which go on the recent files list), the root to select — the first file that
+/// was added, or else the first dropped one that was open already — and whether the filter turned every
+/// file away.</summary>
+public sealed record DropFilesResponse(string? WorkspaceId, IReadOnlyList<OpenedModule> Modules, IReadOnlyList<string> AddedPaths, string? SelectNodeId, bool AllFiltered, string? StateId);
+
+/// <summary>What activating a row leads to: the row to select instead, which may sit in a module the
+/// workspace had to open first (<see cref="RootsChanged"/>). No node means the row is its own target.</summary>
+public sealed record ActivateNodeResponse(string? NodeId, bool RootsChanged);
+
+/// <summary>One assembly of a global assembly cache, read off the directory it sits in.</summary>
+public sealed record GacAssemblyDto(string Name, string Version, string Culture, string PublicKeyToken, string Path);
+
+public sealed record GacListResponse(IReadOnlyList<GacAssemblyDto> Assemblies);
+
+public sealed record GacDetailsRequest(string Path);
+
+/// <summary>Who made a GAC file and its file version, the two lines dnSpy's dialog adds for its selection.</summary>
+public sealed record GacDetailsResponse(string? CreatedBy, string? FileVersion);
+
+/// <summary>
+/// The files the resource nodes save as. <see cref="Raw"/> is dnSpy's Raw Save: the bytes as they are stored —
+/// the whole .resources file, an entry the way the resource writer encodes it. Without it an entry is saved as
+/// its value (a string as UTF-8 text, an image as the image file, BAML as XAML) and a .resources file as one
+/// file per entry. A resources folder stands for every resource in it.
+/// </summary>
+public sealed record ResourceItemsRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, bool Raw);
+
+/// <summary>The files to write; a name may carry a directory part, which the "use sub dirs" variant keeps.</summary>
+public sealed record ResourceItemsResponse(IReadOnlyList<ResourceDataResponse> Items);
+
+/// <summary>
+/// What Go to Resource starts from: a property or method of a strongly typed resources class, as a node or —
+/// for a reference in decompiled text — as the module and token it has there.
+/// </summary>
+public sealed record FindResourceRequest(string WorkspaceId, string? NodeId, string? ModulePath = null, int? MetadataToken = null);
+
+/// <summary>The .resources entry the member reads, or null when it reads none this workspace can find.</summary>
+public sealed record FindResourceResponse(string? NodeId);

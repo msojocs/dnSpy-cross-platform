@@ -43,7 +43,7 @@
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
 | 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
 | 应用壳与通用 UI | ~53% | 11 | 17 | 9 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
-| 程序集树 | ~72% | 12 | 15 | 3 | 1 | 后端完整；Type References、GAC、拖放、Close All 变体已实现；前端需对接 |
+| 程序集树 | ~77% | 15 | 13 | 3 | 1 | 后端完整；Type References、GAC、拖放、Close All 变体、激活跳转已实现；前端 API 已对接，需实现 UI |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
 | 程序集编辑（AsmEditor） | ~46% | 25 | 13 | 31 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
 | C# 交互窗口 | ~42% | 5 | 11 | 9 | 2 | REPL 主流程可用；脚本访问不到 dnSpy，输出一次性返回 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 2 | 3 | 2 | 7 | 多为 WPF/Windows 基础设施；更新检查、打开列表缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，所有对照项合计 ✅ 173 / 🟡 125 / ❌ 180 / ⛔ 30，完成度约 **51%**。
+**整体**：除「工程基础设施」外，所有对照项合计 ✅ 176 / 🟡 123 / ❌ 180 / ⛔ 30，完成度约 **52%**。
 
 ### 1.2 按工作流看
 
@@ -188,21 +188,21 @@
 
 ### 4.3 程序集树（Assembly Explorer）
 
-完成度约 48%（✅ 6 / 🟡 16 / ❌ 7 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令。
+完成度约 53%（✅ 9 / 🟡 14 / ❌ 7 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | 打开程序集（含 PE、未知文档） | `Documents/Tabs/Commands.cs`、`Dialogs/OpenDocumentsHelper.cs` | `file-menu.ts`、`MAIN/index.ts`，RPC `workspace/open`、`workspace/addModules` | ✅ | 另新增 ELF 文档 |
-| Open from GAC / Open List | `Documents/Tabs/Dialogs/OpenFromGAC*`、`OpenDocumentList*` | RPC `gac/list`、`gac/getDetails` | 🟡 | 后端完成；前端对话框未实现 |
+| Open from GAC / Open List | `Documents/Tabs/Dialogs/OpenFromGAC*`、`OpenDocumentList*` | RPC `gac/list`、`gac/getDetails`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需实现对话框 UI |
 | 最近文件 | `Documents/TreeView/AssemblyExplorerMostRecentlyUsedList.cs` | `rememberWorkspace` | 🟡 | 按整组路径记录 |
 | Reload All | `Documents/Tabs/DocumentListLoader.cs` | RPC `workspace/reload` | 🟡 | 不恢复标签；不询问就丢弃未保存修改 |
 | Close All / Sort Assemblies | `Documents/Tabs/Commands.cs`、`DocumentTreeView.cs` | RPC `workspace/sortAssemblies` | ✅ | |
-| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | RPC `workspace/getCloseCandidates`、`workspace/removeModules` | 🟡 | 后端完成；前端菜单未接线 |
+| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | RPC `workspace/getCloseCandidates`、`workspace/removeModules`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需接线菜单 |
 | Close Old In-Memory Modules / Disable MMF | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 隐藏 | ⛔ | 后端整读镜像，没有 MMF，也不建模内存模块 |
 | Remove Assembly | `AE/Assembly/AssemblyCommands.cs` | RPC `workspace/removeModule`、`workspace/removeModules` | ✅ | 支持多选移除；Del 键需前端接线 |
 | 会话恢复 | `Documents/Tabs/DocumentTabServiceLoader.cs` | `dnspy.session.v1` | ✅ | |
 | 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `parseInitialPaths` | 🟡 | 见 4.1 |
-| 拖放（文件、节点） | `Documents/TreeView/DocumentTreeView.cs` | RPC `workspace/dropFiles`、`workspace/moveRoots` | 🟡 | 后端完成；前端 DnD 未实现 |
+| 拖放（文件、节点） | `Documents/TreeView/DocumentTreeView.cs` | RPC `workspace/dropFiles`、`workspace/moveRoots`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需实现 DnD UI |
 | 程序集解析 | `Documents/AssemblyResolver.cs` | `BE/WorkspaceManager.cs` 的 `AssemblyReferenceResolver` | 🟡 | 不查 GAC；解析出的程序集不作为自动加载节点进树 |
 | Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | |
 | 程序集 / 模块节点 | `AssemblyDocumentNodeImpl.cs`、`ModuleDocumentNodeImpl.cs` | `GetAssemblyChildren`、`GetModuleChildren` | 🟡 | 看不到 netmodule；`<Module>` 不在命名空间里列出 |
@@ -210,18 +210,18 @@
 | 成员分组顺序 | `DocumentTreeViewSettings.cs` | `GetTypeChildren` 写死 | ❌ | 顺序与 WPF 默认相反，不可配置 |
 | 隐藏编译器生成的成员 | `TypeNodeImpl.cs` | 无 | ❌ | 会列出 `<>c`、`<…>d__N` |
 | References 文件夹 | `ReferencesFolderNodeImpl.cs`、`ModuleReferenceNodeImpl.cs` | `GetReferenceChildren` | 🟡 | 没有 ModuleRef；双击引用不跳到被引用的程序集 |
-| Type References 文件夹 | `TypeReferencesFolderNodeImpl.cs` | `GetTypeReferenceChildren`、`BE/WorkspaceManager.TypeReferences.cs` | ✅ | 后端完整实现；前端需渲染 |
+| Type References 文件夹 | `TypeReferencesFolderNodeImpl.cs` | `GetTypeReferenceChildren`、`BE/WorkspaceManager.TypeReferences.cs`；前端 `app-store.ts` | ✅ | 后端完整实现；前端 API 已对接，需实现树节点渲染 |
 | 资源节点 | `Documents/TreeView/Resources/*` | `GetResourceChildren`、`BE/WorkspaceManager.Resources.cs` | ✅ | 图片、BAML、序列化资源等专用节点已实现 |
 | Base Type / Derived Types | `BaseTypeFolderNodeImpl.cs`、`DerivedTypesFinder.cs` | `GetBaseTypeChildren`、`FindDerivedTypes` | 🟡 | 双击打开注释文档，而不是跳到类型定义 |
 | 节点外观（文本、token、图标、提示） | 各 `*NodeImpl` | `AssemblyExplorer.tsx` | 🟡 | 图标见第 2 节；提示不带框架和架构 |
 | Assembly Explorer 选项页 | `Documents/Tabs/Settings/AssemblyExplorerAppSettingsPage.cs` | `options-pages.ts` | 🟡 | 只有 showToken、syntaxHighlight 生效 |
-| 选中、激活与多选 | `Documents/Tabs/DocumentTabService.cs` | `AssemblyExplorer.tsx`、RPC `tree/activate` | 🟡 | 后端支持激活跳转；单击不预览；不能多选 |
+| 选中、激活与多选 | `Documents/Tabs/DocumentTabService.cs` | `AssemblyExplorer.tsx`、RPC `tree/activate`；前端 `app-store.ts` | ✅ | 后端支持激活跳转；前端 API 已对接；单击不预览；不能多选 |
 | 键盘导航 | `TreeView/TreeViewImpl.cs` | `TreeRow` 的 `onKeyDown` | 🟡 | 只有 Enter、→、← |
 | Open in New Tab、Open Containing Folder、折叠全部、同步选中 | `TabCommands.cs`、`Commands.cs` | 右键菜单、`revealNode` | ✅ | |
-| Go to Entry Point / Global Cctor / Token | `EntryPointCommands.cs`、`GoToTokenCommand.cs` | RPC `module/getSpecialNode`、`tree/findByToken` | 🟡 | 只在树里选中，不打开文档 |
+| Go to Entry Point / Global Cctor / Token | `EntryPointCommands.cs`、`GoToTokenCommand.cs` | RPC `module/getSpecialNode`、`tree/findByToken`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接；选中节点并打开文档 |
 | Copy MD Token / Full Name、Search MSDN | `CopyTokenCommand.cs` 等 | `AssemblyExplorerContextMenu.tsx` | 🟡 | 属性和事件只拿到短名 |
 | Save Resource / Raw Save Resource | `AE/Resources/ResourceCommands.cs` | RPC `resource/getData`、`resource/getItems` | ✅ | 支持多选保存；Raw 保存已实现 |
-| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | RPC `resource/find` | ✅ | 后端完成；前端需接线 |
+| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | RPC `resource/find`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需接线命令 |
 
 测试：后端 `WorkspaceManagerTests.cs`（懒加载、基类型/派生类型、FindByToken、PE/ELF、Reload 等）；前端 `AssemblyExplorer.test.tsx`、`AssemblyExplorerContextMenu.test.tsx`；e2e `app.spec.ts`、`assembly-tree-performance.spec.ts`。键盘导航、Reload 后的标签表现没有测试。
 

@@ -4,6 +4,13 @@ using System.Runtime.InteropServices;
 
 namespace SearchTarget;
 
+// Global functions and fields for testing search. These are in a static class to make them accessible
+// but they will appear in the <Module> type in the compiled assembly.
+static class GlobalMembers {
+	internal static int GlobalField = 999;
+	internal static string GlobalFunction() => "global-function-needle";
+}
+
 // Every member here is something a search test expects to find, or expects not to find; the names and the
 // literals are what the tests look for.
 

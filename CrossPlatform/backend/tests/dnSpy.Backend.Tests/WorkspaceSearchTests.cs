@@ -283,6 +283,24 @@ public sealed class WorkspaceSearchTests : IDisposable {
 		Assert.Equal(ErrorCodes.InvalidParams, exception.Code);
 	}
 
+	[Fact]
+	public async Task FindsGlobalFunctionsAndFields() {
+		var workspaceId = await OpenAsync();
+
+		// Global functions and fields are in the <Module> type, which was previously skipped.
+		var globalFunction = Assert.Single(await SearchAsync(workspaceId, "GlobalFunction", SearchTypes.Method));
+		Assert.Equal("string GlobalFunction()", globalFunction.Name);
+		Assert.Equal("SearchTarget.GlobalMembers", globalFunction.Location);
+
+		var globalField = Assert.Single(await SearchAsync(workspaceId, "GlobalField", SearchTypes.Field));
+		Assert.Equal("int GlobalField", globalField.Name);
+		Assert.Equal("SearchTarget.GlobalMembers", globalField.Location);
+
+		// Verify we can also find them by literal value.
+		var literal = Assert.Single(await SearchAsync(workspaceId, "global-function-needle", SearchTypes.Literal));
+		Assert.Equal("string GlobalFunction()", literal.Name);
+	}
+
 	async Task<string> OpenAsync() {
 		Assert.True(File.Exists(TargetPath), "The search fixture was not copied to the test output.");
 		return (await manager.OpenAsync(new OpenWorkspaceRequest([TargetPath]), Token)).WorkspaceId;

@@ -277,12 +277,11 @@ sealed class FilterSearcher(FilterSearcherOptions options) {
 		}
 	}
 
-	/// <summary>The module's top-level types by namespace. The global type is left out, the way the tree leaves it out.</summary>
+	/// <summary>The module's top-level types by namespace, including the global type for its members.</summary>
 	static Dictionary<string, List<TypeDef>> GetNamespaces(ModuleDef module) {
 		var namespaces = new Dictionary<string, List<TypeDef>>(StringComparer.Ordinal);
 		foreach (var type in module.Types) {
-			if (type.IsGlobalModuleType)
-				continue;
+			// Include the global type so its members (global functions and fields) can be searched.
 			if (!namespaces.TryGetValue(type.Namespace, out var list))
 				namespaces.Add(type.Namespace, list = []);
 			list.Add(type);

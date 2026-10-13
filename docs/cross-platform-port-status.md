@@ -41,7 +41,7 @@
 |---|---|---|---|---|---|---|
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
-| 搜索窗口 | ~84% | 22 | 5 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；不搜 `<Module>`，命令行参数缺失 |
+| 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
 | 应用壳与通用 UI | ~53% | 11 | 17 | 9 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
 | 程序集树 | ~48% | 6 | 16 | 7 | 1 | 懒加载树可用；单击不预览、单选、无拖放，Type References 是空壳 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 2 | 3 | 2 | 7 | 多为 WPF/Windows 基础设施；更新检查、打开列表缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，所有对照项合计 ✅ 165 / 🟡 128 / ❌ 185 / ⛔ 30，完成度约 **48%**。
+**整体**：除「工程基础设施」外，所有对照项合计 ✅ 167 / 🟡 126 / ❌ 185 / ⛔ 30，完成度约 **49%**。
 
 ### 1.2 按工作流看
 
@@ -406,7 +406,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.9 搜索窗口
 
-完成度约 84%（✅ 22 / 🟡 5 / ❌ 2）。WPF 范围：`WPF/Search/`。后端的匹配器、过滤器、遍历器（`BE/Search/`）逐段对照 WPF 移植。
+完成度约 88%（✅ 24 / 🟡 3 / ❌ 2）。WPF 范围：`WPF/Search/`。后端的匹配器、过滤器、遍历器（`BE/Search/`）逐段对照 WPF 移植。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -418,7 +418,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 选项 6 个复选框 | `Search/SearchControl.xaml` | `SearchPane.tsx` | ✅ | |
 | 名称匹配（分词、全词、大小写、正则） | `dnSpy.Contracts.DnSpy/Search/SearchComparers.cs` | `BE/Search/SearchComparers.cs` | ✅ | |
 | 字面量匹配 | 同上、`Search/FilterSearcher.cs` | `SearchComparers.cs`、`FilterSearcher.cs` | ✅ | |
-| 遍历与过滤语义 | `Search/FilterSearcher.cs` | `BE/Search/FilterSearcher.cs` | 🟡 | 跳过 `<Module>`，全局函数和字段搜不到；模块引用结果无法跳转 |
+| 遍历与过滤语义 | `Search/FilterSearcher.cs` | `BE/Search/FilterSearcher.cs` | ✅ | 包含 `<Module>` 全局函数和字段；模块引用结果无法跳转 |
 | 资源搜索（含 BAML） | `Search/FilterSearcher.cs` | `ResourceTexts.cs`、`DecompileBaml` | ✅ | |
 | 在框架程序集中搜索 | `FrameworkFileUtils` | `BE/Search/FrameworkAssemblies.cs` | ✅ | |
 | 搜索编译器生成的成员 | `FilterSearcher.IsCompilerGenerated` | `BE/Search/CompilerGeneratedMembers.cs` | ✅ | 不随反编译器选项变化 |
@@ -437,10 +437,10 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | Ctrl+Shift+R 分析结果 | `Analyzer/TreeNodes/Commands.cs` | `SearchPane.tsx` | ✅ | |
 | 设置持久化 | `Search/SearchSettings.cs` | `app-options.ts` | ✅ | |
 | 文档变化时清空或重搜 | `Search/SearchService.cs` | `search-store.ts` | ✅ | |
-| 关闭窗口时停止并清空 | `Search/SearchToolWindowContent.cs` | 无 | ❌ | 窗口隐藏时照样搜索 |
+| 关闭窗口时停止并清空 | `Search/SearchToolWindowContent.cs` | `FE/App.tsx` 的 `onModelChange` | ✅ | |
 | 命令行 `--search*` | `Search/AppCommandLineArgsHandler.cs` | 无 | ❌ | |
 
-测试：后端 `WorkspaceSearchTests.cs` 14 条；前端 `search-model.test.ts`、`search-store.test.ts`、`SearchPane.test.tsx`；e2e 3 条。
+测试：后端 `WorkspaceSearchTests.cs` 21 条（新增全局函数和字段测试）；前端 `search-model.test.ts`、`search-store.test.ts`、`SearchPane.test.tsx`；e2e 3 条。
 
 ### 4.10 分析器
 

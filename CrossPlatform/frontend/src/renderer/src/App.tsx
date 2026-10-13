@@ -1599,6 +1599,9 @@ export const App = (): React.JSX.Element => {
             // Closing dnSpy's analyzer window throws away what it held; opening it again starts empty.
             if (!nextModel.getNodeById('analysis'))
               useAnalyzerStore.getState().clear()
+            // Closing the search window stops and clears any running search.
+            if (!nextModel.getNodeById('search'))
+              useSearchStore.getState().clear()
             forceLayoutUpdate((value) => value + 1)
           }}
           onContextMenu={(node, event) => {

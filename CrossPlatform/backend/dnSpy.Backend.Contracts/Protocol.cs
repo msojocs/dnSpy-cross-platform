@@ -233,7 +233,69 @@ public enum DecompilerLanguage {
 	ILWithCSharp,
 }
 
-public sealed record DecompileRequest(string WorkspaceId, string NodeId, DecompilerLanguage Language);
+public sealed record DecompileRequest(string WorkspaceId, string NodeId, DecompilerLanguage Language) {
+	/// <summary>
+	/// Decompiler settings to use for this request. When null, the backend uses default settings.
+	/// </summary>
+	public DecompilerSettingsDto? Settings { get; init; }
+}
+
+/// <summary>
+/// C# and Visual Basic decompiler settings, matching ICSharpCode.Decompiler's DecompilerSettings.
+/// </summary>
+public sealed record CSharpDecompilerSettingsDto(
+	bool AnonymousMethods = true,
+	bool YieldReturn = true,
+	bool AsyncAwait = true,
+	bool QueryExpressions = true,
+	bool ExpressionTrees = true,
+	bool UseDebugSymbols = true,
+	bool ShowXmlDocumentation = true,
+	bool SortCustomAttributes = false,
+	bool FullyQualifyAllTypes = false,
+	bool FullyQualifyAmbiguousTypeNames = true,
+	bool RemoveEmptyDefaultConstructors = true,
+	bool ShowTokenAndRvaComments = false,
+	bool SortMembers = false,
+	bool ForceShowAllMembers = false,
+	bool SortSystemUsingStatementsFirst = true,
+	bool UseSourceCodeOrder = false,
+	bool OneCustomAttributePerLine = false,
+	bool AllowFieldInitializers = true,
+	bool TypeAddInternalModifier = false,
+	bool MemberAddPrivateModifier = false,
+	bool HexadecimalNumbers = true,
+	bool EmitCalliAsInvocationExpression = false,
+	bool InsertParenthesesForReadability = true);
+
+/// <summary>
+/// IL decompiler settings.
+/// </summary>
+public sealed record ILDecompilerSettingsDto(
+	bool ShowXmlDocumentation = true,
+	bool ShowTokenAndRvaComments = true,
+	bool ShowILBytes = true,
+	bool ShowILComments = false,
+	bool SortMembers = false,
+	bool ShowPdbInfo = true,
+	bool HexadecimalNumbers = false);
+
+/// <summary>
+/// BAML decompiler settings.
+/// </summary>
+public sealed record BamlDecompilerSettingsDto(
+	bool NewLineOnAttributes = true,
+	bool UseTabs = true);
+
+/// <summary>
+/// Combined decompiler settings for all languages.
+/// </summary>
+public sealed record DecompilerSettingsDto(
+	CSharpDecompilerSettingsDto? CSharp = null,
+	ILDecompilerSettingsDto? IL = null,
+	BamlDecompilerSettingsDto? Baml = null,
+	bool DecompileFullType = true,
+	bool UseMemoryMappedIO = false);
 
 /// <summary>
 /// A piece of the decompiled text that names something. <paramref name="TargetNodeId"/> is the tree

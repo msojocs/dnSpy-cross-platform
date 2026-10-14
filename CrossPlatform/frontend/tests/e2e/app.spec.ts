@@ -215,7 +215,9 @@ test.describe('the workspace shell', () => {
 
     const about = page.getByRole('dialog', { name: 'About dnSpy' })
     await expect(about).toBeVisible()
-    await expect(about).toContainText('Version 1.0.0')
+    // The version is the packaged one, which is what the About box and the window title both carry.
+    const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version as string
+    await expect(about).toContainText(`Version ${version}`)
     await expect(about).toContainText('GNU GPL v3.0 only')
     expect(nativeDialogs).toEqual([])
 
@@ -606,7 +608,11 @@ test.describe('the workspace shell', () => {
     await expect(ilDialog.getByLabel('Opcode 0')).toBeVisible()
     await ilDialog.getByRole('button', { name: 'Apply' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
-    await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save As' }).click()
+    // The toolbar's save button is dnSpy's Save All, which writes each module back to its own file; what
+    // these two tests write is the copy the save dialog is pointed at, so they go through Save Module...
+    await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
+    await page.getByRole('menuitem', { name: 'File', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Save Module...' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
   })
@@ -950,7 +956,11 @@ test.describe('the workspace shell', () => {
     await expect(page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^E2ECreated @[0-9A-F]{8}$/ })).toBeVisible()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
 
-    await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save As' }).click()
+    // The toolbar's save button is dnSpy's Save All, which writes each module back to its own file; what
+    // these two tests write is the copy the save dialog is pointed at, so they go through Save Module...
+    await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
+    await page.getByRole('menuitem', { name: 'File', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Save Module...' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
 

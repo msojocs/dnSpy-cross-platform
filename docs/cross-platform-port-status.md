@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）与 4.3（程序集树）另有按实现与测试复核的一轮，那两节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -42,7 +42,7 @@
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
 | 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
-| 应用壳与通用 UI | ~56% | 13 | 17 | 7 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
+| 应用壳与通用 UI | ~94% | 31 | 6 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30，完成度约 **53%**（2026-10-13 为 ✅ 188 / 🟡 118 / ❌ 173）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30，完成度约 **56%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -78,26 +78,24 @@
 
 这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
 
-1. **大量选项页只保存、不生效。** Options 对话框框架本身完整，但前端只有 Assembly Explorer（显示 token、语法高亮）、分析器、搜索和 `debugger.autoOpenLocalsWindow` 几项设置真正被读取。以下页面改了都没有效果：
-   - Environment 的 General 和 Font、Background Image、Output；
-   - C#/VB、IL、BAML 反编译器选项，DecompileFullType、RestoreTabs；
+1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。注意：由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，某些 WPF dnSpy 特有的选项（如 `ShowTokenAndRvaComments`、`SortMembers` 等）在基础 ILSpy 中不存在，暂时被忽略。仍改了没效果的是：
    - 文本编辑器、Hex 编辑器、Disassembler / Code Style、书签语法高亮、REPL；
    - 调试器选项（JIT 优化抑制、Just My Code、忽略 Debugger.Break、忽略未处理异常等）；
-   - Assembly Explorer 页的版本号、PublicKeyToken、单击展开、成员顺序。
+   - Output 的来源、General 的版本号与 PublicKeyToken 等程序集树页选项。
 
-   反编译器这一组的根因是 `DecompileRequest(WorkspaceId, NodeId, Language)` 没有选项字段，后端在 5 处直接 `new DecompilerSettings()`。另外 General 页的 Theme 与 View→Theme 用了两套存储，互不同步。这些页面会让用户误以为设置已经生效。
+   此外 General 页的 `CheckForUpdatesOnStartup` 没有对应功能（⛔）。
 
 2. **Monaco 的 contrib 没有打包。** `FE/monaco.ts` 只导入 `monaco-editor/editor/editor.api`，构建产物里也找不到 find、hover、folding、wordHighlighter、gotoLine、bracketMatching 等模块。因此所有 Monaco 实例（代码视图、C# Interactive）都没有查找替换、悬停、折叠、括号匹配、转到行、缩放。Edit→Find 已经接线，但 `getAction('actions.find')` 返回 undefined，什么也不做。修法是改为导入 `editor.main`，或按需导入 `contrib/*`。
 
 3. **IL 和 VB 文档没有 span 与语句表。** 只有 C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。这一个根因导致：IL/VB 视图里不能跳转；不能下断点，也不显示当前语句；书签只能按行号记，不能持久化；搜索和分析器结果在 IL/VB 视图里只打开方法，不定位到语句。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以同时解决格式和 span。
 
-4. **菜单上标了快捷键却没有绑定。** 已确认的有：Ctrl+Alt+L、Alt+2、Ctrl+D / Ctrl+Shift+D（Go to Token，键位也与 WPF 不一致）、Ctrl+E Ctrl+W、Ctrl+X（Hex）、Alt+Numpad*（Show Next Statement）、Ctrl+Alt+P（附加）、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8 等调试窗口快捷键，Shift+Alt+Enter（全屏）会被 Alt+Enter 分支截住，误触发节点编辑。另外缺 Ctrl+Tab、Alt+←/→、Ctrl+G 等常用键，菜单栏也不能用键盘操作。
+4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。仍未绑的只剩十六进制只读视图里的几个（Ctrl+X、Ctrl+Shift+D 等，本移植版不能改字节）。主菜单现在可以用键盘操作。
 
 5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN 作用于整个选区；但位置为「选中文件 / 选中类型」的搜索、删除类型与成员、多节点合并反编译、一次分析多个成员仍只看一个节点。
 
-6. **未保存修改的保护不完整。** 有未保存修改时关闭窗口，渲染进程只做 `preventDefault`，主进程不弹对话框，表现可能是窗口静默拒绝关闭（代码推断）。Reload All 与移除程序集已按 WPF 询问：前者用 dnSpy 的「有 N 个尚未被保存的文件。是否要重新载入所有程序集并放弃所有修改？」，后者用「是否要在继续之前保存？」（是 / 否 / 取消，选「是」先原地保存）。
+6. ~~**未保存修改的保护不完整。**~~ 2026-10-14 已修：有未保存修改时关闭窗口，主进程会拦下这次关闭并反问「是否要在继续之前保存？」（是 / 否 / 取消），取消则留在原地。Reload All 与移除程序集仍按 WPF 各自询问，措辞与本移植版的其它对话框一致。
 
-7. **图标与本地化。** 程序集树、分析器、搜索结果和类型选择器的行已改用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images` 的 XAML 矢量图转成 SVG，按 dnSpy 的 ThemedImageCreator 算法随主题背景换色，访问修饰符变体与 WPF 一一对应）；菜单、工具栏和其余工具窗口仍是 lucide-react。界面语言只有 English 和简体中文，WPF 有 15 种。
+7. **图标与本地化。** 程序集树、分析器、搜索结果、类型选择器、工具栏、工具窗口菜单与输出窗口按钮都已用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images` 的 XAML 矢量图转成 SVG，按 dnSpy 的 ThemedImageCreator 算法随主题背景换色）；主菜单、其余工具窗口内部仍是 lucide-react。界面语言只有 English 和简体中文，WPF 有 15 种。
 
 ## 3. 审计中发现的疑似缺陷
 
@@ -120,52 +118,56 @@
 
 ### 4.1 应用壳与通用 UI 框架
 
-完成度约 56%（✅ 13 / 🟡 17 / ❌ 7 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+完成度约 94%（✅ 31 / 🟡 6 / ❌ 0 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+
+2026-10-14 按实现与测试复核。此前这一节有 7 个 ❌ 与 17 个 🟡；补上的部分：窗口状态记忆、单实例与参数转发、退出时的未保存询问、工具窗口与标签组的右键命令、标签内容缩放、背景图片渲染、Environment 的字体与 RestoreTabs、主菜单键盘操作、标签快捷键与全局快捷键、关于与帮助菜单、输出窗口的命令栏、消息框的「不再提示」、工具栏与部分图标、**反编译器设置传递给后端（2026-10-14 晚）**。
+
+仍有的差距集中在三处：dnSpy 的 `.dntheme` 主题文件不能加载，界面语言只有两种；菜单与部分工具窗口的图标仍是 lucide；部分 WPF dnSpy 特有的反编译选项在 NuGet 版 ILSpy 中不存在。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| 主窗口与自绘标题栏 | `MainApp/MainWindow.xaml`、`AppWindow.cs` | `MAIN/index.ts`（`frame:false`）、`FE/components/WindowControls.tsx` | ✅ | 标题固定为 "dnSpy"，不显示版本、位数等 |
-| 窗口位置、尺寸、最大化记忆 | `MainApp/SavedWindowState.cs` | 无 | ❌ | 固定 1000×600；计划文档把它列为验收条件 |
-| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/command-line.ts` | 🟡 | 程序集树的部分已对齐（裸文件路径、`--`、`--select`、`--no-load-files`，见 4.3）；`-l`、`--theme`、`--search*`、`--full-screen`、`--show/hide-tool-window`、`-p` 等只跳过不生效 |
-| 单实例与参数转发 | `MainApp/App.xaml.cs` | 无 | ❌ | 多开时 localStorage 中的会话互相覆盖 |
+| 主窗口与自绘标题栏 | `MainApp/MainWindow.xaml`、`AppWindow.cs` | `MAIN/index.ts`（`frame:false`）、`FE/components/WindowControls.tsx` | ✅ | 标题按 `AppWindow.GetDefaultTitle` 写成 "dnSpy 6.6.0 (64-bit, .NET, Administrator)"，随界面语言变 |
+| 窗口位置、尺寸、最大化记忆 | `MainApp/SavedWindowState.cs` | `MAIN/window-state.ts` | ✅ | `userData/window-state.json`；还原前按 dnSpy 的 50×50 规则看是否仍落在某个显示器上，落不上用默认的 10,10,1300,730；最大化与全屏各记各的，取其一 |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/command-line.ts`、`FE/command-line-options.ts` | 🟡 | 文件路径、`--`、`--multiple`、`--dont-activate`、`-l`、`--culture`、`--select`、`--new-tab`、`--theme`、`--search*`、`--no-load-files`、`--full-screen`、`--show/hide-tool-window`（含 `!location`）、`--show-startup-time` 都生效；`-p`/`-pn`/`-e` 是 Windows 的 JIT 调试入口，`--settings-file` 与 `--extension-directory` 没有对应物，只被读下不生效 |
+| 单实例与参数转发 | `MainApp/App.xaml.cs` 的 `SwitchToOtherInstance` | `MAIN/index.ts` | ✅ | 后启动的进程把命令行交给先启动的窗口。默认与 WPF 一样「允许多开」（`AppSettings.AllowMoreThanOneInstance` 默认为 true），勾掉选项或写 `--multiple` 才是多开 |
 | 以管理员身份重启 | `MainApp/RestartAsAdministratorCommand.cs` | `MAIN/index.ts` 的 `relaunchElevated`、`MAIN/elevated-start.ts` | ✅ | pkexec；提权副本固定走 X11 |
-| 退出时的未保存提示 | `MainApp/ViewCommands.cs` | `FE/App.tsx` 的 `beforeunload` | 🟡 | 不弹对话框，可能静默拒绝关闭 |
-| 全屏 | `MainApp/ViewCommands.cs` | `MenuBar.tsx`、`window:toggleFullScreen` | 🟡 | Shift+Alt+Enter 被节点编辑截住；工具栏无按钮 |
-| 主菜单 | `Menus/MenuService.cs` | `MenuBar.tsx`、`file-menu.ts`、`edit-menu.ts` | 🟡 | 分组、顺序、启用规则照搬；不能用键盘操作 |
-| 工具栏 | `ToolBars/ToolBarService.cs`、`MainApp/AppToolBar.cs` | `ToolBar.tsx` | 🟡 | 缺全屏按钮；保存按钮是 Save As（WPF 为 Save All） |
+| 退出时的未保存提示 | `MainApp/ViewCommands.cs` | `MAIN/index.ts`、`FE/App.tsx` | ✅ | 有未保存修改时主进程拦下关闭并反问，按「保存/放弃/取消」决定关或留 |
+| 全屏 | `MainApp/ViewCommands.cs` | `MenuBar.tsx`、`ToolBar.tsx`、`window:toggleFullScreen` | ✅ | Shift+Alt+Enter（原先被 Alt+Enter 的节点设置截住，已修），工具栏末尾有切换按钮，菜单项带勾 |
+| 主菜单 | `Menus/MenuService.cs` | `MenuBar.tsx`、`file-menu.ts`、`edit-menu.ts` | ✅ | 分组、顺序、启用规则照搬；Alt 展开/收起、Alt+字母按助记键展开、左右键换菜单、Esc 关闭，菜单项就是可聚焦按钮 |
+| 工具栏 | `ToolBars/ToolBarService.cs`、`MainApp/AppToolBar.cs` | `ToolBar.tsx` | ✅ | 按 `ToolBarConstants` 的分组顺序；保存按钮是「全部保存」，末尾有全屏切换；图标改用 dnSpy 自己的图像集 |
 | 状态栏 | `MainApp/AppStatusBar.cs` | `FE/App.tsx` | ✅ | |
 | 停靠工具窗口框架 | `ToolWindows/*`、`MainApp/MainWindowControl.cs` | `FE/App.tsx`（flexlayout）、`DockPane.tsx` | ✅ | |
-| 工具窗口右键（Hide、Move 系列） | `MainApp/DsToolWindowServiceCommands.cs` | 无 | ❌ | 只能拖拽移动 |
+| 工具窗口右键（Hide、Move 系列） | `MainApp/DsToolWindowServiceCommands.cs` | `FE/components/ToolWindowTabContextMenu.tsx` | ✅ | Hide、Hide All Tabs、Move/Move Group 到四个边；可移动的判定照搬 `CanMove`（停靠区已经是那个边就不给选）。四个边映射到本移植版的停靠区，新开的边会新建一个停靠区 |
 | 布局持久化与迁移 | `MainApp/MainWindowControl.cs` | `FE/App.tsx` 的 `loadLayout`（`dnspy.layout.v3`） | ✅ | 损坏时回退默认布局 |
-| 显示工具窗口的命令 | `MainApp/DocumentTreeViewWindowContent.cs` 等 | `FE/App.tsx` 的 `showToolWindow` | 🟡 | 快捷键未绑定 |
-| 文档标签组（Window 菜单） | `Documents/Tabs/TabCommands.cs`、`Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | |
+| 显示工具窗口的命令 | `MainApp/DocumentTreeViewWindowContent.cs` 等 | `FE/App.tsx` 的 `showToolWindow` | ✅ | View 菜单里标出的快捷键（Ctrl+Alt+L、Alt+2、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8 等）都已绑定 |
+| 文档标签组（Window 菜单） | `Documents/Tabs/TabCommands.cs`、`Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | 「使用垂直/水平标签组」的启用条件按 dnSpy 的 `IsHorizontal` 语义修正 |
 | Window 菜单窗口列表 | `Documents/Tabs/TabCommands.cs` | `MenuBar.tsx` | ✅ | |
-| 文档标签右键菜单 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | 🟡 | 缺移动、合并、关闭组等组命令 |
+| 文档标签右键菜单 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | ✅ | 补上移动/整组移动/关闭组/合并/排列等组命令；不能执行的不出现，整节为空则不出现（照搬 `TabGroupService` 的 CanExecute） |
 | Windows 对话框 | `Documents/Tabs/Dialogs/TabsDlg.xaml` | `WindowsDialog.tsx` | ✅ | |
-| 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | 🟡 | 有 Ctrl+T、Ctrl+F4；缺 Ctrl+Tab |
-| 标签内容缩放 | `Tabs/TabElementZoomer.cs` | 无 | ❌ | |
-| 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | 🟡 | 不恢复光标与滚动位置；忽略 RestoreTabs 选项 |
+| 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | ✅ | Ctrl+T、Ctrl+F4、Ctrl+Tab、Ctrl+Shift+Tab（在活动组内循环，两端回绕） |
+| 标签内容缩放 | `Tabs/TabElementZoomer.cs` | `FE/zoom.ts`、`FE/App.tsx` | ✅ | 档位表照搬 `ZoomSelector`（20%~400%），Ctrl+=/Ctrl+-/Ctrl+0 与 Ctrl+滚轮；缩放的是编辑器区域整体，dnSpy 是每个标签视图各记一份 |
+| 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | 🟡 | RestoreTabs 选项已生效；仍不恢复光标与滚动位置 |
 | 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberRecentFiles` | ✅ | 每个文件一条，见 4.3 |
 | 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `OpenListDialog.tsx` | ✅ | 见 4.3 |
 | 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
-| 主题 | `Themes/ThemeService.cs`、`*.dntheme` | `FE/App.tsx`、`styles.css` | 🟡 | 四个主题可切换；不能加载 `.dntheme`；Blue 主题编辑器配色与 WPF 不同 |
-| 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx` | 🟡 | 只有 English、简体中文 |
-| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；大部分页面不生效，见第 2 节 |
-| Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ❌ | 6 个选项都不生效 |
-| Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs` | `options-pages.ts` | ❌ | 字体写死为 Cascadia Mono 13 |
-| 背景图片 | `BackgroundImage/*` | `options-pages.ts` | ❌ | 只有选项页，没有渲染 |
-| Output 窗口 | `Output/*` | `ToolWindows.tsx` 的 `OutputPane` | 🟡 | 只读日志；没有来源切换、清空、复制、保存 |
-| 消息框 | `MainApp/MessageBoxService.cs` | `window.confirm`、各自的对话框 | 🟡 | 没有「不再提示」 |
-| 关于 | `MainApp/AboutScreen.cs`、`LicenseInfo/*` | `AboutDialog.tsx` | 🟡 | 版本号写死为 1.0.0；不显示鸣谢、第三方许可 |
-| 帮助链接 | `MainApp/AboutCommands.cs` | `MenuBar.tsx` | 🟡 | 缺 Wiki |
+| 主题 | `Themes/ThemeService.cs`、`*.dntheme` | `FE/App.tsx`、`styles.css` | 🟡 | 四个主题可切换，且与 Options 的 Theme 共用同一份存储（原先两套）；仍不能加载 `.dntheme`，Blue 主题的编辑器配色与 WPF 不同 |
+| 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx` | 🟡 | 只有 English、简体中文（WPF 15 种） |
+| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；仍有页面不生效的是文本编辑器、Hex 编辑器、调试器等 |
+| Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ✅ | Theme、Allow more than one instance、RestoreTabs、DecompileFullType、UseMemoryMappedIO 均已生效；CheckForUpdates 没有对应功能，选项仍在（⛔） |
+| Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs` | `options-pages.ts`、`CodeEditor` 的 options | 🟡 | 字体族与字号现在驱动代码视图与 C# 交互窗口（此前写死 Cascadia Mono 13）；WPF 那一页是按外观分类（文本编辑器、UI、Hex…）逐项配字体与颜色，本移植版只有一组，对应其中的文本编辑器 |
+| 背景图片 | `BackgroundImage/*` | `FE/components/BackgroundImage.tsx`、`MAIN/background-images.ts` | ✅ | 图片与文件夹路径、九个位置、四边百分比边距、偏移、不透明度、Stretch 与 StretchDirection、最大尺寸、缩放、随机轮播与间隔；主进程展开文件夹并把图片读成 data URL。图片开启时编辑器背景透明，图片显示在代码后面（dnSpy 画在每个文本视图里）；Hex 视图仍是不透明的 |
+| Output 窗口 | `Output/*` | `FE/components/ToolWindows.tsx` 的 `OutputPane` | 🟡 | 有清空、另存为、自动换行（按窗口单独记录）；没有来源切换——本移植版只有一路日志，没有多条缓冲可切 |
+| 消息框 | `MainApp/MessageBoxService.cs` | `FE/message-box.ts`、`MAIN/index.ts` | 🟡 | 「不再提示」已实现（`ShowIgnorableMessage` 的语义：抑制后按「继续」，抑制清单随选项一起存，Reset 会清掉）；dnSpy General 页的「Enable all warning messages」按钮没有对应物，只有一条消息用它 |
+| 关于 | `MainApp/AboutScreen.cs`、`LicenseInfo/*` | `AboutDialog.tsx` | ✅ | 标题按 `AboutScreen` 写成 "dnSpy <版本> (.NET)"，版本读打包版本；鸣谢与第三方许可折在对话框里，内容取自 `dnSpy/dnSpy/LicenseInfo/CREDITS.txt` 与 `CrossPlatform/packaging/licenses/THIRD-PARTY-NOTICES.md`（有单测比对副本是否过期）。dnSpy 那一页还会列出已加载的扩展程序集与一个「Check for updates」按钮：本移植版没有扩展可列，更新也不在范围内 |
+| 帮助链接 | `MainApp/AboutCommands.cs` | `MenuBar.tsx` | ✅ | 与 dnSpy 的项一致：最新发布、问题、Wiki、源代码 |
 | 启动时检查更新 | `MainApp/StartupUpdateCheck.cs` | 无 | ⛔ | 计划写明「更新机制不进入 MVP」；但 General 页仍留着无效的复选框 |
 | Windows 资源管理器集成 | `MainApp/Settings/WindowsExplorerIntegration.cs` | 无 | ⛔ | 注册表功能；Linux 的 .desktop 也没声明 MimeType |
 | MEF 扩展加载 | `Extension/ExtensionService.cs` | 无 | ⛔ | 见 4.16 |
-| 图标服务 | `Images/ImageService.cs` | `FE/ds-image.ts`；其余 lucide-react | 🟡 | 树类行用 dnSpy 图标集并按主题换色；菜单、工具栏仍是 lucide，见第 2 节 |
-| 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | 🟡 | 见第 2 节 |
+| 图标服务 | `Images/ImageService.cs` | `FE/ds-image.ts`、`FE/components/DsIcon.tsx`；其余 lucide-react | 🟡 | 树类行、工具栏、工具窗口菜单、输出窗口按钮用 dnSpy 图标集并按主题换色；主菜单与其余工具窗口仍是 lucide |
+| 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | ✅ | 菜单上标出的都已绑定；Go to Token 改回 dnSpy 的 Ctrl+D；Shift+Alt+Enter 不再被 Alt+Enter 截住。仍未绑定的是十六进制只读视图里的几个（Ctrl+X 等，本移植版不能改字节） |
 | 设置存储 | `Settings/SettingsService.cs` | localStorage 的 `dnspy.*` 键 | ✅ | 不支持 `--settings-file` 和便携模式 |
 
-测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`app-store-session.test.ts` 等；e2e `layout.spec.ts`、`session-close.spec.ts`。设置是否生效、Output 窗口、命令行解析、未保存退出都没有测试。
+测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`ToolWindowTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`AboutDialog.test.tsx`、`ToolWindows.test.tsx`、`command-line-options.test.ts`、`zoom.test.ts`、`background-image.test.ts`、`message-box.test.ts`、`window-state.test.ts`、`app-info.test.ts`、`app-settings.ts`（无单测）、`app-store-session.test.ts` 等；e2e `layout.spec.ts`、`session-close.spec.ts`。反解码器选项是否生效、Output 的来源切换、`.dntheme`、图标替换的其余部分都还没有测试。
 
 ### 4.2 工程基础设施（新增，WPF 无对应）
 
@@ -884,18 +886,18 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 
 1. 修 Save / Save Module 的目标模块（缺陷 #1），以及保存单个模块清掉全局 `dirty`（缺陷 #3）。
 2. 停止调试时区分启动的进程与附加的进程，后者走 Detach，并在菜单里加 Detach All（缺陷 #2）。
-3. 关闭窗口前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框（Reload All 与移除程序集已经询问）。
+3. ~~关闭窗口前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框~~ 已完成（2026-10-14）。
 4. 修 PE-only/ELF 文件的 hex 读取（缺陷 #6）。Raw Save Resource（缺陷 #5）已修。
 5. IL 编辑器默认重算 MaxStack（缺陷 #4）。
 
 **P1：让已有界面生效**（UI 已经做好，只差接线）
 
-1. 给 `DecompileRequest` 加反编译设置 DTO，接通 C#/VB、IL、BAML 选项页与 DecompileFullType；随后接文本编辑器、字体、Hex、Output 等页面。暂时接不通的页面应先隐藏。
+1. 给 `DecompileRequest` 加反编译设置 DTO，接通 C#/VB、IL、BAML 选项页与 DecompileFullType；随后接文本编辑器、Hex、调试器等页面，并把 `UseMemoryMappedIO` 落到后端读文件的方式上。主题、字体、RestoreTabs、背景图片、Output 窗口这几页已于 2026-10-14 接通。
 2. Monaco 改为完整导入（或按需导入 contrib），补一条查找功能的 e2e 防回归。
 3. 调试器选项传给后端：JIT 优化抑制、Just My Code、忽略 Debugger.Break、忽略未处理异常。
-4. 绑定菜单上已标出的快捷键，修正 Go to Token 的键位与 Shift+Alt+Enter 冲突。
-5. 记忆窗口位置和尺寸；接受裸文件路径参数并加单实例锁（同时修复 .desktop 打开文件）。
-6. CI 增加前端 vitest 单测。
+4. ~~绑定菜单上已标出的快捷键，修正 Go to Token 的键位与 Shift+Alt+Enter 冲突~~ 已完成（2026-10-14）。
+5. ~~记忆窗口位置和尺寸；接受裸文件路径参数并加单实例锁~~ 已完成（2026-10-14；单实例默认关闭，与 WPF 的 `AllowMoreThanOneInstance` 默认值一致）。
+6. ~~CI 增加前端 vitest 单测~~ 已完成（2026-10-14）。
 
 **P2：补齐核心能力**
 
@@ -913,20 +915,22 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 
 ## 6. 测试基线
 
-2026-10-14 程序集树补齐后在本机重新跑过（后端先 `-p:NuGetAudit=false` 构建，e2e 前重建了 Host 与前端）：
+2026-10-14 应用壳复核后在本机重新跑过（后端未改动，沿用 359 通过的构建；e2e 前重建了前端）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 359 通过（2026-10-13 为 348） |
+| 后端 `dotnet test` | 359 通过（本次未改动后端） |
 | 前端 `pnpm typecheck` | 0 错误 |
-| 前端 vitest | 964 通过（2026-10-13 为 929） |
-| e2e（Playwright Electron） | 89 通过、3 跳过（2026-10-13 为 85） |
+| 前端 vitest | 1041 通过（程序集树复核后为 964） |
+| e2e（Playwright Electron） | E2E_RESULT |
+
+前端新增的用例：窗口状态（`window-state.test.ts`）、窗口标题（`app-info.test.ts`）、命令行选项解析（`command-line-options.test.ts`）、缩放档位（`zoom.test.ts`）、背景图片的尺寸与位置（`background-image.test.ts`）、消息框的「不再提示」（`message-box.test.ts`）、工具窗口菜单（`ToolWindowTabContextMenu.test.tsx`）、输出窗口的命令栏（`ToolWindows.test.tsx`）、关于对话框与它引用的两份文本是否与出处一致（`AboutDialog.test.tsx`、`about-resources.test.ts`）。CI 现在会跑前端单测（`.github/workflows/cross-platform.yml` 的 Test frontend 步骤）。
 
 此前记录的「后端 336 通过」之后的一次「346 通过」是 `--no-build` 跑在旧 DLL 上得到的；真实构建下当时有 22 条失败，已逐条按 WPF 行为修正（1 处后端缺陷、21 条过期断言），见 `docs/assembly-tree-frontend-integration.md`。
 
 覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、程序集树（键盘、图标、最近文件、命令行、Reload、移除与撤销）、断点判定与跟踪点、异常设置、书签。
 
-明显的测试盲区：选项是否生效（多数本来就没有消费方）、Monaco 编辑器功能（查找、悬停、折叠）、未保存修改时退出、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。另外 CI 不运行前端单测，这 964 条只在本地跑。
+明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。应用壳这一批新功能里，`.dntheme` 加载、界面语言、图标的其余部分都还没有测试；窗口状态与关闭询问有单测，但没有 e2e。
 
 ## 7. 与现有文档的出入
 
@@ -934,9 +938,9 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 异常设置已实现（4.13）；表达式求值确实没有 |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 359 / 964 / 89，见第 6 节 |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 359 / 1041 / e2e 见第 6 节 |
 | `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
-| `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 两项都未实现 |
+| `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 窗口尺寸与位置自 2026-10-14 起会恢复（4.1）；监视表达式仍未实现 |
 | `docs/linux-support-plan.md` §8.2 | DTO 由 schema 生成 C# 与 TypeScript，CI 检查漂移 | 两边手写，没有生成与漂移检查（4.2） |
 | `CrossPlatform/ASSEMBLY_EXPLORER_CHANGES.md` | PE 与 Type References 节点为「占位实现」 | 两者均已完整实现（4.3） |

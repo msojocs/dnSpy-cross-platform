@@ -495,8 +495,8 @@ const registerIpc = (): void => {
   // Decompiling an assembly root requires ILSpy to walk every type and build source/IL mappings. Large
   // assemblies can legitimately take several minutes; the generic RPC deadline is intentionally shorter
   // for interactive tree operations, so give this operation its own deadline.
-  ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string) =>
-    requireBackend().invoke('document/decompile', { workspaceId, nodeId, language }, 600_000))
+  ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string, settings?: unknown) =>
+    requireBackend().invoke('document/decompile', { workspaceId, nodeId, language, settings }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
   // The Bookmarks window's Location column, and dnSpy's bookmark files. None of them needs a workspace: a
   // module the workspace does not hold — or a bookmark restored before anything was opened — is read from

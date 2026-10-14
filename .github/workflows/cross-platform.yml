@@ -69,6 +69,11 @@ jobs:
       - name: Build Electron application
         run: pnpm --dir frontend build
 
+      - name: Test frontend
+        # The renderer's own unit tests, which `pnpm build` does not run: the type check it does is not
+        # enough for the parts of the shell that are only exercised through a component.
+        run: pnpm --dir frontend test
+
       - name: Run Electron end-to-end tests
         # openbox is started inside the Xvfb session before the tests so the shell's windows are managed;
         # the explicit screen is large enough for the docked panes the tests read from. Clear any

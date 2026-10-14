@@ -244,22 +244,23 @@ const loadDocumentZoom = (): number => {
   return saved === null ? 100 : normalizeZoom(Number(saved))
 }
 
-const loadTheme = (): ThemeName => {
-  const legacy = localStorage.getItem('dnspy.theme')
-  if (legacy === 'light' || legacy === 'dark' || legacy === 'hc' || legacy === 'blue') {
-    localStorage.removeItem('dnspy.theme')
-    saveThemeOption(legacy)
-    return legacy
-  }
-  return loadAppOptions().environmentGeneral.theme
-}
-
-/** Writes the theme where the rest of the options live, leaving the others as they are. */
+/** Writes the theme where the rest of the options live, leaving the others as they are. The options store is
+ *  the one place the theme is kept, which is what makes the View menu and the Environment › General page the
+ *  same setting rather than two that happen to agree. */
 const saveThemeOption = (theme: ThemeName): void => {
   const options = loadAppOptions()
   if (options.environmentGeneral.theme === theme)
     return
   saveAppOptions({ ...options, environmentGeneral: { ...options.environmentGeneral, theme } })
+}
+
+/** Moves a theme an older build left in a key of its own into the options, before anything reads them. */
+export const migrateLegacyTheme = (): void => {
+  const legacy = localStorage.getItem('dnspy.theme')
+  if (legacy !== 'light' && legacy !== 'dark' && legacy !== 'hc' && legacy !== 'blue')
+    return
+  localStorage.removeItem('dnspy.theme')
+  saveThemeOption(legacy)
 }
 
 /**
@@ -272,7 +273,6 @@ const viewChords = [
 
 export const App = (): React.JSX.Element => {
   const [model] = useState(loadLayout)
-  const [theme, setTheme] = useState<ThemeName>(loadTheme)
   const wordWrap = useAppStore((state) => state.wordWrap)
   const setWordWrap = useAppStore((state) => state.setWordWrap)
   const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
@@ -284,6 +284,11 @@ export const App = (): React.JSX.Element => {
   // The saved options, subscribed to so a save in the Options dialog reaches the parts of the shell that
   // read them — the theme, the main process's few settings, and the tool windows' widths among others.
   const options = useAppOptions()
+  // dnSpy's theme lives in its settings file with everything else, which is this port's option store: the
+  // shell reads it from there and writes it back, so there is one copy of it rather than a state of its own
+  // that the options would have to be kept in step with.
+  const theme = options.environmentGeneral.theme
+  const setTheme = (next: ThemeName): void => saveThemeOption(next)
   // Whether a background picture is up, which is what decides whether the editor goes without a background
   // of its own for the picture to be seen through.
   const backgroundImageOn = options.backgroundImage.isEnabled && options.backgroundImage.images.trim().length > 0
@@ -528,7 +533,6 @@ export const App = (): React.JSX.Element => {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    saveThemeOption(theme)
   }, [theme])
 
   // dnSpy's TabElementZoomer scales the tab's content: the whole editor area is scaled here, which is what
@@ -553,14 +557,6 @@ export const App = (): React.JSX.Element => {
     window.addEventListener('wheel', onWheel, { passive: false })
     return () => window.removeEventListener('wheel', onWheel)
   }, [])
-
-  // The theme the Environment › General page saves is the same one the View menu switches, so a save there
-  // has to reach the state here — otherwise the two would show different themes until the next start. The
-  // equality check is what keeps the write above from coming back round as a change of its own.
-  useEffect(() => {
-    if (options.environmentGeneral.theme !== theme)
-      setTheme(options.environmentGeneral.theme)
-  }, [options.environmentGeneral.theme, theme])
 
   // dnSpy's AppSettings.AllowMoreThanOneInstance is read before there is a window to ask, so the options
   // store — which is where the user sets it — hands it to the main process, which keeps it for the next start.
@@ -1138,6 +1134,10 @@ export const App = (): React.JSX.Element => {
       } else if (event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !editingText) {
         event.preventDefault()
         void stopDebug()
+      } else if (event.altKey && event.code === 'NumpadMultiply' && debugState === 'stopped' && !editingText) {
+        // dnSpy's Show Next Statement, which its Debug menu shows with Alt+Numpad* against it.
+        event.preventDefault()
+        void revealStoppedLocation()
       } else if (event.key === 'F5' && !editingText) {
         event.preventDefault()
         if (debugState === 'stopped') void continueDebug()

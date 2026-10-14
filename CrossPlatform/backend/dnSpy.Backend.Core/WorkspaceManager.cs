@@ -1991,7 +1991,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				return await RunAsync(w => w.DecompileAsync(request, cancellationToken), cancellationToken).ConfigureAwait(false);
 
 			try {
-				var prepared = await RunAsync(w => w.PrepareCSharpDecompilation(request.NodeId, cancellationToken), cancellationToken).ConfigureAwait(false);
+				var prepared = await RunAsync(w => w.PrepareCSharpDecompilation(request.NodeId, request.Settings, cancellationToken), cancellationToken).ConfigureAwait(false);
 				if (prepared is null)
 					return await RunAsync(w => w.DecompileAsync(request, cancellationToken), cancellationToken).ConfigureAwait(false);
 				using var session = prepared.Session;
@@ -2021,7 +2021,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		CSharpDecompilation? PrepareCSharpDecompilation(string nodeId, CancellationToken cancellationToken) {
+		CSharpDecompilation? PrepareCSharpDecompilation(string nodeId, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken) {
 			var node = GetNode(nodeId);
 			if (node.AsModuleEntry is not { } module || node.Kind is not (NodeKind.Assembly or NodeKind.Module or NodeKind.Namespace or NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event))
 				return null;
@@ -2029,7 +2029,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var handles = node.Kind == NodeKind.Namespace
 				? GetNamespaceIndex(module).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle).ToArray()
 				: wholeModule ? Array.Empty<System.Reflection.Metadata.EntityHandle>() : [ToEntityHandle((IMDTokenProvider)node.Value)];
-			var settings = new DecompilerSettings();
+			var settings = settingsDto.ToDecompilerSettings();
 			return new CSharpDecompilation(stateId, wholeModule, handles, settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
 		}
 
@@ -2060,7 +2060,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				return new DecompileResponse(GetDocumentTitle(node), request.Language == DecompilerLanguage.VisualBasic ? "visual-basic" : "csharp", text, Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
 			}
 			return request.Language switch {
-				DecompilerLanguage.CSharp => DecompileCSharp(node, cancellationToken),
+				DecompilerLanguage.CSharp => DecompileCSharp(node, request.Settings, cancellationToken),
 				DecompilerLanguage.IL => DecompileIL(node),
 				DecompilerLanguage.ILWithCSharp => DecompileILWithCSharp(node, cancellationToken),
 				DecompilerLanguage.VisualBasic => await DecompileVisualBasicAsync(node, cancellationToken).ConfigureAwait(false),
@@ -2113,7 +2113,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return text.ToString();
 		}
 
-		DecompileResponse DecompileCSharp(NodeEntry node, CancellationToken cancellationToken) {
+		DecompileResponse DecompileCSharp(NodeEntry node, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken) {
 			// A PE node and its structures are not decompiled code: they are the headers, sections and metadata
 			// of the image, read straight out of the file (dnSpy's AsmEditor hex nodes). The ELF structures
 			// are the same thing under a different file format.
@@ -2131,7 +2131,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					return DecompileElfInfo(node, elfEntry);
 				return DecompileUnknownFile(node);
 			}
-			var settings = new DecompilerSettings();
+			var settings = settingsDto.ToDecompilerSettings();
 			try {
 				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
 				var decompiler = session.Decompiler;
@@ -2562,7 +2562,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		async Task<DecompileResponse> DecompileVisualBasicAsync(NodeEntry node, CancellationToken cancellationToken) {
-			var csharp = DecompileCSharp(node, cancellationToken);
+			var csharp = DecompileCSharp(node, null, cancellationToken);
 			return await ConvertToVisualBasicAsync(csharp, cancellationToken).ConfigureAwait(false);
 		}
 
@@ -4168,7 +4168,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			if (codeStatementsByNode.TryGetValue(key, out var cached))
 				return cached;
 			var node = GetNode(nodeId);
-			var statements = DecompileCSharp(node, cancellationToken).CodeStatements ?? Array.Empty<CodeStatementDto>();
+			var statements = DecompileCSharp(node, null, cancellationToken).CodeStatements ?? Array.Empty<CodeStatementDto>();
 			codeStatementsByNode[key] = statements;
 			return statements;
 		}

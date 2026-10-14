@@ -490,7 +490,9 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: /^Breakpoints/ }).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('exposes individual callbacks to re-open each closable tool window', () => {
+  // The menu this renders carries every tool window's entry, and rendering it takes several seconds on a
+  // loaded machine — well past the five the runner allows by default.
+  it('exposes individual callbacks to re-open each closable tool window', { timeout: 30_000 }, () => {
     const onShowOutput = vi.fn()
     const onShowLocals = vi.fn()
     const onShowWatch = vi.fn()

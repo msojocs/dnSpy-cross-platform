@@ -998,7 +998,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }))
     try {
-      const document = await window.dnSpy.decompile(workspaceId, node.id, language)
+      // Pass decompiler settings from app options to the backend
+      const appOptions = await import('./components/app-options').then(m => m.loadAppOptions())
+      const settings = {
+        cSharp: {
+          anonymousMethods: appOptions.decompiler.cSharp.anonymousMethods,
+          yieldReturn: appOptions.decompiler.cSharp.yieldReturn,
+          asyncAwait: appOptions.decompiler.cSharp.asyncAwait,
+          queryExpressions: appOptions.decompiler.cSharp.queryExpressions,
+          expressionTrees: appOptions.decompiler.cSharp.expressionTrees,
+          useDebugSymbols: appOptions.decompiler.cSharp.useDebugSymbols,
+          showXmlDocumentation: appOptions.decompiler.cSharp.showXmlDocumentation,
+          sortCustomAttributes: appOptions.decompiler.cSharp.sortCustomAttributes,
+          fullyQualifyAllTypes: appOptions.decompiler.cSharp.fullyQualifyAllTypes,
+          fullyQualifyAmbiguousTypeNames: appOptions.decompiler.cSharp.fullyQualifyAmbiguousTypeNames,
+          removeEmptyDefaultConstructors: appOptions.decompiler.cSharp.removeEmptyDefaultConstructors,
+          showTokenAndRvaComments: appOptions.decompiler.cSharp.showTokenAndRvaComments,
+          sortMembers: appOptions.decompiler.cSharp.sortMembers,
+          forceShowAllMembers: appOptions.decompiler.cSharp.forceShowAllMembers,
+          sortSystemUsingStatementsFirst: appOptions.decompiler.cSharp.sortSystemUsingStatementsFirst,
+          useSourceCodeOrder: appOptions.decompiler.cSharp.useSourceCodeOrder,
+          oneCustomAttributePerLine: appOptions.decompiler.cSharp.oneCustomAttributePerLine,
+          allowFieldInitializers: appOptions.decompiler.cSharp.allowFieldInitializers,
+          typeAddInternalModifier: appOptions.decompiler.cSharp.typeAddInternalModifier,
+          memberAddPrivateModifier: appOptions.decompiler.cSharp.memberAddPrivateModifier,
+          hexadecimalNumbers: appOptions.decompiler.cSharp.hexadecimalNumbers,
+          emitCalliAsInvocationExpression: appOptions.decompiler.cSharp.emitCalliAsInvocationExpression,
+          insertParenthesesForReadability: appOptions.decompiler.cSharp.insertParenthesesForReadability,
+        },
+        il: {
+          showXmlDocumentation: appOptions.decompiler.il.showXmlDocumentation,
+          showTokenAndRvaComments: appOptions.decompiler.il.showTokenAndRvaComments,
+          showILBytes: appOptions.decompiler.il.showILBytes,
+          showILComments: appOptions.decompiler.il.showILComments,
+          sortMembers: appOptions.decompiler.il.sortMembers,
+          showPdbInfo: appOptions.decompiler.il.showPdbInfo,
+          hexadecimalNumbers: appOptions.decompiler.il.hexadecimalNumbers,
+        },
+        baml: {
+          newLineOnAttributes: appOptions.baml.newLineOnAttributes,
+          useTabs: appOptions.baml.useTabs,
+        },
+        decompileFullType: appOptions.environmentGeneral.decompileFullType,
+        useMemoryMappedIO: appOptions.environmentGeneral.useMemoryMappedIO,
+      }
+      const document = await window.dnSpy.decompile(workspaceId, node.id, language, settings)
       if (get().workspaceId !== workspaceId) return documentId
       if (get().documents[documentId]?.requestedLanguage === language) {
         set((state) => ({

@@ -222,6 +222,62 @@ export interface ResourceDataResponse {
 
 export type DecompilerLanguage = 'cSharp' | 'visualBasic' | 'il' | 'ilWithCSharp'
 
+export interface CSharpDecompilerSettings {
+  anonymousMethods: boolean
+  yieldReturn: boolean
+  asyncAwait: boolean
+  queryExpressions: boolean
+  expressionTrees: boolean
+  useDebugSymbols: boolean
+  showXmlDocumentation: boolean
+  sortCustomAttributes: boolean
+  fullyQualifyAllTypes: boolean
+  fullyQualifyAmbiguousTypeNames: boolean
+  removeEmptyDefaultConstructors: boolean
+  showTokenAndRvaComments: boolean
+  sortMembers: boolean
+  forceShowAllMembers: boolean
+  sortSystemUsingStatementsFirst: boolean
+  useSourceCodeOrder: boolean
+  oneCustomAttributePerLine: boolean
+  allowFieldInitializers: boolean
+  typeAddInternalModifier: boolean
+  memberAddPrivateModifier: boolean
+  hexadecimalNumbers: boolean
+  emitCalliAsInvocationExpression: boolean
+  insertParenthesesForReadability: boolean
+}
+
+export interface ILDecompilerSettings {
+  showXmlDocumentation: boolean
+  showTokenAndRvaComments: boolean
+  showILBytes: boolean
+  showILComments: boolean
+  sortMembers: boolean
+  showPdbInfo: boolean
+  hexadecimalNumbers: boolean
+}
+
+export interface BamlDecompilerSettings {
+  newLineOnAttributes: boolean
+  useTabs: boolean
+}
+
+export interface DecompilerSettings {
+  cSharp?: CSharpDecompilerSettings
+  il?: ILDecompilerSettings
+  baml?: BamlDecompilerSettings
+  decompileFullType: boolean
+  useMemoryMappedIO: boolean
+}
+
+export interface DecompileRequest {
+  workspaceId: string
+  nodeId: string
+  language: DecompilerLanguage
+  settings?: DecompilerSettings
+}
+
 export interface TextSpan {
   start: number
   length: number
@@ -1317,7 +1373,7 @@ export interface DnSpyApi {
    * node that hangs off no root.
    */
   getNodePath(workspaceId: string, nodeId: string): Promise<TreeNodesResponse>
-  decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage): Promise<DecompileResponse>
+  decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage, settings?: DecompilerSettings): Promise<DecompileResponse>
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
   /**

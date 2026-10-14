@@ -44,6 +44,12 @@ const menuKeys = (model: Model, tab: TabNode, canClone = true): string[] => {
     canClone: () => canClone,
     onSave: vi.fn(),
     onModelChanged: vi.fn(),
+    moveTabToGroup: vi.fn(),
+    moveGroup: vi.fn(),
+    closeGroup: vi.fn(),
+    closeOtherGroups: vi.fn(),
+    mergeGroups: vi.fn(),
+    arrangeGroups: vi.fn(),
   }).map((item) => item.key)
 }
 
@@ -130,5 +136,82 @@ describe('DocumentTabContextMenu', () => {
     expect(tab.getParent()).toBeInstanceOf(TabSetNode)
     expect(tab.getParent()?.getId()).not.toBe('documents')
     expect(DockLocation.RIGHT.getOrientation()).toBe(Orientation.HORZ)
+  })
+})
+
+describe('DocumentTabContextMenu tab group commands', () => {
+  // Two groups side by side, which in dnSpy's terms are vertical groups: the row they share runs left to
+  // right, so the entries that need a second group are all there and the ones that would make one are not.
+  const twoGroups = (): Model => Model.fromJson({
+    global: { tabSetEnableDeleteWhenEmpty: true },
+    layout: {
+      type: 'row',
+      children: [1, 2].map((group) => ({
+        type: 'tabset' as const,
+        id: `documents-${group}`,
+        selected: 0,
+        children: [1, 2].map((tab) => ({
+          type: 'tab' as const,
+          id: `doc:${group}-${tab}`,
+          name: `Document ${group}-${tab}`,
+          component: 'document',
+          config: { documentId: `${group}${tab}` },
+        })),
+      })),
+    },
+  } satisfies IJsonModel)
+
+  it('offers the group commands a second group makes possible', () => {
+    const model = twoGroups()
+    const first = getTab(model, 'doc:1-1')
+    expect(menuKeys(model, first)).toEqual([
+      'save-code', 'close', 'close-all', 'close-others', 'new-tab',
+      'tab-groups', 'new-vertical-group',
+      'tab-group-moves', 'move-next-group', 'move-all-next-group',
+      'tab-group-commands', 'close-group', 'close-other-groups', 'move-group-after', 'merge-groups', 'use-horizontal-groups',
+    ])
+  })
+
+  it('offers the other way round for the last group, and nothing that would need a group after it', () => {
+    const model = twoGroups()
+    const last = getTab(model, 'doc:2-1')
+    expect(menuKeys(model, last)).toEqual([
+      'save-code', 'close', 'close-all', 'close-others', 'new-tab',
+      'tab-groups', 'new-vertical-group',
+      'tab-group-moves', 'move-previous-group', 'move-all-previous-group',
+      'tab-group-commands', 'close-group', 'close-other-groups', 'move-group-before', 'merge-groups', 'use-horizontal-groups',
+    ])
+  })
+
+  it('leaves out the arrangement the groups are already in', () => {
+    const model = twoGroups()
+    // The groups are in a row, which is what "use vertical tab groups" — named after the split line — would
+    // make of them anyway, so only the other arrangement is offered.
+    expect(menuKeys(model, getTab(model, 'doc:1-1'))).not.toContain('use-vertical-groups')
+    expect(menuKeys(model, getTab(model, 'doc:1-1'))).toContain('use-horizontal-groups')
+  })
+
+  it('runs the command the entry names, over the tab it was opened on', () => {
+    const model = twoGroups()
+    const tab = getTab(model, 'doc:1-1')
+    const state = getDocumentTabMenuState(tab, true, true)!
+    const onCloseOtherGroups = vi.fn()
+    const items = buildDocumentTabMenuItems(tab, state, {
+      t: (message) => message,
+      canSave: () => true,
+      canClone: () => true,
+      onSave: vi.fn(),
+      onModelChanged: vi.fn(),
+      moveTabToGroup: vi.fn(),
+      moveGroup: vi.fn(),
+      closeGroup: vi.fn(),
+      closeOtherGroups: onCloseOtherGroups,
+      mergeGroups: vi.fn(),
+      arrangeGroups: vi.fn(),
+    })
+    const entry = items.find((item) => item.key === 'close-other-groups')
+    if (!entry || entry.type === 'divider') throw new Error('Missing menu item close-other-groups')
+    entry.onSelect?.({} as never)
+    expect(onCloseOtherGroups).toHaveBeenCalledWith(tab)
   })
 })

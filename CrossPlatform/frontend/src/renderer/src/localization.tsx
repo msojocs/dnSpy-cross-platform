@@ -25,6 +25,16 @@ const zhCN: Record<string, string> = {
   'Merge All Tab Groups': '合并所有标签组',
   'Use Vertical Tab Groups': '使用垂直标签组',
   'Use Horizontal Tab Groups': '使用水平标签组',
+  'Hide': '隐藏',
+  'Hide All Tabs': '隐藏所有选项卡',
+  'Move to Top': '移动到顶部',
+  'Move to Left': '移动到左侧',
+  'Move to Right': '移动到右侧',
+  'Move to Bottom': '移动到底部',
+  'Move Group to Top': '移动组到顶部',
+  'Move Group to Left': '移动组到左侧',
+  'Move Group to Right': '移动组到右侧',
+  'Move Group to Bottom': '移动组到底部',
   'Help': '帮助',
   // dnSpy's File menu (dnSpy.Resources.zh-CN.resx / dnSpy.AsmEditor.Resources.zh-CN.resx). Entries the
   // port has not implemented — Export to Project, Close Old In-Memory Modules — are listed and

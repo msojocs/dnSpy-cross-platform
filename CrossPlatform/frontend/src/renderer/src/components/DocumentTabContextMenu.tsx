@@ -11,7 +11,7 @@ import {
   type IPopupMenuItem,
   type PopupMenuEntry,
 } from 'flexlayout-react'
-import { Columns2, CopyMinus, CopyPlus, PanelsTopLeft, Rows2, Save, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Columns2, CopyMinus, CopyPlus, PanelsTopLeft, Rows2, Save, X } from 'lucide-react'
 
 export interface DocumentTabMenuState {
   tabSet: TabSetNode
@@ -22,6 +22,24 @@ export interface DocumentTabMenuState {
   canClone: boolean
   canCreateHorizontalGroup: boolean
   canCreateVerticalGroup: boolean
+  /** dnSpy's tab group commands, which act on the group the tab is in rather than on the tab. */
+  group: DocumentTabGroupState
+}
+
+/** What the tab menu's group section can offer, which is dnSpy's own set of rules: a second group has to
+ *  be there before anything can be moved between groups, and the group commands need tabs to act on. */
+export interface DocumentTabGroupState {
+  canMoveToNextGroup: boolean
+  canMoveAllToNextGroup: boolean
+  canMoveToPreviousGroup: boolean
+  canMoveAllToPreviousGroup: boolean
+  canCloseGroup: boolean
+  canCloseOtherGroups: boolean
+  canMoveGroupAfterNext: boolean
+  canMoveGroupBeforePrevious: boolean
+  canMergeGroups: boolean
+  canUseVerticalGroups: boolean
+  canUseHorizontalGroups: boolean
 }
 
 interface DocumentTabMenuOptions {
@@ -30,6 +48,14 @@ interface DocumentTabMenuOptions {
   canClone(tab: TabNode): boolean
   onSave(tab: TabNode): void
   onModelChanged(): void
+  /** The Window menu's own commands, reused here as dnSpy reuses them: the tab menu carries the same
+   *  tab-group entries the Window menu does. */
+  moveTabToGroup(tab: TabNode, offset: -1 | 1, all: boolean): void
+  moveGroup(tab: TabNode, after: boolean): void
+  closeGroup(tab: TabNode): void
+  closeOtherGroups(tab: TabNode): void
+  mergeGroups(): void
+  arrangeGroups(horizontal: boolean): void
 }
 
 const allTabs = (node: TabSetNode): TabNode[] => {
@@ -85,6 +111,14 @@ export const getDocumentTabs = (model: Model): TabNode[] => getDocumentTabSets(m
 const belongsToDocumentLayout = (model: Model, tabSet: TabSetNode): boolean =>
   getDocumentTabSets(model).includes(tabSet)
 
+/** Whether a tab is a tool window's — the dock the shell moves and hides from its own menu — as against one
+ *  of the editor's documents, which get the tab menu. The explorer counts as a tool window, as it does
+ *  upstream: it is a window like any other that happens to be docked down the left. */
+export const isToolWindowTab = (tab: TabNode): boolean => {
+  const tabSet = getDocumentTabSet(tab)
+  return tabSet ? isToolWindowTabSet(tabSet) : false
+}
+
 export const getDocumentTabMenuState = (
   tab: TabNode,
   canSave: boolean,
@@ -104,6 +138,20 @@ export const getDocumentTabMenuState = (
     ? commonParent.getOrientation()
     : undefined
   const canSplit = tabsInGroup.length > 1
+  const index = nonEmptyTabSets.indexOf(tabSet)
+  // Horizontal groups are stacked top-to-bottom; vertical groups are side-by-side.
+  const canCreateHorizontalGroup = canSplit
+    && (nonEmptyTabSets.length === 1 || groupOrientation === Orientation.VERT)
+  const canCreateVerticalGroup = canSplit
+    && (nonEmptyTabSets.length === 1 || groupOrientation === Orientation.HORZ)
+  // dnSpy's own rules (TabGroupService's CanExecute properties), which measure everything against the group
+  // a command was invoked on: the ones that act on a group need a second one to move to or merge with, the
+  // ones that move every tab of a group need more than one tab, and the two arrangements need the groups to
+  // be arranged the other way round already.
+  const groupCount = nonEmptyTabSets.length
+  const hasGroupAfter = index >= 0 && index + 1 < groupCount
+  const hasGroupBefore = index > 0
+  const closableInGroup = tabsInGroup.some((item) => item.isCloseable())
 
   return {
     tabSet,
@@ -112,11 +160,23 @@ export const getDocumentTabMenuState = (
     canCloseAll: getDocumentTabSets(model).some((candidate) => allTabs(candidate).some((item) => item.isCloseable())),
     canCloseOthers: tabsInGroup.some((item) => item !== tab && item.isCloseable()),
     canClone,
-    // Horizontal groups are stacked top-to-bottom; vertical groups are side-by-side.
-    canCreateHorizontalGroup: canSplit
-      && (nonEmptyTabSets.length === 1 || groupOrientation === Orientation.VERT),
-    canCreateVerticalGroup: canSplit
-      && (nonEmptyTabSets.length === 1 || groupOrientation === Orientation.HORZ),
+    canCreateHorizontalGroup,
+    canCreateVerticalGroup,
+    group: {
+      canMoveToNextGroup: hasGroupAfter,
+      canMoveAllToNextGroup: hasGroupAfter && canSplit,
+      canMoveToPreviousGroup: hasGroupBefore,
+      canMoveAllToPreviousGroup: hasGroupBefore && canSplit,
+      canCloseGroup: groupCount > 1 && closableInGroup,
+      canCloseOtherGroups: groupCount > 1 && nonEmptyTabSets.some((candidate) => candidate !== tabSet && allTabs(candidate).some((item) => item.isCloseable())),
+      canMoveGroupAfterNext: hasGroupAfter,
+      canMoveGroupBeforePrevious: hasGroupBefore,
+      canMergeGroups: groupCount > 1,
+      // dnSpy's two arrangements are named after the split line, not the stacking: "Use Vertical Tab Groups"
+      // lays the groups out side by side, and is offered while they are stacked rather than after.
+      canUseVerticalGroups: groupCount > 1 && groupOrientation === Orientation.VERT,
+      canUseHorizontalGroups: groupCount > 1 && groupOrientation === Orientation.HORZ,
+    },
   }
 }
 
@@ -236,6 +296,48 @@ export const buildDocumentTabMenuItems = (
         createDocumentTabGroup(tab, false)
       })))
     }
+  }
+
+  // dnSpy's tab menu carries the Window menu's tab group commands as well (TabCommands' TABS_GROUPS group),
+  // in the same order the Window menu lists them. dnSpy hides each one that cannot run rather than greying it
+  // out, so a group on its own shows only the entries that act on it, and a section with none is not there.
+  const group = state.group
+  const groupItems = [
+    group.canMoveToNextGroup && menuItem('move-next-group', options.t('Move to Next Tab Group'), <ArrowRight {...iconProps} />,
+      changed(() => options.moveTabToGroup(tab, 1, false))),
+    group.canMoveAllToNextGroup && menuItem('move-all-next-group', options.t('Move All Tabs to Next Tab Group'), <ArrowRight {...iconProps} />,
+      changed(() => options.moveTabToGroup(tab, 1, true))),
+    group.canMoveToPreviousGroup && menuItem('move-previous-group', options.t('Move to Previous Tab Group'), <ArrowLeft {...iconProps} />,
+      changed(() => options.moveTabToGroup(tab, -1, false))),
+    group.canMoveAllToPreviousGroup && menuItem('move-all-previous-group', options.t('Move All Tabs to Previous Tab Group'), <ArrowLeft {...iconProps} />,
+      changed(() => options.moveTabToGroup(tab, -1, true))),
+  ].filter((item): item is IPopupMenuItem => item !== false)
+  if (groupItems.length > 0) {
+    items.push({ type: 'divider', key: 'tab-group-moves' })
+    items.push(...groupItems)
+  }
+
+  const closeItems = [
+    group.canCloseGroup && menuItem('close-group', options.t('Close Tab Group'), <CopyMinus {...iconProps} />,
+      changed(() => options.closeGroup(tab))),
+    group.canCloseOtherGroups && menuItem('close-other-groups', options.t('Close All Tab Groups But This'), <CopyMinus {...iconProps} />,
+      changed(() => options.closeOtherGroups(tab))),
+    group.canMoveGroupAfterNext && menuItem('move-group-after', options.t('Move Tab Group After Next Tab Group'), <ArrowRight {...iconProps} />,
+      changed(() => options.moveGroup(tab, true))),
+    group.canMoveGroupBeforePrevious && menuItem('move-group-before', options.t('Move Tab Group Before Previous Tab Group'), <ArrowLeft {...iconProps} />,
+      changed(() => options.moveGroup(tab, false))),
+    group.canMergeGroups && menuItem('merge-groups', options.t('Merge All Tab Groups'), <PanelsTopLeft {...iconProps} />,
+      changed(() => options.mergeGroups())),
+  ].filter((item): item is IPopupMenuItem => item !== false)
+  const arrangeItems = [
+    group.canUseVerticalGroups && menuItem('use-vertical-groups', options.t('Use Vertical Tab Groups'), <Columns2 {...iconProps} />,
+      changed(() => options.arrangeGroups(false))),
+    group.canUseHorizontalGroups && menuItem('use-horizontal-groups', options.t('Use Horizontal Tab Groups'), <Rows2 {...iconProps} />,
+      changed(() => options.arrangeGroups(true))),
+  ].filter((item): item is IPopupMenuItem => item !== false)
+  if (closeItems.length > 0 || arrangeItems.length > 0) {
+    items.push({ type: 'divider', key: 'tab-group-commands' })
+    items.push(...closeItems, ...arrangeItems)
   }
 
   return items

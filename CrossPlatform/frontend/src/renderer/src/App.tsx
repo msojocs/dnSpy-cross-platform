@@ -32,7 +32,8 @@ import { loadDocumentLists, rememberCurrentDocuments, saveDocumentLists, type Do
 import { WindowsDialog, type WindowTabEntry } from './components/WindowsDialog'
 import { NodeOptionsDialog } from './components/NodeOptionsDialog'
 import { OptionsDialog } from './components/OptionsDialog'
-import { cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
+import { cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, isToolWindowTab, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
+import { showToolWindowTabContextMenu } from './components/ToolWindowTabContextMenu'
 import { DockPane } from './components/DockPane'
 // Only the interface: the component itself is loaded lazily, when a document tab first draws one.
 import type { DocumentViewCommands } from './components/DocumentView'
@@ -249,6 +250,14 @@ const saveThemeOption = (theme: ThemeName): void => {
   saveAppOptions({ ...options, environmentGeneral: { ...options.environmentGeneral, theme } })
 }
 
+/**
+ * The two-key chords the View menu shows and nothing else binds. Word Wrap wears dnSpy's Ctrl+E, Ctrl+W;
+ * like the bookmark chords it is armed by the first key and run by the second, so it is listed beside them.
+ */
+const viewChords = [
+  { prefix: 'e', key: 'w', plain: false, run: () => useAppStore.getState().setWordWrap(!useAppStore.getState().wordWrap) },
+]
+
 export const App = (): React.JSX.Element => {
   const [model] = useState(loadLayout)
   const [theme, setTheme] = useState<ThemeName>(loadTheme)
@@ -306,7 +315,7 @@ export const App = (): React.JSX.Element => {
   const canShowCode = activeDocument === 'code'
   // The bookmark chord waiting for its second key — Ctrl+K or Ctrl+B — and, as a timestamp so it needs no
   // timer, when it stops waiting.
-  const bookmarkChord = useRef<{ prefix: 'k' | 'b'; until: number } | undefined>(undefined)
+  const bookmarkChord = useRef<{ prefix: string; until: number } | undefined>(undefined)
   const workspaceId = useAppStore((state) => state.workspaceId)
   const backendStatus = useAppStore((state) => state.backendStatus)
   const busy = useAppStore((state) => state.busy)
@@ -613,6 +622,16 @@ export const App = (): React.JSX.Element => {
       model.doAction(Actions.moveNode(tab.getId(), TOOL_WINDOW_TABSET_ID, DockLocation.CENTER, -1, true))
   }
 
+  /** dnSpy's Move over a whole group: every window the dock holds goes to the same edge, one by one, which
+   * is what its group.MoveTo does — the dock the first one makes is where the rest follow it. */
+  const moveToolWindowGroup = (tab: TabNode, location: ToolWindowLocation): void => {
+    const group = tab.getParent()
+    if (!(group instanceof TabSetNode))
+      return
+    for (const item of [...group.getTabNodes()])
+      moveToolWindow(item, location)
+  }
+
   /** The tab set docked at an edge — dnSpy's dock for that location — or undefined when nothing is there yet.
    * The top dock is made by the first move to it, so until then there is nothing between the window and the
    * editor's own tabs to count as one. */
@@ -730,9 +749,10 @@ export const App = (): React.JSX.Element => {
   }
   const documentTabSets = (): TabSetNode[] => getDocumentTabSets(model).filter((tabSet) => tabSet.getTabNodes().length > 0)
   const refreshLayout = (): void => forceLayoutUpdate((value) => value + 1)
-  const moveActiveTabToGroup = (offset: -1 | 1, all: boolean): void => {
-    const tab = activeDocumentTab()
-    if (!tab) return
+  // dnSpy's tab group commands, over the group a given tab is in. The Window menu runs them for the active
+  // document and the tab menu runs them for the tab that was right-clicked, which is why they take the tab
+  // rather than looking one up — the two menus offer the same commands over different tabs.
+  const moveTabToGroup = (tab: TabNode, offset: -1 | 1, all: boolean): void => {
     const groups = documentTabSets()
     const source = tab.getParent()
     if (!(source instanceof TabSetNode)) return
@@ -745,10 +765,9 @@ export const App = (): React.JSX.Element => {
     }
     refreshLayout()
   }
-  const moveActiveGroup = (after: boolean): void => {
-    const tab = activeDocumentTab()
+  const moveTabGroup = (tab: TabNode, after: boolean): void => {
     const groups = documentTabSets()
-    const source = tab?.getParent()
+    const source = tab.getParent()
     if (!(source instanceof TabSetNode)) return
     const index = groups.indexOf(source)
     const target = groups[index + (after ? 1 : -1)]
@@ -756,17 +775,15 @@ export const App = (): React.JSX.Element => {
     model.doAction(Actions.moveNode(source.getId(), target.getId(), after ? DockLocation.RIGHT : DockLocation.LEFT, -1, false))
     refreshLayout()
   }
-  const closeActiveTabGroup = (): void => {
-    const tab = activeDocumentTab()
-    const group = tab?.getParent()
+  const closeTabGroup = (tab: TabNode): void => {
+    const group = tab.getParent()
     if (!(group instanceof TabSetNode)) return
     for (const item of group.getTabNodes())
       if (item.isCloseable()) model.doAction(Actions.deleteTab(item.getId()))
     refreshLayout()
   }
-  const closeOtherTabGroups = (): void => {
-    const tab = activeDocumentTab()
-    const current = tab?.getParent()
+  const closeOtherTabGroups = (tab: TabNode): void => {
+    const current = tab.getParent()
     if (!(current instanceof TabSetNode)) return
     for (const group of documentTabSets()) {
       if (group === current) continue
@@ -793,6 +810,22 @@ export const App = (): React.JSX.Element => {
     for (const group of groups.slice(1))
       if (model.getNodeById(group.getId()))
         model.doAction(Actions.moveNode(group.getId(), target.getId(), horizontal ? DockLocation.BOTTOM : DockLocation.RIGHT, -1, false))
+    refreshLayout()
+  }
+  /** dnSpy's Window menu's own spelling of the commands above: it always acts on the active document's group. */
+  const withActiveTab = (run: (tab: TabNode) => void): void => {
+    const tab = activeDocumentTab()
+    if (tab) run(tab)
+  }
+  /** dnSpy's Select Next/Previous Tab (Ctrl+Tab and Ctrl+Shift+Tab): the tab beside the active one in its own
+   *  group, wrapping round at either end, and only when the group holds more than one tab. */
+  const selectTabInGroup = (offset: -1 | 1): void => {
+    const tabSet = model.getActiveTabset() ?? (model.getNodeById(DOCUMENT_TABSET_ID) as TabSetNode | undefined)
+    const tabs = tabSet?.getTabNodes() ?? []
+    if (tabs.length < 2) return
+    const index = tabs.findIndex((tab) => tab.isSelected())
+    const next = tabs[(index + offset + tabs.length) % tabs.length]
+    model.doAction(Actions.selectTab(next.getId()))
     refreshLayout()
   }
   const windowTabs = useMemo(() => getDocumentTabs(model).map((tab) => ({
@@ -835,7 +868,10 @@ export const App = (): React.JSX.Element => {
     && windowGroups.every((group) => group.getParent() === windowGroups[0].getParent())
     ? windowGroups[0].getParent()
     : undefined
-  const windowGroupsAreHorizontal = commonWindowGroupParent instanceof RowNode
+  // dnSpy names the two arrangements after the split line rather than after the stacking: the groups laid
+  // out in a row are what "use vertical tab groups" would make of them, so that command is offered while
+  // they are stacked instead, and the other way round.
+  const windowGroupsAreSideBySide = commonWindowGroupParent instanceof RowNode
     && commonWindowGroupParent.getOrientation() === Orientation.HORZ
 
   const showCode = async (): Promise<void> => {
@@ -887,7 +923,7 @@ export const App = (): React.JSX.Element => {
       const key = event.key.toLowerCase()
       const armed = bookmarkChord.current
       if (!editingText && armed && armed.until > Date.now() && !event.shiftKey && !event.altKey) {
-        const chord = bookmarkChords.find((candidate) => candidate.prefix === armed.prefix && candidate.key === key && (event.ctrlKey || candidate.plain))
+        const chord = [...bookmarkChords, ...viewChords].find((candidate) => candidate.prefix === armed.prefix && candidate.key === key && (event.ctrlKey || candidate.plain))
         if (chord) {
           bookmarkChord.current = undefined
           event.preventDefault()
@@ -895,14 +931,21 @@ export const App = (): React.JSX.Element => {
           return
         }
       }
-      if (!editingText && !event.shiftKey && !event.altKey && event.ctrlKey && (key === 'k' || key === 'b')) {
+      if (!editingText && !event.shiftKey && !event.altKey && event.ctrlKey && (key === 'k' || key === 'b' || key === 'e')) {
         event.preventDefault()
         bookmarkChord.current = { prefix: key, until: Date.now() + 2000 }
         return
       }
       if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key))
         bookmarkChord.current = undefined
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'o') {
+      if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
+        // dnSpy's Select Previous Tab: the tab before the active one in its own group, wrapping round.
+        event.preventDefault()
+        selectTabInGroup(-1)
+      } else if (event.ctrlKey && event.key === 'Tab') {
+        event.preventDefault()
+        selectTabInGroup(1)
+      } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'o') {
         // dnSpy's Open from GAC, the gesture its File menu shows.
         event.preventDefault()
         setGacDialogOpen(true)
@@ -953,6 +996,48 @@ export const App = (): React.JSX.Element => {
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'p') {
         event.preventDefault()
         collapseTreeViewNodes()
+      } else if (event.ctrlKey && event.key.toLowerCase() === 'd' && !editingText) {
+        // dnSpy's Go to Token, which its tree and its document viewer both bind to Ctrl+D.
+        event.preventDefault()
+        setTokenNode(selectedNode)
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyL') {
+        event.preventDefault()
+        showToolWindow('explorer')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyP') {
+        // dnSpy's Attach to Process. The dialog is what the gesture opens; the process is chosen in it.
+        event.preventDefault()
+        setAttachDialogOpen(true)
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'Digit2' || event.code === 'Numpad2')) {
+        event.preventDefault()
+        showToolWindow('output')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'Digit4' || event.code === 'Numpad4')) {
+        event.preventDefault()
+        showToolWindow('locals')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'Digit8' || event.code === 'Numpad8')) {
+        event.preventDefault()
+        showToolWindow('disassembly')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyB') {
+        event.preventDefault()
+        showToolWindow('breakpoints')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyE') {
+        event.preventDefault()
+        showToolWindow('exception-settings')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyC') {
+        event.preventDefault()
+        showToolWindow('callstack')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyH') {
+        event.preventDefault()
+        showToolWindow('threads')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyU') {
+        event.preventDefault()
+        showToolWindow('modules')
+      } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyZ') {
+        event.preventDefault()
+        showToolWindow('processes')
+      } else if (event.ctrlKey && event.altKey && event.code === 'Break' && debugState === 'stopped') {
+        // dnSpy's Break, which is what its Debug menu shows against Ctrl+Alt+Break.
+        event.preventDefault()
+        void pauseDebug()
       } else if (event.ctrlKey && event.altKey && (event.code === 'Digit0' || event.code === 'Numpad0')) {
         event.preventDefault()
         void showCode()
@@ -971,7 +1056,12 @@ export const App = (): React.JSX.Element => {
       } else if (event.ctrlKey && event.key.toLowerCase() === 'y' && canRedo && !editingText) {
         event.preventDefault()
         redo()
-      } else if (event.altKey && event.key === 'Enter' && !editingText) {
+      } else if (event.shiftKey && event.altKey && event.key === 'Enter') {
+        // dnSpy's Full Screen, Shift+Alt+Enter. It is read before Alt+Enter, which would otherwise take it
+        // for the selected node's settings command.
+        event.preventDefault()
+        void window.dnSpy.toggleFullScreen()
+      } else if (event.altKey && event.key === 'Enter' && !event.shiftKey && !editingText) {
         // dnSpy's Alt+Enter: the settings command of the selected node, which its menu lists beside
         // Edit Method...
         event.preventDefault()
@@ -1005,14 +1095,11 @@ export const App = (): React.JSX.Element => {
       } else if (event.key === 'F11' && !event.shiftKey && debugState === 'stopped' && !editingText) {
         event.preventDefault()
         void stepDebug('stepIn')
-      } else if (event.key === 'F11' && !event.shiftKey && !editingText) {
-        event.preventDefault()
-        void window.dnSpy.toggleFullScreen()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [activeDocument, canRedo, canUndo, chooseAndOpen, collapseTreeViewNodes, continueDebug, debugState, deleteAllBreakpoints, deleteSelected, model, openEditNode, redoEdit, saveAllModules, saveCode, saveModule, saveModuleAs, selectedNode, showToolWindow, showCode, stepDebug, stopDebug, toggleBreakpointHere, undoEdit, workspaceId])
+  }, [activeDocument, canRedo, canUndo, chooseAndOpen, collapseTreeViewNodes, continueDebug, debugState, deleteAllBreakpoints, deleteSelected, model, openEditNode, pauseDebug, redoEdit, saveAllModules, saveCode, saveModule, saveModuleAs, selectedNode, showToolWindow, showCode, stepDebug, stopDebug, toggleBreakpointHere, undoEdit, workspaceId])
 
   // Closing the workspace's documents is also the first thing a restore does, so the two share it.
   const closeDocumentTabs = (): void => {
@@ -1963,27 +2050,27 @@ export const App = (): React.JSX.Element => {
         onNewVerticalTabGroup={() => { if (currentWindowTab) { createDocumentTabGroup(currentWindowTab, false); refreshLayout() } }}
         canMoveToNextTabGroup={currentWindowGroupIndex >= 0 && currentWindowGroupIndex < windowGroups.length - 1}
         canMoveAllToNextTabGroup={currentWindowGroup instanceof TabSetNode && currentWindowGroup.getTabNodes().length > 1 && currentWindowGroupIndex >= 0 && currentWindowGroupIndex < windowGroups.length - 1}
-        onMoveToNextTabGroup={() => moveActiveTabToGroup(1, false)}
-        onMoveAllToNextTabGroup={() => moveActiveTabToGroup(1, true)}
+        onMoveToNextTabGroup={() => withActiveTab((tab) => moveTabToGroup(tab, 1, false))}
+        onMoveAllToNextTabGroup={() => withActiveTab((tab) => moveTabToGroup(tab, 1, true))}
         canMoveToPreviousTabGroup={currentWindowGroupIndex > 0}
         canMoveAllToPreviousTabGroup={currentWindowGroup instanceof TabSetNode && currentWindowGroup.getTabNodes().length > 1 && currentWindowGroupIndex > 0}
-        onMoveToPreviousTabGroup={() => moveActiveTabToGroup(-1, false)}
-        onMoveAllToPreviousTabGroup={() => moveActiveTabToGroup(-1, true)}
+        onMoveToPreviousTabGroup={() => withActiveTab((tab) => moveTabToGroup(tab, -1, false))}
+        onMoveAllToPreviousTabGroup={() => withActiveTab((tab) => moveTabToGroup(tab, -1, true))}
         canCloseAllTabs={windowTabs.some((tab) => model.getNodeById(tab.id)?.isCloseable())}
         onCloseAllTabs={() => { closeAllDocumentTabs(model); refreshLayout() }}
         canCloseTabGroup={hasOtherWindowGroup}
-        onCloseTabGroup={closeActiveTabGroup}
+        onCloseTabGroup={() => withActiveTab(closeTabGroup)}
         canCloseAllTabGroupsButThis={hasOtherWindowGroup}
-        onCloseAllTabGroupsButThis={closeOtherTabGroups}
+        onCloseAllTabGroupsButThis={() => withActiveTab(closeOtherTabGroups)}
         canMoveTabGroupAfterNext={currentWindowGroupIndex >= 0 && currentWindowGroupIndex < windowGroups.length - 1}
-        onMoveTabGroupAfterNext={() => moveActiveGroup(true)}
+        onMoveTabGroupAfterNext={() => withActiveTab((tab) => moveTabGroup(tab, true))}
         canMoveTabGroupBeforePrevious={currentWindowGroupIndex > 0}
-        onMoveTabGroupBeforePrevious={() => moveActiveGroup(false)}
+        onMoveTabGroupBeforePrevious={() => withActiveTab((tab) => moveTabGroup(tab, false))}
         canMergeAllTabGroups={hasOtherWindowGroup}
         onMergeAllTabGroups={mergeTabGroups}
-        canUseVerticalTabGroups={hasOtherWindowGroup && windowGroupsAreHorizontal}
+        canUseVerticalTabGroups={hasOtherWindowGroup && !windowGroupsAreSideBySide}
         onUseVerticalTabGroups={() => arrangeTabGroups(false)}
-        canUseHorizontalTabGroups={hasOtherWindowGroup && !windowGroupsAreHorizontal}
+        canUseHorizontalTabGroups={hasOtherWindowGroup && windowGroupsAreSideBySide}
         onUseHorizontalTabGroups={() => arrangeTabGroups(true)}
         onShowWindowsDialog={() => setWindowsDialogOpen(true)}
         visibleToolWindows={visibleToolWindows}
@@ -2039,6 +2126,18 @@ export const App = (): React.JSX.Element => {
           }}
           onContextMenu={(node, event) => {
             if (!(node instanceof TabNode)) return
+            // A tool window's tab gets the window menu — Hide, Hide All and the two Move groups — and a
+            // document's gets the tab menu, which is dnSpy's split between the two kinds of tab.
+            if (isToolWindowTab(node)) {
+              showToolWindowTabContextMenu(node, event, {
+                t,
+                canMove: canMoveToolWindow,
+                onMove: (tab, location) => { moveToolWindow(tab, location) },
+                onMoveGroup: (tab, location) => { moveToolWindowGroup(tab, location) },
+                onModelChanged: () => forceLayoutUpdate((value) => value + 1),
+              })
+              return
+            }
             showDocumentTabContextMenu(node, event, {
               t,
               canSave: (tab) => {
@@ -2054,6 +2153,12 @@ export const App = (): React.JSX.Element => {
                 if (config?.documentId) void saveCode(config.documentId)
               },
               onModelChanged: () => forceLayoutUpdate((value) => value + 1),
+              moveTabToGroup: (tab, offset, all) => moveTabToGroup(tab, offset, all),
+              moveGroup: (tab, after) => moveTabGroup(tab, after),
+              closeGroup: (tab) => closeTabGroup(tab),
+              closeOtherGroups: (tab) => closeOtherTabGroups(tab),
+              mergeGroups: () => mergeTabGroups(),
+              arrangeGroups: (horizontal) => arrangeTabGroups(horizontal),
             })
           }}
           i18nTranslator={(key) => t(I18nLabelDefaults[key] ?? key)}

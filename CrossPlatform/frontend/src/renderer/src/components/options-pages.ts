@@ -128,7 +128,9 @@ export const collectResets = (pages: PageSpec[]): Map<string, string[]> => {
  * Upstream's Environment category has exactly two pages. "Integrate with Windows
  * Explorer" (a registry-backed shell setting) and the "Enable all warning messages" /
  * "Reset ignored updates" buttons are left out: the first has no Electron equivalent
- * and the second pair are commands, not settings.
+ * and the second pair are commands, not settings. The messages a "Don't show again" has
+ * silenced are kept with the other options, so the Reset the Options dialog offers brings
+ * them back; dnSpy's own button does the same thing, and is the only way it offers.
  */
 const THEME_OPTIONS: SelectOption[] = [
   { value: 'blue', labelKey: 'Blue Theme' },

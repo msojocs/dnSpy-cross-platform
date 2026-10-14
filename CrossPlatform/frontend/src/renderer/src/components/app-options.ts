@@ -20,6 +20,12 @@ export type DebugLanguage = 'C#' | 'Visual Basic'
 export interface EnvironmentGeneralSettings {
   /** Colour theme, upstream's `ThemesVM` combo box. */
   theme: ThemeName
+  /**
+   * The messages whose "Don't show again" box has been ticked, by the id dnSpy gives each one
+   * (MessageBoxService's ignored list). dnSpy keeps these in its settings file under that service's own
+   * section; the port keeps them with the rest of its options, which is what resets them.
+   */
+  ignoredWarnings: string[]
   allowMoreThanOneInstance: boolean
   /** "Decompile a member's enclosing class instead of the class member" */
   decompileFullType: boolean
@@ -496,6 +502,7 @@ const defaultHexEditor = (): HexEditorPaneOptions => ({
 export const defaultAppOptions: AppOptions = {
   environmentGeneral: {
     theme: 'dark',
+    ignoredWarnings: [],
     allowMoreThanOneInstance: true,
     decompileFullType: true,
     restoreTabs: true,

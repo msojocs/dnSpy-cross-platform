@@ -1446,6 +1446,9 @@ export interface DnSpyApi {
   loadBackgroundImages(paths: string[]): Promise<BackgroundImageData[]>
   /** dnSpy's MsgBox: a message to read, with nothing to answer. */
   showMessage(message: string): Promise<void>
+  /** dnSpy's ShowIgnorableMessage: a question with the buttons named, and a "Don't show again" box beside
+   *  them. Answers the button that was chosen, and whether the box was ticked. */
+  askMessage(message: string, buttons: string[]): Promise<{ button: string; dontShowAgain: boolean }>
   /** Reports whether there are unsaved edits, which the main process holds the close back over. */
   setUnsavedChanges(dirty: boolean): Promise<void>
   /** Answers the close the main process asked about: whether the window may go. */

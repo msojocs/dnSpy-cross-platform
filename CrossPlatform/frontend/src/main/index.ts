@@ -78,6 +78,7 @@ const nativeMessages = {
     selectDirectory: '选择目录',
     administrator: '管理员',
     ok: '确定',
+    dontShowAgain: '不再显示此消息',
     restartFailed: '无法以管理员身份重启',
     restartNoResponse: '以管理员身份启动的窗口始终没有出现',
     askSaveFile: '有一个文件尚未被保存，是否要在继续之前保存？',
@@ -108,6 +109,7 @@ const nativeMessages = {
     selectDirectory: 'Select Directory',
     administrator: 'Administrator',
     ok: 'OK',
+    dontShowAgain: "Don't show this message again",
     restartFailed: 'Could not restart with elevated rights',
     restartNoResponse: 'The window started with elevated rights never appeared',
     askSaveFile: 'The file hasn\'t been saved yet. Do you want to save it before continuing?',
@@ -914,6 +916,23 @@ const registerIpc = (): void => {
     mainWindow?.close()
   })
   ipcMain.handle('app:quit', () => app.quit())
+  // dnSpy's ShowIgnorableMessage, as the native box the port draws it with: the caller decides what a box
+  // whose "Don't show again" was ticked means — this only reports that it was.
+  ipcMain.handle('app:askMessage', async (_event, message: string, buttons: string[]) => {
+    if (!mainWindow)
+      return { button: buttons[0], dontShowAgain: false }
+    const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'dnSpy',
+      message,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+      noLink: true,
+      checkboxLabel: nativeText().dontShowAgain,
+    })
+    return { button: buttons[response] ?? buttons[0], dontShowAgain: checkboxChecked }
+  })
   // dnSpy's MsgBox: a message, an OK button and nothing to answer. The title is the app's, as it is there.
   ipcMain.handle('app:showMessage', async (_event, message: string) => {
     if (mainWindow)

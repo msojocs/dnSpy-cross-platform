@@ -45,6 +45,8 @@ const zhCN: Record<string, string> = {
   'Save Module...': '保存模块...',
   'Save All...': '全部保存...',
   'Save All': '全部保存',
+  'Yes': '是',
+  'No': '否',
   'Clear All': '全部清除',
   'Save Output As': '输出另存为',
   'Open from GAC...': '从 GAC 打开...',

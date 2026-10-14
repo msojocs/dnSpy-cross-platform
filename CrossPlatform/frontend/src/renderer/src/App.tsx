@@ -5,6 +5,7 @@ import type { AppCommandLine, DecompilerLanguage, SearchLocation, SearchType, Te
 import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
+import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
 import { normalizeZoom, zoomIn, zoomOut } from './zoom'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
@@ -426,9 +427,16 @@ export const App = (): React.JSX.Element => {
   const toggleBreakpointHere = (): void => {
     if (breakpointTarget) void toggleFunctionBreakpoint(breakpointTarget)
   }
+  // dnSpy's DeleteAllBreakpointsAskUser: the question carries a "Don't show again" box, and a suppressed
+  // one is taken as a yes — the user asked not to be troubled over it again.
   const deleteAllBreakpoints = (): void => {
-    if (window.confirm(t('Do you want to delete all breakpoints?')))
-      void deleteAllBreakpointsAction()
+    void (async () => {
+      const yes = t('Yes')
+      const answer = await askIgnorableMessage(askDeleteAllBreakpointsId, t('Do you want to delete all breakpoints?'), [yes, t('No')])
+      if (answer !== undefined && answer !== yes)
+        return
+      await deleteAllBreakpointsAction()
+    })()
   }
 
   // dnSpy's "Move Types to Empty Namespace" is offered only when the module already has an empty

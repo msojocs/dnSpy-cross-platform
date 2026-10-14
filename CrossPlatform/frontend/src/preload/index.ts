@@ -114,6 +114,7 @@ const api: DnSpyApi = {
   quit: () => ipcRenderer.invoke('app:quit'),
   loadBackgroundImages: (paths) => ipcRenderer.invoke('app:backgroundImages', paths),
   showMessage: (message) => ipcRenderer.invoke('app:showMessage', message),
+  askMessage: (message, buttons) => ipcRenderer.invoke('app:askMessage', message, buttons),
   setUnsavedChanges: (dirty) => ipcRenderer.invoke('app:setUnsavedChanges', dirty),
   respondToClose: (approved) => ipcRenderer.invoke('app:closeResponse', approved),
   onCloseRequested: (callback) => {

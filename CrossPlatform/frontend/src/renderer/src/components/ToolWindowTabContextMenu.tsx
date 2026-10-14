@@ -1,6 +1,6 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { Actions, showPopupMenu, TabNode, TabSetNode, type IPopupMenuItem, type PopupMenuEntry } from 'flexlayout-react'
-import { ArrowLeft, ArrowRight, ArrowUp, ArrowDown, EyeOff, X } from 'lucide-react'
+import { DsIcon } from './DsIcon'
 import type { ToolWindowLocation } from '../command-line-options'
 
 interface ToolWindowTabMenuOptions {
@@ -16,10 +16,10 @@ interface ToolWindowTabMenuOptions {
  *  "_Move" and "Move _Group" submenus hold. The menu this port draws has no submenus, so each entry says
  *  which of the two it belongs to and the edge it names. */
 const LOCATIONS: readonly { location: ToolWindowLocation; label: string; groupLabel: string; icon: ReactNode }[] = [
-  { location: 'top', label: 'Move to Top', groupLabel: 'Move Group to Top', icon: <ArrowUp size={14} strokeWidth={1.7} aria-hidden /> },
-  { location: 'left', label: 'Move to Left', groupLabel: 'Move Group to Left', icon: <ArrowLeft size={14} strokeWidth={1.7} aria-hidden /> },
-  { location: 'right', label: 'Move to Right', groupLabel: 'Move Group to Right', icon: <ArrowRight size={14} strokeWidth={1.7} aria-hidden /> },
-  { location: 'bottom', label: 'Move to Bottom', groupLabel: 'Move Group to Bottom', icon: <ArrowDown size={14} strokeWidth={1.7} aria-hidden /> },
+  { location: 'top', label: 'Move to Top', groupLabel: 'Move Group to Top', icon: <DsIcon name="ToolstripPanelTop" /> },
+  { location: 'left', label: 'Move to Left', groupLabel: 'Move Group to Left', icon: <DsIcon name="ToolstripPanelLeft" /> },
+  { location: 'right', label: 'Move to Right', groupLabel: 'Move Group to Right', icon: <DsIcon name="ToolstripPanelRight" /> },
+  { location: 'bottom', label: 'Move to Bottom', groupLabel: 'Move Group to Bottom', icon: <DsIcon name="ToolstripPanelBottom" /> },
 ]
 
 const menuItem = (key: string, label: string, icon: ReactNode, onSelect: () => void, disabled = false): IPopupMenuItem => ({
@@ -58,10 +58,10 @@ export const buildToolWindowTabMenuItems = (tab: TabNode, options: ToolWindowTab
   // because the menu this port draws has no submenus. The group's own commands are only there when the
   // window shares its dock, which is when there is a group to move.
   const items: PopupMenuEntry[] = [
-    menuItem('hide', options.t('Hide'), <EyeOff size={14} strokeWidth={1.7} aria-hidden />, changed(() => {
+    menuItem('hide', options.t('Hide'), <DsIcon name="TableViewNameOnly" />, changed(() => {
       tab.getModel().doAction(Actions.deleteTab(tab.getId()))
     }), !tab.isCloseable()),
-    menuItem('hide-all', options.t('Hide All Tabs'), <X size={14} strokeWidth={1.7} aria-hidden />, changed(() => {
+    menuItem('hide-all', options.t('Hide All Tabs'), <DsIcon name="CloseDocumentGroup" />, changed(() => {
       for (const other of group instanceof TabSetNode ? allTabs(group) : [tab]) {
         if (other.isCloseable())
           tab.getModel().doAction(Actions.deleteTab(other.getId()))
@@ -83,8 +83,8 @@ export const buildToolWindowTabMenuItems = (tab: TabNode, options: ToolWindowTab
   return items
 }
 
-/** The menu dnSpy offers on a tool window's tab (DsToolWindowServiceCommands). Answers whether it was shown:
- * a tab set of documents gets the tab menu instead, which is the caller's to offer. */
+/** The menu dnSpy offers on a tool window's tab (DsToolWindowServiceCommands). The caller decides which of
+ *  the two menus a tab gets: this one is for a dock of tool windows, the tab menu for one of documents. */
 export const showToolWindowTabContextMenu = (
   tab: TabNode,
   event: ReactMouseEvent<HTMLElement, MouseEvent>,

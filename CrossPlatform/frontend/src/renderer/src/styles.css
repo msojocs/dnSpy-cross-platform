@@ -326,6 +326,23 @@ select:focus-visible,
   color: var(--accent-hover);
 }
 
+/* A toolbar button's icon, which is one of dnSpy's own images: the stylesheet its images share paints the
+   themed drawing as the background of this element. */
+/* A dnSpy image drawn anywhere a menu or a pane wants one. */
+.ds-icon {
+  display: inline-block;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.toolbar-ds-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
 .toolbar-debug-icon {
   display: block;
   width: 16px;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Save, ToggleLeft, Trash2 } from 'lucide-react'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { DsIcon } from './DsIcon'
 
 /** Where the Output window keeps its word wrap. dnSpy keeps it in the settings file with the rest of that
  *  window's options; the port keeps it beside its other per-window settings, in storage of its own. */
@@ -32,10 +32,11 @@ export const OutputPane = (): React.JSX.Element => {
   return (
     <div className="output-window">
       <div className="output-command-bar" role="toolbar" aria-label={t('Output')}>
-        <button type="button" className="icon-button" aria-label={t('Clear All')} title={t('Clear All')} disabled={output.length === 0} onClick={clearOutput}><Trash2 size={15} /></button>
-        <button type="button" className="icon-button" aria-label={t('Save As')} title={t('Save As')} disabled={output.length === 0} onClick={() => void save()}><Save size={15} /></button>
+        {/* dnSpy's own three buttons, with the images its control draws them with (OutputControl.xaml). */}
+        <button type="button" className="icon-button" aria-label={t('Clear All')} title={t('Clear All')} disabled={output.length === 0} onClick={clearOutput}><DsIcon name="ClearWindowContent" /></button>
+        <button type="button" className="icon-button" aria-label={t('Save As')} title={t('Save As')} disabled={output.length === 0} onClick={() => void save()}><DsIcon name="Save" /></button>
         <span className="toolbar-separator" />
-        <button type="button" className="icon-button" aria-label={t('Word Wrap')} title={t('Word Wrap')} aria-pressed={wordWrap} onClick={() => setWordWrap(!wordWrap)}><ToggleLeft size={15} /></button>
+        <button type="button" className="icon-button" aria-label={t('Word Wrap')} title={t('Word Wrap')} aria-pressed={wordWrap} onClick={() => setWordWrap(!wordWrap)}><DsIcon name="WordWrap" /></button>
       </div>
       <div className={`output-pane${wordWrap ? ' output-word-wrap' : ''}`} role="log" aria-label={t('Output')}>
         {output.map((line, index) => <div key={`${index}:${line}`}>{line}</div>)}

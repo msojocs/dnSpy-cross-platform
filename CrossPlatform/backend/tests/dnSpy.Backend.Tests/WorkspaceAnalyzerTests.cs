@@ -42,8 +42,9 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		Assert.Equal(await NodeAsync(workspaceId, area), row.NodeId);
 		Assert.True(row.HasChildren);
 		Assert.True(row.IsPublic);
-		Assert.Equal("class", (await RootAsync(workspaceId, typeof(Circle))).Icon);
-		Assert.Equal("interface", (await RootAsync(workspaceId, typeof(IShape))).Icon);
+		// A type row wears the image of dnSpy's own set its kind and visibility pick (DotNetImageService).
+		Assert.Equal("ClassPublic", (await RootAsync(workspaceId, typeof(Circle))).Icon);
+		Assert.Equal("InterfacePublic", (await RootAsync(workspaceId, typeof(IShape))).Icon);
 	}
 
 	[Fact]
@@ -73,7 +74,7 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		var total = await manager.GetNodeAsync(new NodeRequest(workspaceId, await NodeAsync(workspaceId, Method(typeof(Usage), nameof(Usage.Total)))), Token);
 		Assert.Equal([("Total", "staticMethod"), ("(", "punctuation"), ("IShape", "interface"), (")", "punctuation")], total.LabelParts!.Select(part => (part.Text, part.Color)));
 		Assert.Equal([("double", "keyword")], total.ReturnTypeParts!.Select(part => (part.Text, part.Color)));
-		var root = (await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), Token)).Nodes.Single(node => node.Label.StartsWith("AnalyzerTarget (", StringComparison.Ordinal));
+		var root = (await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), Token)).Nodes.Single(node => node.Kind == "assembly" && node.Label == "AnalyzerTarget");
 		Assert.Equal([("AnalyzerTarget", "assembly"), (" ", "text"), ("(", "punctuation"), ("1.0.0.0", "number"), (")", "punctuation")], root.LabelParts!.Select(part => (part.Text, part.Color)));
 	}
 
@@ -295,7 +296,7 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 	[Fact]
 	public async Task FindsWhereAnAttributeIsAppliedAndWhatItsArgumentsAssign() {
 		var workspaceId = await OpenAsync();
-		var root = (await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), Token)).Nodes.Single(node => node.Label.StartsWith("AnalyzerTarget (", StringComparison.Ordinal));
+		var root = (await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), Token)).Nodes.Single(node => node.Kind == "assembly" && node.Label == "AnalyzerTarget");
 
 		var appliedTo = await SearchAsync(workspaceId, typeof(MarkerAttribute), AnalyzerSearchKinds.AppliedTo);
 		var assembly = Assert.Single(appliedTo, row => row.Kind == "assembly");

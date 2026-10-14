@@ -27,8 +27,8 @@ const zhCN: Record<string, string> = {
   'Use Horizontal Tab Groups': '使用水平标签组',
   'Help': '帮助',
   // dnSpy's File menu (dnSpy.Resources.zh-CN.resx / dnSpy.AsmEditor.Resources.zh-CN.resx). Entries the
-  // port has not implemented — Export to Project, Open from GAC, Open List, the Close* sweeps — are
-  // listed and translated all the same: they keep dnSpy's place in the menu and render disabled.
+  // port has not implemented — Export to Project, Close Old In-Memory Modules — are listed and
+  // translated all the same: they keep dnSpy's place in the menu and render disabled.
   'Open...': '打开...',
   'Export to Project...': '导出到工程...',
   'Save': '保存',
@@ -174,6 +174,32 @@ const zhCN: Record<string, string> = {
   'Analyze': '分析',
   'Search MSDN': '在 MSDN 中搜索',
   'Go to Resource': '转到资源',
+  // dnSpy's Open from GAC and Open List dialogs (dnSpy.Resources.zh-CN.resx: OpenGAC_*, OpenList_*).
+  'Open from GAC': '从 GAC 中打开',
+  'Show duplicates': '显示重复',
+  'Name:': '名称:',
+  'Created by:': '创建者:',
+  'Version:': '版本:',
+  'File Version:': '文件版本:',
+  'Path:': '路径:',
+  'Showing {shown} of {total} files': '正在显示 {shown} /{total} 文件',
+  'Search (Ctrl+F)': '搜索 (Ctrl+F)',
+  'Open List': '打开文件列表',
+  'Saved lists': '已保存的列表',
+  'Files': '文件',
+  'New...': '新建...',
+  'Open': '打开',
+  'Missing name': '缺少名称',
+  // dnSpy.AsmEditor.Resources.zh-CN.resx: RemoveAssembliesCommand, SaveResourcesCommand, RawSaveResourcesCommand.
+  'Save {count} resources': '保存 {count} 资源',
+  'Raw Save {count} resources': '直接保存 {count} 资源',
+  'Save {count} resources, use sub dirs': '以子目录保存 {count} 资源',
+  'Raw Save {count} resources, use sub dirs': '以子目录直接保存 {count} 资源',
+  'Remove {count} assemblies': '移除 {count} 程序集',
+  // dnSpy's question before Reload All Assemblies throws unsaved edits away (dnSpy.AsmEditor.Resources.zh-CN.resx).
+  'There is an unsaved file.': '存在一个尚未被保存的文件。',
+  'There are {count} unsaved files.': '有 {count} 个尚未被保存的文件。',
+  'Are you sure you want to reload all assemblies and lose all changes?': '是否要重新载入所有程序集并放弃所有修改？',
   'Incremental Search': '渐进式搜索',
   // The assembly explorer's context menu (dnSpy.Resources.zh-CN.resx and dnSpy.AsmEditor.Resources.zh-CN.resx).
   'Open Containing Folder': '打开所在文件夹',
@@ -338,6 +364,8 @@ const zhCN: Record<string, string> = {
   'Base type': '基类型',
   'Instruction': '指令',
   'None': '无',
+  // dnSpy.Resources.zh-CN.resx ReferencesFolder: the folder a module lists its assembly and module references in.
+  'References': '引用',
   'Assembly References': '程序集引用',
   // The module and type group folders of the assembly explorer (dnSpy.Resources.zh-CN.resx:
   // TypeReferencesFolder, BaseTypeFolder, DerivedTypes).

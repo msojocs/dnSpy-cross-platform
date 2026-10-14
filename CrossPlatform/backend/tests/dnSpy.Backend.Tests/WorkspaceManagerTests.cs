@@ -111,12 +111,12 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.Equal("basetype", workerBaseTypes[0].Kind);
 		Assert.Equal("object", workerBaseTypes[0].Label);
 		Assert.Equal("System.Object", workerBaseTypes[0].Description);
-		Assert.Equal("class", workerBaseTypes[0].Icon);
+		Assert.Equal("ClassPublic", workerBaseTypes[0].Icon);
 		Assert.NotNull(workerBaseTypes[0].MetadataToken);
 		Assert.True(workerBaseTypes[0].HasChildren);
 		var implemented = Assert.Single(workerBaseTypes, node => node.Label == "Program.IWorker");
 		Assert.Equal("basetype", implemented.Kind);
-		Assert.Equal("interface", implemented.Icon);
+		Assert.Equal("InterfacePrivate", implemented.Icon);
 
 		// The interface resolves to the type this workspace already holds, so expanding it walks that
 		// type's own base type and interfaces — the interface has neither, so the walk ends there.
@@ -131,11 +131,12 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var derived = Assert.Single(await ChildrenAsync(opened.WorkspaceId, derivedTypes.Id), node => node.Kind == "derivedtype");
 		Assert.Equal("Worker", derived.Label);
 		Assert.Equal("DebugTarget.Program/Worker", derived.Description);
-		Assert.Equal("class", derived.Icon);
+		Assert.Equal("ClassPrivate", derived.Icon);
 		Assert.NotNull(derived.MetadataToken);
 		Assert.False(derived.HasChildren);
-		Assert.Equal($"// DebugTarget.Program/Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derived.Id));
-		Assert.Equal($"// DebugTarget.Program/Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derivedTypes.Id));
+		// NodeDecompiler writes the type's ReflectionFullName, which joins a nested type with a plus.
+		Assert.Equal($"// DebugTarget.Program+Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derived.Id));
+		Assert.Equal($"// DebugTarget.Program+Worker{Environment.NewLine}", await DocumentTextAsync(opened.WorkspaceId, derivedTypes.Id));
 	}
 
 	/// <summary>
@@ -227,12 +228,13 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var members = await ChildrenAsync(opened.WorkspaceId, helloResponse.Id);
 		var capabilities = Assert.Single(members, member => member.Kind == "property" && member.Label == "Capabilities");
 		Assert.Equal("IReadOnlyDictionary<string, bool>", capabilities.ReturnType);
-		// The primary constructor wears its parameter list; the record's copy constructor is the other .ctor.
-		Assert.Single(members, member => member.Label == ".ctor(int, string, string, string, string, IReadOnlyDictionary<string, bool>)");
+		// The primary constructor wears its parameter list; the record's copy constructor is the other one. A
+		// constructor row is named after its type, the way dnSpy's NodeFormatter writes it.
+		Assert.Single(members, member => member.Label == "HelloResponse(int, string, string, string, string, IReadOnlyDictionary<string, bool>)");
 
 		var openRequest = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "OpenWorkspaceRequest");
 		var openRequestMembers = await ChildrenAsync(opened.WorkspaceId, openRequest.Id);
-		Assert.Single(openRequestMembers, member => member.Label == ".ctor(IReadOnlyList<string>)");
+		Assert.Single(openRequestMembers, member => member.Label == "OpenWorkspaceRequest(IReadOnlyList<string>)");
 	}
 
 	[Fact]
@@ -265,7 +267,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		// Constructors are the one exception and are checked against a plain method instead: a field initializer
 		// is written on the field, so the module document maps its IL to the field declaration while the method
 		// document maps the same IL to the constructor body. Only the initializers' offsets line up between them.
-		foreach (var member in members.Nodes.Where(node => node.Kind == "method" && !node.Label.StartsWith('.'))) {
+		// A constructor row is named after its type, so it is told apart by that name rather than by ".ctor".
+		foreach (var member in members.Nodes.Where(node => node.Kind == "method" && !node.Label.StartsWith("WorkspaceManager(", StringComparison.Ordinal) && !node.Label.StartsWith('.'))) {
 			var view = await manager.DecompileAsync(
 				new DecompileRequest(opened.WorkspaceId, member.Id, DecompilerLanguage.CSharp),
 				TestContext.Current.CancellationToken);
@@ -1778,11 +1781,12 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	/// <summary>
-	/// An unmanaged file has no assembly document to remove, so the command is refused rather than silently
-	/// dropping whatever row it was run on.
+	/// A file that is not a managed assembly is a document all the same, and dnSpy's Remove Assembly takes any
+	/// root document (RemoveAssemblyCommand.CanExecute: a DsDocumentNode at the root) — Close All Missing
+	/// Files is nothing but that command run over the unknown documents. Its rows go with it.
 	/// </summary>
 	[Fact]
-	public async Task RemoveModule_RefusesAFileThatIsNotAManagedAssembly() {
+	public async Task RemoveModule_TakesAFileThatIsNotAManagedAssembly() {
 		var path = Path.Combine(Path.GetTempPath(), $"dnspy-unknown-{Guid.NewGuid():N}");
 		await File.WriteAllBytesAsync(
 			path,
@@ -1794,14 +1798,14 @@ public sealed class WorkspaceManagerTests : IDisposable {
 				new WorkspaceRequest(opened.WorkspaceId),
 				TestContext.Current.CancellationToken)).Nodes);
 
-			var refused = await Assert.ThrowsAsync<RpcException>(() => manager.RemoveModuleAsync(
+			var removed = await manager.RemoveModuleAsync(
 				new NodeRequest(opened.WorkspaceId, root.Id),
-				TestContext.Current.CancellationToken));
-			Assert.Equal(ErrorCodes.InvalidParams, refused.Code);
-			// It is still there, and nothing was dropped on the way out.
-			Assert.Equal(root.Id, Assert.Single((await manager.GetRootsAsync(
+				TestContext.Current.CancellationToken);
+			Assert.Contains(root.Id, removed.RemovedNodeIds);
+			Assert.Empty(removed.Roots);
+			Assert.Empty((await manager.GetRootsAsync(
 				new WorkspaceRequest(opened.WorkspaceId),
-				TestContext.Current.CancellationToken)).Nodes).Id);
+				TestContext.Current.CancellationToken)).Nodes);
 		}
 		finally {
 			File.Delete(path);
@@ -1938,7 +1942,9 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var assembly = Assert.Single((await manager.GetRootsAsync(
 			new WorkspaceRequest(opened.WorkspaceId),
 			TestContext.Current.CancellationToken)).Nodes);
-		Assert.StartsWith("dnSpy.Backend.Contracts (", assembly.Label, StringComparison.Ordinal);
+		// The row names the assembly; its version travels apart, for the client to write when its options say so.
+		Assert.Equal("dnSpy.Backend.Contracts", assembly.Label);
+		Assert.NotNull(assembly.AssemblyVersion);
 		Assert.Equal("dnSpy.Backend.Contracts.dll", module.Label);
 
 		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
@@ -1998,9 +2004,11 @@ public sealed class WorkspaceManagerTests : IDisposable {
 				TestContext.Current.CancellationToken);
 			await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
 
-			Assert.Equal("Probe (0.0.0.0)", Assert.Single((await manager.GetRootsAsync(
+			var converted = Assert.Single((await manager.GetRootsAsync(
 				new WorkspaceRequest(opened.WorkspaceId),
-				TestContext.Current.CancellationToken)).Nodes).Label);
+				TestContext.Current.CancellationToken)).Nodes);
+			Assert.Equal("Probe", converted.Label);
+			Assert.Equal("0.0.0.0", converted.AssemblyVersion);
 			// The module row is untouched by any of this: it names the file it always did.
 			Assert.Equal("Probe.netmodule", (await manager.GetNodeAsync(
 				new NodeRequest(opened.WorkspaceId, module.Id),
@@ -2105,7 +2113,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.Equal("unknowndocument", root.Kind);
 			Assert.Equal(Path.GetFileName(path), root.Label);
 			Assert.Equal(path, root.Description);
-			Assert.Equal("error", root.Icon);
+			// dnSpy shows a document it could not read with DsImages.AssemblyError.
+			Assert.Equal("AssemblyError", root.Icon);
 			Assert.False(root.HasChildren);
 
 			// It is in the module list too, so a session that is restored opens it again rather than
@@ -2176,7 +2185,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.Equal("pedocument", root.Kind);
 			Assert.Equal(Path.GetFileName(path), root.Label);
 			Assert.Equal(path, root.Description);
-			Assert.Equal("binary", root.Icon);
+			// dnSpy's PE document wears the image an assembly would, and this image is no DLL.
+			Assert.Equal("AssemblyExe", root.Icon);
 
 			var document = await manager.DecompileAsync(
 				new DecompileRequest(opened.WorkspaceId, root.Id, DecompilerLanguage.CSharp),
@@ -2259,7 +2269,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var pe = await FindPeNodeAsync(opened.WorkspaceId);
 
 		Assert.Equal("PE", pe.Label);
-		Assert.Equal("binary", pe.Icon);
+		Assert.Equal("BinaryFile", pe.Icon);
 		Assert.True(pe.HasChildren);
 
 		var structures = await ChildrenAsync(opened.WorkspaceId, pe.Id);
@@ -2282,7 +2292,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.All(structures, node => Assert.False(node.HasChildren));
 		// A structure belongs to the file it was read from, which is the tooltip dnSpy shows for them.
 		Assert.All(structures, node => Assert.Equal(opened.Modules[0].Path, node.Description));
-		Assert.All(structures, node => Assert.Equal("binary", node.Icon));
+		Assert.All(structures, node => Assert.Equal("BinaryFile", node.Icon));
 	}
 
 	[Fact]
@@ -2535,7 +2545,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.Equal("elfdocument", root.Kind);
 			Assert.Equal(Path.GetFileName(path), root.Label);
 			Assert.Equal(path, root.Description);
-			Assert.Equal("binary", root.Icon);
+			Assert.Equal("BinaryFile", root.Icon);
 			Assert.True(root.HasChildren);
 
 			var elf = Assert.Single(await ChildrenAsync(opened.WorkspaceId, root.Id));
@@ -2557,7 +2567,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.All(structures, node => Assert.Equal("elfstructure", node.Kind));
 			Assert.All(structures, node => Assert.False(node.HasChildren));
 			Assert.All(structures, node => Assert.Equal(path, node.Description));
-			Assert.All(structures, node => Assert.Equal("binary", node.Icon));
+			Assert.All(structures, node => Assert.Equal("BinaryFile", node.Icon));
 
 			// There is nothing to edit or write, and the answer says so rather than naming the wrong thing.
 			var save = await Assert.ThrowsAsync<RpcException>(() => manager.SaveModuleInPlaceAsync(
@@ -2920,7 +2930,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var assembly = Assert.Single(
 			(await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes);
 		var module = Assert.Single(await ChildrenAsync(opened.WorkspaceId, assembly.Id));
-		var @namespace = Assert.Single(await ChildrenAsync(opened.WorkspaceId, module.Id), node => node.Kind == "namespace");
+		// The global <Module> type puts an empty namespace beside the named one, the way dnSpy lists it.
+		var @namespace = Assert.Single(await ChildrenAsync(opened.WorkspaceId, module.Id), node => node.Kind == "namespace" && node.Label == "dnSpy.Backend.Contracts");
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, rpcException.Id), TestContext.Current.CancellationToken);
 		var codeProperty = Assert.Single(members.Nodes, node => node.Kind == "property" && node.Label == "Code");
@@ -2958,8 +2969,9 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	/// <summary>
-	/// An event's accessors are nested the same way, and in the order dnSpy lists them: the adder, then the
-	/// remover, then the raiser. No fixture assembly declares an event, so this one writes its own.
+	/// An event's accessors are nested the same way. dnSpy's EventNodeImpl yields the adder, the remover and
+	/// the raiser, but they share one MethodTreeNodeGroup, which sorts them by name — add_, raise_, remove_.
+	/// No fixture assembly declares an event, so this one writes its own.
 	/// </summary>
 	[Fact]
 	public async Task EventAccessorsAreListedUnderTheEvent() {
@@ -2976,7 +2988,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			var changed = Assert.Single(members, node => node.Kind == "event" && node.Label == "Changed");
 			Assert.True(changed.HasChildren);
 			Assert.Equal(
-				new[] { "add_Changed(EventHandler)", "remove_Changed(EventHandler)", "raise_Changed(EventHandler)" },
+				new[] { "add_Changed(EventHandler)", "raise_Changed(EventHandler)", "remove_Changed(EventHandler)" },
 				(await ChildrenAsync(opened.WorkspaceId, changed.Id)).Select(node => node.Label));
 		}
 		finally {

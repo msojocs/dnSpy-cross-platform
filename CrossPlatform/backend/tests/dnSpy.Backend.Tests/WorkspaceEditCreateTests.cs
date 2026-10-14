@@ -253,10 +253,11 @@ public sealed class WorkspaceEditCreateTests : IDisposable {
 		};
 		await WriteOptionsAsync(workspaceId, type.Id, NodeOptionsDto.OfType(edited));
 
-		// The tree says so where the type is listed, which is the namespace the name files it under.
+		// The tree says so where the type is listed, which is the namespace the name files it under. The row
+		// writes the type parameter the edit added, the way NodeFormatter writes a generic type's name.
 		var @namespace = await NamespaceOfAsync(workspaceId, type);
 		var renamed = Assert.Single(await ChildrenAsync(workspaceId, @namespace.Id), node => node.Id == type.Id);
-		Assert.Equal("Renamed", renamed.Label);
+		Assert.Equal("Renamed<T>", renamed.Label);
 
 		var after = Assert.IsType<TypeOptionsDto>((await manager.GetOptionsAsync(
 			new GetNodeOptionsRequest(workspaceId, NodeOptionKinds.Type, type.Id), TestContext.Current.CancellationToken)).Type);

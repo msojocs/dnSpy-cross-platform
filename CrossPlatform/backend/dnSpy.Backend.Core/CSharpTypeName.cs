@@ -204,7 +204,12 @@ static class CSharpTypeName {
 				ApplyTypeArguments(open, arguments);
 				return open;
 			case GenericSig genericSig:
-				return new Syntax { Name = genericSig.GenericParam.Name.String, Color = genericSig.IsMethodVar ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter };
+				// A member reference's signature has no owner to name its generic parameters, so dnSpy's
+				// CSharpFormatter writes the IL spelling instead: "!0" for a type's, "!!0" for a method's.
+				return new Syntax {
+					Name = genericSig.GenericParam?.Name.String ?? $"{(genericSig.IsMethodVar ? "!!" : "!")}{genericSig.Number}",
+					Color = genericSig.IsMethodVar ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter,
+				};
 			case TypeDefOrRefSig typeDefOrRefSig:
 				return Convert(typeDefOrRefSig.TypeDefOrRef, null, ref typeIndex, includeParameterDefinitions, options, depth);
 			case ModifierSig modifierSig:

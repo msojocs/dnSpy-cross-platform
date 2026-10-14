@@ -8,9 +8,9 @@ import {
 } from './AssemblyExplorerContextMenu'
 import type { TreeNode } from '../../../shared/protocol'
 
-const typeNode: TreeNode = { id: 'n-type', kind: 'type', label: 'Console', hasChildren: true, description: 'System.Console', metadataToken: 0x02000002 }
-const methodNode: TreeNode = { id: 'n-method', kind: 'method', label: 'WriteLine()', hasChildren: false, description: 'System.Void System.Console::WriteLine(System.String)', metadataToken: 0x06000001 }
-const moduleNode: TreeNode = { id: 'n-module', kind: 'module', label: 'Example.dll', hasChildren: true, description: '/tmp/Example.dll', metadataToken: 0x00000001 }
+const typeNode: TreeNode = { id: 'n-type', kind: 'type', label: 'Console', hasChildren: true, description: 'System.Console', metadataToken: 0x02000002, fullName: 'System.Console', msdnName: 'System.Console' }
+const methodNode: TreeNode = { id: 'n-method', kind: 'method', label: 'WriteLine()', hasChildren: false, description: 'System.Void System.Console::WriteLine(System.String)', metadataToken: 0x06000001, fullName: 'System.Void System.Console::WriteLine(System.String)', msdnName: 'System.Console.WriteLine' }
+const moduleNode: TreeNode = { id: 'n-module', kind: 'module', label: 'Example.dll', hasChildren: true, description: '/tmp/Example.dll', metadataToken: 0x00000001, fullName: 'Example.dll' }
 const assemblyNode: TreeNode = { id: 'n-assembly', kind: 'assembly', label: 'Example', hasChildren: true, metadataToken: 0x20000001 }
 const namespaceNode: TreeNode = { id: 'n-ns', kind: 'namespace', label: 'System', hasChildren: true }
 
@@ -109,7 +109,6 @@ const UNIMPLEMENTED = [
   'edit-class-code',
   'add-class-members-code',
   'add-class-code',
-  'go-to-resource',
   'disable-mmap-io',
   'break-when-exception-thrown',
   'find-string-references',
@@ -197,6 +196,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
       'open-in-new-tab',
       'create-type',
       'copy-md-token',
+      'copy-full-name',
       'hex-0',
       'module-information',
       'sort-assemblies',
@@ -246,9 +246,9 @@ describe('buildAssemblyExplorerMenuItems', () => {
       onGoToGlobalCctor: vi.fn(),
       onGoToToken: vi.fn(),
     })
+    // Remove is not among them: it takes a root, and the module is the row under the assembly's.
     expect(menuKeys(withCommands)).toEqual([
       'open-in-new-tab',
-      'remove-document',
       'convert-assembly-to-netmodule',
       'create-type',
       'load-dependencies',
@@ -257,6 +257,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
       'go-to-global-cctor',
       'go-to-token',
       'copy-md-token',
+      'copy-full-name',
       'hex-0',
       'module-information',
       'open-containing-folder',
@@ -269,22 +270,80 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(withCommands.onConvertModule).toHaveBeenCalledWith(moduleNode)
   })
 
-  it('offers the two Save commands on a resource node, and only there', () => {
+  it('removes the selected roots, naming one document or counting several', () => {
+    const named = (ctx: AssemblyExplorerMenuContext): AssemblyExplorerMenuContext =>
+      ({ ...ctx, t: (message, values) => Object.entries(values ?? {}).reduce((text, [key, value]) => text.replace(`{${key}}`, String(value)), message) })
+    const other: TreeNode = { id: 'n-other', kind: 'unknowndocument', label: 'notes.txt', hasChildren: false }
+    // RemoveAssemblyCommand.CanExecute: every node a root document, of whatever kind of file.
+    for (const kind of ['assembly', 'pedocument', 'elfdocument', 'unknowndocument'])
+      expect(menuKeys(richContext({ ...assemblyNode, kind }, { onRemoveAssembly: vi.fn() })), `for a ${kind} row`).toContain('remove-document')
+    expect(menuKeys(richContext(moduleNode, { onRemoveAssembly: vi.fn() }))).not.toContain('remove-document')
+    // A selection with a row in it that is no root has nothing Remove can take.
+    expect(menuKeys(richContext(assemblyNode, { onRemoveAssembly: vi.fn(), selection: [assemblyNode, typeNode] }))).not.toContain('remove-document')
+
+    const one = named(richContext(assemblyNode, { onRemoveAssembly: vi.fn(), selection: [assemblyNode] }))
+    expect(labelOf(one, 'remove-document')).toBe('Remove Example')
+    const both = named(richContext(assemblyNode, { onRemoveAssembly: vi.fn(), selection: [assemblyNode, other] }))
+    expect(labelOf(both, 'remove-document')).toBe('Remove 2 assemblies')
+    runEntry(both, 'remove-document')
+    expect(both.onRemoveAssembly).toHaveBeenCalledWith([assemblyNode, other])
+  })
+
+  it('offers Go to Resource on a member that reads a .resources entry, and hands it that member', () => {
+    const property: TreeNode = { id: 'n-res-prop', kind: 'property', label: 'Title', hasChildren: true, description: 'string Resources::Title()' }
+    expect(menuKeys(richContext(property, { onGoToResource: vi.fn() }))).not.toContain('go-to-resource')
+    const ctx = richContext(property, { onGoToResource: vi.fn(), readsResource: true })
+    expect(menuKeys(ctx)).toContain('go-to-resource')
+    runEntry(ctx, 'go-to-resource')
+    expect(ctx.onGoToResource).toHaveBeenCalledWith(property)
+    // dnSpy only answers for a single selected row.
+    expect(menuKeys(richContext(property, { onGoToResource: vi.fn(), readsResource: true, selection: [property, typeNode] }))).not.toContain('go-to-resource')
+  })
+
+  it('offers the Save commands on the resources selected, headed by the files they would write', () => {
     const resource: TreeNode = { id: 'n-res', kind: 'resource', label: 'sample-resource.txt', hasChildren: false }
     const entry: TreeNode = { id: 'n-entry', kind: 'resourceentry', label: 'Title', hasChildren: false }
+    const one = { names: ['Title'], rawNames: ['Title'] }
+    const t = (message: string, values?: Record<string, string | number>): string =>
+      values ? message.replace('{name}', String(values.name)).replace('{count}', String(values.count)) : message
     // Until the shell can save, the entries are not on the menu at all.
-    expect(menuKeys(richContext(resource))).not.toContain('save-resource')
-    expect(menuKeys(richContext(resource, { onSaveResource: vi.fn() }))).toContain('save-resource')
+    expect(menuKeys(richContext(resource, { resourceNames: one }))).not.toContain('save-resource')
+    expect(menuKeys(richContext(resource, { onSaveResource: vi.fn(), resourceNames: one }))).toContain('save-resource')
+    // A resource with nothing to write — a linked one — is not offered the command.
+    expect(menuKeys(richContext(resource, { onSaveResource: vi.fn(), resourceNames: { names: [], rawNames: [] } }))).not.toContain('save-resource')
 
-    // The label is dnSpy's own — "Save {name}" — and the two entries differ only in which command they run.
-    const ctx = richContext(entry, { onSaveResource: vi.fn(), t: (message, values) => values ? message.replace('{name}', String(values.name)) : message })
+    // One file is named in the header, and Raw Save differs only in the command it runs.
+    const ctx = richContext(entry, { onSaveResource: vi.fn(), resourceNames: one, t })
     expect(labelOf(ctx, 'save-resource')).toBe('Save Title')
     expect(labelOf(ctx, 'save-raw-resource')).toBe('Raw Save Title')
     runEntry(ctx, 'save-raw-resource')
-    expect(ctx.onSaveResource).toHaveBeenCalledWith(entry, true)
+    expect(ctx.onSaveResource).toHaveBeenCalledWith([entry], true, false)
+
+    // dnSpy counts files, not rows: a .resources file saves one file per entry, and Raw Save the file itself.
+    // The "use sub dirs" variants show only for several files with a directory in a name.
+    const resources = { names: ['themes/generic.xaml', 'app.xaml', 'icon.png'], rawNames: ['Example.g.resources'] }
+    const set = richContext(resource, { onSaveResource: vi.fn(), resourceNames: resources, t })
+    expect(menuKeys(set).filter((key) => key.startsWith('save-'))).toEqual(['save-resource', 'save-resource-sub-dirs', 'save-raw-resource'])
+    expect(labelOf(set, 'save-resource')).toBe('Save 3 resources')
+    expect(labelOf(set, 'save-resource-sub-dirs')).toBe('Save 3 resources, use sub dirs')
+    expect(labelOf(set, 'save-raw-resource')).toBe('Raw Save Example.g.resources')
+    runEntry(set, 'save-resource-sub-dirs')
+    expect(set.onSaveResource).toHaveBeenCalledWith([resource], false, true)
+
+    // Over a selection the resources in it are saved, whatever else is selected beside them.
+    const several = richContext(entry, { onSaveResource: vi.fn(), selection: [entry, typeNode, resource], resourceNames: { names: ['a', 'b'], rawNames: ['a', 'b'] }, t })
+    expect(labelOf(several, 'save-raw-resource')).toBe('Raw Save 2 resources')
+    runEntry(several, 'save-resource')
+    expect(several.onSaveResource).toHaveBeenCalledWith([entry, resource], false, false)
+
+    // A Resources folder selected on its own stands for what it holds.
+    const folder: TreeNode = { id: 'n-resources', kind: 'resourcesgroup', label: 'Resources', hasChildren: true }
+    const ofFolder = richContext(folder, { onSaveResource: vi.fn(), resourceNames: resources, t })
+    runEntry(ofFolder, 'save-resource')
+    expect(ofFolder.onSaveResource).toHaveBeenCalledWith([folder], false, false)
 
     // A module row holds no resource bytes, so saving is not offered on it even with the shell ready.
-    expect(menuKeys(richContext(moduleNode, { onSaveResource: vi.fn() }))).not.toContain('save-resource')
+    expect(menuKeys(richContext(moduleNode, { onSaveResource: vi.fn(), resourceNames: one }))).not.toContain('save-resource')
   })
 
   it('offers "Move Types to Empty Namespace" only where there is an empty namespace to move into', () => {
@@ -346,6 +405,22 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(ctx.copyText).toHaveBeenCalledWith('System.Void System.Console::WriteLine(System.String)')
     runEntry(ctx, 'search-msdn')
     expect(ctx.onOpenUrl).toHaveBeenCalledWith('https://learn.microsoft.com/dotnet/api/System.Console.WriteLine')
+
+    // A reference row carries the full name and the page of what it names, which the backend worked out.
+    const baseType: TreeNode = { id: 'n-base', kind: 'basetype', label: 'Shape', hasChildren: true, metadataToken: 0x01000005, fullName: 'Ns.Shape', msdnName: 'Ns.Shape' }
+    const fromBase = richContext(baseType)
+    runEntry(fromBase, 'copy-md-token')
+    expect(fromBase.copyText).toHaveBeenCalledWith('0x01000005')
+    runEntry(fromBase, 'copy-full-name')
+    expect(fromBase.copyText).toHaveBeenCalledWith('Ns.Shape')
+
+    // Search MSDN opens a page for every selected row that has one; the copies take the first selected row.
+    const several = richContext(typeNode, { selection: [methodNode, typeNode, moduleNode] })
+    runEntry(several, 'search-msdn')
+    expect(several.onOpenUrl).toHaveBeenCalledTimes(2)
+    expect(several.onOpenUrl).toHaveBeenLastCalledWith('https://learn.microsoft.com/dotnet/api/System.Console')
+    runEntry(several, 'copy-md-token')
+    expect(several.copyText).toHaveBeenCalledWith('0x06000001')
   })
 
   it('offers Add Method Breakpoint on the rows dnSpy reads methods off, and hands it the row', () => {
@@ -365,11 +440,16 @@ describe('buildAssemblyExplorerMenuItems', () => {
   })
 
   it('offers no full name on a row that has none', () => {
-    const keys = menuKeys(richContext(moduleNode))
+    // A namespace stands for no metadata row: no token and no full name, though its page can be searched.
+    const keys = menuKeys(richContext({ ...namespaceNode, msdnName: 'System' }))
     expect(keys).not.toContain('copy-full-name')
-    expect(keys).not.toContain('search-msdn')
-    // A module still carries a token, which is what its copy command writes.
-    expect(keys).toContain('copy-md-token')
+    expect(keys).not.toContain('copy-md-token')
+    expect(keys).toContain('search-msdn')
+    // A module is a metadata row, so both copies are offered — dnSpy writes its name — but there is no page for it.
+    const moduleKeys = menuKeys(richContext(moduleNode))
+    expect(moduleKeys).toContain('copy-full-name')
+    expect(moduleKeys).toContain('copy-md-token')
+    expect(moduleKeys).not.toContain('search-msdn')
   })
 
   it('hands each command the node the menu was opened on', () => {

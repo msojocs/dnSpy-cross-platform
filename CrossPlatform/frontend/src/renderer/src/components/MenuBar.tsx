@@ -29,7 +29,7 @@ interface MenuBarProps {
   canShowCode: boolean
   debugAvailable: boolean
   debugState: 'inactive' | 'starting' | 'running' | 'stopped'
-  recentWorkspaces: string[][]
+  recentFiles: string[]
   canUndo: boolean
   canRedo: boolean
   theme: ThemeName
@@ -40,8 +40,12 @@ interface MenuBarProps {
   elevated: boolean
   visibleToolWindows: ReadonlySet<string>
   onOpen(): void
-  onOpenRecent(paths: string[]): void
+  onOpenFromGac(): void
+  onOpenList(): void
+  onOpenRecent(path: string): void
   onCloseAll(): void
+  onCloseAllFramework(): void
+  onCloseAllMissing(): void
   /** Whether an edit is unsaved, which is what enables the File menu's Save and Save All. */
   dirty: boolean
   onSave(): void
@@ -189,7 +193,7 @@ export const MenuBar = ({
   canShowCode,
   debugAvailable,
   debugState,
-  recentWorkspaces,
+  recentFiles,
   canUndo,
   canRedo,
   theme,
@@ -198,8 +202,12 @@ export const MenuBar = ({
   fullScreen,
   elevated,
   onOpen,
+  onOpenFromGac,
+  onOpenList,
   onOpenRecent,
   onCloseAll,
+  onCloseAllFramework,
+  onCloseAllMissing,
   dirty,
   onSave,
   onSaveModule,
@@ -388,14 +396,18 @@ export const MenuBar = ({
       hasModule,
       dirty,
       elevated,
-      recentWorkspaces,
+      recentFiles,
       onOpen,
+      onOpenFromGac,
+      onOpenList,
       onOpenRecent,
       onSave,
       onSaveModule,
       onSaveAll,
       onReloadAll,
       onCloseAll,
+      onCloseAllFramework,
+      onCloseAllMissing,
       onSortAssemblies,
       onRestartAsAdministrator,
       onQuit,

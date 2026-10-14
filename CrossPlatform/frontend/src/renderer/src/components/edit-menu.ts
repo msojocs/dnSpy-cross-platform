@@ -161,7 +161,8 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: (ctx) => ctx.selectionKind !== undefined },
 
   // 2000 — AsmEditor: Delete
-  { group: GROUP_DELETE, order: 0, label: (ctx) => ctx.t('Remove {name}', { name: ctx.selectionLabel ?? '' }), shortcut: 'Del', visible: kindIs('module') },
+  // RemoveAssemblyCommand.EditMenuCommand: the selection's documents, which are the tree's root rows.
+  { group: GROUP_DELETE, order: 0, label: (ctx) => ctx.t('Remove {name}', { name: ctx.selectionLabel ?? '' }), shortcut: 'Del', visible: kindIs('assembly', 'pedocument', 'elfdocument', 'unknowndocument'), action: deleteSelected },
   { group: GROUP_DELETE, order: 10, label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
   { group: GROUP_DELETE, order: 20, label: deleteLabel, shortcut: 'Del', visible: kindIs('type'), action: deleteSelected },
   { group: GROUP_DELETE, order: 30, label: deleteLabel, shortcut: 'Del', visible: kindIs('method'), action: deleteSelected },

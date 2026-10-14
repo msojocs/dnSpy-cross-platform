@@ -14,6 +14,9 @@ export interface OpenedModule {
   name: string
   path: string
   hasPdb: boolean
+  /** A file the workspace opened by itself to resolve a reference — dnSpy's auto-loaded documents, which a
+   *  reload only brings back when a tab still shows something of them. */
+  autoLoaded?: boolean
 }
 
 export interface OpenWorkspaceResponse {
@@ -58,6 +61,20 @@ export interface TreeNode {
    *  writes in one plain color. */
   labelParts?: TextPart[] | null
   returnTypeParts?: TextPart[] | null
+  /** The row's tooltip the way its WPF node writes one, a line per line. */
+  toolTip?: string | null
+  /** The address "Search MSDN" opens, present only on the public members and namespaces dnSpy offers it on. */
+  msdnName?: string | null
+  /** A member the C# and VB decompilers hide unless "show hidden compiler generated types and methods" is on. */
+  compilerGenerated?: boolean
+  /** A root the workspace opened by itself to resolve a reference, rather than one the user opened. */
+  autoLoaded?: boolean
+  /** The two parts an assembly row may write after its name, which the Assembly Explorer options pick from. */
+  assemblyVersion?: string | null
+  publicKeyToken?: string | null
+  /** What "Copy Full Name" writes: the full name of the metadata row the node stands for — an assembly's
+   *  display name, a module's name, a type's, a member's or a reference's. Absent where dnSpy has no such name. */
+  fullName?: string | null
 }
 
 /** A stretch of a row's text, and the color class dnSpy's syntax highlighting writes it in — "keyword",
@@ -92,6 +109,10 @@ export interface FindByTokenResponse {
 export interface RemoveModuleResponse {
   removedNodeIds: string[]
   roots: TreeNode[]
+  /** The edit history after the removal. A document an edit in the undo history touched is removed by an
+   *  edit of its own, which Undo reverses — dnSpy's RemoveAssemblyCommand. */
+  canUndo?: boolean
+  canRedo?: boolean
 }
 
 /** What is left after several assemblies are removed at once — dnSpy's Remove Assembly over a multiple
@@ -99,12 +120,14 @@ export interface RemoveModuleResponse {
 export interface RemoveModulesResponse {
   removedNodeIds: string[]
   roots: TreeNode[]
+  canUndo?: boolean
+  canRedo?: boolean
 }
 
 /** The modules that hold edits that have not been saved — what dnSpy asks about before Reload All. */
 export interface ModifiedModulesResponse {
-  /** The root node ids of modified modules, subset of the ids given in the request. */
-  modifiedNodeIds: string[]
+  /** The files of the modified modules, among the ones the request named (every module when it named none). */
+  paths: string[]
 }
 
 /** The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the documents
@@ -119,18 +142,23 @@ export interface CloseCandidatesResponse {
  *  one that activates to somewhere else. */
 export interface ActivateNodeResponse {
   nodeId: string | null
-  /** The module that was auto-loaded to follow a reference into it, which the client adds to its roots. */
-  addedModule: OpenedModule | null
+  /** Whether the workspace had to open an assembly to reach the target, so the roots are worth reading again. */
+  rootsChanged: boolean
 }
 
-/** Dropping files on the tree: the modules that were opened and where they went. `index` is where
- *  the first one was inserted among the roots; `-1` means they were appended. */
+/** The Assembly Explorer's dragged-items filter, which decides which of several dropped files are let in. */
+export type DropFilter = 'all' | 'allSupported' | 'dotNetOnly'
+
+/** Dropping files on the tree: the workspace (made by the drop when there was none), the modules it now
+ *  holds, the files it added, and the root to select — the first new one, or else a dropped file that was
+ *  open already. `allFiltered` says the filter turned every new file away. */
 export interface DropFilesResponse {
   workspaceId: string | null
-  stateId: string | null
   modules: OpenedModule[]
-  roots: TreeNode[]
-  index: number
+  addedPaths: string[]
+  selectNodeId: string | null
+  allFiltered: boolean
+  stateId: string | null
 }
 
 /** Every assembly in the global assembly caches on this machine. */
@@ -152,16 +180,31 @@ export interface GacDetailsResponse {
   fileVersion: string | null
 }
 
-/** One resource to save, or one entry inside a .resources file. */
-export interface ResourceItemDto {
-  nodeId: string
+/** A list of files to open together, named the way dnSpy's Open List names one. */
+export interface DocumentListDto {
   name: string
-  base64Data: string
+  files: string[]
+}
+
+export interface DocumentListsResponse {
+  lists: DocumentListDto[]
 }
 
 /** The bytes several resource nodes hold — what Save Resource writes, one file per item. */
 export interface ResourceItemsResponse {
-  items: ResourceItemDto[]
+  items: ResourceDataResponse[]
+}
+
+/** The names the resource nodes save under with Save (`names`) and Raw Save (`rawNames`), without the bytes —
+ *  what the Save commands' headers count, and whether their "use sub dirs" variants are offered. */
+export interface ResourceItemNamesResponse {
+  names: string[]
+  rawNames: string[]
+}
+
+/** The node a command line's `--select` names in the files it opened, or null when it names none. */
+export interface SelectMemberResponse {
+  nodeId: string | null
 }
 
 /** The resource node that holds the data a Resources property or method reads — dnSpy's Go to
@@ -535,6 +578,9 @@ export interface EditCommitResponse {
   changedNodeIds: string[]
   canUndo: boolean
   canRedo: boolean
+  /** Every module the workspace holds, sent only when the step changed which documents the tree holds —
+   *  undoing or redoing a removal dnSpy recorded in the history. */
+  modules?: OpenedModule[] | null
 }
 
 export interface SaveModuleResponse {
@@ -1120,11 +1166,13 @@ export interface ScriptEvaluateResponse {
 
 export type UiLocale = 'en' | 'zh-CN'
 
-/** What the process was started with: files named on the command line, and whether the session from the
- * last run should be left alone (`--no-load-files`). */
+/** What the process was started with — dnSpy's AppCommandLineArgs, the part that is the tree's: the files named
+ * on the command line, the member `--select` names in them, and whether the session from the last run should be
+ * left alone (`--no-load-files`). */
 export interface StartupOptions {
   initialPaths: string[]
   noLoadFiles: boolean
+  selectMember?: string
 }
 
 export interface DnSpyApi {
@@ -1138,9 +1186,10 @@ export interface DnSpyApi {
    * instead of replacing it. Paths already open come back in `skipped`. */
   addModules(workspaceId: string, paths: string[]): Promise<AddModulesResponse>
   closeWorkspace(workspaceId: string): Promise<void>
-  /** Drops every assembly and loads the same files again, discarding edits — dnSpy's Reload All
-   * Assemblies. The workspace keeps its id, but every node id the client held is stale. */
-  reloadWorkspace(workspaceId: string): Promise<OpenWorkspaceResponse>
+  /** Drops every assembly and loads the files the user opened again, discarding edits — dnSpy's Reload All
+   * Assemblies. Of the files the workspace opened by itself only `autoLoadedPaths` come back, auto-loaded as they
+   * were: the ones a tab still shows something of. The workspace keeps its id, but every node id is stale. */
+  reloadWorkspace(workspaceId: string, autoLoadedPaths?: string[]): Promise<OpenWorkspaceResponse>
   /** Reorders the root nodes by name and answers with the tree in its new order — dnSpy's Sort Assemblies. */
   sortAssemblies(workspaceId: string): Promise<TreeNodesResponse>
   /** Removes one assembly from the tree — dnSpy's Remove Assembly — and answers with what is left. */
@@ -1160,13 +1209,23 @@ export interface DnSpyApi {
   activateNode(workspaceId: string, nodeId: string): Promise<ActivateNodeResponse>
   /** Opens the files dropped on the tree at the place they were dropped, filtered the way the
    *  Assembly Explorer's "dragged items" option says. */
-  dropFiles(workspaceId: string | null, paths: string[], index: number, filter: string): Promise<DropFilesResponse>
+  dropFiles(workspaceId: string | null, paths: string[], index: number, filter: DropFilter): Promise<DropFilesResponse>
+  /** The file a dropped `File` stands for. Electron no longer puts the path on the object itself, so the
+   *  preload asks `webUtils` for it; a file that is not on disk answers with an empty string. */
+  pathForFile(file: File): string
   /** Every assembly in the global assembly caches on this machine. */
   listGacAssemblies(): Promise<GacListResponse>
   /** The company and file version of one GAC file, which the dialog shows for its selection. */
   getGacDetails(path: string): Promise<GacDetailsResponse>
+  /** The lists Open List offers beside the user's own: one per .NET shared framework on this machine. */
+  listDefaultDocumentLists(): Promise<DocumentListsResponse>
   /** The bytes several resource nodes hold — what Save Resource writes, one file per item. */
   getResourceItems(workspaceId: string, nodeIds: string[], raw: boolean): Promise<ResourceItemsResponse>
+  /** The names those files would have, both ways, for the Save commands' headers. */
+  getResourceItemNames(workspaceId: string, nodeIds: string[]): Promise<ResourceItemNamesResponse>
+  /** The node a command line's `--select` names in the files at `paths`: a token, "N:" and a namespace, or an
+   *  XML documentation id. */
+  selectMember(workspaceId: string, paths: string[], member: string): Promise<SelectMemberResponse>
   /** The resource node that holds the data a Resources property or method reads — dnSpy's Go to Resource. */
   findResource(workspaceId: string, nodeId: string): Promise<FindResourceResponse>
   /**
@@ -1184,12 +1243,15 @@ export interface DnSpyApi {
   /** Shows a file in the desktop's file manager — dnSpy's Open Containing Folder. */
   showItemInFolder(path: string): Promise<void>
   /**
-   * Writes one resource node's bytes to a file the user picks, and answers with the path it wrote — or
-   * nothing when the dialog was cancelled. `raw` asks for the resource's own bytes rather than the value
-   * a .resources entry decodes to; the port holds no separate serialized form, so both write the same
-   * bytes today, and the flag is kept because dnSpy's two commands differ.
+   * dnSpy's Save and Raw Save over the selected resources: one file goes through a save dialog, several into
+   * a folder the user picks. A .resources file saves as its entries, so even one resource can be several
+   * files; `raw` writes an entry's serialized bytes instead of its value, and `useSubDirs` keeps the directories
+   * in the names when several go into a folder. Answers the files written — none when a dialog was cancelled.
    */
-  saveResource(workspaceId: string, nodeId: string, raw: boolean): Promise<string | undefined>
+  saveResource(workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs?: boolean): Promise<string[]>
+  /** dnSpy's "The file hasn't been saved yet. Do you want to save it before continuing?" for `count` files: save
+   *  them first, let them go unsaved, or call the command off. */
+  askSaveModified(count: number): Promise<'save' | 'discard' | 'cancel'>
   getRoots(workspaceId: string): Promise<TreeNodesResponse>
   getChildren(workspaceId: string, nodeId: string): Promise<TreeNodesResponse>
   getNode(workspaceId: string, nodeId: string): Promise<TreeNode>

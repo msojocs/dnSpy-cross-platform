@@ -123,6 +123,15 @@ public static class RpcMethods {
 	public const string ResourceGetItems = "resource/getItems";
 	/// <summary>The .resources entry a resource accessor reads — dnSpy's Go to Resource.</summary>
 	public const string ResourceFind = "resource/find";
+	/// <summary>The lists dnSpy's Open List dialog offers beside the ones the user saved: one per .NET shared
+	/// framework installed on this machine.</summary>
+	public const string DocumentListDefaults = "documentList/defaults";
+	/// <summary>The names the resource nodes save under, both ways — what the Save commands' headers count
+	/// and whether the "use sub dirs" variants are offered.</summary>
+	public const string ResourceGetItemNames = "resource/getItemNames";
+	/// <summary>The node a command line's <c>--select</c> names in the files it opened: a metadata token, or
+	/// an XML documentation id ("T:", "M:", "N:" …).</summary>
+	public const string TreeSelectMember = "tree/selectMember";
 }
 
 public static class ErrorCodes {
@@ -193,7 +202,9 @@ public sealed record TreeNodesResponse(IReadOnlyList<TreeNodeDto> Nodes);
 /// the C# and VB decompilers hide unless their "show hidden compiler generated types and methods" option is
 /// on. <paramref name="AutoLoaded"/> marks a root the workspace opened by itself to resolve a reference,
 /// rather than one the user opened. <paramref name="AssemblyVersion"/> and <paramref name="PublicKeyToken"/>
-/// are the two parts an assembly row may write after its name, which the client's options pick from.</para>
+/// are the two parts an assembly row may write after its name, which the client's options pick from.
+/// <paramref name="FullName"/> is what "Copy Full Name" writes — the full name of the metadata row the node
+/// stands for, present only on the rows dnSpy offers that command on.</para>
 /// </summary>
 public sealed record TreeNodeDto(
 	string Id,
@@ -212,7 +223,8 @@ public sealed record TreeNodeDto(
 	bool CompilerGenerated = false,
 	bool AutoLoaded = false,
 	string? AssemblyVersion = null,
-	string? PublicKeyToken = null);
+	string? PublicKeyToken = null,
+	string? FullName = null);
 
 public enum DecompilerLanguage {
 	CSharp,
@@ -488,7 +500,11 @@ public sealed record ReplaceResourceRequest(
 
 public sealed record EditTransactionRequest(string WorkspaceId, string TransactionId);
 
-public sealed record EditCommitResponse(int Version, string StateId, IReadOnlyList<string> ChangedNodeIds, bool CanUndo, bool CanRedo);
+/// <summary>
+/// The history after an edit, an undo or a redo. <paramref name="Modules"/> is only set when the step changed
+/// which documents the tree holds — undoing or redoing a removal — and is then every module the workspace holds.
+/// </summary>
+public sealed record EditCommitResponse(int Version, string StateId, IReadOnlyList<string> ChangedNodeIds, bool CanUndo, bool CanRedo, IReadOnlyList<OpenedModule>? Modules = null);
 
 public sealed record SaveModuleRequest(string WorkspaceId, string ModuleId, string DestinationPath, bool Overwrite = false);
 
@@ -1158,7 +1174,12 @@ public sealed record FindByTokenResponse(string? NodeId, string? Error = null);
 /// documents and a selection by node id, so it needs to be told which of them the removal took; the ids
 /// are never handed out again, so one the client still holds names nothing rather than something else.
 /// </summary>
-public sealed record RemoveModuleResponse(IReadOnlyList<string> RemovedNodeIds, IReadOnlyList<TreeNodeDto> Roots);
+/// <summary>
+/// What a removal took out of the tree. A document an edit in the undo history touched is not let go: its
+/// removal is recorded as an edit of its own, which Undo reverses, the way dnSpy's RemoveAssemblyCommand
+/// does — <see cref="CanUndo"/> and <see cref="CanRedo"/> are the history after the removal.
+/// </summary>
+public sealed record RemoveModuleResponse(IReadOnlyList<string> RemovedNodeIds, IReadOnlyList<TreeNodeDto> Roots, bool CanUndo = false, bool CanRedo = false);
 
 /// <summary>Asks for the bytes one resource node holds, for dnSpy's two Save commands. The node may be
 /// the resource itself or a single entry inside a .resources file.</summary>
@@ -1474,6 +1495,12 @@ public sealed record GacDetailsRequest(string Path);
 /// <summary>Who made a GAC file and its file version, the two lines dnSpy's dialog adds for its selection.</summary>
 public sealed record GacDetailsResponse(string? CreatedBy, string? FileVersion);
 
+/// <summary>A list of files to open together, named the way dnSpy's DotnetReferenceFileFinder names one:
+/// "Microsoft.NETCore.App 10.0.2 (x64)". The files are sorted by name.</summary>
+public sealed record DocumentListDto(string Name, IReadOnlyList<string> Files);
+
+public sealed record DocumentListsResponse(IReadOnlyList<DocumentListDto> Lists);
+
 /// <summary>
 /// The files the resource nodes save as. <see cref="Raw"/> is dnSpy's Raw Save: the bytes as they are stored —
 /// the whole .resources file, an entry the way the resource writer encodes it. Without it an entry is saved as
@@ -1493,3 +1520,24 @@ public sealed record FindResourceRequest(string WorkspaceId, string? NodeId, str
 
 /// <summary>The .resources entry the member reads, or null when it reads none this workspace can find.</summary>
 public sealed record FindResourceResponse(string? NodeId);
+
+/// <summary>The names the nodes save under with dnSpy's Save (<see cref="Names"/>) and Raw Save
+/// (<see cref="RawNames"/>), without the bytes — the menu counts them and looks for a directory in them.</summary>
+public sealed record ResourceItemNamesResponse(IReadOnlyList<string> Names, IReadOnlyList<string> RawNames);
+
+/// <summary>
+/// Reloads every file the user opened. A file the workspace opened by itself to resolve a reference comes back
+/// only when it is one of <see cref="AutoLoadedPaths"/> — the ones a tab still shows something of, which dnSpy's
+/// DocumentListLoader adds back so the tab can be restored.
+/// </summary>
+public sealed record ReloadWorkspaceRequest(string WorkspaceId, IReadOnlyList<string>? AutoLoadedPaths = null);
+
+/// <summary>
+/// The member a command line's <c>--select</c> names, looked up in the modules of the files it opened — dnSpy's
+/// AppCommandLineArgsHandler: a number (decimal, or hexadecimal after "0x") is a token in the first of them; "N:"
+/// names a namespace; anything else is an XML documentation id, read the Roslyn way and then the MSVC way.
+/// </summary>
+public sealed record SelectMemberRequest(string WorkspaceId, IReadOnlyList<string> Paths, string Member);
+
+/// <summary>The node to follow, or null when the member names nothing in those files.</summary>
+public sealed record SelectMemberResponse(string? NodeId);

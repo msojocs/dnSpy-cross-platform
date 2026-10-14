@@ -59,7 +59,8 @@ describe('search store', () => {
 
   it('asks for what the settings and the tree\'s selection say', () => {
     saveAppOptions({ ...loadAppOptions(), search: { ...loadAppOptions().search, searchType: 'literal', location: 'selectedType', caseSensitive: true, searchFrameworkAssemblies: false } })
-    useAppStore.setState({ selectedNode: { id: 'n7', kind: 'type', label: 'T', hasChildren: false } })
+    const selectedNode = { id: 'n7', kind: 'type', label: 'T', hasChildren: false }
+    useAppStore.setState({ selectedNode, selectedNodes: [selectedNode] })
     useSearchStore.setState({ query: '42' })
     state().restart()
     expect(search).toHaveBeenCalledWith('ws', {

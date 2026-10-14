@@ -194,7 +194,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.SaveAllModulesAsync(cancellationToken), cancellationToken);
 
 	public Task<OpenWorkspaceResponse> ReloadAsync(WorkspaceRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ReloadAsync(cancellationToken), cancellationToken);
+		ReloadAsync(new ReloadWorkspaceRequest(request.WorkspaceId), cancellationToken);
+
+	public Task<OpenWorkspaceResponse> ReloadAsync(ReloadWorkspaceRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ReloadAsync(request.AutoLoadedPaths, cancellationToken), cancellationToken);
 
 	public Task<TreeNodesResponse> SortAssembliesAsync(WorkspaceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.SortAssemblies(), cancellationToken);
@@ -1155,12 +1158,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		IReadOnlyList<string> DropModule(ModuleEntry module) {
 			// The net modules hanging off the assembly go with it, and their rows with them.
 			var owned = netModules.Values.Where(entry => entry.Id == module.Id).ToArray();
-			foreach (var netModule in owned) {
+			foreach (var netModule in owned)
 				netModules.Remove(netModule.Path);
-				namespaceIndexes.Remove(netModule.Path);
-				typeIndexes.Remove(netModule.Path);
-				typeReferenceIndexes.Remove(netModule.Path);
-			}
 			// The module's own nodes are the ones whose owner is this entry: its assembly root, its module
 			// row, and everything the tree has listed under them so far.
 			var removed = nodes.Values
@@ -1170,6 +1169,21 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			foreach (var id in removed) {
 				nodeIdsByKey.Remove(nodes[id].Key);
 				nodes.Remove(id);
+			}
+			ForgetModuleCaches(module, owned);
+			return removed;
+		}
+
+		/// <summary>
+		/// Forgets what the workspace worked out from a module that leaves the tree — its indexes, its reference
+		/// resolver and the references it resolved, and the module cached under its file for anything that reached
+		/// it through a reference. All of it is rebuilt on demand, should the module come back.
+		/// </summary>
+		void ForgetModuleCaches(ModuleEntry module, IReadOnlyList<ModuleEntry> netModulesOfIt) {
+			foreach (var netModule in netModulesOfIt) {
+				namespaceIndexes.Remove(netModule.Path);
+				typeIndexes.Remove(netModule.Path);
+				typeReferenceIndexes.Remove(netModule.Path);
 			}
 			namespaceIndexes.Remove(module.Path);
 			typeIndexes.Remove(module.Path);
@@ -1186,7 +1200,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// The debug symbols are per module file, and the decompiler's statement map is keyed by state as
 			// well as by node, so dropping the lot is the safe half of the trade: the next read rebuilds them.
 			symbols.Invalidate();
-			return removed;
 		}
 
 		/// <summary>
@@ -1223,6 +1236,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				throw new RpcException(ErrorCodes.InvalidParams, "The selected node is not part of a managed assembly.");
 			if (!TryParseToken(request.Token, out var token))
 				throw new RpcException(ErrorCodes.InvalidParams, "A metadata token is a 32-bit value such as 0x06000001.");
+			return FindTokenNode(module, token);
+		}
+
+		/// <summary>The node a token of the module names, a reference followed to its definition — or why none.</summary>
+		FindByTokenResponse FindTokenNode(ModuleEntry module, uint token) {
 			IMDTokenProvider? provider;
 			try {
 				provider = module.Module.ResolveToken(token);
@@ -1651,20 +1669,17 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// </remarks>
 		sealed class AssemblyReferenceResolver : IDisposable {
 			readonly ICSharpCode.Decompiler.Metadata.PEFile file;
-			readonly ICSharpCode.Decompiler.Metadata.UniversalAssemblyResolver resolver;
+			readonly GacFallbackAssemblyResolver resolver;
 
 			public AssemblyReferenceResolver(string modulePath) {
 				file = new ICSharpCode.Decompiler.Metadata.PEFile(modulePath, PEStreamOptions.PrefetchMetadata);
-				resolver = new ICSharpCode.Decompiler.Metadata.UniversalAssemblyResolver(
-					modulePath,
-					throwOnError: false,
-					targetFramework: ICSharpCode.Decompiler.Metadata.DotNetCorePathFinderExtensions.DetectTargetFrameworkId(file),
-					runtimePack: ICSharpCode.Decompiler.Metadata.DotNetCorePathFinderExtensions.DetectRuntimePack(file));
+				resolver = GacFallbackAssemblyResolver.Create(modulePath, file, throwOnError: false);
 			}
 
-			/// <summary>The file the reference resolves to, or null when nothing provides it. An assembly
-			/// the search cannot make sense of is the same as one it cannot find: neither has anything to
-			/// show, and letting it throw would fail the whole tree listing over one bad reference.</summary>
+			/// <summary>The file the reference resolves to, or null when nothing provides it — the global
+			/// assembly caches last, the way dnSpy's resolver falls back on them. An assembly the search cannot
+			/// make sense of is the same as one it cannot find: neither has anything to show, and letting it
+			/// throw would fail the whole tree listing over one bad reference.</summary>
 			public string? FindFile(AssemblyRef reference) {
 				try {
 					return resolver.FindAssemblyFile(new ReferenceName(reference));
@@ -2345,7 +2360,21 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		internal static CSharpDecompilerSession CreateCSharpDecompilerSession(ModuleEntry module, DecompilerSettings settings, CancellationToken cancellationToken) {
 			if (!module.IsModified) {
-				var decompiler = new CSharpDecompiler(module.Path, settings) { CancellationToken = cancellationToken };
+				// CSharpDecompiler(string, DecompilerSettings) spelled out, so the resolver it builds can fall back
+				// on the global assembly caches the way dnSpy's does.
+				settings.LoadInMemory = true;
+				var file = new ICSharpCode.Decompiler.Metadata.PEFile(
+					module.Path,
+					new FileStream(module.Path, FileMode.Open, FileAccess.Read),
+					PEStreamOptions.PrefetchEntireImage,
+					settings.ApplyWindowsRuntimeProjections ? System.Reflection.Metadata.MetadataReaderOptions.Default : System.Reflection.Metadata.MetadataReaderOptions.None);
+				var fileResolver = GacFallbackAssemblyResolver.Create(
+					module.Path,
+					file,
+					settings.ThrowOnAssemblyResolveErrors,
+					PEStreamOptions.PrefetchMetadata,
+					settings.ApplyWindowsRuntimeProjections ? System.Reflection.Metadata.MetadataReaderOptions.Default : System.Reflection.Metadata.MetadataReaderOptions.None);
+				var decompiler = new CSharpDecompiler(file, fileResolver, settings) { CancellationToken = cancellationToken };
 				return new CSharpDecompilerSession(decompiler);
 			}
 
@@ -2366,11 +2395,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					snapshotStream,
 					PEStreamOptions.PrefetchEntireImage);
 				try {
-					var resolver = new ICSharpCode.Decompiler.Metadata.UniversalAssemblyResolver(
-						module.Path,
-						throwOnError: false,
-						targetFramework: ICSharpCode.Decompiler.Metadata.DotNetCorePathFinderExtensions.DetectTargetFrameworkId(snapshotFile),
-						runtimePack: ICSharpCode.Decompiler.Metadata.DotNetCorePathFinderExtensions.DetectRuntimePack(snapshotFile));
+					var resolver = GacFallbackAssemblyResolver.Create(module.Path, snapshotFile, throwOnError: false);
 					var decompiler = new CSharpDecompiler(snapshotFile, resolver, settings) { CancellationToken = cancellationToken };
 					return new CSharpDecompilerSession(decompiler, snapshotFile, snapshotStream);
 				}
@@ -3414,7 +3439,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			stateId,
 			operations.Select(operation => operation.NodeId).Distinct(StringComparer.Ordinal).ToArray(),
 			undoHistory.Count > 0,
-			redoHistory.Count > 0);
+			redoHistory.Count > 0,
+			operations.Any(operation => operation.ChangesRoots) ? CreateOpenResponse().Modules : null);
 
 		public async Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, CancellationToken cancellationToken) {
 			var module = GetModule(request.ModuleId);
@@ -3500,17 +3526,34 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// it has to read the tree again. Node ids are not numbered from zero again either: a tab the client
 		/// has not reset yet would otherwise match a node that is not the one it named.
 		/// </summary>
-		public async Task<OpenWorkspaceResponse> ReloadAsync(CancellationToken cancellationToken) {
-			var paths = OrderedEntries().Select(entry => entry.Path).ToArray();
+		/// <summary>
+		/// dnSpy's Reload All Assemblies (DocumentListLoader.Reload): every file the user opened, read again in the
+		/// order the tree shows them, and after them the files the workspace had opened by itself that are named in
+		/// <paramref name="autoLoadedPaths"/> — the ones a tab still shows something of, which come back auto-loaded
+		/// as they were so the tab can be restored. Every other auto-loaded file is left to be found again when a
+		/// reference asks for it. Every node id goes with the reload, and so does the edit history.
+		/// </summary>
+		public async Task<OpenWorkspaceResponse> ReloadAsync(IReadOnlyList<string>? autoLoadedPaths, CancellationToken cancellationToken) {
+			var entries = OrderedEntries().ToArray();
+			var paths = entries.Where(entry => !IsAutoLoaded(entry)).Select(entry => entry.Path).ToArray();
+			var kept = entries
+				.Where(entry => IsAutoLoaded(entry) && autoLoadedPaths?.Any(path => SameFile(Path.GetFullPath(path), entry.Path)) == true)
+				.Select(entry => entry.Path)
+				.ToArray();
 			modules.Clear();
 			peModules.Clear();
 			elfFiles.Clear();
 			unknownFiles.Clear();
+			autoLoadedRoots.Clear();
+			netModules.Clear();
 			referenceModules.Clear();
+			foreach (var resolver in referenceResolvers.Values)
+				resolver?.Dispose();
 			referenceResolvers.Clear();
 			referencePaths.Clear();
 			namespaceIndexes.Clear();
 			typeIndexes.Clear();
+			typeReferenceIndexes.Clear();
 			nodes.Clear();
 			nodeIdsByKey.Clear();
 			transactions.Clear();
@@ -3524,6 +3567,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NoteModelChanged();
 			symbols.Invalidate();
 			await LoadModulesAsync(paths, cancellationToken).ConfigureAwait(false);
+			await LoadModulesAsync(kept, cancellationToken, autoLoaded: true).ConfigureAwait(false);
 			if (modules.Count == 0 && peModules.Count == 0 && elfFiles.Count == 0 && unknownFiles.Count == 0)
 				throw new RpcException(ErrorCodes.FileNotFound, "None of the assemblies could be reloaded.");
 			return CreateOpenResponse();
@@ -3758,8 +3802,13 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// the parameter list — dnSpy's tab for one reads "name(params) : return" — while every other
 		/// kind keeps what the tree shows.
 		/// </summary>
-		string GetDocumentTitle(NodeEntry node) =>
-			node.Kind == NodeKind.Method && node.Value is MethodDef method ? GetMethodTabTitle(method) : GetLabel(node);
+		string GetDocumentTitle(NodeEntry node) => node switch {
+			{ Kind: NodeKind.Method, Value: MethodDef method } => GetMethodTabTitle(method),
+			// A tab is written the way the row is, and the row writes an assembly's version by default
+			// (DocumentTreeViewSettings.ShowAssemblyVersion); the label leaves it to the client's options.
+			{ Kind: NodeKind.Assembly, Value: AssemblyDef { Version: { } version } } => $"{GetLabel(node)} ({version})",
+			_ => GetLabel(node),
+		};
 
 		static string FormatParameterList(MethodDef method) => $"({string.Join(", ", method.Parameters.Where(p => !p.IsHiddenThisParameter).Select(p => p.Type.TypeName))})";
 
@@ -3780,7 +3829,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			IsCompilerGenerated(node),
 			node.Module is IModuleEntry entry && entry.Id == node.Id && IsAutoLoaded(entry),
 			node.Kind == NodeKind.Assembly && node.Value is AssemblyDef { Version: { } version } ? version.ToString() : null,
-			node.Kind == NodeKind.Assembly && node.Value is AssemblyDef assembly ? PublicKeyTokenText(assembly) : null);
+			node.Kind == NodeKind.Assembly && node.Value is AssemblyDef assembly ? PublicKeyTokenText(assembly) : null,
+			GetFullName(node));
 
 		/// <summary>The public key token an assembly row may write after its version: the token, "null" when it
 		/// has none — dnSpy's NodeFormatter only writes one that is not empty, which the client decides.</summary>
@@ -4504,7 +4554,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			public void Add(string nodeId, IModuleEntry module, Func<Action> apply) => Operations.Add(new EditOperation(nodeId, module, apply));
 		}
 
-		sealed record EditOperation(string NodeId, IModuleEntry Module, Func<Action> Apply);
+		/// <summary>One step of an edit. <paramref name="ChangesRoots"/> marks one that adds or takes away a root —
+		/// a removal recorded in the history — after which the client reads the module list again.</summary>
+		sealed record EditOperation(string NodeId, IModuleEntry Module, Func<Action> Apply, bool ChangesRoots = false);
 		sealed record EditHistoryEntry(IReadOnlyList<EditOperation> Operations, IReadOnlyList<Action> UndoActions, string BeforeStateId, string AfterStateId);
 
 		internal sealed class SpanTextOutput(Func<object, SpanTarget?> resolveTarget) : ITextOutput {

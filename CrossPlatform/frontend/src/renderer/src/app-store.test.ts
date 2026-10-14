@@ -2,7 +2,7 @@ import { Actions, DockLocation, Model, TabSetNode } from 'flexlayout-react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, TextSpan, TreeNode } from '../../shared/protocol'
 import { isNavigableSpan } from '../../shared/protocol'
-import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadSession, methodBreakpointName, orderedDocumentKeys, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
+import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadRecentFiles, loadSession, methodBreakpointName, rememberRecentFiles, orderedDocumentKeys, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
 import type { Bookmark, DocumentState, LineBreakpoint, SessionSource } from './app-store'
 import { translate } from './localization'
 
@@ -2162,7 +2162,7 @@ describe('openPaths', () => {
       dirty: false,
       workspaceStateId: undefined,
       savedStateId: undefined,
-      recentWorkspaces: [],
+      recentFiles: [],
     })
   })
 
@@ -2673,5 +2673,189 @@ describe('file commands', () => {
     await expect(useAppStore.getState().saveModule()).resolves.toBe(false)
     expect(useAppStore.getState().dirty).toBe(true)
     expect(useAppStore.getState().error).toBe('disk full')
+  })
+})
+
+describe('Recent Files', () => {
+  const rootA = moduleNode('n1', '/A.dll')
+  const rootB = moduleNode('n2', '/B.dll')
+  const addModules = vi.fn()
+  const openWorkspace = vi.fn()
+  const getRoots = vi.fn()
+  const dropFiles = vi.fn()
+
+  beforeEach(() => {
+    localStorage.clear()
+    addModules.mockReset().mockResolvedValue({ modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')], skipped: [], stateId: 's2' })
+    openWorkspace.mockReset().mockResolvedValue({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')], stateId: 's1' })
+    getRoots.mockReset().mockResolvedValue({ nodes: [rootA, rootB] })
+    dropFiles.mockReset().mockResolvedValue({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')], addedPaths: ['/B.dll'], selectNodeId: 'n2', allFiltered: false, stateId: null })
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, addModules, openWorkspace, getRoots, dropFiles } })
+    useAppStore.setState({ workspaceId: undefined, workspaceGeneration: 0, modules: [], roots: [], selectedNode: undefined, selectedNodes: [], recentFiles: [], output: [] })
+  })
+
+  it('remembers each file the user opens, the last one first, and selects the last one\'s root', async () => {
+    await useAppStore.getState().openPaths(['/A.dll', '/B.dll'], { remember: true })
+    expect(useAppStore.getState().recentFiles).toEqual(['/B.dll', '/A.dll'])
+    expect(loadRecentFiles()).toEqual(['/B.dll', '/A.dll'])
+    // dnSpy's OpenDocumentsHelper selects the last file it loaded.
+    expect(useAppStore.getState().selectedNode).toBe(rootB)
+  })
+
+  it('leaves the list alone for the files a session or a list brings back', async () => {
+    await useAppStore.getState().openPaths(['/A.dll', '/B.dll'])
+    expect(useAppStore.getState().recentFiles).toEqual([])
+  })
+
+  it('opens a recent file into the tree as it stands and moves it to the top', async () => {
+    rememberRecentFiles(['/B.dll', '/A.dll'])
+    useAppStore.setState({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll')], roots: [rootA], recentFiles: loadRecentFiles() })
+    await useAppStore.getState().openRecentFile('/B.dll')
+    expect(addModules).toHaveBeenCalledWith('w1', ['/B.dll'])
+    expect(useAppStore.getState().recentFiles).toEqual(['/B.dll', '/A.dll'])
+    expect(useAppStore.getState().selectedNode).toBe(rootB)
+  })
+
+  it('keeps thirty files, each once whatever its case', () => {
+    const many = Array.from({ length: 40 }, (_, index) => `/f${index}.dll`)
+    expect(rememberRecentFiles(many)).toHaveLength(30)
+    expect(rememberRecentFiles(['/F39.DLL'])).toEqual(['/F39.DLL', ...many.slice(10, 39).reverse()])
+  })
+
+  it('carries over the file sets an older profile kept', () => {
+    localStorage.setItem('dnspy.recentWorkspaces.v1', JSON.stringify([['/new/A.dll', '/new/B.dll'], ['/old/C.dll']]))
+    expect(loadRecentFiles()).toEqual(['/new/A.dll', '/new/B.dll', '/old/C.dll'])
+  })
+
+  it('puts only the files a drop added on the list', async () => {
+    useAppStore.setState({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll')], roots: [rootA] })
+    await useAppStore.getState().dropFiles(['/A.dll', '/B.dll'], 1, 'allSupported')
+    expect(useAppStore.getState().recentFiles).toEqual(['/B.dll'])
+  })
+})
+
+describe('tree selection', () => {
+  const rows = ['a', 'b', 'c', 'd'].map((id) => treeNode(id, `key:${id}`))
+
+  beforeEach(() => useAppStore.setState({ selectedNode: undefined, selectedNodes: [], selectionAnchorId: undefined }))
+
+  it('spans a Shift range from the anchor, which the range leaves in place', () => {
+    const { selectNode } = useAppStore.getState()
+    selectNode(rows[1])
+    selectNode(rows[3], { range: true, rows })
+    expect(useAppStore.getState().selectedNodes.map((node) => node.id)).toEqual(['b', 'c', 'd'])
+    selectNode(rows[0], { range: true, rows })
+    expect(useAppStore.getState().selectedNodes.map((node) => node.id)).toEqual(['a', 'b'])
+    expect(useAppStore.getState().selectedNode).toBe(rows[0])
+    // Ctrl moves the anchor to the row it toggled.
+    selectNode(rows[3], { toggle: true })
+    selectNode(rows[2], { range: true, rows })
+    expect(useAppStore.getState().selectedNodes.map((node) => node.id)).toEqual(['c', 'd'])
+  })
+
+  it('selects every row it is given, keeping the row the commands act on', () => {
+    useAppStore.getState().selectNode(rows[2])
+    useAppStore.getState().selectNodes(rows, rows[2])
+    expect(useAppStore.getState().selectedNodes).toEqual(rows)
+    expect(useAppStore.getState().selectedNode).toBe(rows[2])
+  })
+})
+
+describe('Remove Assembly and the edit history', () => {
+  const rootA = moduleNode('n1', '/A.dll')
+  const rootB = moduleNode('n2', '/B.dll')
+  const member = treeNode('m1', 'module:/A.dll:type:1', { label: 'Type' })
+  const removeModules = vi.fn()
+  const undoEdit = vi.fn()
+  const redoEdit = vi.fn()
+  const getRoots = vi.fn()
+  const getNode = vi.fn()
+
+  beforeEach(() => {
+    removeModules.mockReset().mockResolvedValue({ removedNodeIds: ['n1', 'm1'], roots: [rootB], canUndo: true, canRedo: false })
+    getRoots.mockReset()
+    getNode.mockReset().mockRejectedValue(new Error('gone'))
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, removeModules, undoEdit, redoEdit, getRoots, getNode } })
+    useAppStore.setState({
+      workspaceId: 'w1',
+      modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')],
+      roots: [rootA, rootB],
+      children: { n1: [member] },
+      parents: { m1: 'n1' },
+      expanded: { n1: true },
+      documents: { m1: documentState('m1') },
+      selectedNode: member,
+      selectedNodes: [member],
+      canUndo: false,
+      canRedo: false,
+      workspaceStateId: 's1',
+      savedStateId: 's1',
+      output: [],
+    })
+  })
+
+  it('takes the history the removal left, and drops the module it took', async () => {
+    await expect(useAppStore.getState().removeModules(['n1'])).resolves.toEqual(['n1', 'm1'])
+    const state = useAppStore.getState()
+    expect(state.canUndo).toBe(true)
+    expect(state.modules.map((module) => module.id)).toEqual(['n2'])
+    expect(state.documents).toEqual({})
+    expect(state.selectedNode).toBe(rootB)
+  })
+
+  it('puts a removed document back on Undo, and answers the rows a Redo takes away again', async () => {
+    await useAppStore.getState().removeModules(['n1'])
+    getRoots.mockResolvedValue({ nodes: [rootA, rootB] })
+    undoEdit.mockResolvedValue({ version: 3, stateId: 's1', changedNodeIds: ['n1'], canUndo: true, canRedo: true, modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')] })
+    await expect(useAppStore.getState().undoEdit()).resolves.toEqual([])
+    expect(useAppStore.getState().roots).toEqual([rootA, rootB])
+    expect(useAppStore.getState().modules.map((module) => module.id)).toEqual(['n1', 'n2'])
+    expect(useAppStore.getState().dirty).toBe(false)
+
+    // The tree lists the document's rows again, and a redo takes them all away with it.
+    useAppStore.setState({ children: { n1: [member] }, parents: { m1: 'n1' }, documents: { m1: documentState('m1') } })
+    getRoots.mockResolvedValue({ nodes: [rootB] })
+    redoEdit.mockResolvedValue({ version: 4, stateId: 's1', changedNodeIds: ['n1'], canUndo: true, canRedo: false, modules: [openedModule('n2', '/B.dll')] })
+    const removed = await useAppStore.getState().redoEdit()
+    expect(removed.sort()).toEqual(['m1', 'n1'])
+    expect(useAppStore.getState().documents).toEqual({})
+    expect(useAppStore.getState().modules.map((module) => module.id)).toEqual(['n2'])
+  })
+})
+
+describe('saving the modules a command lets go of', () => {
+  const saveModule = vi.fn()
+  const getModifiedModules = vi.fn()
+
+  beforeEach(() => {
+    saveModule.mockReset().mockImplementation(async (_workspaceId: string, moduleId: string) => ({ path: `/${moduleId}.dll`, length: 1, sha256: 'aa' }))
+    getModifiedModules.mockReset()
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, saveModule, getModifiedModules } })
+    useAppStore.setState({
+      workspaceId: 'w1',
+      modules: [openedModule('a', '/a.dll'), openedModule('b', '/b.dll')],
+      dirty: true,
+      workspaceStateId: 's2',
+      savedStateId: 's1',
+      output: [],
+    })
+  })
+
+  it('writes each one, and leaves the workspace modified while another module still is', async () => {
+    getModifiedModules.mockResolvedValue({ paths: ['/b.dll'] })
+    await expect(useAppStore.getState().saveModules(['/a.dll'])).resolves.toBe(true)
+    expect(saveModule).toHaveBeenCalledWith('w1', 'a')
+    expect(useAppStore.getState().dirty).toBe(true)
+
+    getModifiedModules.mockResolvedValue({ paths: [] })
+    await useAppStore.getState().saveModules(['/b.dll'])
+    expect(useAppStore.getState().dirty).toBe(false)
+    expect(useAppStore.getState().savedStateId).toBe('s2')
+  })
+
+  it('answers false when a write fails, which calls the command off', async () => {
+    saveModule.mockRejectedValue(new Error('disk full'))
+    await expect(useAppStore.getState().saveModules(['/a.dll'])).resolves.toBe(false)
+    expect(useAppStore.getState().dirty).toBe(true)
   })
 })

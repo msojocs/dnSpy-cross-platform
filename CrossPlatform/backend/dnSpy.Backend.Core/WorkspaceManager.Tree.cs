@@ -88,6 +88,13 @@ public sealed partial class WorkspaceManager {
 	public Task<FindResourceResponse> FindResourceAsync(FindResourceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindResource(request), cancellationToken);
 
+	/// <summary>The same request resource/getItems takes; only the nodes are read.</summary>
+	public Task<ResourceItemNamesResponse> GetResourceItemNamesAsync(ResourceItemsRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetResourceItemNames(request.NodeIds), cancellationToken);
+
+	public Task<SelectMemberResponse> SelectMemberAsync(SelectMemberRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.SelectMember(request.Paths, request.Member), cancellationToken);
+
 	sealed partial class Workspace {
 		// The roots the workspace opened by itself to resolve a reference — dnSpy's auto-loaded documents. They
 		// look like any other root, but a sort puts them last and a saved list leaves them out.
@@ -163,6 +170,12 @@ public sealed partial class WorkspaceManager {
 		/// Removes the documents the nodes belong to — dnSpy's Remove over the selection, and what its two Close
 		/// All sweeps run. A node inside a document stands for that document, and a document named twice goes
 		/// once. Every kind of document can go: an assembly, a PE, ELF or unknown file alike.
+		/// <para>dnSpy's RemoveAssemblyCommand.Execute decides per document what the edit history makes of it. One
+		/// an edit in the undo history touched cannot simply be let go — undoing that edit would reach into a
+		/// module the tree no longer has — so its removal goes into the history as an edit of its own, which Undo
+		/// reverses by putting the very same document back where it was. One only the redo history touched is let
+		/// go, and the redo history with it, which recording the removal would have cleared anyway. Everything
+		/// else is let go. The removal leaves the saved state where it was: it changes no module.</para>
 		/// </summary>
 		public RemoveModuleResponse RemoveRoots(IReadOnlyList<string> nodeIds) {
 			var entries = new List<IModuleEntry>();
@@ -173,29 +186,107 @@ public sealed partial class WorkspaceManager {
 				if (!entries.Contains(entry))
 					entries.Add(entry);
 			}
+			var kept = entries.Where(entry => Touches(undoHistory, entry)).ToList();
+			var onlyInRedo = entries.Any(entry => !kept.Contains(entry) && Touches(redoHistory, entry));
 			var removed = new List<string>();
-			foreach (var entry in entries) {
-				var removedFromDictionary = entry switch {
-					ModuleEntry module => modules.Remove(module.Id),
-					PeOnlyModuleEntry peModule => peModules.Remove(peModule.Id),
-					ElfFileEntry elf => elfFiles.Remove(elf.Id),
-					UnknownFileEntry unknown => unknownFiles.Remove(unknown.Id),
-					_ => false,
-				};
-				if (!removedFromDictionary)
-					continue;
-				rootOrder.Remove(entry.Id);
-				autoLoadedRoots.Remove(entry.Id);
-				if (entry is ModuleEntry managed) {
-					NoteModelChanged();
-					removed.AddRange(DropModule(managed));
+			foreach (var entry in entries.Except(kept))
+				removed.AddRange(DropRoot(entry));
+			if (kept.Count > 0) {
+				var operations = kept.Select(entry => new EditOperation(entry.Id, entry, () => {
+					var detached = DetachRoot(entry);
+					return () => ReattachRoot(detached);
+				}, ChangesRoots: true)).ToArray();
+				var undo = new Stack<Action>();
+				foreach (var entry in kept) {
+					var detached = DetachRoot(entry);
+					removed.AddRange(detached.Nodes.Select(node => node.Id));
+					undo.Push(() => ReattachRoot(detached));
 				}
-				else {
-					removed.AddRange(DropEntryNodes(entry));
-				}
+				undoHistory.Push(new EditHistoryEntry(operations, undo.ToArray(), stateId, stateId));
+				redoHistory.Clear();
+			}
+			else if (onlyInRedo) {
+				redoHistory.Clear();
 			}
 			version++;
-			return new RemoveModuleResponse(removed, GetRoots().Nodes);
+			return new RemoveModuleResponse(removed, GetRoots().Nodes, undoHistory.Count > 0, redoHistory.Count > 0);
+		}
+
+		/// <summary>Whether an edit of the history was made to the document or to a net module of it.</summary>
+		static bool Touches(IEnumerable<EditHistoryEntry> history, IModuleEntry entry) =>
+			history.Any(step => step.Operations.Any(operation => operation.Module.Id == entry.Id));
+
+		/// <summary>Lets a document go for good: its nodes, and every cache that holds anything of it.</summary>
+		IReadOnlyList<string> DropRoot(IModuleEntry entry) {
+			if (!RemoveRootEntry(entry))
+				return [];
+			rootOrder.Remove(entry.Id);
+			autoLoadedRoots.Remove(entry.Id);
+			if (entry is ModuleEntry managed) {
+				NoteModelChanged();
+				return DropModule(managed);
+			}
+			return DropEntryNodes(entry);
+		}
+
+		bool RemoveRootEntry(IModuleEntry entry) => entry switch {
+			ModuleEntry module => modules.Remove(module.Id),
+			PeOnlyModuleEntry peModule => peModules.Remove(peModule.Id),
+			ElfFileEntry elf => elfFiles.Remove(elf.Id),
+			UnknownFileEntry unknown => unknownFiles.Remove(unknown.Id),
+			_ => false,
+		};
+
+		/// <summary>
+		/// What an undoable removal took out of the tree, kept so Undo can put back the very objects it took: the
+		/// entry the edits in the history were made to, the nodes the client still names by id, and the net modules
+		/// of an assembly with the edits made to them.
+		/// </summary>
+		sealed record DetachedRoot(IModuleEntry Entry, int Index, bool AutoLoaded, NodeEntry[] Nodes, ModuleEntry[] NetModules);
+
+		DetachedRoot DetachRoot(IModuleEntry entry) {
+			var index = rootOrder.IndexOf(entry.Id);
+			var autoLoaded = autoLoadedRoots.Contains(entry.Id);
+			var owned = entry is ModuleEntry ? netModules.Values.Where(netModule => netModule.Id == entry.Id).ToArray() : [];
+			var detachedNodes = nodes.Values
+				.Where(node => ReferenceEquals(node.Module, entry) || owned.Any(netModule => ReferenceEquals(node.Module, netModule)))
+				.ToArray();
+			RemoveRootEntry(entry);
+			rootOrder.Remove(entry.Id);
+			autoLoadedRoots.Remove(entry.Id);
+			foreach (var netModule in owned)
+				netModules.Remove(netModule.Path);
+			foreach (var node in detachedNodes) {
+				nodeIdsByKey.Remove(node.Key);
+				nodes.Remove(node.Id);
+			}
+			if (entry is ModuleEntry module) {
+				ForgetModuleCaches(module, owned);
+				NoteModelChanged();
+			}
+			return new DetachedRoot(entry, index, autoLoaded, detachedNodes, owned);
+		}
+
+		void ReattachRoot(DetachedRoot detached) {
+			var entry = detached.Entry;
+			switch (entry) {
+				case ModuleEntry module: modules.Add(module.Id, module); break;
+				case PeOnlyModuleEntry peModule: peModules.Add(peModule.Id, peModule); break;
+				case ElfFileEntry elf: elfFiles.Add(elf.Id, elf); break;
+				case UnknownFileEntry unknown: unknownFiles.Add(unknown.Id, unknown); break;
+			}
+			rootOrder.Insert(Math.Clamp(detached.Index, 0, rootOrder.Count), entry.Id);
+			if (detached.AutoLoaded)
+				autoLoadedRoots.Add(entry.Id);
+			foreach (var netModule in detached.NetModules)
+				netModules[netModule.Path] = netModule;
+			foreach (var node in detached.Nodes) {
+				nodes[node.Id] = node;
+				nodeIdsByKey[node.Key] = node.Id;
+			}
+			if (entry is ModuleEntry)
+				NoteModelChanged();
+			symbols.Invalidate();
 		}
 
 		/// <summary>The nodes of a file that is not a managed module go with it, the way a module's do.</summary>
@@ -989,12 +1080,14 @@ public sealed partial class WorkspaceManager {
 		/// The page dnSpy's Search MSDN opens for a row (SearchMsdnCommand.GetAddress): a namespace by its name, a
 		/// member after its declaring type with the dots in its own name made dashes, an accessor as the member it
 		/// belongs to and an enum value as its enum. Only members outside code can see are offered — public or
-		/// protected, in a type that is public all the way out.
+		/// protected, in a type that is public all the way out. A row that names a reference — a base or derived
+		/// type, a referenced type or member — is looked up as the definition it resolves to, the way dnSpy resolves
+		/// the IMDTokenNode's reference; one whose definition is not loaded has nothing to look up.
 		/// </summary>
-		static string? GetMsdnName(NodeEntry node) {
+		string? GetMsdnName(NodeEntry node) {
 			if (node.Kind == NodeKind.Namespace)
 				return ((NamespaceValue)node.Value).Name is { Length: > 0 } name ? name : null;
-			if (node.Kind is not (NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event) || node.Value is not IMemberDef member)
+			if (MsdnMember(node) is not { } member)
 				return null;
 			if (member is MethodDef method && FindOwningPropertyOrEvent(method) is IMemberDef owner)
 				member = owner;
@@ -1008,6 +1101,30 @@ public sealed partial class WorkspaceManager {
 			return address.Replace('/', '.').Replace('`', '-');
 		}
 
+		/// <summary>The definition behind a row Search MSDN can be offered on — SearchMsdnCtxMenuCommand.ResolveDef.</summary>
+		IMemberDef? MsdnMember(NodeEntry node) => node.Kind switch {
+			NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event or NodeKind.DerivedType => node.Value as IMemberDef,
+			NodeKind.BaseType => FindLoadedType(GetScopeType(((BaseTypeValue)node.Value).TypeDefOrRef), 0),
+			NodeKind.TypeReference => FindLoadedType(GetScopeType(((TypeReferenceValue)node.Value).Type), 0),
+			NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference => FindLoadedMethod((IMethod)node.Value),
+			NodeKind.FieldReference => FindLoadedField((MemberRef)node.Value),
+			_ => null,
+		};
+
+		/// <summary>
+		/// What dnSpy's Copy Full Name writes for a row: the <c>IFullName</c> of the metadata the row stands for
+		/// (its IMDTokenNode's reference) — an assembly's display name, a module's name, a type's or a member's full
+		/// name, and a reference's. A row that stands for no metadata row — a namespace, a folder, a resource, a
+		/// structure — has none, and dnSpy does not offer the command on it.
+		/// </summary>
+		static string? GetFullName(NodeEntry node) => node.Kind switch {
+			NodeKind.Assembly or NodeKind.Module or NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event
+				or NodeKind.DerivedType or NodeKind.AssemblyReference or NodeKind.ModuleReference
+				or NodeKind.MethodReference or NodeKind.PropertyReference or NodeKind.EventReference or NodeKind.FieldReference => (node.Value as IFullName)?.FullName,
+			NodeKind.BaseType => ((BaseTypeValue)node.Value).TypeDefOrRef.FullName,
+			NodeKind.TypeReference => ((TypeReferenceValue)node.Value).Type.FullName,
+			_ => null,
+		};
 
 		static bool IsPublicType(TypeDef? type) {
 			if (type is null)
@@ -1029,6 +1146,63 @@ public sealed partial class WorkspaceManager {
 				node.Value is IMemberDef member && CompilerGeneratedMembers.IsHidden(member),
 			_ => false,
 		};
+
+		// ---------------------------------------------------------------- command line --select
+
+		/// <summary>
+		/// dnSpy's AppCommandLineArgsHandler.SelectMember over the files a command line opened. A number — decimal,
+		/// or hexadecimal after "0x" or "&amp;H" — is a token in the first module of them, followed to its
+		/// definition the way Go to Token follows one. Otherwise each module is asked in turn: "N:" names one of its
+		/// namespaces, anything else is an XML documentation id, read the Roslyn way and then the MSVC way.
+		/// </summary>
+		public SelectMemberResponse SelectMember(IReadOnlyList<string> paths, string member) {
+			var loaded = paths.SelectMany(LoadedModulesOf).ToList();
+			if (TryParseCommandLineToken(member, out var token))
+				return new SelectMemberResponse(loaded.FirstOrDefault() is { } first ? FindTokenNode(first, token).NodeId : null);
+			const string NamespacePrefix = "N:";
+			foreach (var module in loaded) {
+				if (member.StartsWith(NamespacePrefix, StringComparison.Ordinal)) {
+					var ns = member[NamespacePrefix.Length..];
+					if (GetNamespaceIndex(module).Groups.TryGetValue(ns, out var group))
+						return new SelectMemberResponse(GetOrAddNode($"module:{module.Path}:namespace:{ns}", NodeKind.Namespace, new NamespaceValue(ns, group), module).Id);
+					continue;
+				}
+				var found = XmlDocKeyProvider.FindMemberByKey(module.Module, member) ?? XmlDocKeyProvider.FindMemberByKey(module.Module, member, XmlDocCompiler.MSVC);
+				if (found is IMemberDef definition)
+					return new SelectMemberResponse(GetMemberNode(definition, module).Id);
+			}
+			return new SelectMemberResponse(null);
+		}
+
+		/// <summary>dnSpy's GetLoadedFiles: an open assembly stands for each of its modules, a module for itself.</summary>
+		IEnumerable<ModuleEntry> LoadedModulesOf(string path) {
+			string fullPath;
+			try {
+				fullPath = Path.GetFullPath(path);
+			}
+			catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) {
+				yield break;
+			}
+			foreach (var module in OrderedModules()) {
+				if (!SameFile(module.Path, fullPath))
+					continue;
+				yield return module;
+				foreach (var netModule in netModules.Values.Where(entry => entry.Id == module.Id))
+					yield return netModule;
+			}
+		}
+
+		/// <summary>dnSpy's SimpleTypeConverter.ParseUInt32: decimal, or hexadecimal after "0x" or "&amp;H", with
+		/// "_" as a digit separator.</summary>
+		static bool TryParseCommandLineToken(string text, out uint token) {
+			token = 0;
+			var digits = text.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
+			if (digits.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || digits.StartsWith("&H", StringComparison.OrdinalIgnoreCase)) {
+				var hex = digits[2..];
+				return hex.Trim() == hex && uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out token);
+			}
+			return uint.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out token);
+		}
 
 		// ---------------------------------------------------------------- netmodules
 

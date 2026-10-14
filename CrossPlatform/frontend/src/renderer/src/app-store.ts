@@ -21,6 +21,7 @@ import type {
   DebugStackFrame,
   DebugThread,
   DebugVariable,
+  DropFilter,
   EditCommitResponse,
   HexRange,
   HexTargetResponse,
@@ -192,6 +193,14 @@ export interface BookmarkEntry {
   enabled: boolean
 }
 
+/** How `openPaths` treats the files it opens. */
+export interface OpenPathsOptions {
+  /** Put each file on the Recent Files list. */
+  remember?: boolean
+  /** Select the root of the last file, as dnSpy's OpenDocumentsHelper does. On by default. */
+  select?: boolean
+}
+
 interface AppState {
   backendStatus: BackendStatus
   workspaceId?: string
@@ -206,6 +215,9 @@ interface AppState {
   selectedNode?: TreeNode
   /** Multiple selected nodes for batch operations. The first one is the primary selection (selectedNode). */
   selectedNodes: TreeNode[]
+  /** Where a Shift range starts — the ListBox anchor dnSpy's tree keeps: the row last selected on its own, or
+   *  toggled with Ctrl. A range leaves it where it is, so it can be grown and shrunk from the same row. */
+  selectionAnchorId?: string
   documents: Record<string, DocumentState>
   /** The document tabs in the order the layout shows them, and the one that is selected. The shell owns
    * the layout and reports both here, because a restored session has to put the tabs back as they were. */
@@ -227,7 +239,8 @@ interface AppState {
   savedStateId?: string
   canUndo: boolean
   canRedo: boolean
-  recentWorkspaces: string[][]
+  /** dnSpy's Recent Files: the files the user opened, most recent first. */
+  recentFiles: string[]
   debugSessionId?: string
   debugState: 'inactive' | 'starting' | 'running' | 'stopped'
   debugThreads: DebugThread[]
@@ -292,7 +305,14 @@ interface AppState {
   setHighlightCurrentLine(value: boolean): void
   setBackendStatus(status: BackendStatus): void
   chooseAndOpen(): Promise<void>
-  openPaths(paths: string[]): Promise<void>
+  /**
+   * Opens files into the tree — dnSpy's DsDocumentLoader. `remember` puts each on the Recent Files list, the way
+   * the Open dialog, Open from GAC, a drop and the command line do and a restored session or Open List does not;
+   * `select` selects the root of the last file, which is what dnSpy's OpenDocumentsHelper selects.
+   */
+  openPaths(paths: string[], options?: OpenPathsOptions): Promise<void>
+  /** dnSpy's Recent Files entry: opens that one file into the tree as it stands, and selects it. */
+  openRecentFile(path: string): Promise<void>
   closeWorkspace(): Promise<void>
   toggleNode(node: TreeNode): Promise<void>
   /** Expands a node unconditionally, unlike `toggleNode` which collapses an expanded one. A restore has to
@@ -301,7 +321,14 @@ interface AppState {
   /** Materialises a node's children without expanding it, which is how a restore rebuilds the collapsed
    * branches that hold a restored tab or selection. Does nothing when they are already loaded. */
   loadChildren(node: TreeNode): Promise<void>
-  selectNode(node: TreeNode, options?: { toggle?: boolean; range?: boolean }): void
+  /**
+   * Selects a row — on its own, or with Ctrl (`toggle`) in or out of the selection, or with Shift (`range`) every
+   * row from the anchor to it. `rows` are the rows the tree shows, top to bottom, which is what a range spans;
+   * without them it spans the rows the store has loaded and expanded.
+   */
+  selectNode(node: TreeNode, options?: { toggle?: boolean; range?: boolean; rows?: readonly TreeNode[] }): void
+  /** Selects the rows given, `primary` the one the commands act on — dnSpy's Select All (Ctrl+A) in the tree. */
+  selectNodes(nodes: readonly TreeNode[], primary?: TreeNode): void
   /** Collapse every expanded node except the selected node and its ancestors. */
   collapseTreeViewNodes(): void
   openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
@@ -341,8 +368,18 @@ interface AppState {
   saveModule(): Promise<boolean>
   /** Writes every modified module back over its own file — dnSpy's Save All. */
   saveAllModules(): Promise<boolean>
-  /** Drops every assembly and reopens the same files, discarding edits — dnSpy's Reload All Assemblies. */
-  reloadAllAssemblies(): Promise<boolean>
+  /**
+   * Writes the modules at `paths` back over their own files — dnSpy's DocumentSaver.Save for the documents a
+   * command is about to let go of. The workspace stays modified while any other module still is. Answers whether
+   * every one of them was written.
+   */
+  saveModules(paths: string[]): Promise<boolean>
+  /**
+   * Drops every assembly and reopens the files the user opened, discarding edits — dnSpy's Reload All
+   * Assemblies. Of the files the workspace opened by itself only `autoLoadedPaths` come back: the ones a tab
+   * still shows something of. Putting the tabs back is the shell's, which owns them.
+   */
+  reloadAllAssemblies(autoLoadedPaths?: string[]): Promise<boolean>
   /** Reorders the tree's root nodes by name — dnSpy's Sort Assemblies. */
   sortAssemblies(): Promise<boolean>
   /**
@@ -358,30 +395,32 @@ interface AppState {
    */
   removeModules(nodeIds: string[]): Promise<string[]>
   /**
-   * Which of the workspace's modules hold edits that have not been saved — what dnSpy asks about before
-   * Reload All. Returns the subset of node ids that are modified.
+   * The files of the modules that hold edits not yet saved, among the ones the nodes belong to — what
+   * dnSpy asks about before it lets an assembly go.
    */
-  getModifiedModules(nodeIds: string[]): Promise<string[]>
+  getModifiedModules(nodeIds?: string[]): Promise<string[]>
   /**
    * The roots dnSpy's two Close All sweeps would remove: the framework assemblies and the documents that
    * are not PE images (a missing file is one of those).
    */
   getCloseCandidates(): Promise<{ frameworkNodeIds: string[]; missingNodeIds: string[] }>
   /**
-   * Moves roots to another place in the tree — what dragging them does. Returns the new root list.
+   * Moves roots to another place in the tree — what dragging them does: in front of the root at `index`,
+   * or at the end. Returns the new root list.
    */
   moveRoots(nodeIds: string[], index: number): Promise<TreeNode[]>
   /**
-   * What activating a row — a double click, Enter — goes to: the definition a reference row names, or
-   * the assembly an assembly reference names, opened when it has to be. Returns null when the row is not
-   * one that activates to somewhere else.
+   * dnSpy's DocumentTabService.NodeActivated: a row that names something elsewhere — an assembly reference,
+   * a base, derived or referenced type, a member reference — selects what it names, opening the assembly
+   * it lives in when it has to. Answers whether the row went somewhere, so the caller knows not to open it.
    */
-  activateNode(nodeId: string): Promise<string | null>
+  activateNode(node: TreeNode): Promise<boolean>
   /**
-   * Opens the files dropped on the tree at the place they were dropped, filtered the way the Assembly
-   * Explorer's "dragged items" option says. Returns the modules that were opened and their insertion index.
+   * Opens the files dropped on the tree in front of the root at `index` — dnSpy's OnDropFiles. A dropped
+   * directory stands for every file under it, and with several new files the Assembly Explorer's
+   * dragged-items filter picks which go in. The first new root, or a dropped file already open, is selected.
    */
-  dropFiles(paths: string[], index: number, filter: string): Promise<{ modules: OpenedModule[]; roots: TreeNode[]; index: number }>
+  dropFiles(paths: string[], index: number, filter: DropFilter): Promise<void>
   /**
    * Brings the module's entry point, or the static constructor of its global type, into view — dnSpy's
    * two "Go to ..." commands. Answers false when the module has no such member.
@@ -395,18 +434,21 @@ interface AppState {
    * command that was run; both write the bytes the workspace holds. Answers false when the dialog was
    * cancelled or the write failed.
    */
-  saveResource(node: TreeNode, raw: boolean): Promise<boolean>
-  /**
-   * Writes several resource nodes' bytes to files the user picks — dnSpy's Save Resource over a multiple
-   * selection. Returns false when the dialog was cancelled or any write failed.
-   */
-  saveResources(nodes: TreeNode[], raw: boolean): Promise<boolean>
+  saveResource(nodes: TreeNode[], raw: boolean, useSubDirs?: boolean): Promise<boolean>
+  /** The files the resource nodes would save as, both ways — what the Save commands' headers are made of.
+   *  Nothing to save when the backend cannot say. */
+  getResourceItemNames(nodeIds: string[]): Promise<{ names: string[]; rawNames: string[] }>
   /**
    * The resource node that holds the data a Resources property or method reads — dnSpy's Go to Resource.
    * Returns null when the type is not a Resources class, the method body does not name a resource, or the
    * .resources file is not in the tree.
    */
   findResource(nodeId: string): Promise<string | null>
+  /**
+   * dnSpy's Go to Resource: selects the .resources entry a strongly typed Resources property or method
+   * reads, and opens it the way FollowReference does. Answers false when the member reads none.
+   */
+  goToResource(node: TreeNode): Promise<boolean>
   /**
    * Opens every assembly the module's references name — dnSpy's Load Dependencies. `recursive` follows the
    * closure instead of stopping at the module's own references. Nothing is edited, so the dirty flag and
@@ -427,8 +469,10 @@ interface AppState {
   refreshRoots(): Promise<void>
   saveCode(documentId: string): Promise<boolean>
   methodBodyChanged(node: TreeNode, result: EditCommitResponse): Promise<void>
-  undoEdit(): Promise<void>
-  redoEdit(): Promise<void>
+  /** Undoes the last edit. Answers the node ids the step took out of the tree — a removal redone takes a whole
+   *  document — so the shell can close the tabs that showed them. */
+  undoEdit(): Promise<string[]>
+  redoEdit(): Promise<string[]>
   launchDebug(options: DebugLaunchOptions): Promise<void>
   /** Executable the "Debug Program" dialog should prefill: the selected module, else the first one opened. */
   defaultDebugTarget(): string | undefined
@@ -594,6 +638,11 @@ const loadBool = (key: string, fallback: boolean): boolean => {
 // module is still evaluating, so a `const` further down would still be in its temporal dead zone.
 const bookmarksStorageKey = 'dnspy.bookmarks.v1'
 
+// dnSpy's AssemblyExplorerMostRecentlyUsedList, and the list of file sets this port kept before it — read once to
+// carry the files over. Up here for the same reason as the bookmark key: `loadRecentFiles()` runs at module eval.
+const recentFilesStorageKey = 'dnspy.recentFiles.v1'
+const legacyRecentWorkspacesStorageKey = 'dnspy.recentWorkspaces.v1'
+
 // Where the breakpoints WPF dnSpy would have written to its settings service go. Declared up here for
 // the same reason the bookmark key is.
 const breakpointsStorageKey = 'dnspy.breakpoints.v1'
@@ -634,7 +683,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   dirty: false,
   canUndo: false,
   canRedo: false,
-  recentWorkspaces: loadRecentWorkspaces(),
+  recentFiles: loadRecentFiles(),
   debugState: 'inactive',
   debugThreads: [],
   debugFrames: [],
@@ -661,12 +710,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   chooseAndOpen: async () => {
     const paths = await window.dnSpy.openAssemblies()
     if (paths.length > 0)
-      await get().openPaths(paths)
+      await get().openPaths(paths, { remember: true })
   },
 
-  openPaths: async (paths) => {
+  openPaths: async (paths, options = {}) => {
     const generation = get().workspaceGeneration
     const isCurrent = (): boolean => get().workspaceGeneration === generation
+    const select = options.select !== false
     set({ busy: true, error: undefined })
     try {
       const previousWorkspace = get().workspaceId
@@ -682,16 +732,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!isCurrent()) return
         set((state) => {
           const known = new Set(state.roots.map((root) => root.id))
-          const newSelection = roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode
+          // dnSpy selects the last file it loaded, whether it was there already or not; failing that, the
+          // first root that was not there before is one the user just added.
+          const newSelection = select ? rootOfPath(roots.nodes, added.modules, paths.at(-1)) ?? roots.nodes.find((root) => !known.has(root.id)) ?? state.selectedNode : state.selectedNode
           return {
             modules: added.modules,
             roots: roots.nodes,
-            // The first root that was not there before is the one the user just added.
             selectedNode: newSelection,
             selectedNodes: newSelection ? [newSelection] : state.selectedNodes,
             workspaceStateId: added.stateId,
             savedStateId: added.stateId,
-            recentWorkspaces: rememberWorkspace(added.modules.map((module) => module.path)),
+            recentFiles: options.remember ? rememberRecentFiles(paths) : state.recentFiles,
             assemblyListRevision: state.assemblyListRevision + 1,
           }
         })
@@ -711,6 +762,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         await window.dnSpy.closeWorkspace(opened.workspaceId)
         return
       }
+      const selected = select ? rootOfPath(roots.nodes, opened.modules, paths.at(-1)) ?? roots.nodes[0] : undefined
       set({
         workspaceId: opened.workspaceId,
         modules: opened.modules,
@@ -719,17 +771,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         parents: {},
         expanded: {},
         loadingNodes: {},
-        selectedNode: roots.nodes[0],
-        selectedNodes: roots.nodes[0] ? [roots.nodes[0]] : [],
+        selectedNode: selected,
+        selectedNodes: selected ? [selected] : [],
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
-          dirty: false,
+        dirty: false,
         workspaceStateId: opened.stateId,
         savedStateId: opened.stateId,
         canUndo: false,
         canRedo: false,
-        recentWorkspaces: rememberWorkspace(paths),
+        ...(options.remember ? { recentFiles: rememberRecentFiles(paths) } : {}),
       })
       get().appendOutput(t('Opened {count} module(s).', { count: opened.modules.length }))
     } catch (error) {
@@ -741,6 +793,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isCurrent())
         set({ busy: false })
     }
+  },
+
+  // dnSpy's RecentFilesCommand.OpenFile: the file comes back into the tree as it stands — the files beside it
+  // stay — goes to the top of the list, and its root is selected.
+  openRecentFile: async (path) => {
+    await get().openPaths([path], { remember: true })
   },
 
   closeWorkspace: async () => {
@@ -824,7 +882,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  selectNode: (node, options?: { toggle?: boolean; range?: boolean }) => {
+  selectNode: (node, options) => {
     const current = get()
 
     // Toggle selection with Ctrl/Cmd click
@@ -836,21 +894,27 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({
           selectedNodes: newSelection,
           selectedNode: newSelection[0],
+          selectionAnchorId: node.id,
         })
       } else {
         // Add to selection
         set({
           selectedNodes: [...current.selectedNodes, node],
           selectedNode: node,
+          selectionAnchorId: node.id,
         })
       }
       return
     }
 
-    // Range selection with Shift click
+    // Range selection with Shift: from the anchor — the row last picked on its own — to this one. An anchor the
+    // selection no longer holds, which a selection the app made itself leaves behind, gives way to the selection.
     if (options?.range && current.selectedNode) {
-      const allNodes = collectVisibleNodes(current)
-      const startIndex = allNodes.findIndex((n) => n.id === current.selectedNode!.id)
+      const allNodes = options.rows ?? collectVisibleNodes(current)
+      const anchorId = current.selectionAnchorId !== undefined && current.selectedNodes.some((n) => n.id === current.selectionAnchorId)
+        ? current.selectionAnchorId
+        : current.selectedNode.id
+      const startIndex = allNodes.findIndex((n) => n.id === anchorId)
       const endIndex = allNodes.findIndex((n) => n.id === node.id)
 
       if (startIndex >= 0 && endIndex >= 0) {
@@ -859,13 +923,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({
           selectedNodes: rangeNodes,
           selectedNode: node,
+          selectionAnchorId: anchorId,
         })
         return
       }
     }
 
     // Single selection (default)
-    set({ selectedNode: node, selectedNodes: [node] })
+    set({ selectedNode: node, selectedNodes: [node], selectionAnchorId: node.id })
+  },
+
+  selectNodes: (nodes, primary) => {
+    if (nodes.length === 0)
+      return
+    const selected = primary && nodes.some((node) => node.id === primary.id) ? primary : nodes[0]
+    set({ selectedNodes: [...nodes], selectedNode: selected })
   },
 
   collapseTreeViewNodes: () => {
@@ -1388,18 +1460,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  reloadAllAssemblies: async () => {
+  saveModules: async (paths) => {
+    const { workspaceId, modules } = get()
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    try {
+      for (const path of paths) {
+        const module = modules.find((candidate) => candidate.path === path)
+        if (!module)
+          continue
+        const saved = await window.dnSpy.saveModule(workspaceId, module.id)
+        get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
+      }
+      const stillModified = await window.dnSpy.getModifiedModules(workspaceId)
+      if (stillModified.paths.length === 0)
+        set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Save failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  reloadAllAssemblies: async (autoLoadedPaths) => {
     const { workspaceId } = get()
     if (!workspaceId)
       return false
     set({ busy: true, error: undefined })
     try {
-      const reloaded = await window.dnSpy.reloadWorkspace(workspaceId)
+      const reloaded = await window.dnSpy.reloadWorkspace(workspaceId, autoLoadedPaths)
       const roots = await window.dnSpy.getRoots(workspaceId)
       // Every node id the workspace handed out is gone with the reload, so the tabs, the expanded
       // branches and the selection all name nodes that no longer exist and are dropped with them. The
       // workspace id survives, which is what lets the reload stay inside the same session.
-      set({
+      set((state) => ({
         modules: reloaded.modules,
         roots: roots.nodes,
         children: {},
@@ -1411,12 +1510,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         documents: {},
         documentOrder: [],
         activeDocumentId: undefined,
-          dirty: false,
+        hexTarget: undefined,
+        dirty: false,
         workspaceStateId: reloaded.stateId,
         savedStateId: reloaded.stateId,
         canUndo: false,
         canRedo: false,
-      })
+        assemblyListRevision: state.assemblyListRevision + 1,
+      }))
       get().appendOutput(t('Reloaded {count} module(s).', { count: reloaded.modules.length }))
       return true
     } catch (error) {
@@ -1451,29 +1552,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return []
     try {
       const response = await window.dnSpy.removeModule(workspaceId, node.id)
-      const removed = new Set(response.removedNodeIds)
-      set((state) => {
-        // Everything the client holds by node id for the assembly that went: its documents, and the
-        // records the tree kept for its rows. The ids are never handed out again, so leaving any of them
-        // behind would be a leak that could never be named, not a row that could come back.
-        const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
-          Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
-        const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
-        const newSelection = selectionWent ? response.roots[0] : state.selectedNode
-        return {
-          roots: response.roots,
-          documents: withoutRemoved(state.documents),
-          children: withoutRemoved(state.children),
-          parents: withoutRemoved(state.parents),
-          expanded: withoutRemoved(state.expanded),
-          loadingNodes: withoutRemoved(state.loadingNodes),
-          // dnSpy leaves the tree on another document rather than on nothing at all.
-          selectedNode: newSelection,
-          selectedNodes: selectionWent ? (newSelection ? [newSelection] : []) : state.selectedNodes.filter((n) => !removed.has(n.id)),
-          hexTarget: selectionWent ? undefined : state.hexTarget,
-          assemblyListRevision: state.assemblyListRevision + 1,
-        }
-      })
+      set((state) => ({ ...withoutRemovedRoots(state, response), assemblyListRevision: state.assemblyListRevision + 1 }))
       return response.removedNodeIds
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1489,25 +1568,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return []
     try {
       const response = await window.dnSpy.removeModules(workspaceId, nodeIds)
-      const removed = new Set(response.removedNodeIds)
-      set((state) => {
-        const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
-          Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
-        const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
-        const newSelection = selectionWent ? response.roots[0] : state.selectedNode
-        return {
-          roots: response.roots,
-          documents: withoutRemoved(state.documents),
-          children: withoutRemoved(state.children),
-          parents: withoutRemoved(state.parents),
-          expanded: withoutRemoved(state.expanded),
-          loadingNodes: withoutRemoved(state.loadingNodes),
-          selectedNode: newSelection,
-          selectedNodes: selectionWent ? (newSelection ? [newSelection] : []) : state.selectedNodes.filter((n) => !removed.has(n.id)),
-          hexTarget: selectionWent ? undefined : state.hexTarget,
-          assemblyListRevision: state.assemblyListRevision + 1,
-        }
-      })
+      set((state) => ({ ...withoutRemovedRoots(state, response), assemblyListRevision: state.assemblyListRevision + 1 }))
       return response.removedNodeIds
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1523,7 +1584,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return []
     try {
       const response = await window.dnSpy.getModifiedModules(workspaceId, nodeIds)
-      return response.modifiedNodeIds
+      return response.paths
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       set({ error: message })
@@ -1559,38 +1620,66 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  activateNode: async (nodeId) => {
+  activateNode: async (node) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
-      return null
+      return false
     try {
-      const response = await window.dnSpy.activateNode(workspaceId, nodeId)
-      // If a module was auto-loaded to follow a reference, add it to the roots
-      if (response.addedModule) {
+      const response = await window.dnSpy.activateNode(workspaceId, node.id)
+      // Following the row may have opened the assembly its target lives in, which is a new root.
+      if (response.rootsChanged)
         await get().refreshRoots()
-      }
-      return response.nodeId ?? null
+      if (!response.nodeId)
+        return false
+      await get().revealNode(response.nodeId)
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       set({ error: message })
-      return null
+      return false
     }
   },
 
   dropFiles: async (paths, index, filter) => {
+    if (paths.length === 0)
+      return
+    const generation = get().workspaceGeneration
     const workspaceId = get().workspaceId
+    set({ busy: true, error: undefined })
     try {
       const response = await window.dnSpy.dropFiles(workspaceId ?? null, paths, index, filter)
-      // If this created a new workspace, update the workspace ID
-      if (response.workspaceId && response.workspaceId !== workspaceId) {
-        set({ workspaceId: response.workspaceId })
-      }
-      set({ roots: response.roots, assemblyListRevision: get().assemblyListRevision + 1 })
-      return { modules: response.modules, roots: response.roots, index: response.index }
+      if (get().workspaceGeneration !== generation)
+        return
+      // A drop on an empty tree is what opens the workspace; one the filter turned away entirely opens none.
+      const dropWorkspace = response.workspaceId ?? workspaceId
+      if (!dropWorkspace)
+        return
+      const roots = await window.dnSpy.getRoots(dropWorkspace)
+      if (get().workspaceGeneration !== generation)
+        return
+      const selected = roots.nodes.find((root) => root.id === response.selectNodeId)
+      set((state) => ({
+        workspaceId: dropWorkspace,
+        modules: response.modules,
+        roots: roots.nodes,
+        selectedNode: selected ?? state.selectedNode,
+        selectedNodes: selected ? [selected] : state.selectedNodes,
+        ...(workspaceId ? {} : { workspaceStateId: response.stateId ?? undefined, savedStateId: response.stateId ?? undefined }),
+        // dnSpy's OnDropFiles puts each file it added on the Recent Files list, and only those.
+        recentFiles: response.addedPaths.length > 0 ? rememberRecentFiles(response.addedPaths) : state.recentFiles,
+        assemblyListRevision: state.assemblyListRevision + 1,
+      }))
+      if (response.addedPaths.length > 0)
+        get().appendOutput(t('Opened {count} module(s).', { count: response.addedPaths.length }))
     } catch (error) {
+      if (get().workspaceGeneration !== generation)
+        return
       const message = error instanceof Error ? error.message : String(error)
       set({ error: message })
-      return { modules: [], roots: [], index: -1 }
+      get().appendOutput(t('Open failed: {message}', { message }))
+    } finally {
+      if (get().workspaceGeneration === generation)
+        set({ busy: false })
     }
   },
 
@@ -1622,16 +1711,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     return true
   },
 
-  saveResource: async (node, raw) => {
+  saveResource: async (nodes, raw, useSubDirs = false) => {
     const workspaceId = get().workspaceId
-    if (!workspaceId)
+    if (!workspaceId || nodes.length === 0)
       return false
     try {
-      const path = await window.dnSpy.saveResource(workspaceId, node.id, raw)
+      const paths = await window.dnSpy.saveResource(workspaceId, nodes.map((node) => node.id), raw, useSubDirs)
       // A cancelled dialog is not a failure, and dnSpy says nothing about it either.
-      if (!path)
+      if (paths.length === 0)
         return false
-      get().appendOutput(t('Saved {name} to {path}.', { name: node.label, path }))
+      for (const path of paths)
+        get().appendOutput(t('Saved {name} to {path}.', { name: path.split(/[\\/]/).at(-1) ?? path, path }))
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1641,43 +1731,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  saveResources: async (nodes, raw) => {
+  getResourceItemNames: async (nodeIds) => {
     const workspaceId = get().workspaceId
-    if (!workspaceId || nodes.length === 0)
-      return false
+    if (!workspaceId || nodeIds.length === 0)
+      return { names: [], rawNames: [] }
     try {
-      const response = await window.dnSpy.getResourceItems(workspaceId, nodes.map(n => n.id), raw)
-      if (response.items.length === 0)
-        return false
-
-      // Ask user to select a directory
-      const directory = await window.dnSpy.selectDirectory()
-      if (!directory)
-        return false
-
-      // Save each resource item to the directory
-      let savedCount = 0
-      for (const item of response.items) {
-        try {
-          const data = Uint8Array.from(atob(item.base64Data), c => c.charCodeAt(0))
-          const path = await window.dnSpy.writeFile(directory, item.name, data)
-          if (path) {
-            savedCount++
-            get().appendOutput(t('Saved {name} to {path}.', { name: item.name, path }))
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          get().appendOutput(t('Failed to save {name}: {message}', { name: item.name, message: msg }))
-        }
-      }
-
-      return savedCount > 0
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Save failed: {message}', { message }))
-      return false
+      return await window.dnSpy.getResourceItemNames(workspaceId, nodeIds)
+    } catch {
+      // The menu asks this of every resource it opens on; a node the backend has dropped since has nothing to save.
+      return { names: [], rawNames: [] }
     }
+  },
+
+  goToResource: async (node) => {
+    const resourceId = await get().findResource(node.id)
+    if (!resourceId)
+      return false
+    await get().revealNode(resourceId)
+    const resource = get().selectedNode
+    if (resource?.id === resourceId)
+      await get().openDocument(resource)
+    return true
   },
 
   findResource: async (nodeId) => {
@@ -1687,9 +1761,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const response = await window.dnSpy.findResource(workspaceId, nodeId)
       return response.nodeId
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
+    } catch {
+      // The context menu asks this of every method it opens on; a node the backend has dropped since
+      // simply reads no resource, which is no error worth a banner.
       return null
     }
   },
@@ -1854,25 +1928,29 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   undoEdit: async () => {
     const workspaceId = get().workspaceId
-    if (!workspaceId || !get().canUndo) return
+    if (!workspaceId || !get().canUndo) return []
     try {
       const result = await window.dnSpy.undoEdit(workspaceId)
-      await refreshAfterEdit(get, set, result)
+      const removed = await refreshAfterEdit(get, set, result)
       get().appendOutput(t('Undo completed.'))
+      return removed
     } catch (error) {
       get().appendOutput(t('Undo failed: {message}', { message: error instanceof Error ? error.message : String(error) }))
+      return []
     }
   },
 
   redoEdit: async () => {
     const workspaceId = get().workspaceId
-    if (!workspaceId || !get().canRedo) return
+    if (!workspaceId || !get().canRedo) return []
     try {
       const result = await window.dnSpy.redoEdit(workspaceId)
-      await refreshAfterEdit(get, set, result)
+      const removed = await refreshAfterEdit(get, set, result)
       get().appendOutput(t('Redo completed.'))
+      return removed
     } catch (error) {
       get().appendOutput(t('Redo failed: {message}', { message: error instanceof Error ? error.message : String(error) }))
+      return []
     }
   },
 
@@ -2620,7 +2698,6 @@ const collectVisibleNodes = (state: Pick<AppState, 'roots' | 'children' | 'expan
   return result
 }
 
-const recentWorkspaceKey = 'dnspy.recentWorkspaces.v1'
 
 export const suggestCodeFilename = (title: string, language: string): string => {
   const extension = language === 'csharp'
@@ -3921,23 +3998,92 @@ useAppStore.subscribe((state, previous) => {
     scheduleSessionSave(state)
 })
 
-function loadRecentWorkspaces(): string[][] {
+/** dnSpy's list holds this many files; the oldest go first. */
+const MAX_RECENT_FILES = 30
+
+/** dnSpy compares the files on its list without regard to case. */
+const sameRecentFile = (left: string, right: string): boolean => left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0
+
+/**
+ * The Recent Files list, most recent first. A profile from before the list held single files kept the sets of
+ * files each open made; those are read once, in order, so nothing the user opened is forgotten in the move.
+ */
+export function loadRecentFiles(): string[] {
+  if (typeof localStorage === 'undefined')
+    return []
   try {
-    const value = JSON.parse(localStorage.getItem(recentWorkspaceKey) ?? '[]') as unknown
-    return Array.isArray(value)
-      ? value.filter((entry): entry is string[] => Array.isArray(entry) && entry.every((path) => typeof path === 'string')).slice(0, 10)
-      : []
+    const stored = localStorage.getItem(recentFilesStorageKey)
+    if (stored !== null) {
+      const value = JSON.parse(stored) as unknown
+      return Array.isArray(value) ? addRecentFiles([], value.filter((entry): entry is string => typeof entry === 'string').reverse()) : []
+    }
+    const legacy = JSON.parse(localStorage.getItem(legacyRecentWorkspacesStorageKey) ?? '[]') as unknown
+    if (!Array.isArray(legacy))
+      return []
+    const files = legacy.flatMap((entry: unknown) => Array.isArray(entry) ? entry.filter((path): path is string => typeof path === 'string') : [])
+    return addRecentFiles([], files.reverse())
   } catch {
     return []
   }
 }
 
-function rememberWorkspace(paths: string[]): string[][] {
-  const normalized = [...paths]
-  const identity = normalized.join('\0')
-  const recent = [normalized, ...loadRecentWorkspaces().filter((entry) => entry.join('\0') !== identity)].slice(0, 10)
-  localStorage.setItem(recentWorkspaceKey, JSON.stringify(recent))
-  return recent
+/** dnSpy's AssemblyExplorerMostRecentlyUsedList.Add, once per file in the order they were opened, so the last
+ *  of them ends up first. */
+const addRecentFiles = (list: readonly string[], paths: readonly string[]): string[] => {
+  let files = [...list]
+  for (const path of paths) {
+    if (!path)
+      continue
+    files = [path, ...files.filter((file) => !sameRecentFile(file, path))].slice(0, MAX_RECENT_FILES)
+  }
+  return files
+}
+
+/** Puts the files on the Recent Files list and saves it. */
+export function rememberRecentFiles(paths: readonly string[]): string[] {
+  const files = addRecentFiles(loadRecentFiles(), paths)
+  try {
+    localStorage.setItem(recentFilesStorageKey, JSON.stringify(files))
+  } catch {
+    // A full or unavailable store keeps the list for this run only.
+  }
+  return files
+}
+
+/** The root a file opened as: the module's own row, which carries the module's id. */
+const rootOfPath = (roots: readonly TreeNode[], modules: readonly OpenedModule[], path: string | undefined): TreeNode | undefined => {
+  if (path === undefined)
+    return undefined
+  const module = modules.find((candidate) => candidate.path === path)
+  return module ? roots.find((root) => root.id === module.id) : undefined
+}
+
+/**
+ * The store without anything it held by node id for the documents a removal took — their documents, the rows
+ * the tree listed under them, the selection on them — and with the roots and the edit history the removal left.
+ * dnSpy leaves the tree on another document rather than on nothing at all.
+ */
+const withoutRemovedRoots = (state: AppState, response: { removedNodeIds: string[]; roots: TreeNode[]; canUndo?: boolean; canRedo?: boolean }): Partial<AppState> => {
+  const removed = new Set(response.removedNodeIds)
+  // The ids are never handed out again unless an undo puts the very same document back, so leaving any of
+  // them behind would be a leak that could never be named, not a row that could come back.
+  const withoutRemoved = <T,>(entries: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(entries).filter(([id]) => !removed.has(id)))
+  const selectionWent = state.selectedNode !== undefined && removed.has(state.selectedNode.id)
+  const newSelection = selectionWent ? response.roots[0] : state.selectedNode
+  return {
+    roots: response.roots,
+    modules: state.modules.filter((module) => response.roots.some((root) => root.id === module.id)),
+    documents: withoutRemoved(state.documents),
+    children: withoutRemoved(state.children),
+    parents: withoutRemoved(state.parents),
+    expanded: withoutRemoved(state.expanded),
+    loadingNodes: withoutRemoved(state.loadingNodes),
+    selectedNode: newSelection,
+    selectedNodes: selectionWent ? (newSelection ? [newSelection] : []) : state.selectedNodes.filter((n) => !removed.has(n.id)),
+    hexTarget: selectionWent ? undefined : state.hexTarget,
+    ...(response.canUndo !== undefined ? { canUndo: response.canUndo, canRedo: response.canRedo ?? false } : {}),
+  }
 }
 
 // A REPL left open all day must not grow without bound; the oldest lines go first.
@@ -4310,9 +4456,9 @@ export const ownerTypeIdOf = (
   return undefined
 }
 
-const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommitResponse): Promise<void> => {
+const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommitResponse): Promise<string[]> => {
   const { workspaceId, savedStateId } = get()
-  if (!workspaceId) return
+  if (!workspaceId) return []
   set({
     workspaceStateId: result.stateId,
     dirty: result.stateId !== savedStateId,
@@ -4343,5 +4489,40 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
   // an assembly to a net module leaves the row above the module with no assembly left to name. The roots
   // are read back for every edit rather than guessed at, so undo and redo move the label with the state.
   const roots = await window.dnSpy.getRoots(workspaceId)
-  set({ roots: roots.nodes })
+  const modules = result.modules
+  if (!modules) {
+    set({ roots: roots.nodes })
+    return []
+  }
+  // A step that took a whole document out of the tree, or put one back — a removal dnSpy recorded in the
+  // history. What the client held for a document that went is dropped the way the removal itself drops it; a
+  // document that came back is the very same one, under the ids it had, and simply lists its rows again.
+  const kept = new Set(roots.nodes.map((root) => root.id))
+  const gone = get().roots.filter((root) => !kept.has(root.id)).map((root) => root.id)
+  const removed = nodeIdsUnder(get(), gone)
+  set((state) => ({
+    ...withoutRemovedRoots(state, { removedNodeIds: removed, roots: roots.nodes }),
+    modules,
+    assemblyListRevision: state.assemblyListRevision + 1,
+  }))
+  return removed
+}
+
+/** The roots and every node the client has listed under them. */
+const nodeIdsUnder = (state: Pick<AppState, 'parents' | 'documents'>, rootIds: readonly string[]): string[] => {
+  const roots = new Set(rootIds)
+  if (roots.size === 0)
+    return []
+  const rootOf = (id: string): string => {
+    let current = id
+    for (let parent = state.parents[current]; parent !== undefined; parent = state.parents[current])
+      current = parent
+    return current
+  }
+  const ids = new Set(rootIds)
+  for (const id of [...Object.keys(state.parents), ...Object.keys(state.documents)]) {
+    if (roots.has(rootOf(id)))
+      ids.add(id)
+  }
+  return [...ids]
 }

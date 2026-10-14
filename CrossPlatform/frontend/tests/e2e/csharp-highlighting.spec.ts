@@ -22,7 +22,8 @@ test('uses C# TextMate colors across themes and retains IL highlighting', async 
     await page.locator('.tree-row[data-kind="module"] .tree-expander').click()
     const namespace = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^dnSpy\.Backend\.Contracts$/ })
     await namespace.locator('.tree-expander').click()
-    await page.locator('.tree-row[data-kind="type"][title="dnSpy.Backend.Contracts.HelloRequest"]').dblclick()
+    // The row's tooltip is dnSpy's several-line one, so the row is found by the name it shows.
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @[0-9A-F]{8}$/ }).dblclick()
 
     const editor = page.locator('.monaco-editor')
     await expect(editor).toBeVisible()

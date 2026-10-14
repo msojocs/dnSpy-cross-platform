@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TreeNode } from '../../../shared/protocol'
-import { TypePickerDialog } from './TypePickerDialog'
+import { TypePickerDialog, type PickerMode } from './TypePickerDialog'
 
 const node = (id: string, label: string, kind: string, hasChildren: boolean, icon?: string): TreeNode => ({ id, label, kind, hasChildren, icon })
 
@@ -9,7 +9,13 @@ const node = (id: string, label: string, kind: string, hasChildren: boolean, ico
 const TREE: Record<string, TreeNode[]> = {
   'ws:n1': [node('n2', 'Alpha', 'namespace', true), node('n3', 'Empty.Namespace', 'namespace', false)],
   'ws:n2': [node('n4', 'Alpha.Widget', 'type', true, 'class')],
-  'ws:n4': [node('n5', 'Count', 'field', false, 'field'), node('n6', 'Reset()', 'method', false, 'method')],
+  'ws:n4': [
+    node('n5', 'Count', 'field', false, 'field'),
+    node('n6', 'Reset()', 'method', false, 'method'),
+    // dnSpy's tree names a constructor after its type; only the full name says which method it is.
+    { ...node('n7', 'Widget(int)', 'method', false, 'method'), description: 'System.Void Alpha.Widget::.ctor(System.Int32)' },
+    { ...node('n8', 'Widget()', 'method', false, 'method'), description: 'System.Void Alpha.Widget::.cctor()' },
+  ],
 }
 
 const getRoots = vi.fn(async () => ({ nodes: [node('n1', 'Sample', 'module', true, 'assembly')] }))
@@ -44,7 +50,7 @@ const expanderOf = (label: string): HTMLElement => within(rowOf(label)).getByRol
 const expand = (label: string): void => { fireEvent.click(expanderOf(label)) }
 const open = (label: string): void => { fireEvent.doubleClick(rowOf(label)) }
 
-const renderPicker = (mode: 'type' | 'member' | 'field' | 'method') => {
+const renderPicker = (mode: PickerMode) => {
   const onPick = vi.fn()
   const onClose = vi.fn()
   render(<TypePickerDialog workspaceId="ws" mode={mode} onPick={onPick} onClose={onClose} />)
@@ -99,6 +105,19 @@ describe('TypePickerDialog', () => {
 
     fireEvent.click(rowOf('Alpha.Widget'))
     expect(within(dialog()).getByRole('button', { name: 'OK' })).toBeDisabled()
+  })
+
+  it('offers the instance constructors to pick a constructor from, which the tree names after their type', async () => {
+    renderPicker('constructor')
+    await screen.findByText('Alpha')
+    expand('Alpha')
+    await screen.findByText('Alpha.Widget')
+    expand('Alpha.Widget')
+
+    await screen.findByText('Widget(int)')
+    // The static constructor and the other methods are no answer for a custom attribute.
+    expect(within(dialog()).queryByText('Widget()')).toBeNull()
+    expect(within(dialog()).queryByText('Reset()')).toBeNull()
   })
 
   it('hands back the chain that reached the node, which is what names the assembly and namespace', async () => {

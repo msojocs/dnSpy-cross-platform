@@ -80,9 +80,8 @@ public sealed partial class WorkspaceManager {
 				output.Write(MetadataTextColors.Of((TypeDef)node.Value), GetLabel(node));
 				break;
 			case NodeKind.Method:
-				var method = (MethodDef)node.Value;
-				output.Write(MetadataTextColors.Of(method), method.Name.String);
-				CSharpTypeName.WriteParameterList(output, method, TypeColor);
+				// The same row name the label is — a constructor wears its type's name — in its colours.
+				WriteMethodRowName(output, (MethodDef)node.Value, TypeColor);
 				break;
 			case NodeKind.Field or NodeKind.Property or NodeKind.Event:
 				output.Write(MetadataTextColors.Of((IMemberDef)node.Value), GetLabel(node));

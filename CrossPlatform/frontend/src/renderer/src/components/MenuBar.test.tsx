@@ -16,7 +16,7 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   canShowCode: false,
   debugAvailable: false,
   debugState: 'inactive',
-  recentWorkspaces: [],
+  recentFiles: [],
   canUndo: false,
   canRedo: false,
   theme: 'dark',
@@ -25,8 +25,12 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   fullScreen: false,
   elevated: false,
   onOpen: vi.fn(),
+  onOpenFromGac: vi.fn(),
+  onOpenList: vi.fn(),
   onOpenRecent: vi.fn(),
   onCloseAll: vi.fn(),
+  onCloseAllFramework: vi.fn(),
+  onCloseAllMissing: vi.fn(),
   dirty: false,
   onSave: vi.fn(),
   onSaveModule: vi.fn(),
@@ -170,12 +174,16 @@ describe('MenuBar', () => {
       'Restart as Administrator',
       'ExitAlt+F4',
     ])
-    for (const name of [/^Export to Project/, /^SaveCtrl/, /^Save All/, /^Open from GAC/, /^Open List/, /^Recent Files/, /^Close Old In-Memory/, /^Close All Framework/, /^Close All Missing/])
+    for (const name of [/^Export to Project/, /^SaveCtrl/, /^Save All/, /^Recent Files/, /^Close Old In-Memory/])
       expect(screen.getByRole('menuitem', { name })).toBeDisabled()
     expect(screen.getByRole('menuitem', { name: /^Open\.\.\./ })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: /^Open from GAC/ })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: /^Open List/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Save Module\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Reload All Assemblies/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Close All$/ })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: /^Close All Framework/ })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: /^Close All Missing/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Sort Assemblies/ })).toBeEnabled()
     // dnSpy never greys the restart entry — it is clickable or not there at all.
     expect(screen.getByRole('menuitem', { name: /^Restart as Administrator/ })).toBeEnabled()
@@ -205,16 +213,20 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: /^Save All/ })).toBeEnabled()
   })
 
-  it('lists the recent workspaces under the Recent Files submenu', () => {
+  it('lists the recent files under the Recent Files submenu, numbered, by their whole path', () => {
     const onOpenRecent = vi.fn()
-    renderMenuWith({ recentWorkspaces: [['/tmp/a/One.dll'], ['/tmp/b/Two.dll', '/tmp/b/Three.dll']], onOpenRecent })
+    const longPath = `/very/${'long/'.repeat(30)}Four.dll`
+    renderMenuWith({ recentFiles: ['/tmp/a/One.dll', '/tmp/b/Two.dll', longPath], onOpenRecent })
     fireEvent.click(screen.getByRole('menuitem', { name: 'File' }))
     expect(screen.getByRole('menuitem', { name: /^Recent Files/ })).toBeEnabled()
     fireEvent.pointerEnter(screen.getByRole('menuitem', { name: /^Recent Files/ }))
     const submenu = screen.getAllByRole('menu')[1]
-    expect(within(submenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['1  One.dll', '2  Two.dll +1'])
+    // dnSpy's RecentFilesCommand keeps the last hundred characters of a longer path.
+    expect(within(submenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '1 /tmp/a/One.dll', '2 /tmp/b/Two.dll', `3 [...]${longPath.slice(-100)}`,
+    ])
     fireEvent.click(within(submenu).getByRole('menuitem', { name: /Two\.dll/ }))
-    expect(onOpenRecent).toHaveBeenCalledWith(['/tmp/b/Two.dll', '/tmp/b/Three.dll'])
+    expect(onOpenRecent).toHaveBeenCalledWith('/tmp/b/Two.dll')
   })
 
   it('enables CoreCLR commands only when the backend reports support', () => {
@@ -503,7 +515,7 @@ describe('MenuBar', () => {
       canShowCode={true}
       debugAvailable={false}
       debugState="stopped"
-      recentWorkspaces={[]}
+      recentFiles={[]}
       canUndo={false}
       canRedo={false}
       theme="dark"
@@ -513,8 +525,12 @@ describe('MenuBar', () => {
       elevated={false}
       visibleToolWindows={new Set(['explorer'])}
       onOpen={vi.fn()}
+      onOpenFromGac={vi.fn()}
+      onOpenList={vi.fn()}
       onOpenRecent={vi.fn()}
       onCloseAll={vi.fn()}
+      onCloseAllFramework={vi.fn()}
+      onCloseAllMissing={vi.fn()}
       dirty={false}
       onSave={vi.fn()}
       onSaveModule={vi.fn()}
@@ -642,7 +658,7 @@ describe('MenuBar', () => {
       canShowCode={true}
       debugAvailable={false}
       debugState="inactive"
-      recentWorkspaces={[]}
+      recentFiles={[]}
       canUndo={false}
       canRedo={false}
       theme="dark"
@@ -651,8 +667,12 @@ describe('MenuBar', () => {
       fullScreen={true}
       elevated={false}
       onOpen={vi.fn()}
+      onOpenFromGac={vi.fn()}
+      onOpenList={vi.fn()}
       onOpenRecent={vi.fn()}
       onCloseAll={vi.fn()}
+      onCloseAllFramework={vi.fn()}
+      onCloseAllMissing={vi.fn()}
       dirty={false}
       onSave={vi.fn()}
       onSaveModule={vi.fn()}

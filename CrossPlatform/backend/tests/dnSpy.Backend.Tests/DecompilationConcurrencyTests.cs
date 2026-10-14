@@ -14,7 +14,7 @@ public sealed class DecompilationConcurrencyTests : IDisposable {
 	public async Task TreeRequestsCompleteWhileAssemblyDecompilationIsRunning() {
 		var (workspace, root) = await OpenLargeAssemblyAsync();
 		var module = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, root.Id), TestContext.Current.CancellationToken)).Nodes);
-		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace");
+		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace" && node.Label == "Slow");
 		using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, root.Id, DecompilerLanguage.CSharp), cancellation.Token);
 		try {
@@ -33,7 +33,7 @@ public sealed class DecompilationConcurrencyTests : IDisposable {
 	public async Task EditDuringDecompilationRejectsTheOutdatedDocument() {
 		var (workspace, root) = await OpenLargeAssemblyAsync();
 		var module = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, root.Id), TestContext.Current.CancellationToken)).Nodes);
-		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace");
+		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace" && node.Label == "Slow");
 		var type = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, space.Id), TestContext.Current.CancellationToken)).Nodes);
 		using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, root.Id, DecompilerLanguage.CSharp), cancellation.Token);

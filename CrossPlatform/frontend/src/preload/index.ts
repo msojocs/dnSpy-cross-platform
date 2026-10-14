@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { BackendStatus, DecompilerLanguage, DnSpyApi, UiLocale } from '../shared/protocol'
 
 const api: DnSpyApi = {
@@ -8,7 +8,7 @@ const api: DnSpyApi = {
   openWorkspace: (paths) => ipcRenderer.invoke('workspace:open', paths),
   addModules: (workspaceId, paths) => ipcRenderer.invoke('workspace:addModules', workspaceId, paths),
   closeWorkspace: (workspaceId) => ipcRenderer.invoke('workspace:close', workspaceId),
-  reloadWorkspace: (workspaceId) => ipcRenderer.invoke('workspace:reload', workspaceId),
+  reloadWorkspace: (workspaceId, autoLoadedPaths) => ipcRenderer.invoke('workspace:reload', workspaceId, autoLoadedPaths),
   sortAssemblies: (workspaceId) => ipcRenderer.invoke('workspace:sortAssemblies', workspaceId),
   removeModule: (workspaceId, nodeId) => ipcRenderer.invoke('workspace:removeModule', workspaceId, nodeId),
   removeModules: (workspaceId, nodeIds) => ipcRenderer.invoke('workspace:removeModules', workspaceId, nodeIds),
@@ -17,15 +17,19 @@ const api: DnSpyApi = {
   moveRoots: (workspaceId, nodeIds, index) => ipcRenderer.invoke('workspace:moveRoots', workspaceId, nodeIds, index),
   activateNode: (workspaceId, nodeId) => ipcRenderer.invoke('tree:activate', workspaceId, nodeId),
   dropFiles: (workspaceId, paths, index, filter) => ipcRenderer.invoke('workspace:dropFiles', workspaceId, paths, index, filter),
+  pathForFile: (file) => webUtils.getPathForFile(file),
   listGacAssemblies: () => ipcRenderer.invoke('gac:list'),
   getGacDetails: (path) => ipcRenderer.invoke('gac:getDetails', path),
+  listDefaultDocumentLists: () => ipcRenderer.invoke('documentList:defaults'),
   getResourceItems: (workspaceId, nodeIds, raw) => ipcRenderer.invoke('resource:getItems', workspaceId, nodeIds, raw),
+  getResourceItemNames: (workspaceId, nodeIds) => ipcRenderer.invoke('resource:getItemNames', workspaceId, nodeIds),
+  selectMember: (workspaceId, paths, member) => ipcRenderer.invoke('tree:selectMember', workspaceId, paths, member),
   findResource: (workspaceId, nodeId) => ipcRenderer.invoke('resource:find', workspaceId, nodeId),
   getSpecialNode: (workspaceId, nodeId, kind) => ipcRenderer.invoke('module:specialNode', workspaceId, nodeId, kind),
   findByToken: (workspaceId, nodeId, token) => ipcRenderer.invoke('tree:findByToken', workspaceId, nodeId, token),
   loadDependencies: (workspaceId, nodeId, recursive) => ipcRenderer.invoke('workspace:loadDependencies', workspaceId, nodeId, recursive),
   showItemInFolder: (path) => ipcRenderer.invoke('app:showItemInFolder', path),
-  saveResource: (workspaceId, nodeId, raw) => ipcRenderer.invoke('edit:saveResource', workspaceId, nodeId, raw),
+  saveResource: (workspaceId, nodeIds, raw, useSubDirs) => ipcRenderer.invoke('edit:saveResource', workspaceId, nodeIds, raw, useSubDirs),
   getRoots: (workspaceId) => ipcRenderer.invoke('tree:roots', workspaceId),
   getChildren: (workspaceId, nodeId) => ipcRenderer.invoke('tree:children', workspaceId, nodeId),
   getNode: (workspaceId, nodeId) => ipcRenderer.invoke('tree:node', workspaceId, nodeId),
@@ -64,6 +68,7 @@ const api: DnSpyApi = {
   redoEdit: (workspaceId) => ipcRenderer.invoke('edit:redo', workspaceId),
   saveModuleAs: (workspaceId, moduleId, suggestedName) => ipcRenderer.invoke('module:saveAs', workspaceId, moduleId, suggestedName),
   saveModule: (workspaceId, moduleId) => ipcRenderer.invoke('module:save', workspaceId, moduleId),
+  askSaveModified: (count) => ipcRenderer.invoke('app:askSaveModified', count),
   saveAllModules: (workspaceId) => ipcRenderer.invoke('module:saveAll', workspaceId),
   saveCode: (suggestedName, text) => ipcRenderer.invoke('document:saveCode', suggestedName, text),
   readTextFile: (kind) => ipcRenderer.invoke('dialog:openTextFile', kind),

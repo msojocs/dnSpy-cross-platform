@@ -12,23 +12,33 @@ namespace dnSpy.Backend.Tests;
 public sealed class WorkspaceEditOptionsTests : IDisposable {
 	readonly WorkspaceManager manager = new();
 
+	/// <summary>
+	/// dnSpy's AssemblyReferenceNodeImpl resolves the assembly a reference names and lists that assembly's own
+	/// references — not its types: the assembly itself goes into the tree as a document the workspace loaded
+	/// by itself, and its types are read there.
+	/// </summary>
 	[Fact]
-	public async Task ExpandingAReferenceListsTheAssemblyItNames() {
+	public async Task ExpandingAReferenceListsTheReferencesOfTheAssemblyItNames() {
 		var workspaceId = await OpenTestAssemblyAsync();
 		var reference = await FindReferenceAsync(workspaceId, "dnSpy.Backend.Core");
 		Assert.True(reference.HasChildren);
 
-		var namespaces = await manager.GetChildrenAsync(new NodeRequest(workspaceId, reference.Id), TestContext.Current.CancellationToken);
-		var core = Assert.Single(namespaces.Nodes, node => node.Kind == "namespace" && node.Label == "dnSpy.Backend.Core");
+		var children = await manager.GetChildrenAsync(new NodeRequest(workspaceId, reference.Id), TestContext.Current.CancellationToken);
+		Assert.All(children.Nodes, node => Assert.Equal("assemblyreference", node.Kind));
+		Assert.Contains(children.Nodes, node => node.Label == "dnlib");
+		Assert.Contains(children.Nodes, node => node.Label == "dnSpy.Backend.Contracts");
 
-		var types = await manager.GetChildrenAsync(new NodeRequest(workspaceId, core.Id), TestContext.Current.CancellationToken);
-		var workspaceManager = Assert.Single(types.Nodes, node => node.Label == "WorkspaceManager");
-		Assert.Equal("type", workspaceManager.Kind);
-		Assert.Equal("class", workspaceManager.Icon);
+		var roots = await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), TestContext.Current.CancellationToken);
+		var core = Assert.Single(roots.Nodes, node => node.Kind == "assembly" && node.Label == "dnSpy.Backend.Core");
+		Assert.True(core.AutoLoaded);
 	}
 
+	/// <summary>
+	/// A reference to an assembly the workspace already holds resolves to that assembly, rather than loading
+	/// the file a second time: its rows are the references of the module that is open, and no root is added.
+	/// </summary>
 	[Fact]
-	public async Task AReferenceToAnOpenModuleExpandsToThatModulesOwnNodes() {
+	public async Task AReferenceToAnOpenModuleExpandsToThatModulesOwnReferences() {
 		var opened = await manager.OpenAsync(new OpenWorkspaceRequest([
 			typeof(WorkspaceEditOptionsTests).Assembly.Location,
 			typeof(WorkspaceManager).Assembly.Location,
@@ -36,13 +46,17 @@ public sealed class WorkspaceEditOptionsTests : IDisposable {
 		var module = await FindModuleAsync(opened.WorkspaceId, "dnSpy.Backend.Core");
 		var referring = await FindModuleAsync(opened.WorkspaceId, "dnSpy.Backend.Tests");
 		var reference = await FindReferenceAsync(opened.WorkspaceId, "dnSpy.Backend.Core", referring);
+		var rootsBefore = (await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes.Count;
 
 		var fromReference = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, reference.Id), TestContext.Current.CancellationToken);
-		var fromModule = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, module.Id), TestContext.Current.CancellationToken);
+		var moduleChildren = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, module.Id), TestContext.Current.CancellationToken);
+		var referencesFolder = Assert.Single(moduleChildren.Nodes, node => node.Kind == "referencesgroup");
+		var fromModule = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, referencesFolder.Id), TestContext.Current.CancellationToken);
 
-		// The same node ids, not merely equal labels: the reference is a second way into the module the
-		// workspace already has open, so the two subtrees are one subtree and nothing is listed twice.
-		Assert.Equal(fromModule.Nodes.Select(node => node.Id), fromReference.Nodes.Select(node => node.Id));
+		Assert.Equal(
+			fromModule.Nodes.Where(node => node.Kind == "assemblyreference").Select(node => node.Label),
+			fromReference.Nodes.Select(node => node.Label));
+		Assert.Equal(rootsBefore, (await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes.Count);
 	}
 
 	[Fact]

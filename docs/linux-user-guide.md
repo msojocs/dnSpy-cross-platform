@@ -24,10 +24,11 @@ sudo apt install ./dnSpy-1.0.0-amd64.deb
 dnspy
 ```
 
-可以从命令行直接打开程序集：
+可以从命令行直接打开程序集（和 WPF 版一样，文件路径直接跟在命令后面；`--open` 也仍然可用），并用 `--select` 定位到其中的成员——元数据 token，或 `T:`、`M:`、`N:` 这类 XML 文档 ID：
 
 ```bash
-dnspy --open ./Example.dll
+dnspy ./Example.dll
+dnspy ./Example.dll --select T:Example.Program
 ```
 
 deb 安装脚本会根据系统是否允许非特权 user namespace，配置 Electron sandbox helper。卸载应用不会删除用户配置。

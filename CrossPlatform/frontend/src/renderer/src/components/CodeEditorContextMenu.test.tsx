@@ -133,11 +133,20 @@ const UNIMPLEMENTED = [
   'go-to-entry-point',
   'go-to-global-cctor',
   'go-to-token',
-  'go-to-resource',
   'incremental-search',
 ]
 
 describe('buildCodeEditorMenuItems', () => {
+  it('offers Go to Resource on a reference to a member that reads a .resources entry', () => {
+    const property: TreeNode = { id: 'n-title', label: 'Title', kind: 'property', hasChildren: true, description: 'System.String Resources::Title()' }
+    const onGoToResource = vi.fn()
+    expect(menuKeys(context({ referenceNode: property, onGoToResource }))).not.toContain('go-to-resource')
+    const ctx = context({ referenceNode: property, readsResource: true, onGoToResource })
+    expect(menuKeys(ctx)).toContain('go-to-resource')
+    runEntry(ctx, 'go-to-resource')
+    expect(onGoToResource).toHaveBeenCalledWith(property)
+  })
+
   it('lays a method reference out in dnSpy group and order', () => {
     expect(menuKeys(methodReferenceContext())).toEqual([
       // 0 — tabs

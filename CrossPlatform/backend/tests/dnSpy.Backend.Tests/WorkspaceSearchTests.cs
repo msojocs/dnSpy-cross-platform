@@ -62,7 +62,7 @@ public sealed class WorkspaceSearchTests : IDisposable {
 			describe.NameParts!.Take(8).Select(part => (part.Text, part.Color)));
 		Assert.Equal([("SearchTarget", "namespace"), (".", "operator"), ("Library", "type")], describe.LocationParts!.Select(part => (part.Text, part.Color)));
 		Assert.Equal("method", describe.Icon);
-		Assert.Equal("class", describe.LocationIcon);
+		Assert.Equal("ClassPublic", describe.LocationIcon);
 	}
 
 	[Fact]

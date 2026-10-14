@@ -94,6 +94,8 @@ export interface DocumentViewCommands {
   onAnalyzeReference(target: TextSpan): void
   /** Opens an address in the browser, which is how the menu's "Search MSDN" runs. */
   onOpenUrl(url: string): void
+  /** dnSpy's Go to Resource for the member the reference names: selects and opens the entry it reads. */
+  onGoToResource(node: TreeNode): void
   onOpenHex(): void
   onShowHexAt(kind: HexShowKind): void
   onHexWriteBody(kind: HexBodyKind): void
@@ -212,8 +214,11 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
     // than building from wherever the caret was before. The node the reference names is looked up alongside:
     // the tree lists a member only once its type has been expanded, and dnSpy's commands act on whatever the
     // reference is, not on what the tree happens to show.
-    const [referenceNode] = await Promise.all([
+    const [referenceNode, readsResource] = await Promise.all([
       span?.targetNodeId !== undefined ? referenceNodeOf(span.targetNodeId) : undefined,
+      // Go to Resource shows only on a member that reads a .resources entry, which only the backend can tell
+      // — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the rest.
+      span?.targetNodeId !== undefined ? useAppStore.getState().findResource(span.targetNodeId).then((id) => id !== null) : false,
       useAppStore.getState().setCodeCaret({ documentId, line, column }),
     ])
     const state = useAppStore.getState()
@@ -269,6 +274,8 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
       onAnalyze: (node) => commandsRef.current.onAnalyze(node),
       onAnalyzeReference: (target) => commandsRef.current.onAnalyzeReference(target),
       onOpenUrl: (url) => commandsRef.current.onOpenUrl(url),
+      readsResource,
+      onGoToResource: (node) => commandsRef.current.onGoToResource(node),
       copyText,
       // Monaco's copy is a command rather than one of the editor's actions, so `getAction` has nothing to run:
       // the selected text is written out here, one selection per line as Monaco would.

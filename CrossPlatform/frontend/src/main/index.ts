@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, type WebContents } from 'electron'
 import { spawn } from 'node:child_process'
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { BackendClient } from './backend-client'
+import { parseCommandLine, userArguments } from './command-line'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
+import { resourceFileName, resourceFileSegments } from './resource-files'
 import type { AnalyzeChildrenRequest, AnalyzerNode, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
@@ -24,9 +26,9 @@ let restartInFlight = false
 // True only for the close a successful restart asks for. The renderer's unsaved-edits guard must not
 // stand in its way — that question was already answered before the request was made.
 let closingForRestart = false
-const initialPaths = parseInitialPaths(process.argv)
-// dnSpy spells it `--dont-load-files`; both are accepted so a script written against either works.
-const noLoadFiles = process.argv.includes('--no-load-files') || process.argv.includes('--dont-load-files')
+// dnSpy's command line: the files to open, the member `--select` names in them, and `--no-load-files` (dnSpy spells
+// it `--dont-load-files`; both are accepted so a script written against either works).
+const commandLine = parseCommandLine(userArguments(process.argv, process.defaultApp === true), process.cwd())
 
 const nativeMessages = {
   'zh-CN': {
@@ -39,6 +41,7 @@ const nativeMessages = {
     saveModuleAs: '模块另存为',
     saveCode: '保存代码',
     saveResource: '保存资源',
+    saveResources: '保存资源',
     codeFiles: '代码文件',
     openBookmarks: '导入书签',
     openBreakpoints: '导入断点',
@@ -50,6 +53,11 @@ const nativeMessages = {
     selectDirectory: '选择目录',
     restartFailed: '无法以管理员身份重启',
     restartNoResponse: '以管理员身份启动的窗口始终没有出现',
+    askSaveFile: '有一个文件尚未被保存，是否要在继续之前保存？',
+    askSaveFiles: '有多个文件尚未被保存，是否要在继续前保存它们？',
+    yes: '是',
+    no: '否',
+    cancel: '取消',
   },
   en: {
     openAssembly: 'Open Assembly',
@@ -61,6 +69,7 @@ const nativeMessages = {
     saveModuleAs: 'Save Module As',
     saveCode: 'Save Code',
     saveResource: 'Save Resource',
+    saveResources: 'Save Resources',
     codeFiles: 'Code Files',
     openBookmarks: 'Import Bookmarks',
     openBreakpoints: 'Import Breakpoints',
@@ -72,6 +81,11 @@ const nativeMessages = {
     selectDirectory: 'Select Directory',
     restartFailed: 'Could not restart with elevated rights',
     restartNoResponse: 'The window started with elevated rights never appeared',
+    askSaveFile: 'The file hasn\'t been saved yet. Do you want to save it before continuing?',
+    askSaveFiles: 'The files haven\'t been saved yet. Do you want to save them before continuing?',
+    yes: 'Yes',
+    no: 'No',
+    cancel: 'Cancel',
   },
 } as const
 
@@ -357,15 +371,6 @@ function flushSessionStorage(): void {
   }
 }
 
-function parseInitialPaths(args: string[]): string[] {
-  const paths: string[] = []
-  for (let index = 0; index < args.length; index++) {
-    if (args[index] === '--open' && index + 1 < args.length)
-      paths.push(path.resolve(args[++index]))
-  }
-  return paths
-}
-
 const requireBackend = (): BackendClient => {
   if (!backend)
     throw new Error('The backend is not available.')
@@ -401,7 +406,7 @@ const registerIpc = (): void => {
   ipcMain.handle('workspace:addModules', (_event, workspaceId: string, paths: string[]) => requireBackend().invoke('workspace/addModules', { workspaceId, paths }))
   ipcMain.handle('workspace:loadDependencies', (_event, workspaceId: string, nodeId: string, recursive: boolean) => requireBackend().invoke('workspace/loadDependencies', { workspaceId, nodeId, recursive }))
   ipcMain.handle('workspace:close', (_event, workspaceId: string) => requireBackend().invoke('workspace/close', { workspaceId }))
-  ipcMain.handle('workspace:reload', (_event, workspaceId: string) => requireBackend().invoke('workspace/reload', { workspaceId }))
+  ipcMain.handle('workspace:reload', (_event, workspaceId: string, autoLoadedPaths?: string[]) => requireBackend().invoke('workspace/reload', { workspaceId, autoLoadedPaths: autoLoadedPaths ?? null }))
   ipcMain.handle('workspace:sortAssemblies', (_event, workspaceId: string) => requireBackend().invoke('workspace/sortAssemblies', { workspaceId }))
   ipcMain.handle('workspace:removeModule', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('workspace/removeModule', { workspaceId, nodeId }))
   ipcMain.handle('workspace:removeModules', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('workspace/removeModules', { workspaceId, nodeIds }))
@@ -412,8 +417,11 @@ const registerIpc = (): void => {
   ipcMain.handle('tree:activate', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('tree/activate', { workspaceId, nodeId }))
   ipcMain.handle('gac:list', () => requireBackend().invoke('gac/list', {}))
   ipcMain.handle('gac:getDetails', (_event, path: string) => requireBackend().invoke('gac/getDetails', { path }))
+  ipcMain.handle('documentList:defaults', () => requireBackend().invoke('documentList/defaults', {}))
   ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw }))
   ipcMain.handle('resource:find', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/find', { workspaceId, nodeId }))
+  ipcMain.handle('resource:getItemNames', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('resource/getItemNames', { workspaceId, nodeIds, raw: false }))
+  ipcMain.handle('tree:selectMember', (_event, workspaceId: string, paths: string[], member: string) => requireBackend().invoke('tree/selectMember', { workspaceId, paths, member }))
   ipcMain.handle('module:specialNode', (_event, workspaceId: string, nodeId: string, kind: string) => requireBackend().invoke('module/getSpecialNode', { workspaceId, nodeId, kind }))
   ipcMain.handle('tree:findByToken', (_event, workspaceId: string, nodeId: string, token: string) => requireBackend().invoke('tree/findByToken', { workspaceId, nodeId, token }))
   ipcMain.handle('tree:roots', (_event, workspaceId: string) => requireBackend().invoke('tree/getRoots', { workspaceId }))
@@ -734,7 +742,7 @@ const registerIpc = (): void => {
   })
   ipcMain.handle('window:isFullScreen', (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false)
   ipcMain.handle('backend:status:get', () => lastBackendStatus)
-  ipcMain.handle('app:startupOptions', () => ({ initialPaths, noLoadFiles }))
+  ipcMain.handle('app:startupOptions', () => ({ initialPaths: commandLine.paths, noLoadFiles: commandLine.noLoadFiles, selectMember: commandLine.selectMember }))
   ipcMain.handle('app:filterExistingPaths', (_event, paths: string[]) => paths.filter((candidate) => existsSync(candidate)))
   // dnSpy's File.Exists: a directory is not a file, and any error — missing, unreadable — just means
   // "no", so statSync inside a try rather than existsSync.
@@ -759,23 +767,67 @@ const registerIpc = (): void => {
   })
   // Save Resource writes one node's bytes out, so it needs a destination the backend knows nothing about.
   // The bytes come from the workspace (an unsaved edit is what gets saved) and the file is written here.
-  ipcMain.handle('edit:saveResource', async (_event, workspaceId: string, nodeId: string) => {
-    const resource = await requireBackend().invoke<{ name: string; base64Data: string }>('resource/getData', { workspaceId, nodeId })
-    const data = Buffer.from(resource.base64Data, 'base64')
-    // A test cannot drive the native picker, so it names the file up front, the way the save dialogs do.
-    if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_RESOURCE_PATH) {
-      await writeFile(process.env.DNSPY_E2E_SAVE_RESOURCE_PATH, data)
-      return process.env.DNSPY_E2E_SAVE_RESOURCE_PATH
+  // dnSpy's SaveResources.Save: one item goes through a save dialog under its own name; several go into a
+  // folder the user picks, each under its name with the characters a file name cannot hold made '_'. A
+  // .resources file saves as its entries, the way dnSpy's deserialized save does, so even one resource can
+  // be several files. `raw` is the Raw Save command: an entry's serialized bytes instead of its value.
+  ipcMain.handle('edit:saveResource', async (_event, workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs = false) => {
+    const { items } = await requireBackend().invoke<{ items: { name: string; base64Data: string }[] }>('resource/getItems', { workspaceId, nodeIds, raw })
+    if (items.length === 0)
+      return []
+    // A test cannot drive the native pickers, so it names the file or folder up front.
+    const e2ePath = !app.isPackaged ? process.env.DNSPY_E2E_SAVE_RESOURCE_PATH : undefined
+    if (items.length === 1) {
+      let target = e2ePath
+      if (!target) {
+        const result = await dialog.showSaveDialog(mainWindow!, {
+          title: nativeText().saveResource,
+          defaultPath: resourceFileName(items[0].name),
+          filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
+        })
+        if (result.canceled || !result.filePath)
+          return []
+        target = result.filePath
+      }
+      await writeFile(target, Buffer.from(items[0].base64Data, 'base64'))
+      return [target]
     }
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: nativeText().saveResource,
-      defaultPath: path.basename(resource.name) || 'resource.bin',
-      filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
+    let directory = e2ePath
+    if (!directory) {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: nativeText().saveResources, properties: ['openDirectory', 'createDirectory'] })
+      if (result.canceled || result.filePaths.length === 0)
+        return []
+      directory = result.filePaths[0]
+    }
+    // dnSpy's ResourceSaver: the directories a name keeps under the "use sub dirs" variant are made as needed.
+    const written: string[] = []
+    for (const item of items) {
+      const target = path.join(directory, ...resourceFileSegments(item.name, useSubDirs))
+      await mkdir(path.dirname(target), { recursive: true })
+      await writeFile(target, Buffer.from(item.base64Data, 'base64'))
+      written.push(target)
+    }
+    return written
+  })
+  // dnSpy's DocumentSaver.AskUserToSaveIfModified: Yes saves the files first, No lets them go unsaved, and closing
+  // the box calls the command off — here a Cancel button, which Escape presses. A test names its answer up front.
+  ipcMain.handle('app:askSaveModified', async (_event, count: number): Promise<'save' | 'discard' | 'cancel'> => {
+    const e2eAnswer = !app.isPackaged ? process.env.DNSPY_E2E_SAVE_PROMPT : undefined
+    if (e2eAnswer === 'save' || e2eAnswer === 'discard' || e2eAnswer === 'cancel')
+      return e2eAnswer
+    if (!mainWindow)
+      return 'cancel'
+    const text = nativeText()
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'dnSpy',
+      message: count === 1 ? text.askSaveFile : text.askSaveFiles,
+      buttons: [text.yes, text.no, text.cancel],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
     })
-    if (result.canceled || !result.filePath)
-      return undefined
-    await writeFile(result.filePath, data)
-    return result.filePath
+    return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
   })
   ipcMain.handle('app:setLocale', (_event, locale: UiLocale) => {
     if (locale === 'en' || locale === 'zh-CN')

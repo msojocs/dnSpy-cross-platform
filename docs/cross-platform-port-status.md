@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -42,23 +42,23 @@
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
 | 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
-| 应用壳与通用 UI | ~53% | 11 | 17 | 9 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
-| 程序集树 | ~77% | 15 | 13 | 3 | 1 | 后端完整；Type References、GAC、拖放、Close All 变体、激活跳转已实现；前端 API 已对接，需实现 UI |
+| 应用壳与通用 UI | ~56% | 13 | 17 | 7 | 3 | 停靠布局、标签组、主题可用；Options 大多只存不用，不记忆窗口状态 |
+| 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
-| 程序集编辑（AsmEditor） | ~46% | 25 | 13 | 31 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
+| 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
 | C# 交互窗口 | ~42% | 5 | 11 | 9 | 2 | REPL 主流程可用；脚本访问不到 dnSpy，输出一次性返回 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
-| 反编译与语言 | ~37% | 3 | 13 | 10 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
-| 代码编辑器与文档标签 | ~33% | 4 | 12 | 14 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
+| 反编译与语言 | ~42% | 5 | 12 | 9 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
+| 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
 | Roslyn 语言服务 | ~25% | 0 | 4 | 4 | 0 | 只有词法着色，没有补全、悬停、诊断 |
 | 字符串引用窗口 | 0% | 0 | 0 | 19 | 0 | 完全未移植，只留两个隐藏或灰显的菜单占位 |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
-| 其他杂项 | 不计 | 2 | 3 | 2 | 7 | 多为 WPF/Windows 基础设施；更新检查、打开列表缺失 |
+| 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，所有对照项合计 ✅ 176 / 🟡 123 / ❌ 180 / ⛔ 30，完成度约 **52%**。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30，完成度约 **53%**（2026-10-13 为 ✅ 188 / 🟡 118 / ❌ 173）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -91,13 +91,13 @@
 
 3. **IL 和 VB 文档没有 span 与语句表。** 只有 C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。这一个根因导致：IL/VB 视图里不能跳转；不能下断点，也不显示当前语句；书签只能按行号记，不能持久化；搜索和分析器结果在 IL/VB 视图里只打开方法，不定位到语句。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以同时解决格式和 span。
 
-4. **菜单上标了快捷键却没有绑定。** 已确认的有：Ctrl+Alt+L、Alt+2、Ctrl+D / Ctrl+Shift+D（Go to Token，键位也与 WPF 不一致）、Ctrl+E Ctrl+W、Ctrl+X（Hex）、Alt+Numpad*（Show Next Statement）、Ctrl+Alt+P（附加）、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8 等调试窗口快捷键，以及对程序集按 Del。Shift+Alt+Enter（全屏）会被 Alt+Enter 分支截住，误触发节点编辑。另外缺 Ctrl+Tab、Alt+←/→、Ctrl+G 等常用键，菜单栏也不能用键盘操作。
+4. **菜单上标了快捷键却没有绑定。** 已确认的有：Ctrl+Alt+L、Alt+2、Ctrl+D / Ctrl+Shift+D（Go to Token，键位也与 WPF 不一致）、Ctrl+E Ctrl+W、Ctrl+X（Hex）、Alt+Numpad*（Show Next Statement）、Ctrl+Alt+P（附加）、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8 等调试窗口快捷键，Shift+Alt+Enter（全屏）会被 Alt+Enter 分支截住，误触发节点编辑。另外缺 Ctrl+Tab、Alt+←/→、Ctrl+G 等常用键，菜单栏也不能用键盘操作。
 
-5. **程序集树只能单选。** 位置为「选中文件 / 选中类型」的搜索、批量删除、多节点合并反编译、一次分析多个成员都受此限制。
+5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN 作用于整个选区；但位置为「选中文件 / 选中类型」的搜索、删除类型与成员、多节点合并反编译、一次分析多个成员仍只看一个节点。
 
-6. **未保存修改的保护不完整。** 有未保存修改时关闭窗口，渲染进程只做 `preventDefault`，主进程不弹对话框，表现可能是窗口静默拒绝关闭（代码推断）。Reload All 和移除程序集会直接丢弃修改，不提示。
+6. **未保存修改的保护不完整。** 有未保存修改时关闭窗口，渲染进程只做 `preventDefault`，主进程不弹对话框，表现可能是窗口静默拒绝关闭（代码推断）。Reload All 与移除程序集已按 WPF 询问：前者用 dnSpy 的「有 N 个尚未被保存的文件。是否要重新载入所有程序集并放弃所有修改？」，后者用「是否要在继续之前保存？」（是 / 否 / 取消，选「是」先原地保存）。
 
-7. **图标与本地化。** 没有复用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images`），改用 lucide-react 和手绘 SVG，class/enum/struct/delegate 没有专用图标，也没有访问修饰符叠加图标。界面语言只有 English 和简体中文，WPF 有 15 种。
+7. **图标与本地化。** 程序集树、分析器、搜索结果和类型选择器的行已改用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images` 的 XAML 矢量图转成 SVG，按 dnSpy 的 ThemedImageCreator 算法随主题背景换色，访问修饰符变体与 WPF 一一对应）；菜单、工具栏和其余工具窗口仍是 lucide-react。界面语言只有 English 和简体中文，WPF 有 15 种。
 
 ## 3. 审计中发现的疑似缺陷
 
@@ -109,7 +109,7 @@
 | 2 | 停止调试会杀掉附加的进程。WPF 对附加的进程默认分离；移植版 `stopDebug` 一律以 `terminateDebuggee=true` 断开，前端也没有 Detach 入口 | `FE/app-store.ts` 的 `stopDebug` | 已核实 |
 | 3 | 保存单个模块会清掉全局 `dirty`，即使其他模块仍有修改 | `FE/app-store.ts` 保存逻辑 | 代码推断 |
 | 4 | IL 编辑器从不重算 MaxStack。前端总是回传 `maxStack`，后端因此设 `KeepOldMaxStack = true`，加指令后栈深可能不够 | `BE/WorkspaceManager.cs` 方法体替换 | 代码推断 |
-| 5 | Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数 | `MAIN/index.ts` 的 `edit:saveResource` | 代码推断 |
+| 5 | ~~Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数~~ 已修复（2026-10-13）：改走 `resource/getItems`，`raw` 一路传到后端 | `MAIN/index.ts` 的 `edit:saveResource` | 已核实 |
 | 6 | PE-only、ELF、未知文件的 Open Hex Editor 读不出数据：`GetHexLength` / `ReadHexAsync` 走 `GetModule()`，对这三类文件抛异常 | `BE/WorkspaceManager.cs` | 代码推断 |
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
 | 8 | C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志 | `BE/Scripting/CSharpScriptService.cs` | 代码推断 |
@@ -120,13 +120,13 @@
 
 ### 4.1 应用壳与通用 UI 框架
 
-完成度约 53%（✅ 11 / 🟡 17 / ❌ 9 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+完成度约 56%（✅ 13 / 🟡 17 / ❌ 7 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | 主窗口与自绘标题栏 | `MainApp/MainWindow.xaml`、`AppWindow.cs` | `MAIN/index.ts`（`frame:false`）、`FE/components/WindowControls.tsx` | ✅ | 标题固定为 "dnSpy"，不显示版本、位数等 |
 | 窗口位置、尺寸、最大化记忆 | `MainApp/SavedWindowState.cs` | 无 | ❌ | 固定 1000×600；计划文档把它列为验收条件 |
-| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/index.ts` 的 `parseInitialPaths` | 🟡 | 只认 `--open` 和 `--no-load-files`；裸文件路径被忽略 |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/command-line.ts` | 🟡 | 程序集树的部分已对齐（裸文件路径、`--`、`--select`、`--no-load-files`，见 4.3）；`-l`、`--theme`、`--search*`、`--full-screen`、`--show/hide-tool-window`、`-p` 等只跳过不生效 |
 | 单实例与参数转发 | `MainApp/App.xaml.cs` | 无 | ❌ | 多开时 localStorage 中的会话互相覆盖 |
 | 以管理员身份重启 | `MainApp/RestartAsAdministratorCommand.cs` | `MAIN/index.ts` 的 `relaunchElevated`、`MAIN/elevated-start.ts` | ✅ | pkexec；提权副本固定走 X11 |
 | 退出时的未保存提示 | `MainApp/ViewCommands.cs` | `FE/App.tsx` 的 `beforeunload` | 🟡 | 不弹对话框，可能静默拒绝关闭 |
@@ -145,9 +145,9 @@
 | 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | 🟡 | 有 Ctrl+T、Ctrl+F4；缺 Ctrl+Tab |
 | 标签内容缩放 | `Tabs/TabElementZoomer.cs` | 无 | ❌ | |
 | 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | 🟡 | 不恢复光标与滚动位置；忽略 RestoreTabs 选项 |
-| 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberWorkspace` | ✅ | 记的是每次打开的整组路径 |
-| 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `file-menu.ts`（恒灰） | ❌ | |
-| 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `file-menu.ts`（恒灰） | ❌ | 也发布 Windows 包，不能算平台不适用 |
+| 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberRecentFiles` | ✅ | 每个文件一条，见 4.3 |
+| 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `OpenListDialog.tsx` | ✅ | 见 4.3 |
+| 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
 | 主题 | `Themes/ThemeService.cs`、`*.dntheme` | `FE/App.tsx`、`styles.css` | 🟡 | 四个主题可切换；不能加载 `.dntheme`；Blue 主题编辑器配色与 WPF 不同 |
 | 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx` | 🟡 | 只有 English、简体中文 |
 | Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；大部分页面不生效，见第 2 节 |
@@ -161,7 +161,7 @@
 | 启动时检查更新 | `MainApp/StartupUpdateCheck.cs` | 无 | ⛔ | 计划写明「更新机制不进入 MVP」；但 General 页仍留着无效的复选框 |
 | Windows 资源管理器集成 | `MainApp/Settings/WindowsExplorerIntegration.cs` | 无 | ⛔ | 注册表功能；Linux 的 .desktop 也没声明 MimeType |
 | MEF 扩展加载 | `Extension/ExtensionService.cs` | 无 | ⛔ | 见 4.16 |
-| 图标服务 | `Images/ImageService.cs` | lucide-react、手绘 SVG | 🟡 | 见第 2 节 |
+| 图标服务 | `Images/ImageService.cs` | `FE/ds-image.ts`；其余 lucide-react | 🟡 | 树类行用 dnSpy 图标集并按主题换色；菜单、工具栏仍是 lucide，见第 2 节 |
 | 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | 🟡 | 见第 2 节 |
 | 设置存储 | `Settings/SettingsService.cs` | localStorage 的 `dnspy.*` 键 | ✅ | 不支持 `--settings-file` 和便携模式 |
 
@@ -188,46 +188,49 @@
 
 ### 4.3 程序集树（Assembly Explorer）
 
-完成度约 53%（✅ 9 / 🟡 14 / ❌ 7 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令。
+完成度 100%（✅ 30 / 🟡 0 / ❌ 0 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令，以及 `Libraries/ICSharpCode.TreeView`（SharpTreeView）的键盘行为。
+
+与 WPF 仍有的差别都是本文其他模块记录的整体设计差异，不单独计入本节：单击只选中、双击才在标签中打开（4.5「打开节点的标签模型」）；不做单实例转发（4.1）；不建模内存模块（下表 ⛔ 行）。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| 打开程序集（含 PE、未知文档） | `Documents/Tabs/Commands.cs`、`Dialogs/OpenDocumentsHelper.cs` | `file-menu.ts`、`MAIN/index.ts`，RPC `workspace/open`、`workspace/addModules` | ✅ | 另新增 ELF 文档 |
-| Open from GAC / Open List | `Documents/Tabs/Dialogs/OpenFromGAC*`、`OpenDocumentList*` | RPC `gac/list`、`gac/getDetails`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需实现对话框 UI |
-| 最近文件 | `Documents/TreeView/AssemblyExplorerMostRecentlyUsedList.cs` | `rememberWorkspace` | 🟡 | 按整组路径记录 |
-| Reload All | `Documents/Tabs/DocumentListLoader.cs` | RPC `workspace/reload` | 🟡 | 不恢复标签；不询问就丢弃未保存修改 |
+| 打开程序集（含 PE、未知文档） | `Documents/Tabs/Commands.cs`、`Dialogs/OpenDocumentsHelper.cs` | `file-menu.ts`、`MAIN/index.ts`，RPC `workspace/open`、`workspace/addModules` | ✅ | 另新增 ELF 文档。打开后选中最后一个文件的根行（OpenDocumentsHelper） |
+| Open from GAC | `Documents/Tabs/Dialogs/OpenFromGAC*` | `OpenFromGacDialog.tsx`，RPC `gac/list`、`gac/getDetails` | ✅ | 搜索（多词、名称或版本）、显示重复、右侧详情、多选、双击打开；Ctrl+Shift+O。Linux 上列的是 Mono 的 GAC |
+| Open List | `Documents/Tabs/Dialogs/OpenDocumentList*`、`DocumentListService.cs`、`DefaultDocumentList.cs` | `OpenListDialog.tsx`、`FE/document-lists.ts`，RPC `documentList/defaults`（`BE/DefaultDocumentLists.cs`） | ✅ | 命名列表存 localStorage；当前打开的文件随时记入选中列表；内置列表来自本机每个 .NET 共享框架版本。新建列表用内联输入框代替 WPF 的输入对话框 |
+| 最近文件 | `Documents/TreeView/AssemblyExplorerMostRecentlyUsedList.cs`、`Documents/Tabs/Commands.cs` 的 `RecentFilesCommand` | `FE/app-store.ts` 的 `rememberRecentFiles`、`openRecentFile`，`file-menu.ts` | ✅ | 每个文件一条，最多 30 条，大小写不敏感去重，最近的在前；Open、Open from GAC、拖放（只记新加的）、命令行会记入，会话恢复和 Open List 不记。菜单项「序号 + 完整路径」，超过 100 字符保留末尾 100 个并加 `[...]`；点开只把该文件加进当前树并选中。旧版按整组记录的列表启动时迁移 |
+| Reload All | `Documents/Tabs/DocumentListLoader.cs`、`AE/UndoRedo/UndoRedoDocumentListListener.cs` | RPC `workspace/reload`（`ReloadWorkspaceRequest`），`FE/App.tsx` 的 `reloadAll` | ✅ | 有未保存修改时用 dnSpy 原话询问；重新加载用户打开的文件，自动加载的文档只保留标签还在用的（仍标为自动加载）；随后按节点键恢复展开的分支、选中项和文档标签，Hex / 模块信息标签按文件恢复 |
 | Close All / Sort Assemblies | `Documents/Tabs/Commands.cs`、`DocumentTreeView.cs` | RPC `workspace/sortAssemblies` | ✅ | |
-| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | RPC `workspace/getCloseCandidates`、`workspace/removeModules`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需接线菜单 |
+| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | RPC `workspace/getCloseCandidates` + `workspace/removeModules` | ✅ | 走 Remove Assembly：有未保存修改先询问是否保存，被移除文档的标签一并关闭 |
 | Close Old In-Memory Modules / Disable MMF | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 隐藏 | ⛔ | 后端整读镜像，没有 MMF，也不建模内存模块 |
-| Remove Assembly | `AE/Assembly/AssemblyCommands.cs` | RPC `workspace/removeModule`、`workspace/removeModules` | ✅ | 支持多选移除；Del 键需前端接线 |
+| Remove Assembly | `AE/Assembly/AssemblyCommands.cs` | RPC `workspace/removeModules`；树右键、Edit 菜单、Del 键 | ✅ | 作用于选中的全部根行（程序集、PE、ELF、未知文档），标题「移除 {n} 程序集」。有未保存修改时问「是否要在继续之前保存？」（是：先原地保存，失败则不移除；否：直接移除；取消）。撤销历史里的编辑涉及的文档，移除本身记为一步可撤销的编辑，撤销后同一批节点原样回到原位置；只在重做历史里的文档直接移除并清空重做历史 |
 | 会话恢复 | `Documents/Tabs/DocumentTabServiceLoader.cs` | `dnspy.session.v1` | ✅ | |
-| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `parseInitialPaths` | 🟡 | 见 4.1 |
-| 拖放（文件、节点） | `Documents/TreeView/DocumentTreeView.cs` | RPC `workspace/dropFiles`、`workspace/moveRoots`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需实现 DnD UI |
-| 程序集解析 | `Documents/AssemblyResolver.cs` | `BE/WorkspaceManager.cs` 的 `AssemblyReferenceResolver` | 🟡 | 不查 GAC；解析出的程序集不作为自动加载节点进树 |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs`、`Documents/Tabs/AppCommandLineArgsHandler.cs` | `MAIN/command-line.ts`，RPC `tree/selectMember`（`BE/XmlDocKeyProvider.cs`），`FE/App.tsx` 的 `followCommandLine` | ✅ | 非选项参数都是要打开的文件（`--` 之后一律当文件，`file://` 地址转成路径），`--open` 保留；其余 dnSpy 选项连同取值一起跳过。打开后跟随 `--select`：数字（十进制或 `0x`/`&H` 十六进制）是第一个模块里的 token，`N:` 是命名空间，其余按 Roslyn、再按 MSVC 格式的 XML 文档 ID 查找；找不到就打开第一个程序集。单实例与参数转发见 4.1 |
+| 拖放（文件、节点） | `Documents/TreeView/DocumentTreeView.cs` | `AssemblyExplorer.tsx`，RPC `workspace/dropFiles`、`workspace/moveRoots` | ✅ | 文件落在哪个根行前就插在哪；目录展开为其下全部文件；多文件时按「拖入项过滤」选项筛选；拖动根行可重新排序 |
+| 程序集解析 | `Documents/AssemblyResolver.cs` | `BE/GacFallbackAssemblyResolver.cs`、`BE/GacInfo.cs` 的 `Resolve` | ✅ | 模块目录与目标框架目录之后，非 .NET（Core）目标再查 GAC：先按完整标识找缓存目录，再在 Mono 的引用目录里找同名且版本、公钥标记一致的文件。树的引用解析与反编译器共用这一规则。解析出的程序集作为自动加载的根进树，排在最后，行文字变淡 |
 | Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | |
-| 程序集 / 模块节点 | `AssemblyDocumentNodeImpl.cs`、`ModuleDocumentNodeImpl.cs` | `GetAssemblyChildren`、`GetModuleChildren` | 🟡 | 看不到 netmodule；`<Module>` 不在命名空间里列出 |
+| 程序集 / 模块节点 | `AssemblyDocumentNodeImpl.cs`、`ModuleDocumentNodeImpl.cs` | `GetAssemblyChildren`、`GetModuleChildren` | ✅ | 列出 netmodule；`<Module>` 在 `-` 命名空间里 |
 | 命名空间 / 类型 / 成员，访问器嵌套 | `NamespaceNodeImpl.cs`、`TypeNodeImpl.cs` 等 | `GetTypeChildren` 等 | ✅ | |
-| 成员分组顺序 | `DocumentTreeViewSettings.cs` | `GetTypeChildren` 写死 | ❌ | 顺序与 WPF 默认相反，不可配置 |
-| 隐藏编译器生成的成员 | `TypeNodeImpl.cs` | 无 | ❌ | 会列出 `<>c`、`<…>d__N` |
-| References 文件夹 | `ReferencesFolderNodeImpl.cs`、`ModuleReferenceNodeImpl.cs` | `GetReferenceChildren` | 🟡 | 没有 ModuleRef；双击引用不跳到被引用的程序集 |
-| Type References 文件夹 | `TypeReferencesFolderNodeImpl.cs` | `GetTypeReferenceChildren`、`BE/WorkspaceManager.TypeReferences.cs`；前端 `app-store.ts` | ✅ | 后端完整实现；前端 API 已对接，需实现树节点渲染 |
+| 成员分组顺序 | `DocumentTreeViewSettings.cs` | 后端按 WPF 默认顺序输出，`orderTypeChildren` 按选项重排 | ✅ | Assembly Explorer 选项页的五个下拉生效 |
+| 隐藏编译器生成的成员 | `TypeNodeImpl.cs` 等的 `ShowMember` | 后端 `compilerGenerated` 标记，树按反编译器选项过滤 | ✅ | 跟随 C# 反编译器「显示隐藏的编译器生成类型和方法」 |
+| References 文件夹 | `ReferencesFolderNodeImpl.cs`、`ModuleReferenceNodeImpl.cs` | `GetReferenceChildren` | ✅ | 含 ModuleRef；程序集引用展开为被引用程序集的引用，双击选中被引用的程序集（需要时自动加载） |
+| Type References 文件夹 | `TypeReferencesFolderNodeImpl.cs` | `GetTypeReferenceChildren` | ✅ | 类型、泛型实例、方法/属性/事件/字段引用分组；双击跳到定义 |
 | 资源节点 | `Documents/TreeView/Resources/*` | `GetResourceChildren`、`BE/WorkspaceManager.Resources.cs` | ✅ | 图片、BAML、序列化资源等专用节点已实现 |
-| Base Type / Derived Types | `BaseTypeFolderNodeImpl.cs`、`DerivedTypesFinder.cs` | `GetBaseTypeChildren`、`FindDerivedTypes` | 🟡 | 双击打开注释文档，而不是跳到类型定义 |
-| 节点外观（文本、token、图标、提示） | 各 `*NodeImpl` | `AssemblyExplorer.tsx` | 🟡 | 图标见第 2 节；提示不带框架和架构 |
-| Assembly Explorer 选项页 | `Documents/Tabs/Settings/AssemblyExplorerAppSettingsPage.cs` | `options-pages.ts` | 🟡 | 只有 showToken、syntaxHighlight 生效 |
-| 选中、激活与多选 | `Documents/Tabs/DocumentTabService.cs` | `AssemblyExplorer.tsx`、RPC `tree/activate`；前端 `app-store.ts` | ✅ | 后端支持激活跳转；前端 API 已对接；单击不预览；不能多选 |
-| 键盘导航 | `TreeView/TreeViewImpl.cs` | `TreeRow` 的 `onKeyDown` | 🟡 | 只有 Enter、→、← |
+| Base Type / Derived Types | `BaseTypeFolderNodeImpl.cs`、`DerivedTypesFinder.cs` | `GetBaseTypeChildren`、`FindDerivedTypes`，RPC `tree/activate` | ✅ | 双击跳到类型定义（WPF `NodeActivated`）；解析不到时才打开注释文档 |
+| 节点外观（文本、token、图标、提示） | 各 `*NodeImpl`、`Images/DotNetImageService.cs`、`Images/ThemedImageCreator.cs` | `AssemblyExplorer.tsx` 的 `NodeIcon`，`FE/ds-image.ts`、`FE/ds-images.generated.ts`（`scripts/generate-tree-images.mjs` 由 `dnSpy/dnSpy.Images` 生成） | ✅ | 行图标就是 dnSpy 图标集里后端点名的那一张（含 Private/Internal/Protected 等访问变体、展开的文件夹），按 ThemedImageCreator 的 HSL 算法对主题背景换色；切换主题只改写样式表，行不重新渲染。构造函数行的着色文本与标签一致（写类型名）。提示含框架与架构 |
+| Assembly Explorer 选项页 | `Documents/Tabs/Settings/AssemblyExplorerAppSettingsPage.cs` | `options-pages.ts` | ✅ | 七项全部生效：token、语法高亮、版本号、PublicKeyToken、单击展开、成员顺序、拖入项过滤 |
+| 选中、激活与多选 | `Documents/Tabs/DocumentTabService.cs`、ListBox 的 Extended 选择 | `AssemblyExplorer.tsx`、RPC `tree/activate` | ✅ | Ctrl/Shift 多选，Shift 范围从锚点算起（锚点是最后一次单独选中或 Ctrl 切换的行）；右键落在选区内时保留选区；引用类行激活跳转 |
+| 键盘导航 | `TreeView/TreeViewImpl.cs`、SharpTreeView 的 `OnKeyDown` / `SharpTreeViewTextSearch` | `AssemblyExplorer.tsx` 的 `onTreeKeyDown`、`TreeTextSearch` | ✅ | ↑↓ Home End PgUp PgDn 移动并选中，Shift 扩选，Ctrl 只移动焦点、Ctrl+Space 切换；← 折叠或回到父行，→ 展开或进入第一个子行；小键盘 + − *；Enter / Space 激活唯一选中行；Ctrl+A 全选；直接键入行首文字查找（连续输入累积前缀、重复同一字母轮换、Backspace 回退、两倍双击时间后清空）。WPF 的输入查找比对的是文本控件的 `ToString()`，实际不可用，这里按行文字比对 |
 | Open in New Tab、Open Containing Folder、折叠全部、同步选中 | `TabCommands.cs`、`Commands.cs` | 右键菜单、`revealNode` | ✅ | |
-| Go to Entry Point / Global Cctor / Token | `EntryPointCommands.cs`、`GoToTokenCommand.cs` | RPC `module/getSpecialNode`、`tree/findByToken`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接；选中节点并打开文档 |
-| Copy MD Token / Full Name、Search MSDN | `CopyTokenCommand.cs` 等 | `AssemblyExplorerContextMenu.tsx` | 🟡 | 属性和事件只拿到短名 |
-| Save Resource / Raw Save Resource | `AE/Resources/ResourceCommands.cs` | RPC `resource/getData`、`resource/getItems` | ✅ | 支持多选保存；Raw 保存已实现 |
-| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | RPC `resource/find`；前端 `app-store.ts` | ✅ | 后端完成；前端 API 已对接，需接线命令 |
+| Go to Entry Point / Global Cctor / Token | `EntryPointCommands.cs`、`GoToTokenCommand.cs` | RPC `module/getSpecialNode`、`tree/findByToken` | ✅ | |
+| Copy MD Token / Full Name、Search MSDN | `CopyTokenCommand.cs`、`CopyFullNameCommand.cs`、`SearchMsdnCommand.cs` | `AssemblyExplorerContextMenu.tsx`，后端 `TreeNodeDto.FullName`、`MsdnName` | ✅ | 两个复制命令取第一个选中行，凡代表元数据行（程序集、模块、类型、成员、各种引用、基类型/派生类型）都有；全名即 `IFullName.FullName`。Search MSDN 对每个选中行各开一页：公开（或受保护）的定义、能解析到这种定义的引用行，以及非空命名空间 |
+| Save Resource / Raw Save Resource | `AE/Resources/ResourceCommands.cs`、`SaveResources.cs` | RPC `resource/getItems`、`resource/getItemNames`，`MAIN/index.ts` 的 `edit:saveResource`、`MAIN/resource-files.ts` | ✅ | 四个命令齐全：保存 / 以子目录保存 / 直接保存 / 以子目录直接保存。标题按要写出的文件数（.resources 按条目算），一个文件写名字；「以子目录」两项只在多个文件且有名字带目录时出现。单独选中 Resources 文件夹即代表其中全部资源；选区里的非资源行忽略；没有数据可写的资源不显示命令。目录段 `.`/`..` 会改写，资源名不能把文件写到所选目录之外 |
+| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | RPC `resource/find`，树右键与代码视图右键 | ✅ | 只在读取 .resources 条目的属性/方法上出现（树里要求只选中一行）；选中并打开该条目 |
 
-测试：后端 `WorkspaceManagerTests.cs`（懒加载、基类型/派生类型、FindByToken、PE/ELF、Reload 等）；前端 `AssemblyExplorer.test.tsx`、`AssemblyExplorerContextMenu.test.tsx`；e2e `app.spec.ts`、`assembly-tree-performance.spec.ts`。键盘导航、Reload 后的标签表现没有测试。
+测试：后端 `AssemblyExplorerCommandTests.cs`（全名、MSDN 地址跟随引用、着色文本与标签一致、资源保存名、带撤销历史的移除、Reload 保留自动加载文件、`--select`、XML 文档 ID 往返、GAC 与 Mono 引用目录解析）、`WorkspaceManagerTests.cs`（懒加载、基类型/派生类型、FindByToken、PE/ELF、Reload、移除非托管文档等）、`DefaultDocumentListsTests.cs`；前端 `AssemblyExplorer.test.tsx`（键盘导航、输入查找、书签组合键穿透、dnSpy 图标、单击展开、激活、过滤编译器生成成员、成员顺序、拖放、程序集版本）、`AssemblyExplorerContextMenu.test.tsx`（多选移除、四个保存命令、复制与 MSDN、Go to Resource）、`CodeEditorContextMenu.test.tsx`（代码视图 Go to Resource）、`ds-image.test.ts`、`app-store.test.ts`（最近文件、Shift 锚点、移除与撤销、按模块保存）、`MenuBar.test.tsx`（最近文件菜单）、`MAIN/command-line.test.ts`、`MAIN/resource-files.test.ts`、`OpenFromGacDialog.test.tsx`、`document-lists.test.ts`；e2e `assembly-tree.spec.ts`（命令行 `--select` 与最近文件、键盘导航、Reload All 恢复标签、移除后撤销）、`app.spec.ts`、`assembly-tree-performance.spec.ts`。Open from GAC、Open List 两个对话框和拖放仍没有 e2e。
 
 ### 4.4 反编译与语言
 
-完成度约 37%（✅ 3 / 🟡 13 / ❌ 10 / ⛔ 1）。WPF 范围：`WPF/Decompiler/`、`WPF/Language/`、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
+完成度约 42%（✅ 5 / 🟡 12 / ❌ 9 / ⛔ 1）。WPF 范围：`WPF/Decompiler/`、`WPF/Language/`、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
 
 后端没有沿用仓库里的 ILSpy 分支，而是用 NuGet 上的 `ICSharpCode.Decompiler 11.1`、`ICSharpCode.BamlDecompiler`，VB 由 `ICSharpCode.CodeConverter` 从 C# 文本转换得到。
 
@@ -255,8 +258,8 @@
 | `.resources` 条目显示 | `Documents/TreeView/Resources/BuiltInResourceElementNodeImpl.cs` | `DecompileResourceEntry` | 🟡 | 非字符串条目显示原始十六进制 |
 | 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 无 | ❌ | |
 | 嵌入资源文本识别 | `ResourceUtilities.cs` | `DescribeResource` | ❌ | 只显示 "Embedded resource, N bytes" |
-| 保存资源 | `AE/Resources/ResourceCommands.cs` | RPC `resource/getData` | 🟡 | 与 4.3 重复计入 |
-| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 隐藏 | ❌ | 与 4.3 重复计入 |
+| 保存资源 | `AE/Resources/ResourceCommands.cs` | RPC `resource/getItems` | ✅ | 与 4.3 重复计入 |
+| Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 树右键、代码视图右键 | ✅ | 与 4.3 重复计入 |
 | BAML → XAML | `BamlDecompiler/XamlDecompiler.cs` | `DecompileResourceEntry` | 🟡 | 无 span、无悬停 |
 | Disassemble BAML | `BamlDecompiler/BamlDisassembler.cs` | 无 | ❌ | |
 | BAML 选项页 | `BamlDecompiler/BamlSettings.cs` | `options-pages.ts` | ❌ | 后端写死设置 |
@@ -265,7 +268,7 @@
 
 ### 4.5 代码编辑器与文档标签
 
-完成度约 33%（✅ 4 / 🟡 12 / ❌ 14）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
+完成度约 35%（✅ 4 / 🟡 13 / ❌ 13）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -294,7 +297,7 @@
 | 语法着色 | `DocViewer/DecompilerTabContentClassifierContext.cs` | `csharp-highlighting.ts`（Shiki）、`il-language.ts` | 🟡 | 只有词法着色，没有语义着色 |
 | 文本编辑器选项与字体 | `Text/Settings/*` | `options-pages.ts` | ❌ | `DocumentView` 不读任何字段 |
 | 右键 Open in New Tab / Copy Token / Full Name / MSDN | `TabCommands.cs` 等 | `CodeEditorContextMenu.tsx` | ✅ | |
-| 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs` | 隐藏 | ❌ | 只在树菜单里有 |
+| 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs`、`ResourceCommands.cs` | `CodeEditorContextMenu.tsx` | 🟡 | Go to Resource 已接入；Go to Token、Go to Entry Point 仍只在树菜单里有 |
 | 标签右键与快捷键 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | 🟡 | 见 4.1 |
 | 标签组与 Window 菜单 | `Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | 与 4.1 重复计入 |
 | 会话恢复标签 | `Documents/Tabs/DocumentTabSerializer.cs` | `buildSession`、`loadSession` | 🟡 | 与 4.1 重复计入 |
@@ -497,7 +500,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 
-整体完成度约 46%（✅ 25 / 🟡 13 / ❌ 31 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
+整体完成度约 51%（✅ 29 / 🟡 12 / ❌ 28 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
 
 元数据编辑最完整：五类成员的编辑、新建、删除对话框与 WPF 逐页对齐，命名空间操作和事务式撤销也很扎实。差距集中在 Roslyn 源码编辑、方法体编辑器、资源新建与元素编辑、程序集/模块对话框、保存选项。
 
@@ -506,14 +509,14 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | Namespace | ~100% | 3 | 0 | 0 | 0 |
 | Types / Method / Field / Property / Event | ~100% | 5 | 0 | 0 | 0 |
 | 通用对话框（DnlibDialogs、ViewHelpers） | ~79% | 5 | 1 | 1 | 0 |
-| Commands（菜单落位与杂项命令） | ~58% | 3 | 1 | 2 | 1 |
-| UndoRedo | ~50% | 2 | 2 | 2 | 0 |
+| Commands（菜单落位与杂项命令） | ~75% | 4 | 1 | 1 | 1 |
+| UndoRedo | ~83% | 4 | 2 | 0 | 0 |
 | Hex（修改能力） | ~44% | 3 | 1 | 4 | 0 |
 | Module | ~38% | 1 | 1 | 2 | 0 |
 | SaveModule | ~33% | 1 | 2 | 3 | 0 |
 | MethodBody | ~28% | 1 | 3 | 5 | 0 |
 | Resources | ~21% | 1 | 1 | 5 | 0 |
-| Assembly | ~17% | 0 | 1 | 2 | 1 |
+| Assembly | ~33% | 1 | 0 | 2 | 1 |
 | Compiler（C# 编辑） | 0% | 0 | 0 | 5 | 0 |
 
 #### Assembly、Module、Namespace
@@ -522,7 +525,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 |---|---|---|---|---|
 | Edit Assembly… | `AE/Assembly/AssemblyCommands.cs`、`AssemblyOptionsVM.cs` | `edit-menu.ts`（灰显） | ❌ | 后端选项模型不含 assembly |
 | Create Assembly… | 同上 | 灰显 | ❌ | |
-| Remove Assembly | 同上 | RPC `workspace/removeModule` | 🟡 | 不可撤销，不询问保存 |
+| Remove Assembly | 同上 | RPC `workspace/removeModules` | ✅ | 作用于选中的全部根行；撤销历史涉及的文档，移除记为可撤销的一步，见 4.3 |
 | Disable Memory Mapped I/O | 同上 | 隐藏 | ⛔ | 后端没有内存映射 |
 | Edit Module… | `AE/Module/ModuleCommands.cs`、`ModuleOptionsVM.cs` | 灰显 | ❌ | |
 | NetModule 新建、添加、移除 | 同上、`NetModuleOptionsVM.cs` | 隐藏 | ❌ | 树分不清 netmodule 与程序集模块 |
@@ -595,8 +598,8 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 编辑命令统一进撤销栈并刷新界面 | `UndoCommandService.cs` | `refreshAfterEdit` | ✅ | 后端有版本冲突检测 |
 | 修改标记 | 同上 | 前端只有一个工作区级 `dirty` | 🟡 | 见缺陷 #3；撤销回保存点后不复位 |
 | 退出时询问保存 | `AE/UndoRedo/Commands.cs` | `beforeunload` | 🟡 | 没有「保存后退出」 |
-| 重新加载前提示 | `UndoRedoDocumentListListener.cs` | 无 | ❌ | |
-| 移除已修改的程序集时询问 | `AE/Assembly/AssemblyCommands.cs` | 无 | ❌ | |
+| 重新加载前提示 | `UndoRedoDocumentListListener.cs` | `FE/App.tsx` 的 `reloadAll` | ✅ | dnSpy 原话：「有 N 个尚未被保存的文件。是否要重新载入所有程序集并放弃所有修改？」 |
+| 移除已修改的程序集时询问 | `AE/Assembly/AssemblyCommands.cs`、`AE/SaveModule/DocumentSaver.cs` | `FE/App.tsx` 的 `removeDocuments`，`app:askSaveModified` | ✅ | 「是否要在继续之前保存？」是 / 否 / 取消；选「是」原地保存，保存失败则不移除 |
 
 #### 通用对话框与命令
 
@@ -610,11 +613,11 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 手工构造 MemberRef / MethodSpec | `MemberRefVM.cs`、`MethodSpecVM.cs` | 无 | ❌ | |
 | 列表编辑控件 | `ListVM.cs` | `ListEditor.tsx` | ✅ | |
 | 命令在三处菜单里的落位 | `AE/Commands/*MenuHandler.cs` | `edit-menu.ts`、两个右键菜单 | ✅ | |
-| 多选批量操作 | `AE/Commands/DeletableNodes.cs` | 树单选 | 🟡 | |
+| 多选批量操作 | `AE/Commands/DeletableNodes.cs` | 树支持多选 | 🟡 | Remove Assembly 作用于整个选区；删除类型/成员仍只删一个 |
 | Copy MD Token / Full Name | `WPF/Documents/Tabs/CopyTokenCommand.cs` | 树和代码视图菜单 | ✅ | |
 | Copy IL Bytes | `AE/Commands/InstructionCommands.cs` | 无 | ❌ | |
 | Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | 与 4.3 重复计入 |
-| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | 灰显 | ❌ | 与 4.3 重复计入 |
+| Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | File 菜单 | ✅ | 与 4.3 重复计入 |
 | Close Old In-Memory Modules | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 灰显 | ⛔ | 不建模内存模块 |
 
 测试：后端 `WorkspaceEditCreateTests.cs`、`WorkspaceEditOptionsTests.cs`、`Editing/NodeOptionsRoundTripTests.cs`、`Editing/SignatureRoundTripTests.cs`，以及 `WorkspaceManagerTests.cs` 中的方法体、资源、hex、保存用例；前端 `*OptionsDialog.test.tsx` 与 `widgets/*.test.ts(x)` 约 430 条；e2e 覆盖新建类型并保存、IL 与元数据编辑、hex 写入并撤销、模块转换。`MethodBodyEditor` 没有组件测试，退出提示和修改标记粒度没有测试。
@@ -858,15 +861,15 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 
 ### 4.18 其他杂项
 
-不计完成度（✅ 2 / 🟡 3 / ❌ 2 / ⛔ 7）。
+不计完成度（✅ 3 / 🟡 3 / ❌ 1 / ⛔ 7）。
 
 | 项目 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
 | 本地化资源（15 种语言） | `WPF/Properties/*.resx` 等 | 🟡 | 只有 2 种 |
 | 许可证与鸣谢 | `WPF/LicenseInfo/*` | 🟡 | 安装包里齐全；应用内看不到 |
-| 图标库 `dnSpy.Images` | `dnSpy/dnSpy.Images/` | 🟡 | 改用 lucide-react |
+| 图标库 `dnSpy.Images` | `dnSpy/dnSpy.Images/` | 🟡 | 树、分析器、搜索结果、类型选择器的行已用原图（转成 SVG、按主题换色）；菜单、工具栏仍是 lucide-react |
 | 更新检查 | `WPF/MainApp/UpdateService.cs` | ❌ | 选项页复选框无效，会误导用户 |
-| 打开列表与默认列表 | `WPF/FileLists/*` | ❌ | 与 4.1 重复 |
+| 打开列表与默认列表 | `WPF/FileLists/*` | ✅ | 与 4.1 重复；默认列表取本机 .NET 共享框架 |
 | netcorefiles（dbgshim） | `DBG/netcorefiles/` | ✅ | 改用 `Microsoft.Diagnostics.DbgShim` NuGet 包 |
 | 以管理员身份重启 | `WPF/MainApp/RestartAsAdministratorCommand.cs` | ✅ | 与 4.1 重复 |
 | 弱事件、MVVM 辅助、启动优化、WineFixes、DevBuildWarning | `WPF/Events`、`WPF/MVVM`、`WPF/MainApp/*` | ⛔ | 基础设施或 WPF 专属 |
@@ -881,8 +884,8 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 
 1. 修 Save / Save Module 的目标模块（缺陷 #1），以及保存单个模块清掉全局 `dirty`（缺陷 #3）。
 2. 停止调试时区分启动的进程与附加的进程，后者走 Detach，并在菜单里加 Detach All（缺陷 #2）。
-3. 关闭窗口、Reload All、移除程序集前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框。
-4. 修 Raw Save Resource（缺陷 #5）和 PE-only/ELF 文件的 hex 读取（缺陷 #6）。
+3. 关闭窗口前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框（Reload All 与移除程序集已经询问）。
+4. 修 PE-only/ELF 文件的 hex 读取（缺陷 #6）。Raw Save Resource（缺陷 #5）已修。
 5. IL 编辑器默认重算 MaxStack（缺陷 #4）。
 
 **P1：让已有界面生效**（UI 已经做好，只差接线）
@@ -910,17 +913,20 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 
 ## 6. 测试基线
 
-以下数字取自 `CrossPlatform/ANALYZER_HANDOFF.md`（2026-10-12），本次审计没有重新运行：
+2026-10-14 程序集树补齐后在本机重新跑过（后端先 `-p:NuGetAudit=false` 构建，e2e 前重建了 Host 与前端）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 336 通过 |
-| 前端 vitest | 893 通过 |
-| e2e（Playwright Electron） | 82 通过、3 跳过 |
+| 后端 `dotnet test` | 359 通过（2026-10-13 为 348） |
+| 前端 `pnpm typecheck` | 0 错误 |
+| 前端 vitest | 964 通过（2026-10-13 为 929） |
+| e2e（Playwright Electron） | 89 通过、3 跳过（2026-10-13 为 85） |
 
-覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、断点判定与跟踪点、异常设置、书签。
+此前记录的「后端 336 通过」之后的一次「346 通过」是 `--no-build` 跑在旧 DLL 上得到的；真实构建下当时有 22 条失败，已逐条按 WPF 行为修正（1 处后端缺陷、21 条过期断言），见 `docs/assembly-tree-frontend-integration.md`。
 
-明显的测试盲区：选项是否生效（多数本来就没有消费方）、Monaco 编辑器功能（查找、悬停、折叠）、命令行解析、未保存修改时退出、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。另外 CI 不运行前端单测，这 893 条只在本地跑。
+覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、程序集树（键盘、图标、最近文件、命令行、Reload、移除与撤销）、断点判定与跟踪点、异常设置、书签。
+
+明显的测试盲区：选项是否生效（多数本来就没有消费方）、Monaco 编辑器功能（查找、悬停、折叠）、未保存修改时退出、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。另外 CI 不运行前端单测，这 964 条只在本地跑。
 
 ## 7. 与现有文档的出入
 
@@ -928,9 +934,9 @@ WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」�
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 异常设置已实现（4.13）；表达式求值确实没有 |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 336 / 893 / 82，见第 6 节 |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 359 / 964 / 89，见第 6 节 |
 | `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
 | `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 两项都未实现 |
 | `docs/linux-support-plan.md` §8.2 | DTO 由 schema 生成 C# 与 TypeScript，CI 检查漂移 | 两边手写，没有生成与漂移检查（4.2） |
-| `CrossPlatform/ASSEMBLY_EXPLORER_CHANGES.md` | PE 与 Type References 节点为「占位实现」 | PE 节点已完整；Type References 仍为空（4.3） |
+| `CrossPlatform/ASSEMBLY_EXPLORER_CHANGES.md` | PE 与 Type References 节点为「占位实现」 | 两者均已完整实现（4.3） |

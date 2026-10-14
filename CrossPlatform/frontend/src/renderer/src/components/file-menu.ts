@@ -10,15 +10,19 @@ export interface FileMenuContext {
   dirty: boolean
   /** Whether the app already has elevated rights; "Restart as Administrator" only makes sense if not. */
   elevated: boolean
-  /** The workspace sets the user opened before, most recent first; each is the path list of one open. */
-  recentWorkspaces: string[][]
+  /** The files the user opened before, most recent first — dnSpy's AssemblyExplorerMostRecentlyUsedList. */
+  recentFiles: string[]
   onOpen(): void
-  onOpenRecent(paths: string[]): void
+  onOpenFromGac(): void
+  onOpenList(): void
+  onOpenRecent(path: string): void
   onSave(): void
   onSaveModule(): void
   onSaveAll(): void
   onReloadAll(): void
   onCloseAll(): void
+  onCloseAllFramework(): void
+  onCloseAllMissing(): void
   onSortAssemblies(): void
   onRestartAsAdministrator(): void
   onQuit(): void
@@ -47,26 +51,25 @@ const GROUP_EXIT = 1000000
 const always = (): boolean => true
 
 /**
- * dnSpy's recent-file list: one entry per remembered file, numbered, under the "Recent Files" submenu.
- * This port remembers the path list of each open rather than single files, so an entry names the first
- * of its paths and says how many more came with it.
+ * dnSpy's RecentFilesCommand: one entry per remembered file, numbered from 1 and naming the file by its whole
+ * path, under the "Recent Files" submenu.
  */
 const recentFiles = (ctx: FileMenuContext): MenuItem[] =>
-  ctx.recentWorkspaces.map((paths, index) => ({
-    label: `${index + 1}  ${recentLabel(paths, ctx.t('Workspace'))}`,
-    action: () => ctx.onOpenRecent(paths),
+  ctx.recentFiles.map((path, index) => ({
+    label: `${index + 1} ${recentFileLabel(path)}`,
+    action: () => ctx.onOpenRecent(path),
   }))
 
-export const recentLabel = (paths: string[], workspaceLabel: string): string => {
-  const first = paths[0]?.split(/[\\/]/).at(-1) ?? workspaceLabel
-  return paths.length > 1 ? `${first} +${paths.length - 1}` : first
-}
+/** RecentFilesCommand.GetShortFilename: a path longer than a hundred characters keeps its last hundred. */
+const MAX_RECENT_FILE_LABEL = 100
+export const recentFileLabel = (path: string): string =>
+  path.length > MAX_RECENT_FILE_LABEL ? `[...]${path.slice(path.length - MAX_RECENT_FILE_LABEL)}` : path
 
 /**
  * dnSpy's File menu (AppMenus.cs + the ExportMenuItem registrations across dnSpy.Documents.Tabs,
  * dnSpy.AsmEditor and MainApp), in the order its Group and Order values give. Entries this port has no
- * command for — Export to Project, Open from GAC, Open List, the Close* sweeps — keep dnSpy's place and
- * render disabled, so the menu still reads as dnSpy's.
+ * command for — Export to Project, Close Old In-Memory Modules — keep dnSpy's place and render disabled,
+ * so the menu still reads as dnSpy's.
  */
 const FILE_ENTRIES: FileEntry[] = [
   // 0 — Save
@@ -79,15 +82,15 @@ const FILE_ENTRIES: FileEntry[] = [
 
   // 1000 — Open and the commands that work on what is open
   { group: GROUP_OPEN, order: 0, label: (ctx) => ctx.t('Open...'), shortcut: 'Ctrl+O', enabled: always, action: (ctx) => ctx.onOpen() },
-  { group: GROUP_OPEN, order: 10, label: (ctx) => ctx.t('Open from GAC...'), shortcut: 'Ctrl+Shift+O', enabled: () => false },
-  { group: GROUP_OPEN, order: 20, label: (ctx) => ctx.t('Open List...'), enabled: () => false },
-  { group: GROUP_OPEN, order: 30, label: (ctx) => ctx.t('Recent Files'), enabled: (ctx) => ctx.recentWorkspaces.length > 0, submenu: recentFiles },
+  { group: GROUP_OPEN, order: 10, label: (ctx) => ctx.t('Open from GAC...'), shortcut: 'Ctrl+Shift+O', enabled: always, action: (ctx) => ctx.onOpenFromGac() },
+  { group: GROUP_OPEN, order: 20, label: (ctx) => ctx.t('Open List...'), enabled: always, action: (ctx) => ctx.onOpenList() },
+  { group: GROUP_OPEN, order: 30, label: (ctx) => ctx.t('Recent Files'), enabled: (ctx) => ctx.recentFiles.length > 0, submenu: recentFiles },
   { group: GROUP_OPEN, order: 40, label: (ctx) => ctx.t('Reload All Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onReloadAll() },
   // Close All and Close Old In-Memory Modules share dnSpy's Order 50; the stable sort keeps this order.
   { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close All'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAll() },
   { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close Old In-Memory Modules'), enabled: () => false },
-  { group: GROUP_OPEN, order: 55, label: (ctx) => ctx.t('Close All Framework Assemblies'), enabled: () => false },
-  { group: GROUP_OPEN, order: 60, label: (ctx) => ctx.t('Close All Missing Files'), enabled: () => false },
+  { group: GROUP_OPEN, order: 55, label: (ctx) => ctx.t('Close All Framework Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllFramework() },
+  { group: GROUP_OPEN, order: 60, label: (ctx) => ctx.t('Close All Missing Files'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllMissing() },
   { group: GROUP_OPEN, order: 100, label: (ctx) => ctx.t('Sort Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSortAssemblies() },
 
   // 1000000 — Exit

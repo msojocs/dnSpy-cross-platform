@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, LoaderCircle, X } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
-import { NodeIcon } from './AssemblyExplorer'
+import { iconFamily, NodeIcon } from './AssemblyExplorer'
 import { trapTabKey, useModalLayer } from './modal-stack'
 
 /**
@@ -14,16 +14,20 @@ export type PickerMode = 'type' | 'member' | 'field' | 'method' | 'constructor'
 
 /**
  * Whether a node is one of the answers this mode is looking for. A mode that only wants part of a kind
- * tells them apart by name, since that is all the tree carries: an instance constructor is a method
- * called `.ctor`, which is the name ECMA-335 §II.10.5.1 requires it to have — `.cctor` is the static one
- * and is not a custom attribute's constructor.
+ * tells them apart by name: an instance constructor is a method called `.ctor`, which is the name
+ * ECMA-335 §II.10.5.1 requires it to have — `.cctor` is the static one and is not a custom attribute's
+ * constructor. The row's label names a constructor after its type, the way dnSpy's tree does, so the name
+ * is read off the full name the node carries instead ("System.Void NS.Type::.ctor(System.String)").
  */
+const isInstanceConstructor = (node: TreeNode): boolean =>
+  node.kind === 'method' && (node.description?.includes('::.ctor(') ?? node.label.startsWith('.ctor('))
+
 const SELECTABLE: Record<PickerMode, (node: TreeNode) => boolean> = {
   type: (node) => node.kind === 'type',
   member: (node) => ['type', 'method', 'field', 'property', 'event'].includes(node.kind),
   field: (node) => node.kind === 'field',
   method: (node) => node.kind === 'method',
-  constructor: (node) => node.kind === 'method' && node.label.startsWith('.ctor('),
+  constructor: isInstanceConstructor,
 }
 
 /**
@@ -63,7 +67,8 @@ const PickerRow = ({ node, parents, mode, children, expanded, loading, selectedI
     return null
   const open = expanded[node.id] ?? false
   const trail = [...parents, node]
-  const label = node.kind === 'referencesgroup' ? t('Assembly References') : node.label
+  // The folder dnSpy labels from its resources (ReferencesFolder), translated the way the tree translates it.
+  const label = node.kind === 'referencesgroup' ? t(node.label) : node.label
   return (
     <>
       <div
@@ -100,7 +105,7 @@ const PickerRow = ({ node, parents, mode, children, expanded, loading, selectedI
         >
           {loading[node.id] ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
         </button>
-        <span className={`tree-icon kind-${node.kind} icon-${node.icon ?? 'item'}`}><NodeIcon icon={node.icon} expanded={open} /></span>
+        <span className={`tree-icon kind-${node.kind} icon-${iconFamily(node.icon)}`}><NodeIcon icon={node.icon} expanded={open} /></span>
         <span className="tree-label">{label}</span>
       </div>
       {open && children[node.id]?.map((child) => (

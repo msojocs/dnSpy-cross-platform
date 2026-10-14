@@ -9,6 +9,7 @@ dnSpy is distributed under GPL-3.0-only. The Linux desktop package also includes
 | FlexLayout React | MIT | https://github.com/caplin/FlexLayout |
 | Monaco Editor | MIT | https://github.com/microsoft/monaco-editor |
 | Lucide | ISC | https://lucide.dev/ |
+| dnSpy image set (`dnSpy/dnSpy.Images`, from the Visual Studio Image Library) | Visual Studio Image Library license | https://www.microsoft.com/en-us/download/details.aspx?id=35825 |
 | Zustand | MIT | https://github.com/pmndrs/zustand |
 | dnlib | MIT | https://github.com/0xd4d/dnlib |
 | ILSpy decompiler and BAML decompiler | MIT | https://github.com/icsharpcode/ILSpy |

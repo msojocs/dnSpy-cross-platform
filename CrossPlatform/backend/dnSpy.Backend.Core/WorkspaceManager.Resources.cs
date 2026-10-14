@@ -443,6 +443,43 @@ public sealed partial class WorkspaceManager {
 			return new ResourceItemsResponse(items);
 		}
 
+		/// <summary>
+		/// The names the nodes save under, both ways, without reading what they hold — the headers of dnSpy's Save
+		/// commands count these (SaveResourcesCommand.GetHeaderInternal), and the "use sub dirs" variants are only
+		/// offered when there are several and one of them has a directory in it.
+		/// </summary>
+		public ResourceItemNamesResponse GetResourceItemNames(IReadOnlyList<string> nodeIds) {
+			var selected = nodeIds.Select(GetNode).ToList();
+			if (selected is [{ Kind: NodeKind.ResourcesGroup } folder])
+				selected = [.. GetResourceChildren(folder)];
+			return new ResourceItemNamesResponse(
+				[.. selected.SelectMany(node => ResourceItemNames(node, raw: false))],
+				[.. selected.SelectMany(node => ResourceItemNames(node, raw: true))]);
+		}
+
+		/// <summary>The names <see cref="ResourceItems"/> gives its files, item for item.</summary>
+		IEnumerable<string> ResourceItemNames(NodeEntry node, bool raw) {
+			switch (node.Value) {
+				case ResourceEntryValue entry when raw:
+					yield return entry.Name;
+					break;
+				case ResourceEntryValue entry:
+					yield return DeserializedEntryName(entry);
+					break;
+				case EmbeddedResource resource when !raw && ShapeOf(resource) == ResourceShape.ResourceSet:
+					foreach (var child in GetEmbeddedResourceChildren(node))
+						yield return DeserializedEntryName((ResourceEntryValue)child.Value);
+					break;
+				case EmbeddedResource resource:
+					yield return resource.Name.String;
+					break;
+			}
+		}
+
+		/// <summary>A BAML entry saves as the XAML it decompiles to; every other entry under its own name.</summary>
+		static string DeserializedEntryName(ResourceEntryValue entry) =>
+			ShapeOf(entry.Element) == ResourceShape.Baml ? Path.ChangeExtension(entry.Name, ".xaml") : entry.Name;
+
 		IEnumerable<(string Name, byte[] Data)> ResourceItems(NodeEntry node, bool raw, CancellationToken cancellationToken) {
 			switch (node.Value) {
 				case ResourceEntryValue entry when raw:

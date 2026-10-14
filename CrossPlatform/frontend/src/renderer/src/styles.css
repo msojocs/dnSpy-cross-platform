@@ -444,6 +444,17 @@ select:focus-visible,
   color: var(--accent-hover);
 }
 
+/* dnSpy's own 16×16 image for a row: its class's rule, which ds-image.ts writes in the theme's colours, draws it. */
+.ds-image {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  pointer-events: none;
+}
+
 .icon-assembly { color: #8f969c; }
 .icon-assembly-exe { color: #d39a47; }
 .icon-module { color: #a77bd4; }
@@ -882,6 +893,7 @@ select:focus-visible,
 
 .search-type-icon {
   display: inline-flex;
+  align-items: center;
 }
 
 .search-options {
@@ -925,6 +937,7 @@ select:focus-visible,
 .result-icon {
   display: inline-flex;
   flex: none;
+  align-items: center;
   justify-content: center;
   width: 20px;
 }
@@ -3266,3 +3279,143 @@ fieldset.options-group {
 :root:not([data-theme="hc"]) .bookmarks-pane .tc-directoryPart { color: var(--tc-directory-part); }
 :root:not([data-theme="hc"]) .bookmarks-pane .tc-fileNameNoExtension { color: var(--tc-file-name); }
 :root:not([data-theme="hc"]) .bookmarks-pane .tc-fileExtension { color: var(--tc-file-extension); }
+
+/* dnSpy's Open from GAC dialog: the list on the left, the search, the duplicates switch and the selected
+   file's details on the right. */
+.open-from-gac-dialog {
+  grid-template-rows: 33px minmax(0, 1fr) 43px;
+  width: min(92vw, 900px);
+  height: min(80vh, 600px);
+}
+
+.gac-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  min-height: 0;
+}
+
+.gac-list,
+.open-list-rows {
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.gac-row,
+.open-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px;
+  gap: 10px;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  cursor: default;
+}
+
+.gac-row span,
+.open-list-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gac-header,
+.open-list-header {
+  position: sticky;
+  top: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.gac-row:not(.gac-header):hover,
+.open-list-row:not(.open-list-header):hover,
+.gac-row.selected,
+.open-list-row.selected {
+  background: var(--selection);
+}
+
+.open-list-row span:last-child {
+  text-align: right;
+}
+
+.open-list-row.current span:first-child {
+  font-weight: 600;
+}
+
+.gac-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+}
+
+.gac-side > input {
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.gac-duplicates,
+.open-list-saved {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gac-details {
+  margin: 0;
+}
+
+.gac-details dt {
+  margin: 5px 0 0 10px;
+  font-weight: 600;
+}
+
+.gac-details dd {
+  margin: 1px 0 0 15px;
+  overflow-wrap: anywhere;
+}
+
+.gac-status {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+/* dnSpy's Open List dialog. */
+.open-list-dialog {
+  grid-template-rows: 33px 33px minmax(160px, 1fr) 43px;
+  width: min(90vw, 760px);
+  height: min(80vh, 520px);
+}
+
+.open-list-naming {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.open-list-naming input {
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.open-list-naming .field-error {
+  color: var(--danger);
+}
+
+/* A root the workspace opened by itself to resolve a reference: dnSpy sorts them last; the row is muted so
+   the user can tell it from the files they opened. */
+.tree-row.auto-loaded .tree-label {
+  opacity: 0.75;
+}
+
+/* The image families the backend's DsImages names come down to, in the colors dnSpy's image set uses. */
+.icon-struct { color: #62a9df; }
+.icon-delegate { color: #b180d7; }
+.icon-enum-item,
+.icon-constant { color: #c0a05a; }

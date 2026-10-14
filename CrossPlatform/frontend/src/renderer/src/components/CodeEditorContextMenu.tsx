@@ -82,6 +82,11 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onAnalyzeReference?(target: TextSpan): void
   /** Opens an address in the browser, which is how dnSpy's Search MSDN command runs. */
   onOpenUrl?(url: string): void
+  /** Whether the member the reference under the caret names reads a .resources entry, which the backend
+   *  answered before the menu opened — dnSpy's ResourceRef.TryCreate over the TextReference. */
+  readsResource?: boolean
+  /** Selects and opens the .resources entry that member reads — dnSpy's Go to Resource. */
+  onGoToResource?(node: TreeNode): void
   /** Writes plain text to the clipboard, which is what dnSpy's two copy commands put there. */
   copyText?(text: string): void
   onCopy?(): void
@@ -199,10 +204,10 @@ const formatToken = (token: number): string => `0x${(token >>> 0).toString(16).t
 
 /**
  * What "Copy Full Name" and "Search MSDN" text: dnSpy reads `IFullName.FullName` off the reference under
- * the caret. A tree node's description is dnlib's FullName for the kinds that have one.
+ * the caret, which the node it names carries.
  */
 const fullNameOf = (ctx: CodeEditorMenuContext): string | undefined =>
-  ctx.referenceNode?.description ?? ctx.referenceNode?.label
+  ctx.referenceNode?.fullName ?? ctx.referenceNode?.description ?? ctx.referenceNode?.label
 
 /**
  * Where dnSpy's "Search MSDN" sends the browser. `SearchMsdnCommand.GetAddress` builds a docs API address
@@ -339,7 +344,9 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // member of a module the workspace does not hold by the reference itself.
   { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
-  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: never },
+  // dnSpy's TextEditorCommand: the reference under the caret is a getter-only property or a method of a
+  // strongly typed resources class, which the backend answered before the menu opened.
+  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: (ctx) => ctx.readsResource === true && ctx.referenceNode !== undefined && ctx.onGoToResource !== undefined, run: (ctx) => { if (ctx.referenceNode) ctx.onGoToResource?.(ctx.referenceNode) } },
 
   // 15000 — Editor (GROUP_CTX_DOCVIEWER_EDITOR). The document is read-only, so Cut and Paste have
   // nothing to do; Copy is still needed, since the menu replaces Monaco's own.

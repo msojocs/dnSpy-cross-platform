@@ -257,11 +257,21 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.ModuleSaveAll:
 				return await workspaces.SaveAllModulesAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceReload:
-				return await workspaces.ReloadAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
+				return await workspaces.ReloadAsync(DeserializeParams<ReloadWorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceSortAssemblies:
 				return await workspaces.SortAssembliesAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceRemoveModule:
 				return await workspaces.RemoveModuleAsync(DeserializeParams<NodeRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceRemoveModules:
+				return await workspaces.RemoveModulesAsync(DeserializeParams<RemoveModulesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceGetModifiedModules:
+				return await workspaces.GetModifiedModulesAsync(DeserializeParams<ModifiedModulesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceGetCloseCandidates:
+				return await workspaces.GetCloseCandidatesAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceMoveRoots:
+				return await workspaces.MoveRootsAsync(DeserializeParams<MoveRootsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceDropFiles:
+				return await workspaces.DropFilesAsync(DeserializeParams<DropFilesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleGetSpecialNode:
 				return await workspaces.GetSpecialNodeAsync(DeserializeParams<SpecialNodeRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.TreeFindByToken:
@@ -276,6 +286,22 @@ internal sealed class JsonRpcServer {
 				return await workspaces.ExportBookmarksAsync(DeserializeParams<ExportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.BookmarksImport:
 				return await workspaces.ImportBookmarksAsync(DeserializeParams<ImportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.GacList:
+				return await workspaces.ListGacAsync(cancellationToken).ConfigureAwait(false);
+			case RpcMethods.GacGetDetails:
+				return await workspaces.GetGacDetailsAsync(DeserializeParams<GacDetailsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DocumentListDefaults:
+				return await Task.Run(DefaultDocumentLists.Find, cancellationToken).ConfigureAwait(false);
+			case RpcMethods.TreeActivate:
+				return await workspaces.ActivateNodeAsync(DeserializeParams<NodeRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceGetItems:
+				return await workspaces.GetResourceItemsAsync(DeserializeParams<ResourceItemsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceFind:
+				return await workspaces.FindResourceAsync(DeserializeParams<FindResourceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceGetItemNames:
+				return await workspaces.GetResourceItemNamesAsync(DeserializeParams<ResourceItemsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.TreeSelectMember:
+				return await workspaces.SelectMemberAsync(DeserializeParams<SelectMemberRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptEvaluate:
 				return await scripts.EvaluateAsync(DeserializeParams<ScriptEvaluateRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptReset:

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
 import type { DecompilerLanguage, TextSpan, TreeNode } from '../../shared/protocol'
-import { enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
+import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { loadAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
@@ -25,6 +25,9 @@ import { BookmarksPane } from './components/BookmarksPane'
 import { AttachDialog } from './components/AttachDialog'
 import { DebugProgramDialog } from './components/DebugProgramDialog'
 import { AboutDialog } from './components/AboutDialog'
+import { OpenFromGacDialog } from './components/OpenFromGacDialog'
+import { OpenListDialog } from './components/OpenListDialog'
+import { loadDocumentLists, rememberCurrentDocuments, saveDocumentLists, type DocumentList, type StoredDocumentLists } from './document-lists'
 import { WindowsDialog, type WindowTabEntry } from './components/WindowsDialog'
 import { NodeOptionsDialog } from './components/NodeOptionsDialog'
 import { OptionsDialog } from './components/OptionsDialog'
@@ -212,7 +215,10 @@ const DELETE_CONFIRMATIONS: Record<string, string> = {
 }
 
 // The node kinds the Edit menu offers a Delete command for, and which the Del key therefore removes.
-const DELETABLE_KINDS = ['type', 'method', 'field', 'property', 'event', 'namespace', 'resource']
+const DELETABLE_KINDS = ['type', 'method', 'field', 'property', 'event', 'namespace', 'resource', 'assembly', 'pedocument', 'elfdocument', 'unknowndocument']
+
+// The rows that stand for a whole file: the tree's roots, which Remove Assembly takes out of it.
+const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndocument']
 
 // The node kinds whose Edit command — and Alt+Enter with it — opens a dialog: every one dnSpy has a
 // settings command for that the port has built the window of.
@@ -248,6 +254,8 @@ export const App = (): React.JSX.Element => {
   const [attachDialogOpen, setAttachDialogOpen] = useState(false)
   const [debugProgramDialogOpen, setDebugProgramDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
+  const [gacDialogOpen, setGacDialogOpen] = useState(false)
+  const [openListDialogOpen, setOpenListDialogOpen] = useState(false)
   const [windowsDialogOpen, setWindowsDialogOpen] = useState(false)
   const [optionsDialogCategory, setOptionsDialogCategory] = useState<'environment' | 'decompiler' | 'debugger' | undefined>(undefined)
   const [navigation, setNavigation] = useState<{ items: TreeNode[]; index: number }>({ items: [], index: -1 })
@@ -286,8 +294,9 @@ export const App = (): React.JSX.Element => {
   const chooseAndOpen = useAppStore((state) => state.chooseAndOpen)
   const closeWorkspace = useAppStore((state) => state.closeWorkspace)
   const dirty = useAppStore((state) => state.dirty)
-  const recentWorkspaces = useAppStore((state) => state.recentWorkspaces)
+  const recentFiles = useAppStore((state) => state.recentFiles)
   const openPaths = useAppStore((state) => state.openPaths)
+  const openRecentFile = useAppStore((state) => state.openRecentFile)
   const canUndo = useAppStore((state) => state.canUndo)
   const canRedo = useAppStore((state) => state.canRedo)
   const undoEdit = useAppStore((state) => state.undoEdit)
@@ -300,7 +309,10 @@ export const App = (): React.JSX.Element => {
   const saveAllModules = useAppStore((state) => state.saveAllModules)
   const reloadAllAssemblies = useAppStore((state) => state.reloadAllAssemblies)
   const sortAssemblies = useAppStore((state) => state.sortAssemblies)
-  const removeModule = useAppStore((state) => state.removeModule)
+  const goToResource = useAppStore((state) => state.goToResource)
+  const removeModules = useAppStore((state) => state.removeModules)
+  const getModifiedModules = useAppStore((state) => state.getModifiedModules)
+  const getCloseCandidates = useAppStore((state) => state.getCloseCandidates)
   const goToSpecialNode = useAppStore((state) => state.goToSpecialNode)
   const goToToken = useAppStore((state) => state.goToToken)
   const saveCode = useAppStore((state) => state.saveCode)
@@ -386,6 +398,14 @@ export const App = (): React.JSX.Element => {
   const deleteSelected = (node = selectedNode): void => {
     if (!node)
       return
+    // A root row is a document, and Del or Edit > Remove takes it out of the tree — with every other
+    // selected root, the way RemoveAssemblyCommand acts on the whole selection.
+    if (DOCUMENT_ROOT_KINDS.includes(node.kind)) {
+      const selection = useAppStore.getState().selectedNodes
+      const roots = selection.some((selected) => selected.id === node.id) && selection.every((selected) => DOCUMENT_ROOT_KINDS.includes(selected.kind)) ? selection : [node]
+      void removeDocuments(roots.map((root) => root.id), () => removeModules(roots.map((root) => root.id)))
+      return
+    }
     // dnSpy asks before removing a type, method or field — each of those can be referenced from code
     // that this edit cannot see. Property, event, resource and namespace removals go through unasked.
     const question = DELETE_CONFIRMATIONS[node.kind]
@@ -394,6 +414,20 @@ export const App = (): React.JSX.Element => {
     void deleteNode(node).then((deleted) => {
       if (deleted)
         closeDocumentTabsFor(model, node.id)
+    })
+  }
+  /** Undo and Redo, which can take a whole document out of the tree again — a removal dnSpy recorded in the
+   *  history — and then the tabs that showed anything of it go with it, the way the removal closed them. */
+  const undo = (): void => {
+    void undoEdit().then((removed) => {
+      for (const nodeId of removed)
+        closeDocumentTabsFor(model, nodeId)
+    })
+  }
+  const redo = (): void => {
+    void redoEdit().then((removed) => {
+      for (const nodeId of removed)
+        closeDocumentTabsFor(model, nodeId)
     })
   }
   const enableAllBreakpoints = (enabled: boolean): void => {
@@ -725,7 +759,11 @@ export const App = (): React.JSX.Element => {
       }
       if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key))
         bookmarkChord.current = undefined
-      if (event.ctrlKey && event.key.toLowerCase() === 'o') {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'o') {
+        // dnSpy's Open from GAC, the gesture its File menu shows.
+        event.preventDefault()
+        setGacDialogOpen(true)
+      } else if (event.ctrlKey && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         void chooseAndOpen()
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') {
@@ -786,10 +824,10 @@ export const App = (): React.JSX.Element => {
         findInActiveDocumentEditor()
       } else if (event.ctrlKey && event.key.toLowerCase() === 'z' && canUndo && !editingText) {
         event.preventDefault()
-        void undoEdit()
+        undo()
       } else if (event.ctrlKey && event.key.toLowerCase() === 'y' && canRedo && !editingText) {
         event.preventDefault()
-        void redoEdit()
+        redo()
       } else if (event.altKey && event.key === 'Enter' && !editingText) {
         // dnSpy's Alt+Enter: the settings command of the selected node, which its menu lists beside
         // Edit Method...
@@ -869,7 +907,10 @@ export const App = (): React.JSX.Element => {
       if (dirty) {
         event.preventDefault()
         event.returnValue = ''
+        return
       }
+      // dnSpy writes the open files into the selected Open List list as the window closes.
+      rememberCurrentDocuments(useAppStore.getState().modules.map((module) => module.path))
     }
     window.addEventListener('beforeunload', beforeUnload)
     return () => window.removeEventListener('beforeunload', beforeUnload)
@@ -922,9 +963,57 @@ export const App = (): React.JSX.Element => {
     return viewId
   }
 
-  // Where the previous session comes back. Every node the saved session names is looked up by key —
-  // walking down from the roots, materialising each branch on the way, because only the module roots
-  // exist after a restart — and whatever no longer resolves is passed over so the rest still restores.
+  /**
+   * Puts the branches, the selection and the tabs a session names back on the tree the workspace holds now.
+   * Every node the session names is looked up by key — walking down from the roots, materialising each branch on
+   * the way, because only the roots exist after the files were opened — and whatever no longer resolves is passed
+   * over so the rest still comes back. Answers how many tabs came back, or undefined when the workspace changed
+   * under it.
+   */
+  const restoreTreeAndTabs = async (session: SavedSession, isCurrent: () => boolean): Promise<number | undefined> => {
+    const byKey = new Map<string, TreeNode>()
+    for (const root of useAppStore.getState().roots) {
+      if (root.key)
+        byKey.set(root.key, root)
+    }
+    for (const reference of session.nodes) {
+      const node = byKey.get(reference.key)
+      if (!node)
+        continue
+      // The list is ordered parents-first, so a node it names has its parent already in the map.
+      // Expanding is not a toggle here: the explorer expands every fresh root on its own, and a
+      // toggle would close the root it just opened.
+      if (reference.expanded)
+        await expandNode(node)
+      else
+        await loadChildren(node)
+      if (!isCurrent()) return undefined
+      for (const child of useAppStore.getState().children[node.id] ?? []) {
+        if (child.key)
+          byKey.set(child.key, child)
+      }
+    }
+    const selected = session.selectedNode ? byKey.get(session.selectedNode) : undefined
+    if (selected)
+      selectNode(selected)
+    let restoredDocuments = 0
+    for (const document of session.documents) {
+      const node = byKey.get(document.key)
+      if (!node)
+        continue
+      await addDocumentTab(node, false, document.language)
+      if (!isCurrent()) return undefined
+      restoredDocuments++
+    }
+    const active = session.activeDocument ? byKey.get(session.activeDocument) : undefined
+    if (active) {
+      model.doAction(Actions.selectTab(`doc:${active.id}`))
+      forceLayoutUpdate((value) => value + 1)
+    }
+    return restoredDocuments
+  }
+
+  // Where the previous session comes back: the files it held are opened, and then its tree and tabs.
   const restoreSession = async (session: SavedSession): Promise<void> => {
     if (session.paths.length === 0)
       return
@@ -948,49 +1037,12 @@ export const App = (): React.JSX.Element => {
       if (!isCurrent()) return
       if (!useAppStore.getState().workspaceId)
         return // openPaths has already reported why
-      const byKey = new Map<string, TreeNode>()
-      for (const root of useAppStore.getState().roots) {
-        if (root.key)
-          byKey.set(root.key, root)
-      }
-      for (const reference of session.nodes) {
-        const node = byKey.get(reference.key)
-        if (!node)
-          continue
-        // The list is ordered parents-first, so a node it names has its parent already in the map.
-        // Expanding is not a toggle here: the explorer expands every fresh root on its own, and a
-        // toggle would close the root it just opened.
-        if (reference.expanded)
-          await expandNode(node)
-        else
-          await loadChildren(node)
-        if (!isCurrent()) return
-        for (const child of useAppStore.getState().children[node.id] ?? []) {
-          if (child.key)
-            byKey.set(child.key, child)
-        }
-      }
-      const selected = session.selectedNode ? byKey.get(session.selectedNode) : undefined
-      if (selected)
-        selectNode(selected)
-      let restoredDocuments = 0
-      for (const document of session.documents) {
-        const node = byKey.get(document.key)
-        if (!node)
-          continue
-        await addDocumentTab(node, false, document.language)
-        if (!isCurrent()) return
-        restoredDocuments++
-      }
+      const restoredDocuments = await restoreTreeAndTabs(session, isCurrent)
+      if (restoredDocuments === undefined) return
       // Opening a document takes the Start tab away, so one only comes back when nothing was restored
       // to take its place.
       if (restoredDocuments === 0)
         showStartTab()
-      const active = session.activeDocument ? byKey.get(session.activeDocument) : undefined
-      if (active) {
-        model.doAction(Actions.selectTab(`doc:${active.id}`))
-        forceLayoutUpdate((value) => value + 1)
-      }
       appendOutput(t('Restored the previous session.'))
     } catch (error) {
       if (!isCurrent()) return
@@ -1006,6 +1058,107 @@ export const App = (): React.JSX.Element => {
         setRestoringSession(false)
       }
     }
+  }
+
+  /**
+   * dnSpy's Reload All Assemblies (DocumentListLoader.Reload). Unsaved edits are asked about first, with dnSpy's
+   * question; the tabs are remembered and closed; the files the user opened are read again, with the ones the
+   * workspace had opened by itself that a tab showed something of; and the tabs, the branches and the selection
+   * are put back on the new tree — a module's hex and information tabs by the file they show.
+   */
+  const reloadAll = async (): Promise<void> => {
+    const state = useAppStore.getState()
+    if (!state.workspaceId)
+      return
+    const modified = await getModifiedModules()
+    if (modified.length > 0) {
+      const unsaved = modified.length === 1 ? t('There is an unsaved file.') : t('There are {count} unsaved files.', { count: modified.length })
+      if (!window.confirm(`${unsaved} ${t('Are you sure you want to reload all assemblies and lose all changes?')}`))
+        return
+    }
+    const current = useAppStore.getState()
+    const session = buildSession(current)
+    // A module tab names its module by the root's id, which the reload issues again; the file is what stays.
+    const moduleTabs: { component: 'hex' | 'module-info'; path: string }[] = []
+    model.visitNodes((node) => {
+      const component = node instanceof TabNode ? node.getComponent() : undefined
+      if (node instanceof TabNode && (component === 'hex' || component === 'module-info')) {
+        const moduleId = (node.getConfig() as { moduleId?: string } | undefined)?.moduleId
+        const module = current.modules.find((candidate) => candidate.id === moduleId)
+        if (module)
+          moduleTabs.push({ component, path: module.path })
+      }
+    })
+    // DocumentListLoader adds back the auto-loaded documents a tab shows something of, auto-loaded as they were.
+    const rootIdOf = (id: string): string => {
+      let rootId = id
+      for (let parent = current.parents[rootId]; parent !== undefined; parent = current.parents[rootId])
+        rootId = parent
+      return rootId
+    }
+    const shownRoots = new Set(current.documentOrder.map(rootIdOf))
+    const autoLoaded = current.modules
+      .filter((module) => module.autoLoaded && (shownRoots.has(module.id) || moduleTabs.some((tab) => tab.path === module.path)))
+      .map((module) => module.path)
+    const generation = current.workspaceGeneration
+    const isCurrent = (): boolean => useAppStore.getState().workspaceGeneration === generation
+    setRestoringSession(true)
+    try {
+      closeDocumentTabs()
+      if (!await reloadAllAssemblies(autoLoaded) || !isCurrent()) {
+        if (isCurrent())
+          showStartTab()
+        return
+      }
+      const restoredDocuments = await restoreTreeAndTabs(session, isCurrent)
+      if (restoredDocuments === undefined) return
+      let restoredModuleTabs = 0
+      for (const tab of moduleTabs) {
+        const target = useAppStore.getState().modules.find((module) => module.path === tab.path)
+        const root = target ? useAppStore.getState().roots.find((candidate) => candidate.id === target.id) : undefined
+        if (root) {
+          addSpecialTab(tab.component, root)
+          restoredModuleTabs++
+        }
+      }
+      if (restoredDocuments === 0 && restoredModuleTabs === 0)
+        showStartTab()
+      forceLayoutUpdate((value) => value + 1)
+    } finally {
+      if (isCurrent())
+        setRestoringSession(false)
+    }
+  }
+
+  /**
+   * dnSpy's AppCommandLineArgsHandler, once the files a command line named are open: the member `--select` names
+   * in them is followed — opened in a tab and selected — and, failing that, the first assembly of those files, or
+   * else the first of them the tree holds at all.
+   */
+  const followCommandLine = async (paths: string[], member: string | undefined): Promise<void> => {
+    const { workspaceId: currentWorkspace } = useAppStore.getState()
+    if (!currentWorkspace)
+      return
+    if (member) {
+      try {
+        const { nodeId } = await window.dnSpy.selectMember(currentWorkspace, paths, member)
+        if (nodeId) {
+          await shellCallbacksRef.current.openBookmarkTarget(nodeId)
+          return
+        }
+      } catch {
+        // A member that cannot be looked up is the same as one that names nothing: the files are shown instead.
+      }
+    }
+    const { roots, modules: openModules } = useAppStore.getState()
+    const opened = paths.flatMap((path) => {
+      const module = openModules.find((candidate) => candidate.path === path)
+      const root = module ? roots.find((candidate) => candidate.id === module.id) : undefined
+      return root ? [root] : []
+    })
+    const target = opened.find((root) => root.kind === 'assembly') ?? opened[0]
+    if (target)
+      await addDocumentTab(target)
   }
 
   const openNodeId = async (nodeId: string): Promise<void> => {
@@ -1067,8 +1220,8 @@ export const App = (): React.JSX.Element => {
 
   // The store cannot open tabs or tool windows itself, so it calls back into the shell. Handlers are
   // read through a ref because both close over the current workspace and layout.
-  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget })
-  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget }
+  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine })
+  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine }
   useEffect(() => {
     setOpenNodeById((nodeId) => shellCallbacksRef.current.openBookmarkTarget(nodeId))
     setOpenNodeInNewTabById((nodeId) => shellCallbacksRef.current.openNodeInNewTab(nodeId))
@@ -1119,8 +1272,12 @@ export const App = (): React.JSX.Element => {
         forceLayoutUpdate((value) => value + 1)
       }
       enableSessionPersistence()
-      if (options.initialPaths.length > 0)
-        await openPaths(options.initialPaths)
+      // dnSpy's command line: the files go on the Recent Files list, and what is shown of them is the member
+      // --select names, or else the first assembly among them.
+      if (options.initialPaths.length > 0) {
+        await openPaths(options.initialPaths, { remember: true, select: false })
+        await shellCallbacksRef.current.followCommandLine(options.initialPaths, options.selectMember)
+      }
     })()
   }, [backendStatus.state, openPaths])
 
@@ -1228,6 +1385,61 @@ export const App = (): React.JSX.Element => {
       void closeWorkspace()
   }
 
+  /**
+   * dnSpy's Remove Assembly, which its two File menu sweeps run as well: the documents go, the tabs still
+   * showing anything inside them close, and unsaved edits in them are asked about first — dnSpy's
+   * AskUserToSaveIfModified, which saves them when told to and calls the removal off when a save fails.
+   */
+  const removeDocuments = async (nodeIds: string[], remove: () => Promise<string[]>): Promise<void> => {
+    if (nodeIds.length === 0)
+      return
+    const modified = await getModifiedModules(nodeIds)
+    if (modified.length > 0) {
+      const answer = await window.dnSpy.askSaveModified(modified.length)
+      if (answer === 'cancel')
+        return
+      if (answer === 'save' && !await useAppStore.getState().saveModules(modified))
+        return
+    }
+    for (const nodeId of await remove())
+      closeDocumentTabsFor(model, nodeId)
+  }
+
+  const closeAllFrameworkAssemblies = async (): Promise<void> => {
+    const { frameworkNodeIds } = await getCloseCandidates()
+    await removeDocuments(frameworkNodeIds, () => removeModules(frameworkNodeIds))
+  }
+
+  const closeAllMissingFiles = async (): Promise<void> => {
+    const { missingNodeIds } = await getCloseCandidates()
+    await removeDocuments(missingNodeIds, () => removeModules(missingNodeIds))
+  }
+
+  // dnSpy's Open List keeps the open files in the selected list, so they are written into it before the
+  // dialog reads the lists — DocumentListLoader.SaveCurrentDocumentsToList.
+  const showOpenList = (): void => {
+    rememberCurrentDocuments(modules.map((module) => module.path))
+    setOpenListDialogOpen(true)
+  }
+
+  /**
+   * OK in Open List: the lists are saved as the dialog left them, and a list other than the one the open
+   * files belong to replaces them — DocumentListLoader.Load, which closes what is open and opens the list.
+   * Unsaved edits are asked about first, the way the close does.
+   */
+  const openDocumentList = async (stored: StoredDocumentLists, chosen: DocumentList | undefined): Promise<void> => {
+    const previous = loadDocumentLists().selected
+    if (chosen && chosen.name !== previous && dirty && !window.confirm(t('Discard unsaved changes and close the workspace?')))
+      return
+    saveDocumentLists(stored)
+    if (!chosen || chosen.name === previous)
+      return
+    await closeWorkspace()
+    const paths = await window.dnSpy.filterExistingPaths(chosen.files)
+    if (paths.length > 0)
+      await openPaths(paths)
+  }
+
   // dnSpy's restart goes through the ordinary close, so unsaved edits still get their say first;
   // the confirm stands in for that prompt and a "no" leaves the app, and the edits, alone.
   const restartAsAdministrator = (): void => {
@@ -1252,20 +1464,15 @@ export const App = (): React.JSX.Element => {
     onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
     onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
     onEditResource: (node) => { void replaceResource(node) },
-    onSaveResource: (node, raw) => { void saveResource(node, raw) },
+    onSaveResource: (nodes, raw, useSubDirs) => { void saveResource(nodes, raw, useSubDirs) },
     onLoadDependencies: (node, recursive) => { void loadDependencies(node, recursive) },
     onConvertModule: (node) => { void convertModule(node) },
     onRenameNamespace: (node) => setRenameNamespaceNode(node),
     onMoveTypesToEmptyNamespace: (node) => { void moveTypesToEmptyNamespace(node) },
     onSortAssemblies: () => { void sortAssemblies() },
-    onRemoveAssembly: (node) => {
-      // The assembly's documents go with it, so the tabs still showing them are closed here rather than
-      // left pointing at nodes the backend no longer has.
-      void removeModule(node).then((removedNodeIds) => {
-        for (const nodeId of removedNodeIds)
-          closeDocumentTabsFor(model, nodeId)
-      })
-    },
+    // The documents' tabs go with them, so they are closed rather than left on nodes the backend dropped.
+    onRemoveAssembly: (nodes) => { void removeDocuments(nodes.map((node) => node.id), () => removeModules(nodes.map((node) => node.id))) },
+    onGoToResource: (node) => { void goToResource(node) },
     onOpenContainingFolder: (node) => { if (node.description) void window.dnSpy.showItemInFolder(node.description) },
     onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
     onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
@@ -1311,6 +1518,7 @@ export const App = (): React.JSX.Element => {
     onAddClassTracepoint: (node) => setClassTracepointNode(node),
     onAnalyzeReference: (target) => void analyzeReference(target),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    onGoToResource: (node) => { void goToResource(node) },
     onOpenHex: openHex,
     onShowHexAt: showSelectionInHex,
     onHexWriteBody: (kind) => void hexWriteMethodBody(kind),
@@ -1428,23 +1636,27 @@ export const App = (): React.JSX.Element => {
         canShowCode={canShowCode}
         debugAvailable={backendStatus.capabilities?.['debug.coreclr.launch'] === true}
         debugState={debugState}
-        recentWorkspaces={recentWorkspaces}
+        recentFiles={recentFiles}
         canUndo={canUndo}
         canRedo={canRedo}
         theme={theme}
         onOpen={() => void chooseAndOpen()}
-        onOpenRecent={(paths) => void openPaths(paths)}
+        onOpenFromGac={() => setGacDialogOpen(true)}
+        onOpenList={showOpenList}
+        onOpenRecent={(path) => void openRecentFile(path)}
         onCloseAll={closeCurrentWorkspace}
+        onCloseAllFramework={() => void closeAllFrameworkAssemblies()}
+        onCloseAllMissing={() => void closeAllMissingFiles()}
         dirty={dirty}
         onSave={() => void saveModule()}
         onSaveModule={() => void saveModuleAs()}
         onSaveAll={() => void saveAllModules()}
-        onReloadAll={() => void reloadAllAssemblies()}
+        onReloadAll={() => void reloadAll()}
         onSortAssemblies={() => void sortAssemblies()}
         onFind={() => { findInActiveDocumentEditor() }}
         onSearchAssemblies={showSearch}
-        onUndo={() => void undoEdit()}
-        onRedo={() => void redoEdit()}
+        onUndo={undo}
+        onRedo={redo}
         onEditMethodBody={() => { if (selectedNode?.kind === 'method') setEditMethodNode(selectedNode) }}
         onEditResource={() => { if (selectedNode) void replaceResource(selectedNode) }}
         onDelete={deleteSelected}
@@ -1571,7 +1783,7 @@ export const App = (): React.JSX.Element => {
       <ToolBar
         hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSave={() => void saveModuleAs()} onSearch={showSearch}
         canGoBack={navigation.index > 0} canGoForward={navigation.index >= 0 && navigation.index < navigation.items.length - 1} onBack={goBack} onForward={goForward}
-        canUndo={canUndo} canRedo={canRedo} onUndo={() => void undoEdit()} onRedo={() => void redoEdit()}
+        canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo}
         decompilerLanguage={activeDocumentLanguage} onLanguageChange={(language) => { if (activeDocumentId) void changeDocumentLanguage(activeDocumentId, language) }}
         debugAvailable={backendStatus.capabilities?.['debug.coreclr.launch'] === true} debugState={debugState}
         onStart={() => setDebugProgramDialogOpen(true)} onContinue={() => void continueDebug()} onPause={() => void pauseDebug()}
@@ -1667,6 +1879,18 @@ export const App = (): React.JSX.Element => {
       {attachDialogOpen && <AttachDialog onClose={() => setAttachDialogOpen(false)} />}
       {debugProgramDialogOpen && <DebugProgramDialog onClose={() => setDebugProgramDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
+      {gacDialogOpen && (
+        <OpenFromGacDialog
+          onClose={() => setGacDialogOpen(false)}
+          onOpen={(paths) => void openPaths(paths, { remember: true })}
+        />
+      )}
+      {openListDialogOpen && (
+        <OpenListDialog
+          onClose={() => setOpenListDialogOpen(false)}
+          onOpen={(stored, chosen) => void openDocumentList(stored, chosen)}
+        />
+      )}
       {windowsDialogOpen && (
         <WindowsDialog
           tabs={windowsDialogTabs}

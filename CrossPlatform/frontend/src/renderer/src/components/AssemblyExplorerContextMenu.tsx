@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
 import type { MethodBreakpointTarget } from '../app-store'
-import { isAnalyzableNode, searchMsdnUrl } from './CodeEditorContextMenu'
+import { isAnalyzableNode } from './CodeEditorContextMenu'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
 
@@ -41,8 +41,10 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onOpenNode(node: TreeNode): void
   /** Follows the node in a tab of its own — dnSpy's `OpenNewTabInternal`. */
   onOpenInNewTab?(node: TreeNode): void
-  /** Removes a whole document from the tree — dnSpy's `RemoveAssemblyCommand`. */
-  onRemoveAssembly?(node: TreeNode): void
+  /** Removes whole documents from the tree — dnSpy's `RemoveAssemblyCommand`, over the selected roots. */
+  onRemoveAssembly?(nodes: TreeNode[]): void
+  /** Selects the .resources entry a strongly typed Resources member reads — dnSpy's Go to Resource. */
+  onGoToResource?(node: TreeNode): void
   onDeleteNode?(node: TreeNode): void
   onEditNode?(node: TreeNode): void
   onCreateMember?(kind: CreatedKind, nested: boolean, node: TreeNode): void
@@ -71,8 +73,9 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onGoToGlobalCctor?(node: TreeNode): void
   /** The node the menu was opened over names the module the token is looked up in. */
   onGoToToken?(node: TreeNode): void
-  /** Saves a resource's bytes to a file the user picks. */
-  onSaveResource?(node: TreeNode, raw: boolean): void
+  /** Saves what the resources hold — dnSpy's four Save commands: their values or (`raw`) their serialized bytes,
+   *  and with several files whether the directories in their names are kept (`useSubDirs`). */
+  onSaveResource?(nodes: TreeNode[], raw: boolean, useSubDirs: boolean): void
   onOpenContainingFolder?(node: TreeNode): void
   onSortAssemblies?(): void
   /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
@@ -96,6 +99,21 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
 export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, HexMenuContext {
   /** The row that was right-clicked. */
   node: TreeNode
+  /**
+   * The rows the command acts on: every selected row when the right-clicked one is among them, else that
+   * row alone — dnSpy's tree right-clicks into the selection rather than replacing it.
+   */
+  selection?: TreeNode[]
+  /** Whether the right-clicked row reads a .resources entry, which the backend answered before the menu
+   *  opened — dnSpy's ResourceRef.TryCreate, which is what shows Go to Resource. */
+  readsResource?: boolean
+  /**
+   * The files the selected resources would save as, both ways, which the backend answered before the menu
+   * opened: dnSpy's Save commands are headed by how many there are (one by its name), are only offered when
+   * there is something to save, and offer their "use sub dirs" variants only for several with a directory in a
+   * name.
+   */
+  resourceNames?: { names: string[]; rawNames: string[] }
   /**
    * Whether the module holding the selected namespace already has an empty namespace node. dnSpy offers
    * "Move Types to Empty Namespace" only when there is somewhere to move them to.
@@ -170,21 +188,68 @@ const isMember = kindIs('type', 'method', 'field', 'property', 'event')
 /** The header of dnSpy's "Delete X" commands, which name the node they would remove. */
 const deleteLabel = (ctx: AssemblyExplorerMenuContext): string => ctx.t('Delete {name}', { name: ctx.node.label })
 
-/** The header of dnSpy's "Remove X" commands, which do the same for a whole document. */
-const removeLabel = (ctx: AssemblyExplorerMenuContext): string => ctx.t('Remove {name}', { name: ctx.node.label })
+/** The rows a command acts on: every selected row when the right-clicked one is among them, else that row. */
+const selectionOf = (ctx: Pick<AssemblyExplorerMenuContext, 'node' | 'selection'>): TreeNode[] =>
+  ctx.selection && ctx.selection.length > 0 ? ctx.selection : [ctx.node]
+
+/** The documents Remove acts on: the selected roots — RemoveAssemblyCommand.CanExecute wants every node a root. */
+const removalTargets = (ctx: AssemblyExplorerMenuContext): TreeNode[] => {
+  const selection = selectionOf(ctx)
+  return selection.every((node) => DOCUMENT_ROOT_KINDS.includes(node.kind)) ? selection : []
+}
 
 /**
- * The full name dnSpy's "Copy Full Name" and "Search MSDN" write: the node's `IFullName`, which only the
- * types and members have. A namespace, a module or a resource carries no such name, and a description
- * that happens to sit on one of those rows is the file path or a display string, not a member's name.
+ * SaveResourcesCommandBase.FilesGetResourceNodes: a Resources folder selected on its own stands for the resources
+ * in it; otherwise the selected resources and resource entries are saved, whatever else is selected with them.
  */
-const fullNameOf = (ctx: AssemblyExplorerMenuContext): string | undefined =>
-  isMember(ctx) ? ctx.node.description ?? ctx.node.label : undefined
+export const resourceTargets = (ctx: Pick<AssemblyExplorerMenuContext, 'node' | 'selection'>): TreeNode[] => {
+  const selection = selectionOf(ctx)
+  if (selection.length === 1 && selection[0].kind === 'resourcesgroup')
+    return selection
+  return selection.filter((node) => node.kind === 'resource' || node.kind === 'resourceentry')
+}
 
-/** The token "Copy MD Token" writes — `CopyTokenCommand` writes it as `0x` plus eight hex digits. */
-const metadataTokenOf = (ctx: AssemblyExplorerMenuContext): number | undefined => ctx.node.metadataToken
+/** SaveResourcesCommand.GetHeaderInternal: one file by its name, several by how many there are. */
+const saveLabel = (ctx: AssemblyExplorerMenuContext, names: readonly string[], one: string, many: string): string =>
+  names.length === 1 ? ctx.t(one, { name: names[0] }) : ctx.t(many, { count: names.length })
 
-const formatToken = (token: number): string => `0x${token.toString(16).toUpperCase().padStart(8, '0')}`
+/** SaveWithPathResourcesCommand.IsVisibleInternal: several files, one of them with a directory in its name. */
+const hasSubDirectories = (names: readonly string[]): boolean => names.length > 1 && names.some((name) => /[\\/]/.test(name))
+
+const savedNames = (ctx: AssemblyExplorerMenuContext): string[] => resourceTargets(ctx).length > 0 ? ctx.resourceNames?.names ?? [] : []
+const rawSavedNames = (ctx: AssemblyExplorerMenuContext): string[] => resourceTargets(ctx).length > 0 ? ctx.resourceNames?.rawNames ?? [] : []
+
+/** The kinds a root row of the tree has — one per kind of file dnSpy opens. */
+const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndocument']
+
+/** RemoveAssemblyCommand.GetHeader: one document by its row text, several by how many there are. */
+const removeLabel = (ctx: AssemblyExplorerMenuContext): string => {
+  const targets = removalTargets(ctx)
+  return targets.length > 1 ? ctx.t('Remove {count} assemblies', { count: targets.length }) : ctx.t('Remove {name}', { name: ctx.node.label })
+}
+
+/**
+ * The full name dnSpy's "Copy Full Name" writes: the `IFullName` of the metadata the first selected row stands
+ * for — an assembly's display name, a module's name, a type's, a member's or a reference's. A namespace, a folder
+ * or a resource stands for no metadata row, and the backend sends no name for one.
+ */
+const fullNameOf = (ctx: AssemblyExplorerMenuContext): string | undefined => selectionOf(ctx)[0].fullName ?? undefined
+
+/** The token "Copy MD Token" writes, the first selected row's — `CopyTokenCommand` writes it as `0x` plus eight
+ *  hex digits, for any row that stands for a metadata row. */
+const metadataTokenOf = (ctx: AssemblyExplorerMenuContext): number | undefined => selectionOf(ctx)[0].metadataToken
+
+/**
+ * The pages dnSpy's Search MSDN opens: one per selected row that names a public definition — a reference row
+ * standing for the one it resolves to — or a namespace. The backend works out the address of each.
+ */
+const msdnNamesOf = (ctx: AssemblyExplorerMenuContext): string[] =>
+  selectionOf(ctx).flatMap((node) => node.msdnName ? [node.msdnName] : [])
+
+/** SearchMsdnCtxMenuCommand's address for what the backend named. */
+export const msdnPageUrl = (msdnName: string): string => `https://learn.microsoft.com/dotnet/api/${msdnName}`
+
+const formatToken = (token: number): string => `0x${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
 
 /**
  * What "Add Method Breakpoint" is for: dnSpy's GetMethodReferences takes a method, and a property or an
@@ -260,18 +325,19 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // own, which is what the code viewer's "Open in New Tab" does for a reference.
   { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: fixedIcon(<CopyPlus {...iconProps} />), label: (ctx) => ctx.t('Open in New Tab'), visible: (ctx) => ctx.onOpenInNewTab !== undefined && !isGroupFolder(ctx), run: (ctx) => ctx.onOpenInNewTab?.(ctx.node) },
 
-  // 1000 — Save (GROUP_CTX_DOCUMENTS_ASMED_SAVE). dnSpy's four commands save the selected resources:
-  // one per file or all of them into a directory tree, and the same pair again for the serialized bytes.
-  // This tree selects one node at a time, so the two "Sub Directories" commands — visible upstream only
-  // with more than one resource, and only when a name has a path in it — have nothing to act on and are
-  // left out of the table entirely, the way the groups a menu has no entries for are.
-  { group: GROUP_SAVE, order: 0, key: 'save-resource', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => ctx.t('Save {name}', { name: ctx.node.label }), visible: (ctx) => kindIs('resource', 'resourceentry')(ctx) && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(ctx.node, false) },
-  { group: GROUP_SAVE, order: 20, key: 'save-raw-resource', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => ctx.t('Raw Save {name}', { name: ctx.node.label }), visible: (ctx) => kindIs('resource', 'resourceentry')(ctx) && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(ctx.node, true) },
+  // 1000 — Save (GROUP_CTX_DOCUMENTS_ASMED_SAVE). dnSpy's four commands save the selected resources: their
+  // values one file each, or into the directories their names hold; and the same pair again for the serialized
+  // bytes. A header counts the files rather than the rows — a .resources file saves as one file per entry — and
+  // the two "use sub dirs" commands show only for several files with a directory in a name.
+  { group: GROUP_SAVE, order: 0, key: 'save-resource', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => saveLabel(ctx, savedNames(ctx), 'Save {name}', 'Save {count} resources'), visible: (ctx) => savedNames(ctx).length > 0 && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(resourceTargets(ctx), false, false) },
+  { group: GROUP_SAVE, order: 10, key: 'save-resource-sub-dirs', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => ctx.t('Save {count} resources, use sub dirs', { count: savedNames(ctx).length }), visible: (ctx) => hasSubDirectories(savedNames(ctx)) && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(resourceTargets(ctx), false, true) },
+  { group: GROUP_SAVE, order: 20, key: 'save-raw-resource', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => saveLabel(ctx, rawSavedNames(ctx), 'Raw Save {name}', 'Raw Save {count} resources'), visible: (ctx) => rawSavedNames(ctx).length > 0 && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(resourceTargets(ctx), true, false) },
+  { group: GROUP_SAVE, order: 30, key: 'save-raw-resource-sub-dirs', icon: fixedIcon(<Save {...iconProps} />), label: (ctx) => ctx.t('Raw Save {count} resources, use sub dirs', { count: rawSavedNames(ctx).length }), visible: (ctx) => hasSubDirectories(rawSavedNames(ctx)) && ctx.onSaveResource !== undefined, run: (ctx) => ctx.onSaveResource?.(resourceTargets(ctx), true, true) },
 
   // 2000 — AsmEditor: Delete (GROUP_CTX_DOCUMENTS_ASMED_DELETE). Remove comes first, then one entry per
   // deletable node type, so exactly one of the latter is ever on screen: the node's kind picks it, and
   // its header names that node.
-  { group: GROUP_DELETE, order: 0, key: 'remove-document', icon: fixedIcon(<Trash2 {...iconProps} />), label: removeLabel, shortcut: 'Del', visible: (ctx) => kindIs('assembly', 'module')(ctx) && ctx.onRemoveAssembly !== undefined, run: (ctx) => ctx.onRemoveAssembly?.(ctx.node) },
+  { group: GROUP_DELETE, order: 0, key: 'remove-document', icon: fixedIcon(<Trash2 {...iconProps} />), label: removeLabel, shortcut: 'Del', visible: (ctx) => removalTargets(ctx).length > 0 && ctx.onRemoveAssembly !== undefined, run: (ctx) => ctx.onRemoveAssembly?.(removalTargets(ctx)) },
   { group: GROUP_DELETE, order: 10, key: 'remove-netmodule', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
   { group: GROUP_DELETE, order: 20, key: 'delete-type', icon: fixedIcon(<Trash2 {...iconProps} />), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('type')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
   { group: GROUP_DELETE, order: 30, key: 'delete-method', icon: fixedIcon(<Trash2 {...iconProps} />), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('method')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
@@ -379,8 +445,9 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // without a rule that could ever pass.
   { group: GROUP_OTHER, order: 0, key: 'find-string-references', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find String References in Module'), visible: never },
   { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => isAnalyzableNode(ctx.node) && ctx.onAnalyze !== undefined, run: (ctx) => ctx.onAnalyze?.(ctx.node) },
-  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
-  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: never },
+  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => msdnNamesOf(ctx).length > 0 && ctx.onOpenUrl !== undefined, run: (ctx) => { for (const name of msdnNamesOf(ctx)) ctx.onOpenUrl?.(msdnPageUrl(name)) } },
+  // dnSpy's DocumentTreeViewCommand only answers for a single selected row.
+  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: (ctx) => ctx.readsResource === true && selectionOf(ctx).length === 1 && ctx.onGoToResource !== undefined, run: (ctx) => ctx.onGoToResource?.(ctx.node) },
   { group: GROUP_OTHER, order: 30, key: 'open-containing-folder', icon: fixedIcon(<FolderSearch {...iconProps} />), label: (ctx) => ctx.t('Open Containing Folder'), visible: (ctx) => kindIs('assembly', 'module')(ctx) && ctx.onOpenContainingFolder !== undefined, run: (ctx) => ctx.onOpenContainingFolder?.(ctx.node) },
   { group: GROUP_OTHER, order: 40, key: 'sort-assemblies', icon: fixedIcon(<ArrowDownAZ {...iconProps} />), label: (ctx) => ctx.t('Sort Assemblies'), visible: (ctx) => ctx.onSortAssemblies !== undefined, run: (ctx) => ctx.onSortAssemblies?.() },
   { group: GROUP_OTHER, order: 50, key: 'disable-mmap-io', icon: fixedIcon(<FileBox {...iconProps} />), label: (ctx) => ctx.t('Disable Memory Mapped I/O'), visible: never },

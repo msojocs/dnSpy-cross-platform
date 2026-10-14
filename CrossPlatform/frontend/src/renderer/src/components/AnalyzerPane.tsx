@@ -6,7 +6,7 @@ import { useAnalyzerStore } from '../analyzer-store'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './app-options'
-import { NodeIcon } from './AssemblyExplorer'
+import { iconFamily, NodeIcon } from './AssemblyExplorer'
 import { ColoredText } from './ColoredText'
 import { showAnalyzerContextMenu, type AnalyzerMenuContext } from './AnalyzerContextMenu'
 
@@ -90,7 +90,7 @@ const AnalyzerTreeRow = memo(({ line, selected, focused, expanded, loading, show
       >
         {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
       </button>
-      <span className={`tree-icon kind-${node.kind} icon-${icon}`}><NodeIcon icon={icon} expanded={expanded} /></span>
+      <span className={`tree-icon kind-${node.kind} icon-${iconFamily(icon)}`}><NodeIcon icon={icon} expanded={expanded} /></span>
       {/* A row the backend sent no colors for — a search's header — is plain text in dnSpy too. */}
       <span className="tree-label">{syntaxHighlight && node.labelParts ? <ColoredText parts={composeAnalyzerParts(node, t, showToken)} /> : line.text}</span>
     </div>

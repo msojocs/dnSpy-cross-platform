@@ -42,7 +42,7 @@
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
 | 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
-| 应用壳与通用 UI | ~94% | 31 | 6 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
+| 应用壳与通用 UI | ~97% | 32 | 5 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片、会话恢复（含光标与滚动位置）齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30，完成度约 **56%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30，完成度约 **56%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -118,7 +118,7 @@
 
 ### 4.1 应用壳与通用 UI 框架
 
-完成度约 94%（✅ 31 / 🟡 6 / ❌ 0 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+完成度约 97%（✅ 32 / 🟡 5 / ❌ 0 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
 
 2026-10-14 按实现与测试复核。此前这一节有 7 个 ❌ 与 17 个 🟡；补上的部分：窗口状态记忆、单实例与参数转发、退出时的未保存询问、工具窗口与标签组的右键命令、标签内容缩放、背景图片渲染、Environment 的字体与 RestoreTabs、主菜单键盘操作、标签快捷键与全局快捷键、关于与帮助菜单、输出窗口的命令栏、消息框的「不再提示」、工具栏与部分图标、**反编译器设置传递给后端（2026-10-14 晚）**。
 
@@ -146,7 +146,7 @@
 | Windows 对话框 | `Documents/Tabs/Dialogs/TabsDlg.xaml` | `WindowsDialog.tsx` | ✅ | |
 | 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | ✅ | Ctrl+T、Ctrl+F4、Ctrl+Tab、Ctrl+Shift+Tab（在活动组内循环，两端回绕） |
 | 标签内容缩放 | `Tabs/TabElementZoomer.cs` | `FE/zoom.ts`、`FE/App.tsx` | ✅ | 档位表照搬 `ZoomSelector`（20%~400%），Ctrl+=/Ctrl+-/Ctrl+0 与 Ctrl+滚轮；缩放的是编辑器区域整体，dnSpy 是每个标签视图各记一份 |
-| 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | 🟡 | RestoreTabs 选项已生效；仍不恢复光标与滚动位置 |
+| 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | ✅ | RestoreTabs 选项已生效；光标与滚动位置已恢复 |
 | 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberRecentFiles` | ✅ | 每个文件一条，见 4.3 |
 | 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `OpenListDialog.tsx` | ✅ | 见 4.3 |
 | 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
@@ -167,7 +167,7 @@
 | 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | ✅ | 菜单上标出的都已绑定；Go to Token 改回 dnSpy 的 Ctrl+D；Shift+Alt+Enter 不再被 Alt+Enter 截住。仍未绑定的是十六进制只读视图里的几个（Ctrl+X 等，本移植版不能改字节） |
 | 设置存储 | `Settings/SettingsService.cs` | localStorage 的 `dnspy.*` 键 | ✅ | 不支持 `--settings-file` 和便携模式 |
 
-测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`ToolWindowTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`AboutDialog.test.tsx`、`ToolWindows.test.tsx`、`command-line-options.test.ts`、`zoom.test.ts`、`background-image.test.ts`、`message-box.test.ts`、`window-state.test.ts`、`app-info.test.ts`、`app-settings.ts`（无单测）、`app-store-session.test.ts` 等；e2e `layout.spec.ts`、`session-close.spec.ts`。反解码器选项是否生效、Output 的来源切换、`.dntheme`、图标替换的其余部分都还没有测试。
+测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`ToolWindowTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`AboutDialog.test.tsx`、`ToolWindows.test.tsx`、`command-line-options.test.ts`、`zoom.test.ts`、`background-image.test.ts`、`message-box.test.ts`、`window-state.test.ts`、`app-info.test.ts`、`app-settings.ts`（无单测）、`app-store-session.test.ts`（含光标与滚动位置恢复测试） 等；e2e `layout.spec.ts`、`session-close.spec.ts`。反解码器选项是否生效、Output 的来源切换、`.dntheme`、图标替换的其余部分都还没有测试。
 
 ### 4.2 工程基础设施（新增，WPF 无对应）
 

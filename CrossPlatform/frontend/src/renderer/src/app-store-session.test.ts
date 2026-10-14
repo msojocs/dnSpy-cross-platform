@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DecompileResponse, TreeNode } from '../../shared/protocol'
-import { loadSession, useAppStore } from './app-store'
+import { buildSession, loadSession, useAppStore } from './app-store'
 
 const root: TreeNode = { id: 'root', key: 'module:/A.dll', kind: 'module', label: 'A.dll', hasChildren: true }
 const child: TreeNode = { id: 'child', key: 'module:/A.dll:type:1', kind: 'type', label: 'Type', hasChildren: false }
@@ -105,3 +105,122 @@ describe('closing a workspace during session restoration', () => {
     expect(loadSession()?.paths).toEqual([])
   })
 })
+
+describe('session editor state persistence', () => {
+  const docNode: TreeNode = { id: 'doc', key: 'module:/A.dll:type:1:method:1', kind: 'method', label: 'Method', hasChildren: false }
+
+  beforeEach(() => {
+    useAppStore.setState({
+      ...useAppStore.getInitialState(),
+      workspaceId: 'test-workspace',
+      modules: [{ id: 'root', path: '/A.dll', name: 'A', hasPdb: false }],
+      roots: [root],
+      children: {},
+      parents: {},
+    })
+  })
+
+  it('saves cursor position and scroll when updating editor state', () => {
+    useAppStore.setState({
+      documents: {
+        doc: {
+          nodeId: 'doc',
+          loading: false,
+          requestedLanguage: 'cSharp',
+          title: 'Method',
+          text: 'void Method() {}',
+          language: 'csharp',
+          spans: [],
+          diagnostics: [],
+        },
+      },
+      documentOrder: ['doc'],
+    })
+
+    useAppStore.getState().updateDocumentEditorState('doc', 10, 5, 120)
+
+    expect(useAppStore.getState().documents.doc).toMatchObject({
+      cursorLine: 10,
+      cursorColumn: 5,
+      scrollTop: 120,
+    })
+  })
+
+  it('includes editor state in session when building', () => {
+    useAppStore.setState({
+      documents: {
+        doc: {
+          nodeId: 'doc',
+          loading: false,
+          requestedLanguage: 'cSharp',
+          title: 'Method',
+          text: 'void Method() {}',
+          language: 'csharp',
+          spans: [],
+          diagnostics: [],
+          cursorLine: 15,
+          cursorColumn: 8,
+          scrollTop: 200,
+        },
+      },
+      documentOrder: ['doc'],
+      children: { root: [docNode] },
+      parents: { doc: 'root' },
+    })
+
+    const session = buildSession(useAppStore.getState())
+
+    expect(session.documents).toEqual([{
+      key: 'module:/A.dll:type:1:method:1',
+      language: 'cSharp',
+      cursorLine: 15,
+      cursorColumn: 8,
+      scrollTop: 200,
+    }])
+  })
+
+  it('loads editor state from session', () => {
+    localStorage.setItem('dnspy.session.v1', JSON.stringify({
+      version: 1,
+      paths: ['/A.dll'],
+      nodes: [],
+      documents: [{
+        key: 'module:/A.dll:type:1',
+        language: 'cSharp',
+        cursorLine: 20,
+        cursorColumn: 12,
+        scrollTop: 300,
+      }],
+    }))
+
+    const session = loadSession()
+
+    expect(session?.documents).toEqual([{
+      key: 'module:/A.dll:type:1',
+      language: 'cSharp',
+      cursorLine: 20,
+      cursorColumn: 12,
+      scrollTop: 300,
+    }])
+  })
+
+  it('handles missing editor state gracefully', () => {
+    localStorage.setItem('dnspy.session.v1', JSON.stringify({
+      version: 1,
+      paths: ['/A.dll'],
+      nodes: [],
+      documents: [{
+        key: 'module:/A.dll:type:1',
+        language: 'cSharp',
+      }],
+    }))
+
+    const session = loadSession()
+
+    expect(session?.documents).toEqual([{
+      key: 'module:/A.dll:type:1',
+      language: 'cSharp',
+    }])
+  })
+})
+

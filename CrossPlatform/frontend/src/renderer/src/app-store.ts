@@ -41,6 +41,9 @@ export interface DocumentState extends DecompileResponse {
   nodeId: string
   loading: boolean
   requestedLanguage: DecompilerLanguage
+  cursorLine?: number
+  cursorColumn?: number
+  scrollTop?: number
 }
 
 export interface FunctionBreakpoint {
@@ -338,6 +341,8 @@ interface AppState {
   collapseTreeViewNodes(): void
   openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
   changeDocumentLanguage(nodeId: string, language: DecompilerLanguage): Promise<void>
+  /** Updates the editor state (cursor position and scroll) for a document, which session restore reads back. */
+  updateDocumentEditorState(nodeId: string, cursorLine?: number, cursorColumn?: number, scrollTop?: number): void
   renameNode(node: TreeNode, newName: string): Promise<boolean>
   /** Adds the type or member a create dialog assembled to the node that owns it, and selects the new
    * node. Says whether it was created; a refused one has already been reported. */
@@ -1089,6 +1094,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const node = findNode(get(), nodeId)
     if (existing && node)
       await get().openDocument(node, language)
+  },
+
+  updateDocumentEditorState: (nodeId, cursorLine, cursorColumn, scrollTop) => {
+    const existing = get().documents[nodeId]
+    if (!existing)
+      return
+    set((state) => ({
+      documents: {
+        ...state.documents,
+        [nodeId]: {
+          ...existing,
+          cursorLine,
+          cursorColumn,
+          scrollTop,
+        },
+      },
+    }))
   },
 
   renameNode: async (node, newName) => {
@@ -3780,6 +3802,9 @@ export interface SavedSessionNode {
 export interface SavedSessionDocument {
   key: string
   language: DecompilerLanguage
+  cursorLine?: number
+  cursorColumn?: number
+  scrollTop?: number
 }
 
 /**
@@ -3829,13 +3854,16 @@ const toSavedNode = (value: unknown): SavedSessionNode[] => {
 }
 
 const toSavedDocument = (value: unknown): SavedSessionDocument[] => {
-  const document = value as { key?: unknown; language?: unknown } | null
+  const document = value as { key?: unknown; language?: unknown; cursorLine?: unknown; cursorColumn?: unknown; scrollTop?: unknown } | null
   if (typeof document?.key !== 'string' || document.key === '')
     return []
   const language = document.language
   return [{
     key: document.key,
     language: language === 'visualBasic' || language === 'il' || language === 'ilWithCSharp' ? language : 'cSharp',
+    cursorLine: typeof document.cursorLine === 'number' ? document.cursorLine : undefined,
+    cursorColumn: typeof document.cursorColumn === 'number' ? document.cursorColumn : undefined,
+    scrollTop: typeof document.scrollTop === 'number' ? document.scrollTop : undefined,
   }]
 }
 
@@ -3911,7 +3939,16 @@ export function buildSession(state: SessionSource): SavedSession {
       .map((entry) => ({ key: entry.node.key as string, expanded: entry.expanded })),
     documents: state.documentOrder.flatMap((documentId) => {
       const node = nodesById.get(documentId)
-      return node?.key ? [{ key: node.key, language: state.documents[documentId]?.requestedLanguage ?? 'cSharp' }] : []
+      const doc = state.documents[documentId]
+      if (!node?.key)
+        return []
+      return [{
+        key: node.key,
+        language: doc?.requestedLanguage ?? 'cSharp',
+        cursorLine: doc?.cursorLine,
+        cursorColumn: doc?.cursorColumn,
+        scrollTop: doc?.scrollTop,
+      }]
     }),
     activeDocument: activeNode?.key,
     selectedNode: state.selectedNode?.key,

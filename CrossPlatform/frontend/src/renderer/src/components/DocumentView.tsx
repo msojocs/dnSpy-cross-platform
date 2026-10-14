@@ -453,6 +453,42 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               registerDocumentEditor(viewId, editor, documentId)
               // The decoration collections exist from here on, so the effects that fill them can run again.
               setEditorReady(true)
+
+              // Restore cursor and scroll position from saved session
+              const savedDoc = useAppStore.getState().documents[documentId]
+              if (savedDoc?.cursorLine !== undefined && savedDoc.cursorColumn !== undefined) {
+                editor.setPosition({ lineNumber: savedDoc.cursorLine, column: savedDoc.cursorColumn })
+              }
+              if (savedDoc?.scrollTop !== undefined) {
+                editor.setScrollTop(savedDoc.scrollTop)
+              }
+
+              // Save cursor position changes
+              editor.onDidChangeCursorPosition(() => {
+                const position = editor.getPosition()
+                if (position) {
+                  useAppStore.getState().updateDocumentEditorState(
+                    documentId,
+                    position.lineNumber,
+                    position.column,
+                    editor.getScrollTop()
+                  )
+                }
+              })
+
+              // Save scroll position changes
+              editor.onDidScrollChange(() => {
+                const position = editor.getPosition()
+                if (position) {
+                  useAppStore.getState().updateDocumentEditorState(
+                    documentId,
+                    position.lineNumber,
+                    position.column,
+                    editor.getScrollTop()
+                  )
+                }
+              })
+
               // A frame navigation opens its document while the tab is still being laid out, so the reveal
               // it asks for finds an editor without a height; this is where that request is tried again.
               editor.onDidLayoutChange(() => {

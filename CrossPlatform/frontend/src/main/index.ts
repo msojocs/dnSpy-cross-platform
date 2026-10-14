@@ -779,6 +779,19 @@ const registerIpc = (): void => {
   // resulting system/cancel would look to the user like a script that simply never finished.
   ipcMain.handle('script:evaluate', (_event, code: string) => requireBackend().invoke('script/evaluate', { code }, 600_000))
   ipcMain.handle('script:reset', () => requireBackend().invoke('script/reset', {}, 600_000))
+
+  // Roslyn language service handlers
+  ipcMain.handle('languageService:updateDocument', (_event, filePath: string, content: string) =>
+    requireBackend().invoke('languageService/updateDocument', { filePath, content }))
+  ipcMain.handle('languageService:completions', (_event, filePath: string, position: number) =>
+    requireBackend().invoke('languageService/completions', { filePath, position }))
+  ipcMain.handle('languageService:hover', (_event, filePath: string, position: number) =>
+    requireBackend().invoke('languageService/hover', { filePath, position }))
+  ipcMain.handle('languageService:signatureHelp', (_event, filePath: string, position: number) =>
+    requireBackend().invoke('languageService/signatureHelp', { filePath, position }))
+  ipcMain.handle('languageService:diagnostics', (_event, filePath: string) =>
+    requireBackend().invoke('languageService/diagnostics', { filePath }))
+
   ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle('window:toggleMaximize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)

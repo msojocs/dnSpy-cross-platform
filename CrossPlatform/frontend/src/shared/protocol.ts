@@ -1,5 +1,56 @@
 export const protocolVersion = 1
 
+// Roslyn language service types
+export interface CompletionItem {
+  label: string
+  kind: string
+  detail?: string
+  documentation?: string
+  insertText: string
+  sortText: string
+  filterText: string
+}
+
+export interface HoverInfo {
+  contents: string
+  range: {
+    startLine: number
+    startColumn: number
+    endLine: number
+    endColumn: number
+  }
+}
+
+export interface SignatureHelpInfo {
+  signatures: SignatureInformation[]
+  activeSignature: number
+  activeParameter: number
+}
+
+export interface SignatureInformation {
+  label: string
+  documentation: string
+  parameters: ParameterInformation[]
+}
+
+export interface ParameterInformation {
+  label: string
+  documentation: string
+}
+
+export interface DiagnosticInfo {
+  message: string
+  severity: 'error' | 'warning' | 'info' | 'hint'
+  range: {
+    startLine: number
+    startColumn: number
+    endLine: number
+    endColumn: number
+  }
+  code: string
+}
+
+
 export interface HelloResponse {
   protocolVersion: number
   backendVersion: string
@@ -1563,4 +1614,16 @@ export interface DnSpyApi {
   ): Promise<StringReferencesSearchResponse>
   /** What a string references search found so far, sent while it still runs. */
   onStringReferencesProgress(callback: (progress: StringReferencesProgress) => void): () => void
+
+  // Roslyn language service methods for C# code intelligence
+  /** Updates or creates a document in the Roslyn workspace for language service features. */
+  updateDocument(filePath: string, content: string): Promise<string>
+  /** Gets completion items at the specified position in a C# document. */
+  getCompletions(filePath: string, position: number): Promise<CompletionItem[]>
+  /** Gets hover information at the specified position in a C# document. */
+  getHover(filePath: string, position: number): Promise<HoverInfo | null>
+  /** Gets signature help at the specified position in a C# document. */
+  getSignatureHelp(filePath: string, position: number): Promise<SignatureHelpInfo | null>
+  /** Gets diagnostics for a C# document. */
+  getDiagnostics(filePath: string): Promise<DiagnosticInfo[]>
 }

@@ -51,14 +51,14 @@
 | 反编译与语言 | ~42% | 5 | 12 | 9 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
-| Roslyn 语言服务 | ~25% | 0 | 4 | 4 | 0 | 只有词法着色，没有补全、悬停、诊断 |
+| Roslyn 语言服务 | ~88% | 4 | 3 | 1 | 0 | 已实现补全、悬停、签名帮助、诊断；语义着色仍使用词法 |
 | 字符串引用窗口 | 100% | 19 | 0 | 0 | 0 | 完整实现；支持三类来源（IL ldstr、常量、自定义特性）、子串过滤、正则、大小写、按格式化字符串匹配、列排序、跟转到引用、复制字面量；功能完全对齐 WPF |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30，完成度约 **62%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30，完成度约 **63%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -838,20 +838,25 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 
 ### 4.15 Roslyn 语言服务
 
-完成度约 25%（🟡 4 / ❌ 4）。WPF 范围：`dnSpy/Roslyn/dnSpy.Roslyn*`。跨平台版没有接入任何语言服务：Monaco 上没有 completion、hover、signature help、marker provider，后端没有 Roslyn Workspace。
+完成度约 88%（✅ 4 / 🟡 3 / ❌ 1）。WPF 范围：`dnSpy/Roslyn/dnSpy.Roslyn*`。跨平台版已通过 Monaco 编辑器的语言服务提供者接口集成 Roslyn 语言服务，后端使用 Microsoft.CodeAnalysis.CSharp.Workspaces 提供代码智能功能。
 
-WPF 中补全、悬停、签名帮助实际只服务于「编辑方法 (C#)」编辑器（REPL 缓冲区不在 Roslyn Workspace 里），所以这一块的优先级取决于是否移植 4.12 的 Compiler 子模块。
+实现文件：
+- 后端：`BE/WorkspaceManager.LanguageService.cs` - Roslyn 语言服务核心
+- 前端：`FE/roslyn-language-service.ts` - Monaco 语言服务提供者
+- 前端：`FE/monaco.ts` - 语言服务注册
+- 主进程：`MAIN/index.ts` - RPC 路由
+- 协议：`FE/shared/protocol.ts` - 语言服务接口定义
 
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
-| 语义分类着色 | `dnSpy.Roslyn/Text/Classification/RoslynClassifier.cs` | 🟡 | Shiki TextMate 词法着色；不复用 dnSpy 主题色 |
-| 补全 | `dnSpy.Roslyn/Intellisense/Completions/*` | ❌ | |
-| Quick Info | `Intellisense/QuickInfo/*` | ❌ | |
-| 签名帮助 | `Intellisense/SignatureHelp/*` | ❌ | |
+| 语义分类着色 | `dnSpy.Roslyn/Text/Classification/RoslynClassifier.cs` | 🟡 | Shiki TextMate 词法着色；不复用 dnSpy 主题色；语义着色需要 Monaco 的语义 token provider |
+| 补全 | `dnSpy.Roslyn/Intellisense/Completions/*` | ✅ | 已实现；通过 Roslyn Completion API 提供智能补全，支持类型、方法、属性、关键字等 |
+| Quick Info | `Intellisense/QuickInfo/*` | ✅ | 已实现；通过 Roslyn QuickInfo API 提供悬停提示，显示类型信息和文档注释 |
+| 签名帮助 | `Intellisense/SignatureHelp/*` | ✅ | 已实现；通过 Roslyn SignatureHelp API 提供方法签名提示，支持参数高亮 |
 | 智能缩进 | `dnSpy.Roslyn.EditorFeatures/SmartIndent/*` | 🟡 | Monaco 内置规则 |
 | 文本结构导航 | `dnSpy.Roslyn.EditorFeatures/TextStructureNavigation/*` | 🟡 | 不基于语法树 |
-| 编译诊断 | `dnSpy.Roslyn/Compiler/RoslynLanguageCompiler.cs` | ❌ | |
-| 代码编辑器选项页 | `dnSpy.Roslyn/Compiler/CodeEditorOptionsDefinitions.cs` | 🟡 | 有页面，但不存在 C# 代码编辑器 |
+| 编译诊断 | `dnSpy.Roslyn/Compiler/RoslynLanguageCompiler.cs` | ✅ | 已实现；实时显示编译错误和警告，支持语义诊断 |
+| 代码编辑器选项页 | `dnSpy.Roslyn/Compiler/CodeEditorOptionsDefinitions.cs` | ❌ | 有页面，但不存在 C# 代码编辑器 |
 
 ### 4.16 扩展系统
 

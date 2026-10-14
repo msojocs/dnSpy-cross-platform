@@ -165,6 +165,12 @@ const api: DnSpyApi = {
     ipcRenderer.on('search:progress', listener)
     return () => ipcRenderer.removeListener('search:progress', listener)
   },
+  // Roslyn language service methods
+  updateDocument: (filePath, content) => ipcRenderer.invoke('languageService:updateDocument', filePath, content),
+  getCompletions: (filePath, position) => ipcRenderer.invoke('languageService:completions', filePath, position),
+  getHover: (filePath, position) => ipcRenderer.invoke('languageService:hover', filePath, position),
+  getSignatureHelp: (filePath, position) => ipcRenderer.invoke('languageService:signatureHelp', filePath, position),
+  getDiagnostics: (filePath) => ipcRenderer.invoke('languageService:diagnostics', filePath),
 }
 
 contextBridge.exposeInMainWorld('dnSpy', api)

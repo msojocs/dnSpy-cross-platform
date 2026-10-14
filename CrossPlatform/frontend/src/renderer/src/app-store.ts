@@ -607,6 +607,8 @@ interface AppState {
   /** Throws the diff away and puts the engine back to the settings the definition files name. */
   restoreDefaultExceptionSettings(): Promise<void>
   appendOutput(message: string): void
+  /** Empties the Output window — dnSpy's Clear All. */
+  clearOutput(): void
   clearError(): void
   /** Builds the C# Interactive session the first time the window is opened, printing the banner. */
   startScript(): Promise<void>
@@ -2611,6 +2613,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   appendOutput: (message) => set((state) => ({
     output: [...state.output.slice(-999), `${timestamp()}  ${message}`],
   })),
+
+  clearOutput: () => set({ output: [] }),
 
   clearError: () => set({ error: undefined }),
 

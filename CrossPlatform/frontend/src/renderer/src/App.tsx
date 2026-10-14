@@ -2089,7 +2089,8 @@ export const App = (): React.JSX.Element => {
         onShowOptions={(category) => setOptionsDialogCategory(category ?? 'environment')}
       />
       <ToolBar
-        hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSave={() => void saveModuleAs()} onSearch={showSearch}
+        hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSaveAll={() => void saveAllModules()} onSearch={showSearch}
+        fullScreen={fullScreen} onToggleFullScreen={() => void window.dnSpy.toggleFullScreen()}
         canGoBack={navigation.index > 0} canGoForward={navigation.index >= 0 && navigation.index < navigation.items.length - 1} onBack={goBack} onForward={goForward}
         canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo}
         decompilerLanguage={activeDocumentLanguage} onLanguageChange={(language) => { if (activeDocumentId) void changeDocumentLanguage(activeDocumentId, language) }}

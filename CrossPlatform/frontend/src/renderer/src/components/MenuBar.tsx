@@ -562,8 +562,11 @@ export const MenuBar = ({
       ...(windowTabItems.length > 0 ? [{ separator: true }, ...windowTabItems] : []),
     ],
     [t('Help')]: [
+      // dnSpy's Help menu, in its order and with its wording: the release, the issues, the wiki and the
+      // source, then About at the end (AboutCommands).
       { label: t('Latest Release'), action: () => openExternal(`${repositoryUrl}/releases/latest`) },
-      { label: t('Report Bug'), action: () => openExternal(`${repositoryUrl}/issues/new`) },
+      { label: t('Issues'), action: () => openExternal(`${repositoryUrl}/issues`) },
+      { label: t('Wiki'), action: () => openExternal(`${repositoryUrl}/wiki`) },
       { label: t('Source Code'), action: () => openExternal(repositoryUrl) },
       { separator: true },
       { label: t('About dnSpy'), action: onAbout },

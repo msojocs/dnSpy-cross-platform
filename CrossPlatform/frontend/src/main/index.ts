@@ -620,7 +620,7 @@ const registerIpc = (): void => {
     requireBackend().invoke('module/save', { workspaceId, moduleId }))
   ipcMain.handle('module:saveAll', (_event, workspaceId: string) =>
     requireBackend().invoke('module/saveAll', { workspaceId }))
-  ipcMain.handle('document:saveCode', async (_event, suggestedName: string, text: string) => {
+  ipcMain.handle('document:saveCode', async (_event, suggestedName: string, text: string, title?: string) => {
     if (typeof suggestedName !== 'string' || typeof text !== 'string')
       throw new TypeError('Invalid save-code request.')
     if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_CODE_PATH) {
@@ -630,7 +630,9 @@ const registerIpc = (): void => {
     const safeName = path.basename(suggestedName) || 'code.txt'
     const extension = path.extname(safeName).slice(1) || 'txt'
     const result = await dialog.showSaveDialog(mainWindow!, {
-      title: nativeText().saveCode,
+      // The renderer names the box when it is saving something other than code — the Output window's text,
+      // which is written out the same way — since it is the side that knows which language to say it in.
+      title: title ?? nativeText().saveCode,
       defaultPath: safeName,
       filters: [
         { name: nativeText().codeFiles, extensions: [extension] },

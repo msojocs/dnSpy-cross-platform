@@ -1199,7 +1199,8 @@ describe('MenuBar', () => {
 
   it.each([
     ['Latest Release', 'https://github.com/msojocs/dnSpy/releases/latest'],
-    ['Report Bug', 'https://github.com/msojocs/dnSpy/issues/new'],
+    ['Issues', 'https://github.com/msojocs/dnSpy/issues'],
+    ['Wiki', 'https://github.com/msojocs/dnSpy/wiki'],
     ['Source Code', 'https://github.com/msojocs/dnSpy'],
   ])('opens %s in the system browser', (label, url) => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)

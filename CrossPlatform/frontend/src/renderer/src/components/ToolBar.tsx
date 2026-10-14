@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   FolderOpen,
+  Maximize,
   Redo2,
   Save,
   Search,
@@ -14,8 +15,10 @@ interface ToolBarProps {
   hasWorkspace: boolean
   busy: boolean
   onOpen(): void
-  onSave(): void
+  onSaveAll(): void
   onSearch(): void
+  fullScreen: boolean
+  onToggleFullScreen(): void
   canGoBack: boolean
   canGoForward: boolean
   onBack(): void
@@ -69,13 +72,14 @@ const DebugIcon = ({ name }: { name: DebugIconName }): React.JSX.Element => {
   <circle id="svg_2" fill="#1688d7" r="1.4" cy="13" cx="8"/></svg>
 }
 
-export const ToolBar = ({ hasWorkspace, busy, onOpen, onSave, onSearch, canGoBack, canGoForward, onBack, onForward, canUndo, canRedo, onUndo, onRedo, decompilerLanguage, onLanguageChange, debugAvailable, debugState, onStart, onContinue, onPause, onRestart, onShowNextStatement, onStepInto, onStepOver, onStepOut, onStop }: ToolBarProps): React.JSX.Element => {
+export const ToolBar = ({ hasWorkspace, busy, onOpen, onSaveAll, onSearch, fullScreen, onToggleFullScreen, canGoBack, canGoForward, onBack, onForward, canUndo, canRedo, onUndo, onRedo, decompilerLanguage, onLanguageChange, debugAvailable, debugState, onStart, onContinue, onPause, onRestart, onShowNextStatement, onStepInto, onStepOver, onStepOut, onStop }: ToolBarProps): React.JSX.Element => {
   const { t } = useLanguage()
   const debugging = debugState !== 'inactive'
   return (
     <div className="tool-bar" role="toolbar" aria-label={t('Main toolbar')}>
       <ToolButton label={t('Open Assembly')} onClick={onOpen}><FolderOpen size={16} /></ToolButton>
-      <ToolButton label={t('Save As')} disabled={!hasWorkspace} onClick={onSave}><Save size={16} /></ToolButton>
+      {/* dnSpy's Save button is Save All — its AsmEditor exports it with the SaveAll icon (SaveModuleCommand). */}
+      <ToolButton label={t('Save All')} disabled={!hasWorkspace} onClick={onSaveAll}><Save size={16} /></ToolButton>
       <span className="toolbar-separator" />
       <ToolButton label={t('Back')} disabled={!canGoBack} onClick={onBack}><ArrowLeft size={16} /></ToolButton>
       <ToolButton label={t('Forward')} disabled={!canGoForward} onClick={onForward}><ArrowRight size={16} /></ToolButton>
@@ -103,6 +107,8 @@ export const ToolBar = ({ hasWorkspace, busy, onOpen, onSave, onSearch, canGoBac
       <span className="toolbar-separator" />
       <ToolButton label={t('Search')} disabled={!hasWorkspace} onClick={onSearch}><Search size={16} /></ToolButton>
       <span className="toolbar-spacer" />
+      {/* The last group dnSpy's toolbar has: the Full Screen toggle (ToolBarCommands). */}
+      <ToolButton label={t('Full Screen')} onClick={onToggleFullScreen}><Maximize size={16} className={fullScreen ? 'toolbar-toggle-on' : undefined} /></ToolButton>
       {busy && <span className="toolbar-busy">{t('Working')}</span>}
     </div>
   )

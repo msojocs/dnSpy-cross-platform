@@ -1,18 +1,39 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import appIconUrl from '../../../../../packaging/linux/icons/128x128.png'
+// Both of these are read where they are written — the notices beside the package they describe and the
+// credits out of the WPF tree — and are copied into this package's resources/ so the bundler has them,
+// since it may not read above this package's root. A test keeps the copies the same as the originals.
+import thirdPartyNotices from '../../../../resources/THIRD-PARTY-NOTICES.md?raw'
+import credits from '../../../../resources/CREDITS.txt?raw'
 import { useLanguage } from '../localization'
 
 interface AboutDialogProps {
   onClose(): void
 }
 
+/** Which of the dialog's two long texts is open. dnSpy shows them one after another in its About tab; here
+ * they are folded away so the box stays a box, and only one is open at a time. */
+type OpenText = 'credits' | 'notices' | undefined
+
 export const AboutDialog = ({ onClose }: AboutDialogProps): React.JSX.Element => {
   const dialog = useRef<HTMLDivElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
+  const [version, setVersion] = useState<string>()
+  const [openText, setOpenText] = useState<OpenText>(undefined)
   const { t } = useLanguage()
 
   useEffect(() => closeButton.current?.focus(), [])
+
+  // dnSpy's AboutScreen writes the app's version at the top of the tab. It comes from the main process,
+  // which is where the packaged version is known.
+  useEffect(() => {
+    let mounted = true
+    void window.dnSpy.getStartupOptions().then((options) => {
+      if (mounted) setVersion(options.version)
+    })
+    return () => { mounted = false }
+  }, [])
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
@@ -53,12 +74,28 @@ export const AboutDialog = ({ onClose }: AboutDialogProps): React.JSX.Element =>
           <div className="about-brand">
             <img className="about-logo" src={appIconUrl} alt="" />
             <div>
-              <div className="about-name">dnSpy</div>
-              <div className="about-version">{t('Version 1.0.0')}</div>
+              {/* dnSpy's own heading is "dnSpy <version> (.NET)" (AboutScreen.Write). */}
+              <div className="about-name">{version ? `dnSpy ${version} (.NET)` : 'dnSpy'}</div>
+              <div className="about-version">{t('Version {version}', { version: version ?? '—' })}</div>
             </div>
           </div>
           <p id="about-description">{t('Cross-platform .NET assembly browser, decompiler, editor and debugger.')}</p>
           <p className="about-license">{t('Licensed under GNU GPL v3.0 only.')}</p>
+          {/* dnSpy's About tab ends with the credits and the third-party licenses, one after the other
+              (AboutScreen.WriteResourceFile). */}
+          <div className="about-folds">
+            <button type="button" className="about-fold" aria-expanded={openText === 'credits'} onClick={() => setOpenText(openText === 'credits' ? undefined : 'credits')}>
+              {t('Credits')}
+            </button>
+            <button type="button" className="about-fold" aria-expanded={openText === 'notices'} onClick={() => setOpenText(openText === 'notices' ? undefined : 'notices')}>
+              {t('Third-Party Notices')}
+            </button>
+          </div>
+          {openText && (
+            <pre className="about-text" aria-label={t(openText === 'credits' ? 'Credits' : 'Third-Party Notices')}>
+              {openText === 'credits' ? credits : thirdPartyNotices}
+            </pre>
+          )}
         </div>
         <div className="modal-actions">
           <span className="modal-action-spacer" />

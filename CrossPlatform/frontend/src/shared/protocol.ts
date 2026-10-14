@@ -1379,7 +1379,9 @@ export interface DnSpyApi {
   saveModule(workspaceId: string, moduleId: string): Promise<SaveModuleResponse>
   /** Writes every modified module back over its own file — dnSpy's Save All. */
   saveAllModules(workspaceId: string): Promise<SaveAllResponse>
-  saveCode(suggestedName: string, text: string): Promise<string | undefined>
+  /** Writes text the user picks a file for — a decompiled document's code, or the Output window's log.
+   *  `title` names the save box; without one it is the port's "Save Code". */
+  saveCode(suggestedName: string, text: string, title?: string): Promise<string | undefined>
   /**
    * Picks a text file and returns its contents, or undefined when the picker was dismissed. `kind`
    * only titles the dialog — the two importers that use this read the same kind of JSON file.

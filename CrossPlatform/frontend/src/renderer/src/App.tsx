@@ -5,6 +5,7 @@ import type { AppCommandLine, DecompilerLanguage, SearchLocation, SearchType, Te
 import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
+import { normalizeZoom, zoomIn, zoomOut } from './zoom'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
@@ -32,6 +33,7 @@ import { loadDocumentLists, rememberCurrentDocuments, saveDocumentLists, type Do
 import { WindowsDialog, type WindowTabEntry } from './components/WindowsDialog'
 import { NodeOptionsDialog } from './components/NodeOptionsDialog'
 import { OptionsDialog } from './components/OptionsDialog'
+import { BackgroundImage } from './components/BackgroundImage'
 import { cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, isToolWindowTab, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
 import { showToolWindowTabContextMenu } from './components/ToolWindowTabContextMenu'
 import { DockPane } from './components/DockPane'
@@ -232,6 +234,15 @@ const isEditableKind = (kind: string): kind is CreatedKind => EDITABLE_KINDS.has
  * this port's option store; a theme an older build left in a key of its own is moved into the options and that
  * key dropped, so the View menu and the Environment › General page stop disagreeing about it.
  */
+/**
+ * The tab content's zoom, as a percentage. dnSpy keeps it on each tab view (TabElementZoomer); this port has
+ * one editor area, so one zoom covers whatever tab is showing in it, and it is remembered between runs.
+ */
+const loadDocumentZoom = (): number => {
+  const saved = localStorage.getItem('dnspy.zoom')
+  return saved === null ? 100 : normalizeZoom(Number(saved))
+}
+
 const loadTheme = (): ThemeName => {
   const legacy = localStorage.getItem('dnspy.theme')
   if (legacy === 'light' || legacy === 'dark' || legacy === 'hc' || legacy === 'blue') {
@@ -266,11 +277,15 @@ export const App = (): React.JSX.Element => {
   const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
   const setHighlightCurrentLine = useAppStore((state) => state.setHighlightCurrentLine)
   const [fullScreen, setFullScreen] = useState<boolean>(false)
+  const [documentZoom, setDocumentZoom] = useState<number>(loadDocumentZoom)
   // dnSpy reads this once at startup and never again; elevation can't change under a running app.
   const [elevated, setElevated] = useState<boolean>(false)
   // The saved options, subscribed to so a save in the Options dialog reaches the parts of the shell that
   // read them — the theme, the main process's few settings, and the tool windows' widths among others.
   const options = useAppOptions()
+  // Whether a background picture is up, which is what decides whether the editor goes without a background
+  // of its own for the picture to be seen through.
+  const backgroundImageOn = options.backgroundImage.isEnabled && options.backgroundImage.images.trim().length > 0
   const [renameNode, setRenameNode] = useState<TreeNode>()
   const [renameNamespaceNode, setRenameNamespaceNode] = useState<TreeNode>()
   const [editMethodNode, setEditMethodNode] = useState<TreeNode>()
@@ -507,6 +522,29 @@ export const App = (): React.JSX.Element => {
     document.documentElement.dataset.theme = theme
     saveThemeOption(theme)
   }, [theme])
+
+  // dnSpy's TabElementZoomer scales the tab's content: the whole editor area is scaled here, which is what
+  // carries the code view, the hex dump and everything else a document tab shows at the same size.
+  useEffect(() => {
+    localStorage.setItem('dnspy.zoom', String(documentZoom))
+    const element = model.getNodeById(DOCUMENT_TABSET_ID)?.getLayoutRef()
+    element?.style.setProperty('zoom', String(documentZoom / 100))
+  }, [documentZoom, layoutVersion, model])
+
+  // Ctrl+wheel over the editor steps the zoom, one level per notch, in both directions.
+  useEffect(() => {
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey || event.deltaY === 0)
+        return
+      const target = event.target as HTMLElement | null
+      if (!target?.closest('.workspace-host'))
+        return
+      event.preventDefault()
+      setDocumentZoom((current) => normalizeZoom(event.deltaY < 0 ? zoomIn(current) : zoomOut(current)))
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    return () => window.removeEventListener('wheel', onWheel)
+  }, [])
 
   // The theme the Environment › General page saves is the same one the View menu switches, so a save there
   // has to reach the state here — otherwise the two would show different themes until the next start. The
@@ -938,7 +976,18 @@ export const App = (): React.JSX.Element => {
       }
       if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key))
         bookmarkChord.current = undefined
-      if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
+      if (event.ctrlKey && !event.altKey && (event.code === 'Equal' || event.code === 'NumpadAdd')) {
+        // dnSpy's Zoom In, which its ZoomSelector steps through a list of levels rather than by a fixed step.
+        event.preventDefault()
+        setDocumentZoom((current) => normalizeZoom(zoomIn(current)))
+      } else if (event.ctrlKey && !event.altKey && (event.code === 'Minus' || event.code === 'NumpadSubtract')) {
+        event.preventDefault()
+        setDocumentZoom((current) => normalizeZoom(zoomOut(current)))
+      } else if (event.ctrlKey && !event.altKey && !event.shiftKey && (event.code === 'Digit0' || event.code === 'Numpad0')) {
+        // dnSpy's Zoom Reset. Ctrl+Alt+0 is "Show Code" and is read further down, so the two do not meet.
+        event.preventDefault()
+        setDocumentZoom(100)
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
         // dnSpy's Select Previous Tab: the tab before the active one in its own group, wrapping round.
         event.preventDefault()
         selectTabInGroup(-1)
@@ -1570,8 +1619,11 @@ export const App = (): React.JSX.Element => {
       return
     startupHandled.current = true
     void (async () => {
-      const options = await window.dnSpy.getStartupOptions()
-      const session = options.commandLine.noLoadFiles ? undefined : loadSession()
+      const startupOptions = await window.dnSpy.getStartupOptions()
+      // dnSpy's RestoreTabs option: with it off the window starts clean however the last run ended, which is
+      // a different thing from `--no-load-files` — that one leaves the saved session alone for the next run.
+      const restoringTabs = loadAppOptions().environmentGeneral.restoreTabs
+      const session = startupOptions.commandLine.noLoadFiles || !restoringTabs ? undefined : loadSession()
       if (session && session.paths.length > 0) {
         await shellCallbacksRef.current.restoreSession(session)
       } else {
@@ -1585,11 +1637,11 @@ export const App = (): React.JSX.Element => {
       // dnSpy's command line: the theme, the language and the window state it names, the files it lists —
       // which go on the Recent Files list, with the member `--select` names shown of them — and the tool
       // windows and search window it asks for.
-      await shellCallbacksRef.current.applyCommandLine(options.commandLine)
+      await shellCallbacksRef.current.applyCommandLine(startupOptions.commandLine)
       // dnSpy's ShowElapsedTime: what the app took to load, in a box, since `--show-startup-time` asks for it.
       // Its ticks are a Stopwatch's — ten million to the second — so the milliseconds are what they count off.
-      if (options.commandLine.showStartupTime) {
-        const elapsed = Date.now() - options.processStartTime
+      if (startupOptions.commandLine.showStartupTime) {
+        const elapsed = Date.now() - startupOptions.processStartTime
         await window.dnSpy.showMessage(`${elapsed} ms, ${elapsed * 10_000} ticks`)
       }
     })()
@@ -1889,9 +1941,9 @@ export const App = (): React.JSX.Element => {
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
       case 'explorer': return <AssemblyExplorer commands={explorerCommands} />
-      case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
+      case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} transparentBackground={backgroundImageOn} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
       case 'output': return <OutputPane />
-      case 'csharp-interactive': return <CSharpInteractive theme={theme} />
+      case 'csharp-interactive': return <CSharpInteractive theme={theme} transparentBackground={backgroundImageOn} />
       case 'search': return <SearchPane commands={searchCommands} />
       case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
       case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
@@ -2108,6 +2160,9 @@ export const App = (): React.JSX.Element => {
         </div>
       )}
       <main className="workspace-host">
+        {/* The Background Image window's picture, under the tabs — dnSpy draws it inside its text views,
+            which is what the editor's own background is taken away for while it is up. */}
+        <BackgroundImage />
         <Layout
           model={model}
           factory={factory}

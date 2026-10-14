@@ -168,7 +168,7 @@ const environmentCategory: PageSpec = {
         {
           id: 'font',
           controls: [
-            { kind: 'text', path: 'environmentFont.fontFamily', labelKey: 'Font', placeholder: 'Consolas' },
+            { kind: 'text', path: 'environmentFont.fontFamily', labelKey: 'Font', placeholder: 'Cascadia Mono' },
             { kind: 'number', path: 'environmentFont.fontSize', labelKey: 'Size', min: 6, max: 24, step: 1 },
           ],
         },

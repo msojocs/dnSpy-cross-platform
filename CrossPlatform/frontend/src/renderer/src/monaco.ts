@@ -20,6 +20,20 @@ monaco.languages.setLanguageConfiguration('il', ilLanguageConfiguration)
 monaco.editor.defineTheme('dnspy-light', { base: 'vs', inherit: true, rules: ilThemeRules.light, colors: {} })
 monaco.editor.defineTheme('dnspy-dark', { base: 'vs-dark', inherit: true, rules: ilThemeRules.dark, colors: {} })
 monaco.editor.defineTheme('dnspy-high-contrast', { base: 'hc-black', inherit: true, rules: ilThemeRules.highContrast, colors: {} })
+// The same three with the editor's own background taken away, which is what shows the Background Image
+// window's picture behind the code the way dnSpy's own text views show it. Nothing else of the theme moves.
+monaco.editor.defineTheme('dnspy-light-transparent', { base: 'vs', inherit: true, rules: ilThemeRules.light, colors: { 'editor.background': '#00000000' } })
+monaco.editor.defineTheme('dnspy-dark-transparent', { base: 'vs-dark', inherit: true, rules: ilThemeRules.dark, colors: { 'editor.background': '#00000000' } })
+monaco.editor.defineTheme('dnspy-high-contrast-transparent', { base: 'hc-black', inherit: true, rules: ilThemeRules.highContrast, colors: { 'editor.background': '#00000000' } })
+
+/**
+ * The Monaco theme for one of the port's four themes. With the Background Image window showing a picture the
+ * editor goes without a background of its own, so the picture is what the code is read against.
+ */
+export const monacoThemeName = (theme: string, transparentBackground = false): string => {
+  const base = theme === 'light' ? 'dnspy-light' : theme === 'hc' ? 'dnspy-high-contrast' : 'dnspy-dark'
+  return transparentBackground ? `${base}-transparent` : base
+}
 
 let initialization: Promise<void> | undefined
 

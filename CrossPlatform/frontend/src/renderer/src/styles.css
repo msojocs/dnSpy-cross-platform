@@ -345,6 +345,26 @@ select:focus-visible,
   overflow: hidden;
 }
 
+/* The Background Image window's picture: a layer under the tabs, sized and placed by the window's own
+   settings, which the editor's transparent background is what shows through. */
+.background-image {
+  position: absolute;
+  display: flex;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.background-image img {
+  object-fit: fill;
+}
+
+/* While a picture is up the editor's own surfaces give up their background, so the picture is what the text
+   is read against — dnSpy draws it inside each text view, behind the code, rather than behind the window. */
+:root[data-background-image='true'] .flexlayout__tabset,
+:root[data-background-image='true'] .flexlayout__tab {
+  background: transparent;
+}
+
 .error-banner {
   display: flex;
   align-items: center;

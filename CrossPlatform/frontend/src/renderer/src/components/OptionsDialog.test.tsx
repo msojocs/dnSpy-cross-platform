@@ -126,7 +126,7 @@ describe('OptionsDialog', () => {
 
     fireEvent.click(screen.getByRole('treeitem', { name: /^Font/ }))
     expect(screen.getByRole('heading', { name: 'Font', level: 2 })).toBeInTheDocument()
-    expect((screen.getByLabelText('Font') as HTMLInputElement).value).toBe('Consolas')
+    expect((screen.getByLabelText('Font') as HTMLInputElement).value).toBe('Cascadia Mono')
   })
 
   it('renders every option of the upstream debugger settings page', () => {

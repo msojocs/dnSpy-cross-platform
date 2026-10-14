@@ -582,6 +582,52 @@ export const MenuBar = ({
     return () => window.removeEventListener('pointerdown', close)
   }, [])
 
+  // The menu bar is operated from the keyboard the way dnSpy's is (a WPF menu, so the whole of it): Alt
+  // opens the first menu and closes whatever is open, Alt and a letter opens the menu that letter names, the
+  // left and right arrows walk along the open menus, and Escape closes. Inside a menu the entries are
+  // buttons, so Tab walks them and Enter runs one.
+  const menuNamesRef = useRef<string[]>([])
+  menuNamesRef.current = Object.keys(menus)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const editingText = (event.target as HTMLElement | null)?.matches('input, textarea, [contenteditable="true"]') ?? false
+      if (editingText)
+        return
+      const names = menuNamesRef.current
+      if (openMenu) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          setOpenMenu(undefined)
+          return
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          const step = event.key === 'ArrowRight' ? 1 : -1
+          const index = names.indexOf(openMenu)
+          event.preventDefault()
+          setOpenMenu(names[(index + step + names.length) % names.length])
+          return
+        }
+      }
+      // A bare Alt drops the menu bar down; pressing it again puts it away, as the same key does in WPF.
+      if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey) {
+        event.preventDefault()
+        setOpenMenu((current) => (current ? undefined : names[0]))
+        return
+      }
+      // Alt and a letter — the mnemonics dnSpy's menu headers carry — opens the menu it names.
+      if (!event.altKey || event.ctrlKey || !event.code.startsWith('Key'))
+        return
+      const letter = event.code.slice(3).toLowerCase()
+      const target = names.find((name) => name.toLowerCase().startsWith(letter))
+      if (!target)
+        return
+      event.preventDefault()
+      setOpenMenu(target)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [openMenu])
+
   const closeMenu = (): void => setOpenMenu(undefined)
 
   return (

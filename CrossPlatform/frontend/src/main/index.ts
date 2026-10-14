@@ -4,6 +4,7 @@ import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { BackendClient } from './backend-client'
+import { readBackgroundImages } from './background-images'
 import { formatAppTitle } from './app-info'
 import { loadAppMainSettings, saveAppMainSettings } from './app-settings'
 import { parseCommandLine, userArguments } from './command-line'
@@ -799,6 +800,9 @@ const registerIpc = (): void => {
   ipcMain.handle('window:isFullScreen', (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false)
   ipcMain.handle('backend:status:get', () => lastBackendStatus)
   ipcMain.handle('app:startupOptions', () => ({ commandLine, title: appTitle(), version: app.getVersion(), processStartTime }))
+  // The Background Image window's sources: the paths its options list, folders expanded to the images in
+  // them, each handed over as a data URL — the renderer may not read the disk for itself.
+  ipcMain.handle('app:backgroundImages', (_event, paths: string[]) => readBackgroundImages(paths))
   ipcMain.handle('app:filterExistingPaths', (_event, paths: string[]) => paths.filter((candidate) => existsSync(candidate)))
   // dnSpy's File.Exists: a directory is not a file, and any error — missing, unreadable — just means
   // "no", so statSync inside a try rather than existsSync.

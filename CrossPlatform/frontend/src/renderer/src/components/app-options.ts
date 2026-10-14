@@ -503,8 +503,12 @@ export const defaultAppOptions: AppOptions = {
     checkForUpdateOnStartup: true,
   },
   environmentFont: {
-    fontFamily: 'Consolas',
-    fontSize: 12,
+    // dnSpy picks the first of a list of families that is installed and sizes it at FontUtilities'
+    // DEFAULT_FONT_SIZE, which is 10pt at 96 dpi — the 13 the editors were drawing at before this option was
+    // read. The family is looked up with JetBrains Mono and the generic monospaced family behind it, so a
+    // family the machine does not have leaves the editor as it was.
+    fontFamily: 'Cascadia Mono',
+    fontSize: 13,
   },
   decompiler: {
     cSharp: {

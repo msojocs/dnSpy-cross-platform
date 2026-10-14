@@ -1225,6 +1225,12 @@ export interface AppMainSettings {
   allowMoreThanOneInstance: boolean
 }
 
+/** One background image the renderer may draw: its file name, and its bytes as a data URL. */
+export interface BackgroundImageData {
+  name: string
+  dataUrl: string
+}
+
 export interface DnSpyApi {
   openAssemblies(): Promise<string[]>
   getStartupOptions(): Promise<StartupOptions>
@@ -1435,6 +1441,9 @@ export interface DnSpyApi {
   toggleFullScreen(): Promise<boolean>
   isFullScreen(): Promise<boolean>
   quit(): Promise<void>
+  /** The images the Background Image window's paths name — files, and the images in the folders — read
+   *  out as data URLs, since the renderer may not read the disk itself. */
+  loadBackgroundImages(paths: string[]): Promise<BackgroundImageData[]>
   /** dnSpy's MsgBox: a message to read, with nothing to answer. */
   showMessage(message: string): Promise<void>
   /** Reports whether there are unsaved edits, which the main process holds the close back over. */

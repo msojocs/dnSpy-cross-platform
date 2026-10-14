@@ -10,6 +10,8 @@ import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
 import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
+import { monacoThemeName } from '../monaco'
+import { useAppOptions } from './app-options'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
 import type { CreatedKind, HexShowKind } from './edit-menu'
 
@@ -103,7 +105,7 @@ export interface DocumentViewCommands {
   onHexPasteBody(): void
 }
 
-export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }: { documentId: string; viewId: string; theme: string; onNavigate(target: TextSpan): void; commands: DocumentViewCommands }): React.JSX.Element => {
+export const DocumentView = ({ documentId, viewId, theme, transparentBackground, onNavigate, commands }: { documentId: string; viewId: string; theme: string; transparentBackground: boolean; onNavigate(target: TextSpan): void; commands: DocumentViewCommands }): React.JSX.Element => {
   const wordWrap = useAppStore((state) => state.wordWrap)
   const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
   const document = useAppStore((state) => state.documents[documentId])
@@ -422,7 +424,10 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
         : document.language === 'xml'
           ? 'xml'
           : 'csharp'
-  const editorTheme = theme === 'light' ? 'dnspy-light' : theme === 'hc' ? 'dnspy-high-contrast' : 'dnspy-dark'
+  const editorTheme = monacoThemeName(theme, transparentBackground)
+  const font = useAppOptions().environmentFont
+  const editorFontFamily = `'${font.fontFamily}', 'JetBrains Mono', monospace`
+  const editorFontSize = font.fontSize
 
   return (
     <div className="document-view" data-reference-count={document.spans.filter(isNavigableSpan).length}>
@@ -622,9 +627,11 @@ export const DocumentView = ({ documentId, viewId, theme, onNavigate, commands }
               lineDecorationsWidth: 14,
               wordWrap: wordWrap ? 'on' : 'off',
               renderLineHighlight: highlightCurrentLine ? 'all' : 'none',
-              fontFamily: "'Cascadia Mono', 'JetBrains Mono', monospace",
-              fontSize: 13,
-              lineHeight: 20,
+              fontFamily: editorFontFamily,
+              fontSize: editorFontSize,
+              // dnSpy's text view keeps its lines a fifth taller than the font, which is what the editor
+              // was drawing before the font became an option.
+              lineHeight: Math.round(editorFontSize * 1.55),
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
               renderWhitespace: 'selection',

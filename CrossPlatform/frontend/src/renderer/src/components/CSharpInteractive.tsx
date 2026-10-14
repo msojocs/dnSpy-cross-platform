@@ -5,13 +5,16 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 import type { ScriptOutputEntry } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { monacoThemeName } from '../monaco'
+import { useAppOptions } from './app-options'
 
 /**
  * The C# Interactive window: a log of everything submissions have printed, and a Monaco box that
  * collects the next one. Enter runs, Shift+Enter breaks the line, Alt+Up/Down walks the history —
  * the bindings the upstream window documents in its `#help` text.
  */
-export const CSharpInteractive = ({ theme }: { theme: string }): React.JSX.Element => {
+export const CSharpInteractive = ({ theme, transparentBackground }: { theme: string; transparentBackground: boolean }): React.JSX.Element => {
+  const font = useAppOptions().environmentFont
   const entries = useAppStore((state) => state.scriptEntries)
   const running = useAppStore((state) => state.scriptRunning)
   const startScript = useAppStore((state) => state.startScript)
@@ -101,7 +104,7 @@ export const CSharpInteractive = ({ theme }: { theme: string }): React.JSX.Eleme
           path="csharp-interactive.csx"
           language="csharp"
           defaultValue=""
-          theme={theme === 'light' ? 'dnspy-light' : theme === 'hc' ? 'dnspy-high-contrast' : 'dnspy-dark'}
+          theme={monacoThemeName(theme, transparentBackground)}
           onMount={(editor, monaco) => {
             editorRef.current = editor
             const run = (): void => runRef.current()
@@ -124,9 +127,9 @@ export const CSharpInteractive = ({ theme }: { theme: string }): React.JSX.Eleme
             overviewRulerLanes: 0,
             hideCursorInOverviewRuler: true,
             wordWrap: 'on',
-            fontFamily: "'Cascadia Mono', 'JetBrains Mono', monospace",
-            fontSize: 13,
-            lineHeight: 19,
+            fontFamily: `'${font.fontFamily}', 'JetBrains Mono', monospace`,
+            fontSize: font.fontSize,
+            lineHeight: Math.round(font.fontSize * 1.5),
             tabSize: 4,
             padding: { top: 6, bottom: 6 },
           }}

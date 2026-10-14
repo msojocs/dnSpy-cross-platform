@@ -112,6 +112,7 @@ const api: DnSpyApi = {
   toggleFullScreen: () => ipcRenderer.invoke('window:toggleFullScreen'),
   isFullScreen: () => ipcRenderer.invoke('window:isFullScreen'),
   quit: () => ipcRenderer.invoke('app:quit'),
+  loadBackgroundImages: (paths) => ipcRenderer.invoke('app:backgroundImages', paths),
   showMessage: (message) => ipcRenderer.invoke('app:showMessage', message),
   setUnsavedChanges: (dirty) => ipcRenderer.invoke('app:setUnsavedChanges', dirty),
   respondToClose: (approved) => ipcRenderer.invoke('app:closeResponse', approved),

@@ -1197,6 +1197,40 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Show Method Body in Hex Editor/ })).toBeInTheDocument()
   })
 
+  it('drops the menu bar down with Alt, and puts it away with Alt again', async () => {
+    renderMenu()
+
+    fireEvent.keyDown(document.body, { key: 'Alt' })
+    // The first menu's entries are up: the File menu is the one the bar opens on.
+    expect(await screen.findByRole('menuitem', { name: /^Open\.\.\./ })).toBeInTheDocument()
+
+    fireEvent.keyDown(document.body, { key: 'Alt' })
+    expect(screen.queryByRole('menuitem', { name: /^Open\.\.\./ })).not.toBeInTheDocument()
+  })
+
+  it('opens a menu from the mnemonic its header carries', async () => {
+    renderMenu()
+
+    // Alt+H is the Help menu: it drops down with the entries the menu has.
+    fireEvent.keyDown(document.body, { key: 'h', code: 'KeyH', altKey: true })
+    expect(await screen.findByRole('menuitem', { name: 'About dnSpy' })).toBeInTheDocument()
+  })
+
+  it('walks along the open menus with the left and right arrows, and closes on Escape', async () => {
+    renderMenu()
+
+    fireEvent.keyDown(document.body, { key: 'Alt' })
+    expect(await screen.findByRole('menuitem', { name: /^Open\.\.\./ })).toBeInTheDocument()
+
+    // The next menu along is Edit, so the File menu's entries go and its own take their place.
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' })
+    expect(await screen.findByRole('menuitem', { name: /^Undo/ })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /^Open\.\.\./ })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByRole('menuitem', { name: /^Undo/ })).not.toBeInTheDocument()
+  })
+
   it.each([
     ['Latest Release', 'https://github.com/msojocs/dnSpy/releases/latest'],
     ['Issues', 'https://github.com/msojocs/dnSpy/issues'],

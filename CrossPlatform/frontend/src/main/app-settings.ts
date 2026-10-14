@@ -7,13 +7,16 @@ import { readFileSync, writeFileSync } from 'node:fs'
  * file is only ever a copy of what the user last chose.
  */
 export interface AppMainSettings {
-  /** dnSpy's AppSettings.AllowMoreThanOneInstance: false lets a second dnSpy start instead of handing its
-   * command line to the one already running. Read before the single instance lock is taken. */
+  /** dnSpy's AppSettings.AllowMoreThanOneInstance: true — its default — lets a second dnSpy start on its
+   * own, and false is what makes it hand its command line to the one already running. Read before the
+   * single instance lock is taken. */
   allowMoreThanOneInstance: boolean
 }
 
 export const defaultAppMainSettings: AppMainSettings = {
-  allowMoreThanOneInstance: false,
+  // dnSpy's own default (AppSettings.AllowMoreThanOneInstance): a second dnSpy is a second window, and the
+  // command line handover is only what happens once the user asks for one instance instead.
+  allowMoreThanOneInstance: true,
 }
 
 /** Defaults for a file that is missing, unreadable or not what it should be: a fresh install starts with

@@ -43,6 +43,7 @@ export interface EditMenuContext {
   onRedo(): void
   onFind(): void
   onSearchAssemblies(): void
+  onFindStringReferences(): void
   onEditMethodBody(): void
   onEditResource(): void
   onDelete(): void
@@ -158,7 +159,7 @@ const EDIT_ENTRIES: EditEntry[] = [
   // 1000 — Find
   { group: GROUP_FIND, order: 0, label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: always, enabled: (ctx) => ctx.activeDocument === 'code', action: (ctx) => ctx.onFind() },
   { group: GROUP_FIND, order: 10, label: (ctx) => ctx.t('Search Assemblies'), shortcut: 'Ctrl+Shift+K', visible: always, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSearchAssemblies() },
-  { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: (ctx) => ctx.selectionKind !== undefined },
+  { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: inModule, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onFindStringReferences() },
 
   // 2000 — AsmEditor: Delete
   // RemoveAssemblyCommand.EditMenuCommand: the selection's documents, which are the tree's root rows.

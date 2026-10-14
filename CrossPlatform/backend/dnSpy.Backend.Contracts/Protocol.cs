@@ -132,6 +132,11 @@ public static class RpcMethods {
 	/// <summary>The node a command line's <c>--select</c> names in the files it opened: a metadata token, or
 	/// an XML documentation id ("T:", "M:", "N:" …).</summary>
 	public const string TreeSelectMember = "tree/selectMember";
+	/// <summary>Scans modules for all string references (ldstr, constants, custom attributes).</summary>
+	public const string StringReferencesSearch = "stringReferences/search";
+	/// <summary>A notification: the string references found since the last one, sent while it still runs
+	/// when the request named a progress token.</summary>
+	public const string StringReferencesProgress = "stringReferences/progress";
 }
 
 public static class ErrorCodes {
@@ -1603,3 +1608,36 @@ public sealed record SelectMemberRequest(string WorkspaceId, IReadOnlyList<strin
 
 /// <summary>The node to follow, or null when the member names nothing in those files.</summary>
 public sealed record SelectMemberResponse(string? NodeId);
+
+/// <summary>
+/// Request to search for all string references in modules. If <paramref name="ModuleIds"/> is empty or null,
+/// searches all modules in the workspace.
+/// </summary>
+public sealed record StringReferencesSearchRequest(
+	string WorkspaceId,
+	IReadOnlyList<string>? ModuleIds = null,
+	string? ProgressToken = null,
+	bool SearchCompilerGeneratedMembers = true);
+
+/// <summary>
+/// String references found, in the order they were found. <paramref name="Start"/> is where the first result
+/// stands among everything found: the ones sent ahead come before it.
+/// </summary>
+public sealed record StringReferencesSearchResponse(IReadOnlyList<StringReferenceDto> References, int Start = 0);
+
+/// <summary>
+/// One string reference: the literal string, where it appears, and what kind of reference it is.
+/// <paramref name="Kind"/> is one of: "IL" (ldstr instruction), "Constant" (field/property/parameter default value),
+/// "Attribute" (custom attribute argument).
+/// </summary>
+public sealed record StringReferenceDto(
+	string Literal,
+	string Kind,
+	string ReferrerLabel,
+	string ModuleName,
+	string? NodeId = null,
+	int? MetadataToken = null,
+	int? IlOffset = null,
+	IReadOnlyList<TextPartDto>? ReferrerLabelParts = null,
+	string? Icon = null,
+	string? ToolTip = null);

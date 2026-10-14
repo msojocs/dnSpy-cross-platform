@@ -24,6 +24,7 @@ import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
 import { BreakpointsPane, CallStackPane, LocalsPane, ModulesPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
+import { StringReferencesPane } from './components/StringReferencesPane'
 import { BookmarksPane } from './components/BookmarksPane'
 import { AttachDialog } from './components/AttachDialog'
 import { DebugProgramDialog } from './components/DebugProgramDialog'
@@ -1954,6 +1955,7 @@ export const App = (): React.JSX.Element => {
       case 'csharp-interactive': return <CSharpInteractive theme={theme} transparentBackground={backgroundImageOn} />
       case 'search': return <SearchPane commands={searchCommands} />
       case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
+      case 'string-references': return workspaceId ? <StringReferencesPane workspaceId={workspaceId} /> : null
       case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'locals': return <LocalsPane />

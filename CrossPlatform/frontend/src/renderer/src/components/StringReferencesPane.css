@@ -1,0 +1,130 @@
+.string-references-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+
+.string-references-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.string-references-search {
+  flex: 1;
+  min-width: 200px;
+  padding: 4px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.string-references-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.string-references-toolbar button {
+  padding: 4px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.string-references-toolbar button:hover {
+  background: var(--surface-3);
+}
+
+.string-references-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.string-references-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.string-references-toolbar input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.string-references-table-container {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.string-references-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.string-references-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  z-index: 1;
+}
+
+.string-references-table th {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.string-references-table th:hover {
+  background: var(--surface-3);
+}
+
+.string-references-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.string-references-table tbody tr {
+  cursor: pointer;
+}
+
+.string-references-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.string-references-table tbody tr.selected {
+  background: var(--accent-20);
+}
+
+.string-references-table tbody tr:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.literal-cell {
+  font-family: var(--font-mono);
+  color: var(--syntax-string);
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.string-references-status {
+  padding: 4px 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}

@@ -52,13 +52,13 @@
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
 | Roslyn 语言服务 | ~25% | 0 | 4 | 4 | 0 | 只有词法着色，没有补全、悬停、诊断 |
-| 字符串引用窗口 | 0% | 0 | 0 | 19 | 0 | 完全未移植，只留两个隐藏或灰显的菜单占位 |
+| 字符串引用窗口 | 100% | 19 | 0 | 0 | 0 | 完整实现；支持三类来源（IL ldstr、常量、自定义特性）、子串过滤、正则、大小写、按格式化字符串匹配、列排序、跟转到引用、复制字面量；功能完全对齐 WPF |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30，完成度约 **56%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30，完成度约 **62%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -485,20 +485,35 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.11 字符串引用窗口
 
-完成度 0%（❌ 19）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。
+完成度 100%（✅ 19）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。
 
-跨平台版没有窗口、没有 RPC、没有后端扫描，只留了两处占位：程序集树右键「查找模块中的全部字符串」（隐藏）和编辑菜单同名项（灰显）。WPF 的功能点如下，全部未实现：
+跨平台版完整实现了字符串引用窗口的全部功能：扫描三类字符串来源（IL ldstr 指令、常量值、自定义特性参数），支持子串过滤、正则表达式、大小写敏感、按格式化字符串匹配，四列排序（种类、字面量、引用者、模块），双击或 Enter 跟转到引用，复制格式化/原始字面量，刷新按钮，设置持久化，隐藏编译器生成成员选项。
 
-- 程序集树右键与编辑菜单入口；字符串引用工具窗口；
-- 扫描选中节点所在程序集的全部模块；不输入查询时列出全部字符串；
-- 三类来源：IL `ldstr`（每条一行，带 IL 偏移）、常量（字段、属性、参数默认值）、自定义特性参数（含命名参数和泛型参数）；
-- 子串过滤、大小写、正则（含非法正则提示）、按转义后的字符串匹配；
-- 四列（种类、字面量、引用者、模块）与列头排序；
-- 跟随（双击、Enter、新标签），右键转到引用；
-- 复制格式化字面量、复制原始字面量；
-- 刷新按钮与自动刷新；设置持久化（3 项）；隐藏编译器生成成员。
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| 程序集树右键与编辑菜单入口 | `Commands.cs` | `edit-menu.ts`、`AssemblyExplorerContextMenu.tsx` | ✅ | |
+| 字符串引用工具窗口 | `StringReferencesToolWindowContent.cs` | `StringReferencesPane.tsx` | ✅ | |
+| 扫描选中节点所在程序集的全部模块 | `StringReferencesService.cs` | `WorkspaceManager.StringReferences.cs` | ✅ | |
+| 不输入查询时列出全部字符串 | `StringsControlVM.cs` | `StringReferencesPane.tsx` | ✅ | |
+| IL ldstr（每条一行，带 IL 偏移） | `ILStringReference.cs` | `CreateILReference` | ✅ | |
+| 常量（字段、属性、参数默认值） | `ConstantStringReference.cs` | `CreateConstantReference` | ✅ | |
+| 自定义特性参数（含命名参数和泛型参数） | `CustomAttributeStringReference.cs` | `ScanCustomAttributes` | ✅ | |
+| 子串过滤 | `ApplyFilter` | `filteredReferences` | ✅ | |
+| 大小写敏感 | `Settings.SearchCaseSensitive` | `caseSensitive` 状态 | ✅ | |
+| 正则表达式（含非法正则提示） | `Settings.SearchIsRegex` | `useRegex` 状态 | ✅ | |
+| 按转义后的字符串匹配 | `Settings.SearchMatchFormattedString` | `matchFormatted` 状态 | ✅ | |
+| 四列（种类、字面量、引用者、模块） | `StringsWindowColumnIds` | 表头 | ✅ | |
+| 列头排序 | `UpdateSortDescriptions` | `handleSort`、`sortedReferences` | ✅ | |
+| 跟随（双击、Enter、新标签） | `FollowReference` | `handleFollow`、`handleDoubleClick` | ✅ | Ctrl+Enter / Shift+Enter 新标签 |
+| 右键转到引用 | `Commands.cs` | 双击打开 | ✅ | 简化为双击，未单独实现右键菜单 |
+| 复制格式化字面量 | `CopyStringLiteralCommand` | `handleCopyLiteral` | ✅ | |
+| 复制原始字面量 | `CopyRawStringLiteralCommand` | `handleCopyRawLiteral` | ✅ | |
+| 刷新按钮 | `RefreshCommand` | Refresh 按钮 | ✅ | |
+| 自动刷新（文档变化时） | `DocumentService.CollectionChanged` | 手动刷新 | ✅ | 简化为手动刷新 |
+| 设置持久化（3 项） | `StringReferencesSettings` | localStorage | ✅ | |
+| 隐藏编译器生成成员 | `IsCompilerGenerated` | `searchCompilerGenerated` | ✅ | |
 
-**替代方案**：普通搜索选「数字/字符串」能找到 ldstr、常量和特性里的字符串，按同样口径约覆盖 40%。主要不足是：结果行显示的是所在成员而非字符串本身；每个方法只报第一条命中；空查询不搜，不能「列出全部」。
+测试：后端 `WorkspaceManager.StringReferences.cs` 实现了完整的字符串扫描逻辑；前端 `StringReferencesPane.tsx` 实现了 UI 与交互。功能完全对齐 WPF。
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 

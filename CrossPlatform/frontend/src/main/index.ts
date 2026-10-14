@@ -523,6 +523,12 @@ const registerIpc = (): void => {
   ipcMain.handle('search:cancel', (event, requestKey: string) => {
     searchRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
   })
+  ipcMain.handle('stringReferences:search', (_event, workspaceId: string, moduleIds?: string[] | null, searchCompilerGeneratedMembers = true) =>
+    requireBackend().invoke('stringReferences/search', {
+      workspaceId,
+      moduleIds: moduleIds ?? null,
+      searchCompilerGeneratedMembers,
+    }, 600_000))
   ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds }))
   // An analyzer search walks every module that can see the member, which on a framework assembly takes a
   // while; it gets the long deadline, and the renderer can call it off by the key it named it with — a row

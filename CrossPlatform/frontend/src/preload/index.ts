@@ -40,6 +40,8 @@ const api: DnSpyApi = {
   exportBookmarks: (workspaceId, bookmarks) => ipcRenderer.invoke('bookmarks:export', workspaceId, bookmarks),
   importBookmarks: (workspaceId, xml) => ipcRenderer.invoke('bookmarks:import', workspaceId, xml),
   search: (workspaceId, request, requestKey) => ipcRenderer.invoke('search:run', workspaceId, request, requestKey),
+  searchStringReferences: (workspaceId, moduleIds, searchCompilerGeneratedMembers) =>
+    ipcRenderer.invoke('stringReferences:search', workspaceId, moduleIds, searchCompilerGeneratedMembers),
   cancelSearch: (requestKey) => ipcRenderer.invoke('search:cancel', requestKey),
   analyzeNodes: (workspaceId, nodeIds) => ipcRenderer.invoke('analyze:nodes', workspaceId, nodeIds),
   analyzeChildren: (workspaceId, request, requestKey) => ipcRenderer.invoke('analyze:children', workspaceId, request, requestKey),

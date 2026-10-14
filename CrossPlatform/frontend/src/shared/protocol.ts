@@ -459,6 +459,30 @@ export interface SearchProgress {
   results: SearchResult[]
 }
 
+/** One string reference found in a module. */
+export interface StringReference {
+  literal: string
+  kind: 'IL' | 'Constant' | 'Attribute'
+  referrerLabel: string
+  moduleName: string
+  nodeId?: string | null
+  metadataToken?: number | null
+  ilOffset?: number | null
+  referrerLabelParts?: TextPart[] | null
+  icon?: string | null
+  toolTip?: string | null
+}
+
+export interface StringReferencesSearchResponse {
+  references: StringReference[]
+  start?: number
+}
+
+export interface StringReferencesProgress {
+  references: StringReference[]
+  start: number
+}
+
 /** The searches dnSpy's analyzer offers under a member, by the key a search row carries. */
 export type AnalyzerSearchKind =
   | 'uses' | 'usedBy' | 'overrides' | 'overriddenBy' | 'implementedBy' | 'readBy' | 'assignedBy'
@@ -1531,4 +1555,12 @@ export interface DnSpyApi {
   onAnalyzeProgress(callback: (progress: AnalyzeProgress) => void): () => void
   /** What a search window search found so far, sent while it still runs. */
   onSearchProgress(callback: (progress: SearchProgress) => void): () => void
+  /** Searches for all string references in the specified modules. */
+  searchStringReferences(
+    workspaceId: string,
+    moduleIds?: string[] | null,
+    searchCompilerGeneratedMembers?: boolean
+  ): Promise<StringReferencesSearchResponse>
+  /** What a string references search found so far, sent while it still runs. */
+  onStringReferencesProgress(callback: (progress: StringReferencesProgress) => void): () => void
 }

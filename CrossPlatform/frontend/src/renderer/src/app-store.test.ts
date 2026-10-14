@@ -884,6 +884,45 @@ describe('C# Interactive', () => {
     expect(useAppStore.getState().scriptRunning).toBe(false)
   })
 
+  it('keeps the colors the input had on its echo, moved to the trimmed text', async () => {
+    await useAppStore.getState().evaluateScript('  x + 1', [
+      { start: 2, length: 1, color: 'local' },
+      { start: 4, length: 1, color: 'operator' },
+      { start: 6, length: 1, color: 'number' },
+    ])
+
+    expect(useAppStore.getState().scriptEntries[0]).toEqual({
+      kind: 'echo',
+      text: 'x + 1',
+      colors: [
+        { start: 0, length: 1, color: 'local' },
+        { start: 2, length: 1, color: 'operator' },
+        { start: 4, length: 1, color: 'number' },
+      ],
+    })
+  })
+
+  it('colors the echo before running the submission when the input had no colors yet', async () => {
+    const classifyScript = vi.fn().mockResolvedValue({ spans: [{ start: 0, length: 1, color: 'error' }] })
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, classifyScript } })
+
+    await useAppStore.getState().evaluateScript('y')
+
+    expect(classifyScript).toHaveBeenCalledWith('y')
+    expect(classifyScript.mock.invocationCallOrder[0]).toBeLessThan(evaluateScript.mock.invocationCallOrder[0])
+    expect(useAppStore.getState().scriptEntries[0]).toEqual({ kind: 'echo', text: 'y', colors: [{ start: 0, length: 1, color: 'error' }] })
+  })
+
+  it('still runs a submission whose colors could not be worked out', async () => {
+    const classifyScript = vi.fn().mockRejectedValue(new Error('backend gone'))
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, classifyScript } })
+
+    await useAppStore.getState().evaluateScript('1 + 1')
+
+    expect(evaluateScript).toHaveBeenCalledWith('1 + 1')
+    expect(useAppStore.getState().scriptEntries[0]).toEqual({ kind: 'echo', text: '1 + 1' })
+  })
+
   it('ignores a blank submission', async () => {
     await useAppStore.getState().evaluateScript('   ')
 

@@ -55,6 +55,8 @@ interface MenuBarProps {
   onSortAssemblies(): void
   onFind(): void
   onSearchAssemblies(): void
+  /** dnSpy's Find String References in Module: scans the assemblies of the tree's selection. */
+  onFindStringReferences(): void
   onUndo(): void
   onRedo(): void
   onEditMethodBody(): void
@@ -216,6 +218,7 @@ export const MenuBar = ({
   onSortAssemblies,
   onFind,
   onSearchAssemblies,
+  onFindStringReferences,
   onUndo,
   onRedo,
   onEditMethodBody,
@@ -427,6 +430,7 @@ export const MenuBar = ({
       onRedo,
       onFind,
       onSearchAssemblies,
+      onFindStringReferences,
       onEditMethodBody,
       onEditResource,
       onDelete,

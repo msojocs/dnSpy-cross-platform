@@ -27,6 +27,7 @@ import type {
   HexTargetResponse,
   NodeOptionsDto,
   OpenedModule,
+  ClassifiedSpan,
   ScriptOutputEntry,
   SpecialNodeKind,
   TextSpan,
@@ -34,6 +35,7 @@ import type {
 } from '../../shared/protocol'
 import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
 import { getActiveLocale, translate as t } from './localization'
+import { spansOfTrimmed } from './roslyn-classification'
 
 export type { BreakpointConditionKind, BreakpointHitCountKind, BreakpointSettings }
 
@@ -618,7 +620,11 @@ interface AppState {
   /** Builds the C# Interactive session the first time the window is opened, printing the banner. */
   startScript(): Promise<void>
   /** Runs one submission, echoing it first; `#`-commands are handled here rather than by the host. */
-  evaluateScript(code: string): Promise<void>
+  /**
+   * Runs a submission. `colors` are the semantic colors the input had (against `code` as typed), which its echo in
+   * the log keeps, as dnSpy's REPL keeps a submitted command's colors; without them the echo is classified first.
+   */
+  evaluateScript(code: string, colors?: ClassifiedSpan[]): Promise<void>
   /** Rebuilds the session, which is what `#reset` does and what drops the script's variables. */
   resetScript(): Promise<void>
   clearScriptOutput(): void
@@ -2698,11 +2704,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     await rebuildScriptSession(set)
   },
 
-  evaluateScript: async (code) => {
+  evaluateScript: async (code, colors) => {
     const submission = code.trim()
     if (!submission || get().scriptRunning) return
     const history = get().scriptHistory
-    const echo: ScriptOutputEntry = { kind: 'echo', text: submission }
+    // Colors asked for here are worked out before the submission runs, so they are the input's, not the ones
+    // the code would get once its own declarations exist.
+    const echoColors = colors ? spansOfTrimmed(code, colors) : await classifySubmission(submission)
+    const echo: ScriptOutputEntry = echoColors && echoColors.length > 0 ? { kind: 'echo', text: submission, colors: echoColors } : { kind: 'echo', text: submission }
     set((state) => ({
       scriptEntries: [...state.scriptEntries, echo].slice(-MAX_SCRIPT_ENTRIES),
       // Pressing Enter twice on the same line should not fill the history with copies of it.
@@ -4204,6 +4213,15 @@ const appendScriptEntries = (set: StoreSet, entries: ScriptOutputEntry[]): void 
 }
 
 /** Throws the host's session away and reports the banner of the engine that replaced it. */
+/** The semantic colors of a submission whose input had none yet; a failure only costs the echo its colors. */
+const classifySubmission = async (submission: string): Promise<ClassifiedSpan[] | undefined> => {
+  try {
+    return (await window.dnSpy.classifyScript(submission)).spans
+  } catch {
+    return undefined
+  }
+}
+
 const rebuildScriptSession = async (set: StoreSet): Promise<void> => {
   set({ scriptRunning: true })
   try {

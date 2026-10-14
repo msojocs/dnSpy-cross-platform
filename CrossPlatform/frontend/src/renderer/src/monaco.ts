@@ -1,5 +1,5 @@
 import { loader } from '@monaco-editor/react'
-import * as monacoApi from 'monaco-editor'
+import * as monacoApi from 'monaco-editor/editor/editor.api'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 import 'monaco-editor/languages/definitions/csharp/register'
 import 'monaco-editor/languages/definitions/vb/register'
@@ -43,13 +43,6 @@ export function initializeMonaco(): Promise<void> {
     .then(() => undefined)
     .catch((error: unknown) => {
       console.error('Unable to initialize C# highlighting; using Monaco highlighting.', error)
-    })
-    .then(() => import('./roslyn-language-service'))
-    .then(({ registerRoslynLanguageService }) => {
-      registerRoslynLanguageService(monaco)
-    })
-    .catch((error: unknown) => {
-      console.error('Unable to initialize Roslyn language service; code intelligence features will be limited.', error)
     })
     .then(() => {
       loader.config({ monaco })

@@ -81,6 +81,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
   onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
   onAnalyze?(node: TreeNode): void
+  /** dnSpy's Find String References in Module over the selection: scans every module of their assemblies. */
+  onFindStringReferences?(nodes: TreeNode[]): void
   /** Opens an address in the browser, which is how dnSpy's Search MSDN command runs. */
   onOpenUrl?(url: string): void
   /** Writes plain text to the clipboard, which is what dnSpy's two copy commands put there. */
@@ -221,6 +223,10 @@ const rawSavedNames = (ctx: AssemblyExplorerMenuContext): string[] => resourceTa
 
 /** The kinds a root row of the tree has — one per kind of file dnSpy opens. */
 const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndocument']
+
+/** The rows that are not in a .NET module: the documents that are no assembly, and the ELF rows under one. */
+const NOT_IN_DOTNET_MODULE_KINDS = ['pedocument', 'elfdocument', 'unknowndocument', 'elf', 'elfstructure']
+const isInDotNetModule = (node: TreeNode): boolean => !NOT_IN_DOTNET_MODULE_KINDS.includes(node.kind)
 
 /** RemoveAssemblyCommand.GetHeader: one document by its row text, several by how many there are. */
 const removeLabel = (ctx: AssemblyExplorerMenuContext): string => {
@@ -441,9 +447,9 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => isMethodBreakpointTarget(ctx) && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => ctx.onAddMethodBreakpoints?.([ctx.node]) },
 
   // 11000 — Other (GROUP_CTX_DOCUMENTS_OTHER). "Find String References in Module" is dnSpy's string
-  // searcher, a tool window of its own that this port has no equivalent of, so it stays in the table
-  // without a rule that could ever pass.
-  { group: GROUP_OTHER, order: 0, key: 'find-string-references', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find String References in Module'), visible: never },
+  // searcher: it shows for any selection with a row in a .NET module (DocumentsCommand's GetModule), and
+  // scans every module of those rows' assemblies.
+  { group: GROUP_OTHER, order: 0, key: 'find-string-references', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find String References in Module'), visible: (ctx) => ctx.onFindStringReferences !== undefined && selectionOf(ctx).some(isInDotNetModule), run: (ctx) => ctx.onFindStringReferences?.(selectionOf(ctx).filter(isInDotNetModule)) },
   { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => isAnalyzableNode(ctx.node) && ctx.onAnalyze !== undefined, run: (ctx) => ctx.onAnalyze?.(ctx.node) },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => msdnNamesOf(ctx).length > 0 && ctx.onOpenUrl !== undefined, run: (ctx) => { for (const name of msdnNamesOf(ctx)) ctx.onOpenUrl?.(msdnPageUrl(name)) } },
   // dnSpy's DocumentTreeViewCommand only answers for a single selected row.

@@ -137,6 +137,32 @@ public static class RpcMethods {
 	/// <summary>A notification: the string references found since the last one, sent while it still runs
 	/// when the request named a progress token.</summary>
 	public const string StringReferencesProgress = "stringReferences/progress";
+	/// <summary>The semantic colors of the C# Interactive window's input, compiled against the session the way
+	/// the WPF window's RoslynClassifier colors it while it is being typed.</summary>
+	public const string ScriptClassify = "script/classify";
+	/// <summary>Opens a C# code document in a Roslyn workspace of its own — the document dnSpy's Edit Method
+	/// (C#) editor types into — and answers with the id the other languageService/* methods take.</summary>
+	public const string LanguageServiceOpen = "languageService/open";
+	/// <summary>Replaces the text of an open code document.</summary>
+	public const string LanguageServiceUpdate = "languageService/update";
+	/// <summary>Drops an open code document and its workspace.</summary>
+	public const string LanguageServiceClose = "languageService/close";
+	/// <summary>The semantic colors of a whole code document (dnSpy's RoslynClassifier).</summary>
+	public const string LanguageServiceClassify = "languageService/classify";
+	/// <summary>The completion list at a position (dnSpy's Roslyn completion source).</summary>
+	public const string LanguageServiceCompletion = "languageService/completion";
+	/// <summary>The classified tooltip of one item of the last completion list.</summary>
+	public const string LanguageServiceCompletionDescription = "languageService/completionDescription";
+	/// <summary>The Quick Info of the symbol at a position.</summary>
+	public const string LanguageServiceQuickInfo = "languageService/quickInfo";
+	/// <summary>The signatures of the call, indexer, attribute or generic name around a position.</summary>
+	public const string LanguageServiceSignatureHelp = "languageService/signatureHelp";
+	/// <summary>What compiling the document reports, the way dnSpy's RoslynLanguageCompiler reports it.</summary>
+	public const string LanguageServiceDiagnostics = "languageService/diagnostics";
+	/// <summary>The indentation a line should get — dnSpy's Roslyn smart indent.</summary>
+	public const string LanguageServiceIndentation = "languageService/indentation";
+	/// <summary>The spans of the syntax around positions, innermost first — dnSpy's Roslyn text structure navigator.</summary>
+	public const string LanguageServiceSelectionRanges = "languageService/selectionRanges";
 }
 
 public static class ErrorCodes {
@@ -1407,6 +1433,27 @@ public static class TextColors {
 	public const string DirectoryPart = "directoryPart";
 	public const string FileNameNoExtension = "fileNameNoExtension";
 	public const string FileExtension = "fileExtension";
+	// The colors only code has, which Roslyn's classifier and its tagged text use beside the ones above.
+	/// <summary>The gray of the words dnSpy writes between names ("parameter", "attribute").</summary>
+	public const string DarkGray = "darkGray";
+	public const string Comment = "comment";
+	public const string Local = "local";
+	public const string Label = "label";
+	public const string Module = "module";
+	public const string VerbatimString = "verbatimString";
+	public const string PreprocessorKeyword = "preprocessorKeyword";
+	public const string PreprocessorText = "preprocessorText";
+	public const string ExcludedCode = "excludedCode";
+	public const string XmlDocCommentAttributeName = "xmlDocCommentAttributeName";
+	public const string XmlDocCommentAttributeQuotes = "xmlDocCommentAttributeQuotes";
+	public const string XmlDocCommentAttributeValue = "xmlDocCommentAttributeValue";
+	public const string XmlDocCommentCDataSection = "xmlDocCommentCDataSection";
+	public const string XmlDocCommentComment = "xmlDocCommentComment";
+	public const string XmlDocCommentDelimiter = "xmlDocCommentDelimiter";
+	public const string XmlDocCommentEntityReference = "xmlDocCommentEntityReference";
+	public const string XmlDocCommentName = "xmlDocCommentName";
+	public const string XmlDocCommentProcessingInstruction = "xmlDocCommentProcessingInstruction";
+	public const string XmlDocCommentText = "xmlDocCommentText";
 }
 
 /// <summary>The keys of the search window's "Search For" box, one per entry of dnSpy's SearchType.</summary>
@@ -1610,34 +1657,206 @@ public sealed record SelectMemberRequest(string WorkspaceId, IReadOnlyList<strin
 public sealed record SelectMemberResponse(string? NodeId);
 
 /// <summary>
-/// Request to search for all string references in modules. If <paramref name="ModuleIds"/> is empty or null,
-/// searches all modules in the workspace.
+/// Scans for the strings dnSpy's String References window lists. <paramref name="NodeIds"/> are tree nodes whose
+/// assemblies are scanned, every module of each; <paramref name="ModulePaths"/> are modules a scan read before,
+/// which a refresh reads again. <paramref name="ShowAllMembers"/> is set when the current language shows the members
+/// the compiler made (IL); C# and VB leave them out, as dnSpy's decompilers do.
 /// </summary>
 public sealed record StringReferencesSearchRequest(
 	string WorkspaceId,
-	IReadOnlyList<string>? ModuleIds = null,
-	string? ProgressToken = null,
-	bool SearchCompilerGeneratedMembers = true);
+	IReadOnlyList<string>? NodeIds = null,
+	IReadOnlyList<string>? ModulePaths = null,
+	bool ShowAllMembers = false,
+	string? ProgressToken = null);
 
 /// <summary>
-/// String references found, in the order they were found. <paramref name="Start"/> is where the first result
-/// stands among everything found: the ones sent ahead come before it.
+/// What a scan found, in the order it found it. <paramref name="Start"/> is where the first of them stands among
+/// everything found: the ones sent ahead come before it. <paramref name="ModulePaths"/> are the modules scanned.
 /// </summary>
-public sealed record StringReferencesSearchResponse(IReadOnlyList<StringReferenceDto> References, int Start = 0);
+public sealed record StringReferencesSearchResponse(IReadOnlyList<StringReferenceDto> References, int Start, IReadOnlyList<string> ModulePaths);
+
+/// <summary>The params of a <see cref="RpcMethods.StringReferencesProgress"/> notification.</summary>
+public sealed record StringReferencesProgressNotification(string ProgressToken, int Start, IReadOnlyList<StringReferenceDto> References);
+
+/// <summary>dnSpy's StringReferenceKind, in its order.</summary>
+public static class StringReferenceKinds {
+	public const string IL = "il";
+	public const string Constant = "constant";
+	public const string Attribute = "attribute";
+}
 
 /// <summary>
-/// One string reference: the literal string, where it appears, and what kind of reference it is.
-/// <paramref name="Kind"/> is one of: "IL" (ldstr instruction), "Constant" (field/property/parameter default value),
-/// "Attribute" (custom attribute argument).
+/// One string and where it is. <paramref name="FormattedLiteral"/> is the string as a C# literal, verbatim when
+/// <paramref name="IsVerbatim"/>. <paramref name="Token"/> is what the list sorts by after the kind — the method of
+/// an <c>ldstr</c>, the member or parameter of a constant, the owner of an attribute — and <paramref name="IlOffset"/>
+/// the instruction of an <c>ldstr</c>. <paramref name="NodeId"/> is the tree node following the row opens.
 /// </summary>
 public sealed record StringReferenceDto(
-	string Literal,
 	string Kind,
-	string ReferrerLabel,
+	string Literal,
+	string FormattedLiteral,
+	bool IsVerbatim,
+	IReadOnlyList<TextPartDto> ReferrerParts,
+	string ReferrerIcon,
 	string ModuleName,
-	string? NodeId = null,
-	int? MetadataToken = null,
-	int? IlOffset = null,
-	IReadOnlyList<TextPartDto>? ReferrerLabelParts = null,
-	string? Icon = null,
-	string? ToolTip = null);
+	int Token,
+	string? NodeId,
+	int? IlOffset);
+
+/// <summary>The C# Interactive window's input, to be colored against the session it will run in.</summary>
+public sealed record ScriptClassifyRequest(string Code);
+
+/// <summary>A stretch of code and the color class it is written in, one of <see cref="TextColors"/>.</summary>
+public sealed record ClassifiedSpanDto(int Start, int Length, string Color);
+
+/// <summary>The colored stretches of a text, in order; text between them keeps the editor's own color.</summary>
+public sealed record ClassifyResponse(IReadOnlyList<ClassifiedSpanDto> Spans);
+
+/// <summary>
+/// What a code document compiles with — dnSpy's C# compiler settings page, whose defaults these are.
+/// <paramref name="PreprocessorSymbols"/> is a list separated by ';' or ','.
+/// </summary>
+public sealed record CodeCompilerOptionsDto(
+	bool Optimize = true,
+	bool CheckOverflow = false,
+	bool AllowUnsafe = true,
+	string PreprocessorSymbols = "TRACE");
+
+/// <summary>
+/// Opens a C# code document. <paramref name="References"/> are the assemblies it compiles against; null means
+/// the framework the host runs on, read from its reference pack when one is installed so that symbols have
+/// their XML documentation.
+/// </summary>
+public sealed record CodeDocumentOpenRequest(string Text, IReadOnlyList<string>? References = null, CodeCompilerOptionsDto? Options = null);
+
+public sealed record CodeDocumentOpenResponse(string DocumentId);
+
+public sealed record CodeDocumentUpdateRequest(string DocumentId, string Text);
+
+public sealed record CodeDocumentRequest(string DocumentId);
+
+/// <summary>A document and an offset into its text.</summary>
+public sealed record CodePositionRequest(string DocumentId, int Position);
+
+/// <summary>A span of a document's text.</summary>
+public sealed record CodeSpanDto(int Start, int Length);
+
+/// <summary>Replace <paramref name="Length"/> characters at <paramref name="Start"/> with <paramref name="NewText"/>.</summary>
+public sealed record CodeTextEditDto(int Start, int Length, string NewText);
+
+/// <summary>
+/// Asks for the completion list at <paramref name="Position"/>. <paramref name="TriggerCharacter"/> is the
+/// character just typed; null means the list was asked for (Ctrl+Space). A typed character that Roslyn would
+/// not open a list for gets an empty one.
+/// </summary>
+public sealed record CodeCompletionRequest(string DocumentId, int Position, string? TriggerCharacter = null);
+
+/// <summary>
+/// One completion item. <paramref name="Index"/> names it to <see cref="RpcMethods.LanguageServiceCompletionDescription"/>.
+/// <paramref name="Edit"/> is what committing it does when that is more than putting <paramref name="InsertText"/>
+/// over the list's span (an override, a member that needs a using); <paramref name="CommitCharacters"/> are the
+/// characters that commit it as they are typed. <paramref name="Tags"/> are Roslyn's WellKnownTags.
+/// </summary>
+public sealed record CodeCompletionItemDto(
+	int Index,
+	string DisplayText,
+	string DisplayTextPrefix,
+	string DisplayTextSuffix,
+	string InlineDescription,
+	string FilterText,
+	string SortText,
+	string InsertText,
+	IReadOnlyList<string> Tags,
+	int MatchPriority,
+	bool Preselect,
+	string CommitCharacters,
+	CodeTextEditDto? Edit = null);
+
+/// <summary>
+/// The completion list: <paramref name="Span"/> is the text the items replace and filter on.
+/// <paramref name="SuggestionMode"/> is Roslyn's builder mode (a lambda parameter, a name being declared), where
+/// typing never commits an item. <paramref name="ResultId"/> names the list to the description request.
+/// </summary>
+public sealed record CodeCompletionListDto(int ResultId, CodeSpanDto Span, bool SuggestionMode, IReadOnlyList<CodeCompletionItemDto> Items);
+
+public sealed record CodeCompletionResponse(CodeCompletionListDto? List);
+
+public sealed record CodeCompletionDescriptionRequest(string DocumentId, int ResultId, int Index);
+
+/// <summary>An item's tooltip, in the colors of its tagged text; empty when the list is gone.</summary>
+public sealed record CodeCompletionDescriptionResponse(IReadOnlyList<TextPartDto> Parts);
+
+/// <summary>
+/// One part of a Quick Info: <paramref name="Kind"/> is Roslyn's QuickInfoSectionKinds name — "Description",
+/// "DocumentationComments", "TypeParameters", "AnonymousTypes", "Usage", "Exception" — the parts dnSpy shows.
+/// </summary>
+public sealed record CodeQuickInfoSectionDto(string Kind, IReadOnlyList<TextPartDto> Parts);
+
+/// <summary>
+/// What hovering over <paramref name="Span"/> shows. <paramref name="Glyph"/> is the dnSpy image of the symbol,
+/// and <paramref name="Warning"/> is set when the symbol is not available in every target the code builds for.
+/// </summary>
+public sealed record CodeQuickInfoDto(CodeSpanDto Span, string? Glyph, bool Warning, IReadOnlyList<CodeQuickInfoSectionDto> Sections);
+
+public sealed record CodeQuickInfoResponse(CodeQuickInfoDto? QuickInfo);
+
+/// <summary>Asks for signature help; <paramref name="TriggerCharacter"/> is the character just typed, if any.</summary>
+public sealed record CodeSignatureHelpRequest(string DocumentId, int Position, string? TriggerCharacter = null);
+
+public sealed record CodeSignatureParameterDto(string Name, IReadOnlyList<TextPartDto> Display, IReadOnlyList<TextPartDto> Documentation, bool IsOptional);
+
+/// <summary>
+/// One signature, laid out the way Roslyn's SignatureHelpItem is: <paramref name="Prefix"/>, the parameters
+/// joined by <paramref name="Separator"/>, then <paramref name="Suffix"/>.
+/// </summary>
+public sealed record CodeSignatureDto(
+	IReadOnlyList<TextPartDto> Prefix,
+	IReadOnlyList<TextPartDto> Separator,
+	IReadOnlyList<TextPartDto> Suffix,
+	IReadOnlyList<CodeSignatureParameterDto> Parameters,
+	IReadOnlyList<TextPartDto> Documentation,
+	bool IsVariadic);
+
+/// <summary>
+/// The signatures around a position. <paramref name="ApplicableSpan"/> is the argument list the session lasts
+/// for; <paramref name="ArgumentIndex"/> is the argument the caret is in, <paramref name="ArgumentName"/> its
+/// name when it is a named argument, and <paramref name="SelectedItem"/> the overload the arguments pick.
+/// </summary>
+public sealed record CodeSignatureHelpDto(
+	CodeSpanDto ApplicableSpan,
+	int ArgumentIndex,
+	int ArgumentCount,
+	string? ArgumentName,
+	int SelectedItem,
+	IReadOnlyList<CodeSignatureDto> Items);
+
+public sealed record CodeSignatureHelpResponse(CodeSignatureHelpDto? Help);
+
+/// <summary>
+/// One compiler message, the way dnSpy's code editor lists it: <paramref name="Severity"/> is "error",
+/// "warning" or "info", <paramref name="HelpUri"/> the page the id links to. Lines and columns are 0-based.
+/// </summary>
+public sealed record CodeDiagnosticDto(
+	string Id,
+	string Severity,
+	string Message,
+	string HelpUri,
+	int Start,
+	int Length,
+	int StartLine,
+	int StartColumn,
+	int EndLine,
+	int EndColumn);
+
+public sealed record CodeDiagnosticsResponse(IReadOnlyList<CodeDiagnosticDto> Diagnostics);
+
+/// <summary>Asks how far a line (0-based) should be indented, in the editor's indentation settings.</summary>
+public sealed record CodeIndentationRequest(string DocumentId, int Line, int IndentSize = 4, int TabSize = 4, bool UseTabs = false);
+
+/// <summary>The column the line's text should start at, or null to keep the editor's own indentation.</summary>
+public sealed record CodeIndentationResponse(int? Indentation);
+
+public sealed record CodeSelectionRangesRequest(string DocumentId, IReadOnlyList<int> Positions);
+
+/// <summary>For each position, the spans of the token and of every node around it, innermost first.</summary>
+public sealed record CodeSelectionRangesResponse(IReadOnlyList<IReadOnlyList<CodeSpanDto>> Ranges);

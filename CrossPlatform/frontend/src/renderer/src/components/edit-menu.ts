@@ -120,6 +120,10 @@ const documentIs = (document: ActiveDocument) => (ctx: EditMenuContext): boolean
 /** Node kinds that live inside a module — dnSpy's `GetModuleNode(node) is not null`. The assembly root
  *  counts: its helper answers with the module child of whatever it is handed, so selecting the root is
  *  selecting the module it holds, which is what every entry gated on this acts on. */
+/** Any row with a .NET module above it: everything but the documents that are no assembly and the ELF rows. */
+const inDotNetModule = (ctx: EditMenuContext): boolean =>
+  ctx.selectionKind !== undefined && !['pedocument', 'elfdocument', 'unknowndocument', 'elf', 'elfstructure'].includes(ctx.selectionKind)
+
 const inModule = kindIs('assembly', 'module', 'namespace', 'type', 'method', 'field', 'property', 'event', 'resource', 'resourceentry')
 
 /**
@@ -159,7 +163,8 @@ const EDIT_ENTRIES: EditEntry[] = [
   // 1000 — Find
   { group: GROUP_FIND, order: 0, label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: always, enabled: (ctx) => ctx.activeDocument === 'code', action: (ctx) => ctx.onFind() },
   { group: GROUP_FIND, order: 10, label: (ctx) => ctx.t('Search Assemblies'), shortcut: 'Ctrl+Shift+K', visible: always, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSearchAssemblies() },
-  { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: inModule, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onFindStringReferences() },
+  // MenuBarCommand.IsVisible: the tree's selection has a row in a .NET module.
+  { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: inDotNetModule, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onFindStringReferences() },
 
   // 2000 — AsmEditor: Delete
   // RemoveAssemblyCommand.EditMenuCommand: the selection's documents, which are the tree's root rows.

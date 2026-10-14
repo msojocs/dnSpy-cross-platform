@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The library the String References tests scan: a string in every place dnSpy's string searcher looks —
+       ldstr operands, field and parameter constants, attribute arguments on every kind of owner — and one
+       inside a lambda, which the C# view hides. Never optimized, so every ldstr stays in the IL. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Optimize>false</Optimize>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

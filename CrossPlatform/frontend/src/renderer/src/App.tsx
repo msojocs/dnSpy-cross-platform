@@ -18,13 +18,14 @@ import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPa
 import { isAnalyzableNode } from './components/CodeEditorContextMenu'
 import { useAnalyzerStore } from './analyzer-store'
 import { useSearchStore, updateSearchSettings } from './search-store'
+import { useStringReferencesStore } from './string-references-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
 import { BreakpointsPane, CallStackPane, LocalsPane, ModulesPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
-import { StringReferencesPane } from './components/StringReferencesPane'
+import { StringReferencesPane, type StringReferencesPaneCommands } from './components/StringReferencesPane'
 import { BookmarksPane } from './components/BookmarksPane'
 import { AttachDialog } from './components/AttachDialog'
 import { DebugProgramDialog } from './components/DebugProgramDialog'
@@ -75,6 +76,7 @@ const restorableTabs: Record<string, { name: string; component: string }> = {
   'csharp-interactive': { name: 'C# Interactive', component: 'csharp-interactive' },
   search: { name: 'Search', component: 'search' },
   analysis: { name: 'Analyzer', component: 'analysis' },
+  'string-references': { name: 'String References', component: 'string-references' },
   locals: { name: 'Locals', component: 'locals' },
   'exception-settings': { name: 'Exception Settings', component: 'exception-settings' },
   watch: { name: 'Watch 1', component: 'watch' },
@@ -759,6 +761,18 @@ export const App = (): React.JSX.Element => {
   const showSearch = (): void => {
     showToolWindow('search')
     useSearchStore.getState().requestFocus()
+  }
+
+  // dnSpy's Find String References in Module: shows the String References window, which takes the focus, and
+  // scans every module of the assemblies the nodes are in.
+  const findStringReferences = (nodes: TreeNode[]): void => {
+    if (nodes.length === 0)
+      return
+    showToolWindow('string-references')
+    useStringReferencesStore.getState().analyze(nodes.map((node) => node.id))
+    // A context menu hands the focus back to the row it was opened on as it closes, which happens after
+    // its command ran; the window asks for the focus once that is done.
+    setTimeout(() => useStringReferencesStore.getState().requestFocus(), 0)
   }
 
   // dnSpy's Open Empty Tab (Ctrl+T is taken; the View menu and `--new-tab` are what reach it): a tab with
@@ -1850,6 +1864,7 @@ export const App = (): React.JSX.Element => {
     onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
     onAddClassTracepoint: (node) => setClassTracepointNode(node),
     onAnalyze: (node) => { void openAnalysis(node) },
+    onFindStringReferences: (nodes) => findStringReferences(nodes),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     copyText: (text) => {
       void navigator.clipboard.writeText(text).catch((error: unknown) => {
@@ -1946,6 +1961,11 @@ export const App = (): React.JSX.Element => {
     addMethodBreakpoints: (nodes) => { void addMethodBreakpoints(nodes) },
   }
 
+  const stringReferencesCommands: StringReferencesPaneCommands = {
+    openNode: analyzerCommands.openNode,
+    copyText: (text) => explorerCommands.copyText?.(text),
+  }
+
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
@@ -1955,7 +1975,7 @@ export const App = (): React.JSX.Element => {
       case 'csharp-interactive': return <CSharpInteractive theme={theme} transparentBackground={backgroundImageOn} />
       case 'search': return <SearchPane commands={searchCommands} />
       case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
-      case 'string-references': return workspaceId ? <StringReferencesPane workspaceId={workspaceId} /> : null
+      case 'string-references': return <StringReferencesPane commands={stringReferencesCommands} />
       case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'locals': return <LocalsPane />
@@ -2025,6 +2045,7 @@ export const App = (): React.JSX.Element => {
         onSortAssemblies={() => void sortAssemblies()}
         onFind={() => { findInActiveDocumentEditor() }}
         onSearchAssemblies={showSearch}
+        onFindStringReferences={() => findStringReferences(useAppStore.getState().selectedNodes)}
         onUndo={undo}
         onRedo={redo}
         onEditMethodBody={() => { if (selectedNode?.kind === 'method') setEditMethodNode(selectedNode) }}

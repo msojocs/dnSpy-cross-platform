@@ -3,12 +3,14 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Core.LanguageService;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.CSharp.Scripting.Hosting;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CodeAnalysis.Scripting.Hosting;
+using Microsoft.CodeAnalysis.Text;
 
 namespace dnSpy.Backend.Core;
 
@@ -110,6 +112,40 @@ public sealed class CSharpScriptService : IDisposable {
 			execution.Release();
 		}
 	}
+
+	/// <summary>
+	/// The semantic colors of input that has not been submitted yet — the WPF window's
+	/// <c>OnCommandUpdatedAsync</c>. The input is compiled as the next submission of the session, so a variable an
+	/// earlier submission declared is colored as a local and a name that binds to nothing as an error.
+	/// </summary>
+	/// <remarks>
+	/// It does not wait for a running submission: the session's state is replaced, never changed, so reading it
+	/// while a submission runs sees the state from before that submission.
+	/// </remarks>
+	public async Task<ClassifyResponse> ClassifyAsync(string code, CancellationToken cancellationToken) {
+		ObjectDisposedException.ThrowIf(disposed, this);
+		ArgumentNullException.ThrowIfNull(code);
+		if (code.Length == 0)
+			return new ClassifyResponse([]);
+		var session = await GetSessionAsync(cancellationToken).ConfigureAwait(false);
+		return await Task.Run(() => {
+			var script = session.State.Script;
+			var previous = (CSharpCompilation)script.GetCompilation();
+			var syntaxTree = SyntaxFactory.ParseSyntaxTree(code, scriptParseOptions, cancellationToken: cancellationToken);
+			var compilation = CSharpCompilation.CreateScriptCompilation("myasm", syntaxTree, null, previous.Options, previous, script.ReturnType, script.GlobalsType);
+			var semanticModel = compilation.GetSemanticModel(syntaxTree);
+			try {
+				return new ClassifyResponse(RoslynClassifier.Classify(semanticModel, LanguageServiceHost.Workspace, new TextSpan(0, code.Length), TextColors.Error, cancellationToken));
+			}
+			catch (Exception ex) when (ex is not OperationCanceledException) {
+				// The WPF window shows uncolored input when the classifier fails; a broken classification
+				// must not be what stops the user from running the code.
+				return new ClassifyResponse([]);
+			}
+		}, cancellationToken).ConfigureAwait(false);
+	}
+
+	static readonly CSharpParseOptions scriptParseOptions = new(languageVersion: LanguageVersion.Latest, kind: SourceCodeKind.Script);
 
 	/// <summary>
 	/// Drops the session and builds a new one, which is what <c>#reset</c> does: the WPF command cancels

@@ -12,7 +12,7 @@ import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
 import { resourceFileName, resourceFileSegments } from './resource-files'
 import { captureWindowState, loadWindowState, resolveWindowPlacement, saveWindowState } from './window-state'
-import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, UiLocale } from '../shared/protocol'
+import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, StringReference, StringReferencesSearchRequest, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
@@ -24,6 +24,7 @@ let lastBackendStatus: BackendStatus = { state: 'starting' }
 const analyzerRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 // The search window's searches still running, kept the same way: a new query calls the last one off.
 const searchRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
+const stringReferencesRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -287,6 +288,11 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
     const request = searchRequests.get(progress.progressToken)
     if (request && !request.sender.isDestroyed())
       request.sender.send('search:progress', { requestKey: request.requestKey, start: progress.start, results: progress.results })
+  } else if (method === 'stringReferences/progress') {
+    const progress = parameters as { progressToken: string; start: number; references: StringReference[] }
+    const request = stringReferencesRequests.get(progress.progressToken)
+    if (request && !request.sender.isDestroyed())
+      request.sender.send('stringReferences:progress', { requestKey: request.requestKey, start: progress.start, references: progress.references })
   }
 }
 
@@ -523,12 +529,22 @@ const registerIpc = (): void => {
   ipcMain.handle('search:cancel', (event, requestKey: string) => {
     searchRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
   })
-  ipcMain.handle('stringReferences:search', (_event, workspaceId: string, moduleIds?: string[] | null, searchCompilerGeneratedMembers = true) =>
-    requireBackend().invoke('stringReferences/search', {
-      workspaceId,
-      moduleIds: moduleIds ?? null,
-      searchCompilerGeneratedMembers,
-    }, 600_000))
+  // A string references scan reads every method body of the assemblies it covers; it gets the long deadline,
+  // and the renderer calls it off by its key when a new scan replaces it.
+  ipcMain.handle('stringReferences:search', async (event, workspaceId: string, request: StringReferencesSearchRequest, requestKey: string) => {
+    const key = `${event.sender.id}:${requestKey}`
+    const entry = { controller: new AbortController(), sender: event.sender, requestKey }
+    stringReferencesRequests.set(key, entry)
+    try {
+      return await requireBackend().invoke('stringReferences/search', { workspaceId, ...request, progressToken: key }, 600_000, entry.controller.signal)
+    } finally {
+      if (stringReferencesRequests.get(key) === entry)
+        stringReferencesRequests.delete(key)
+    }
+  })
+  ipcMain.handle('stringReferences:cancel', (event, requestKey: string) => {
+    stringReferencesRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
   ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds }))
   // An analyzer search walks every module that can see the member, which on a framework assembly takes a
   // while; it gets the long deadline, and the renderer can call it off by the key it named it with — a row
@@ -780,18 +796,31 @@ const registerIpc = (): void => {
   ipcMain.handle('script:evaluate', (_event, code: string) => requireBackend().invoke('script/evaluate', { code }, 600_000))
   ipcMain.handle('script:reset', () => requireBackend().invoke('script/reset', {}, 600_000))
 
-  // Roslyn language service handlers
-  ipcMain.handle('languageService:updateDocument', (_event, filePath: string, content: string) =>
-    requireBackend().invoke('languageService/updateDocument', { filePath, content }))
-  ipcMain.handle('languageService:completions', (_event, filePath: string, position: number) =>
-    requireBackend().invoke('languageService/completions', { filePath, position }))
-  ipcMain.handle('languageService:hover', (_event, filePath: string, position: number) =>
-    requireBackend().invoke('languageService/hover', { filePath, position }))
-  ipcMain.handle('languageService:signatureHelp', (_event, filePath: string, position: number) =>
-    requireBackend().invoke('languageService/signatureHelp', { filePath, position }))
-  ipcMain.handle('languageService:diagnostics', (_event, filePath: string) =>
-    requireBackend().invoke('languageService/diagnostics', { filePath }))
-
+  ipcMain.handle('script:classify', (_event, code: string) => requireBackend().invoke('script/classify', { code }))
+  // The Roslyn language service of a C# code editor: one backend workspace per open document.
+  ipcMain.handle('languageService:open', (_event, request: unknown) => requireBackend().invoke('languageService/open', request))
+  ipcMain.handle('languageService:update', async (_event, documentId: string, text: string) => {
+    await requireBackend().invoke('languageService/update', { documentId, text })
+  })
+  ipcMain.handle('languageService:close', async (_event, documentId: string) => {
+    await requireBackend().invoke('languageService/close', { documentId })
+  })
+  ipcMain.handle('languageService:classify', (_event, documentId: string) =>
+    requireBackend().invoke('languageService/classify', { documentId }))
+  ipcMain.handle('languageService:completion', (_event, documentId: string, position: number, triggerCharacter: string | null) =>
+    requireBackend().invoke('languageService/completion', { documentId, position, triggerCharacter }))
+  ipcMain.handle('languageService:completionDescription', (_event, documentId: string, resultId: number, index: number) =>
+    requireBackend().invoke('languageService/completionDescription', { documentId, resultId, index }))
+  ipcMain.handle('languageService:quickInfo', (_event, documentId: string, position: number) =>
+    requireBackend().invoke('languageService/quickInfo', { documentId, position }))
+  ipcMain.handle('languageService:signatureHelp', (_event, documentId: string, position: number, triggerCharacter: string | null) =>
+    requireBackend().invoke('languageService/signatureHelp', { documentId, position, triggerCharacter }))
+  // Compiling is what produces the messages, so this one gets the time a compile can take.
+  ipcMain.handle('languageService:diagnostics', (_event, documentId: string) =>
+    requireBackend().invoke('languageService/diagnostics', { documentId }, 120_000))
+  ipcMain.handle('languageService:indentation', (_event, request: unknown) => requireBackend().invoke('languageService/indentation', request))
+  ipcMain.handle('languageService:selectionRanges', (_event, documentId: string, positions: number[]) =>
+    requireBackend().invoke('languageService/selectionRanges', { documentId, positions }))
   ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle('window:toggleMaximize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)

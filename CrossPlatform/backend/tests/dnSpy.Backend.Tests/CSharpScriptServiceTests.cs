@@ -138,4 +138,59 @@ public sealed class CSharpScriptServiceTests : IDisposable {
 		var result = Assert.Single(response.Entries);
 		Assert.Equal("42", result.Text);
 	}
+
+	/// <summary>The colors the input gets, as (text, color) pairs, so a test reads like the code it colors.</summary>
+	static (string Text, string Color)[] Colors(string code, ClassifyResponse response) =>
+		response.Spans.Select(span => (code.Substring(span.Start, span.Length), span.Color)).ToArray();
+
+	[Fact]
+	public async Task InputIsColoredTheWayTheWpfWindowColorsIt() {
+		const string code = "Console.WriteLine(\"a\" + 1); // done";
+		var colors = Colors(code, await service.ClassifyAsync(code, TestContext.Current.CancellationToken));
+
+		Assert.Contains(("Console", TextColors.StaticType), colors);
+		Assert.Contains(("WriteLine", TextColors.StaticMethod), colors);
+		Assert.Contains(("\"a\"", TextColors.String), colors);
+		Assert.Contains(("1", TextColors.Number), colors);
+		Assert.Contains(("+", TextColors.Operator), colors);
+		Assert.Contains(("(", TextColors.Punctuation), colors);
+		Assert.Contains(("// done", TextColors.Comment), colors);
+	}
+
+	[Fact]
+	public async Task ANameThatBindsToNothingIsColoredAsAnError() {
+		const string code = "undefinedName.Foo()";
+		var colors = Colors(code, await service.ClassifyAsync(code, TestContext.Current.CancellationToken));
+
+		Assert.Contains(("undefinedName", TextColors.Error), colors);
+	}
+
+	[Fact]
+	public async Task AVariableAnEarlierSubmissionDeclaredIsColoredAsALocal() {
+		await service.EvaluateAsync("var counter = 1; static int Twice(int value) => value * 2;", TestContext.Current.CancellationToken);
+
+		const string code = "Twice(counter)";
+		var colors = Colors(code, await service.ClassifyAsync(code, TestContext.Current.CancellationToken));
+
+		Assert.Contains(("counter", TextColors.Local), colors);
+		Assert.Contains(("Twice", TextColors.StaticMethod), colors);
+	}
+
+	[Fact]
+	public async Task ClassifyingDoesNotRunTheInput() {
+		await service.ClassifyAsync("var never = 1;", TestContext.Current.CancellationToken);
+
+		var response = await service.EvaluateAsync("never", TestContext.Current.CancellationToken);
+
+		var error = Assert.Single(response.Entries);
+		Assert.Equal(ScriptOutputEntry.Error, error.Kind);
+		Assert.Contains("CS0103", error.Text, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task EmptyInputHasNoColors() {
+		var response = await service.ClassifyAsync(string.Empty, TestContext.Current.CancellationToken);
+
+		Assert.Empty(response.Spans);
+	}
 }

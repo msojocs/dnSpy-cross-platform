@@ -24,6 +24,7 @@
     <ProjectReference Include="..\DebugTarget\DebugTarget.csproj" />
     <ProjectReference Include="..\AnalyzerTarget.Consumer\AnalyzerTarget.Consumer.csproj" />
     <ProjectReference Include="..\SearchTarget\SearchTarget.csproj" />
+    <ProjectReference Include="..\StringTarget\StringTarget.csproj" />
   </ItemGroup>
 
   <Target Name="BuildBamlFixture" BeforeTargets="Build">

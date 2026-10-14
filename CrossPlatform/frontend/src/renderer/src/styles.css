@@ -611,6 +611,73 @@ select:focus-visible,
 :root:not([data-theme="hc"]) .tc-assemblyExe { color: var(--tc-assembly-exe); }
 :root:not([data-theme="hc"]) .tc-assemblyModule { color: var(--tc-assembly-module); }
 
+/* The colors only code has, which Roslyn's classifier gives the C# Interactive window's input and the echo of
+   what was submitted: plain text and punctuation take the theme's text color here too, since the classifier's
+   colors replace the editor's own highlighting rather than adding to it. Values from dark.dntheme and
+   light.dntheme; the rules are scoped to code so the tree's rows keep their plain text and punctuation. */
+:root {
+  --tc-text: #dcdcdc;
+  --tc-punctuation: #dcdcdc;
+  --tc-comment: #57a64a;
+  --tc-string: #d69d85;
+  --tc-verbatim-string: #d69d85;
+  --tc-local: #dcdcdc;
+  --tc-parameter: #dcdcdc;
+  --tc-label: #806f4d;
+  --tc-module: #378d7b;
+  --tc-preprocessor-keyword: #9b9b9b;
+  --tc-preprocessor-text: #dcdcdc;
+  --tc-excluded-code: #9b9b9b;
+  --tc-xml-doc-attribute: #c8c8c8;
+  --tc-xml-doc-cdata: #e9d585;
+  --tc-xml-doc-comment: #608b4e;
+  --tc-xml-doc-text: #608b4e;
+  --tc-dark-gray: #7f7f7f;
+}
+
+:root[data-theme="light"] {
+  --tc-text: #000000;
+  --tc-punctuation: #000000;
+  --tc-comment: #008000;
+  --tc-string: #a31515;
+  --tc-verbatim-string: #800000;
+  --tc-local: #000000;
+  --tc-parameter: #000000;
+  --tc-label: #663300;
+  --tc-module: #1b5d70;
+  --tc-preprocessor-keyword: #808080;
+  --tc-preprocessor-text: #000000;
+  --tc-excluded-code: #808080;
+  --tc-xml-doc-attribute: #808080;
+  --tc-xml-doc-cdata: #808080;
+  --tc-xml-doc-comment: #808080;
+  --tc-xml-doc-text: #008000;
+}
+
+:root:not([data-theme="hc"]) .code-colors .tc-darkGray { color: var(--tc-dark-gray); }
+:root:not([data-theme="hc"]) .code-colors .tc-text { color: var(--tc-text); }
+:root:not([data-theme="hc"]) .code-colors .tc-punctuation { color: var(--tc-punctuation); }
+:root:not([data-theme="hc"]) .code-colors .tc-comment { color: var(--tc-comment); }
+:root:not([data-theme="hc"]) .code-colors .tc-string { color: var(--tc-string); }
+:root:not([data-theme="hc"]) .code-colors .tc-verbatimString { color: var(--tc-verbatim-string); }
+:root:not([data-theme="hc"]) .code-colors .tc-local { color: var(--tc-local); }
+:root:not([data-theme="hc"]) .code-colors .tc-parameter { color: var(--tc-parameter); font-weight: bold; }
+:root:not([data-theme="hc"]) .code-colors .tc-label { color: var(--tc-label); }
+:root:not([data-theme="hc"]) .code-colors .tc-module { color: var(--tc-module); }
+:root:not([data-theme="hc"]) .code-colors .tc-preprocessorKeyword { color: var(--tc-preprocessor-keyword); }
+:root:not([data-theme="hc"]) .code-colors .tc-preprocessorText { color: var(--tc-preprocessor-text); }
+:root:not([data-theme="hc"]) .code-colors .tc-excludedCode { color: var(--tc-excluded-code); }
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeName,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeQuotes,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeValue { color: var(--tc-xml-doc-attribute); }
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentCDataSection { color: var(--tc-xml-doc-cdata); }
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentComment,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentDelimiter,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentName,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentProcessingInstruction { color: var(--tc-xml-doc-comment); }
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentEntityReference,
+:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentText { color: var(--tc-xml-doc-text); }
+
 /* The line a search shows while it is still running — dnSpy's "Searching..." message node. */
 .analyzer-searching .tree-label {
   color: var(--text-muted);

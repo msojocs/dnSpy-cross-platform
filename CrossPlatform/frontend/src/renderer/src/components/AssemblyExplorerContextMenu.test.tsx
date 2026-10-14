@@ -111,7 +111,6 @@ const UNIMPLEMENTED = [
   'add-class-code',
   'disable-mmap-io',
   'break-when-exception-thrown',
-  'find-string-references',
 ]
 
 /** A context rich enough to show everything the port can run, on the node a case names. */
@@ -122,6 +121,18 @@ const richContext = (node: TreeNode, overrides: Partial<AssemblyExplorerMenuCont
 })
 
 describe('buildAssemblyExplorerMenuItems', () => {
+  it('finds the string references of every row of the selection that is in a .NET module', () => {
+    const onFindStringReferences = vi.fn()
+    const native = { ...typeNode, id: 'n-native', kind: 'pedocument', label: 'native.dll' }
+    const ctx = richContext(typeNode, { onFindStringReferences, selection: [typeNode, native] })
+
+    expect(menuKeys(ctx).slice(menuKeys(ctx).indexOf('find-string-references'), menuKeys(ctx).indexOf('find-string-references') + 2)).toEqual(['find-string-references', 'analyze'])
+    runEntry(ctx, 'find-string-references')
+
+    expect(onFindStringReferences).toHaveBeenCalledWith([typeNode])
+    expect(menuKeys(richContext(native, { onFindStringReferences }))).not.toContain('find-string-references')
+  })
+
   it('lays a type node out in dnSpy group and order', () => {
     expect(menuKeys(richContext(typeNode))).toEqual([
       // 0 — tabs

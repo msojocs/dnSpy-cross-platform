@@ -39,6 +39,7 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   onSortAssemblies: vi.fn(),
   onFind: vi.fn(),
   onSearchAssemblies: vi.fn(),
+  onFindStringReferences: vi.fn(),
   onUndo: vi.fn(),
   onRedo: vi.fn(),
   onEditMethodBody: vi.fn(),
@@ -541,6 +542,7 @@ describe('MenuBar', () => {
       onSortAssemblies={vi.fn()}
       onFind={vi.fn()}
       onSearchAssemblies={vi.fn()}
+      onFindStringReferences={vi.fn()}
       onUndo={vi.fn()}
       onRedo={vi.fn()}
       onEditMethodBody={vi.fn()}
@@ -683,6 +685,7 @@ describe('MenuBar', () => {
       onSortAssemblies={vi.fn()}
       onFind={vi.fn()}
       onSearchAssemblies={vi.fn()}
+      onFindStringReferences={vi.fn()}
       onUndo={vi.fn()}
       onRedo={vi.fn()}
       onEditMethodBody={vi.fn()}
@@ -920,14 +923,26 @@ describe('MenuBar', () => {
     renderMenuWith({ selectionKind: 'type', selectionLabel: 'HelloRequest' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     // Delete, the type's two create commands, its own editor and the four member dialogs are wired up;
-    // what is left of the group is the C#-scripting commands and the dependency and reference searches.
+    // what is left of the group is the C#-scripting commands.
     expect(screen.getByRole('menuitem', { name: /^Delete HelloRequest/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Create Type\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Create Nested Type\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Edit Type\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Edit Class \(C#\)\.\.\./ })).toBeDisabled()
-    expect(screen.getByRole('menuitem', { name: /^Find String References in Module/ })).toBeDisabled()
     expect(screen.queryByRole('menuitem', { name: /^Edit Method Body/ })).not.toBeInTheDocument()
+  })
+
+  it('finds the string references of the selection\'s module, for any row in a .NET module', () => {
+    const onFindStringReferences = vi.fn()
+    renderMenuWith({ selectionKind: 'type', selectionLabel: 'HelloRequest', onFindStringReferences })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Find String References in Module/ }))
+    expect(onFindStringReferences).toHaveBeenCalledOnce()
+
+    cleanup()
+    renderMenuWith({ selectionKind: 'pedocument', selectionLabel: 'native.dll' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Find String References in Module/ })).not.toBeInTheDocument()
   })
 
   it('runs the create and edit commands whose dialogs the port has built', () => {

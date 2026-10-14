@@ -40,8 +40,8 @@ const api: DnSpyApi = {
   exportBookmarks: (workspaceId, bookmarks) => ipcRenderer.invoke('bookmarks:export', workspaceId, bookmarks),
   importBookmarks: (workspaceId, xml) => ipcRenderer.invoke('bookmarks:import', workspaceId, xml),
   search: (workspaceId, request, requestKey) => ipcRenderer.invoke('search:run', workspaceId, request, requestKey),
-  searchStringReferences: (workspaceId, moduleIds, searchCompilerGeneratedMembers) =>
-    ipcRenderer.invoke('stringReferences:search', workspaceId, moduleIds, searchCompilerGeneratedMembers),
+  searchStringReferences: (workspaceId, request, requestKey) => ipcRenderer.invoke('stringReferences:search', workspaceId, request, requestKey),
+  cancelStringReferences: (requestKey) => ipcRenderer.invoke('stringReferences:cancel', requestKey),
   cancelSearch: (requestKey) => ipcRenderer.invoke('search:cancel', requestKey),
   analyzeNodes: (workspaceId, nodeIds) => ipcRenderer.invoke('analyze:nodes', workspaceId, nodeIds),
   analyzeChildren: (workspaceId, request, requestKey) => ipcRenderer.invoke('analyze:children', workspaceId, request, requestKey),
@@ -165,12 +165,23 @@ const api: DnSpyApi = {
     ipcRenderer.on('search:progress', listener)
     return () => ipcRenderer.removeListener('search:progress', listener)
   },
-  // Roslyn language service methods
-  updateDocument: (filePath, content) => ipcRenderer.invoke('languageService:updateDocument', filePath, content),
-  getCompletions: (filePath, position) => ipcRenderer.invoke('languageService:completions', filePath, position),
-  getHover: (filePath, position) => ipcRenderer.invoke('languageService:hover', filePath, position),
-  getSignatureHelp: (filePath, position) => ipcRenderer.invoke('languageService:signatureHelp', filePath, position),
-  getDiagnostics: (filePath) => ipcRenderer.invoke('languageService:diagnostics', filePath),
+  onStringReferencesProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+    ipcRenderer.on('stringReferences:progress', listener)
+    return () => ipcRenderer.removeListener('stringReferences:progress', listener)
+  },
+  classifyScript: (code) => ipcRenderer.invoke('script:classify', code),
+  openCodeDocument: (request) => ipcRenderer.invoke('languageService:open', request),
+  updateCodeDocument: (documentId, text) => ipcRenderer.invoke('languageService:update', documentId, text),
+  closeCodeDocument: (documentId) => ipcRenderer.invoke('languageService:close', documentId),
+  classifyCodeDocument: (documentId) => ipcRenderer.invoke('languageService:classify', documentId),
+  getCodeCompletion: (documentId, position, triggerCharacter) => ipcRenderer.invoke('languageService:completion', documentId, position, triggerCharacter ?? null),
+  getCodeCompletionDescription: (documentId, resultId, index) => ipcRenderer.invoke('languageService:completionDescription', documentId, resultId, index),
+  getCodeQuickInfo: (documentId, position) => ipcRenderer.invoke('languageService:quickInfo', documentId, position),
+  getCodeSignatureHelp: (documentId, position, triggerCharacter) => ipcRenderer.invoke('languageService:signatureHelp', documentId, position, triggerCharacter ?? null),
+  getCodeDiagnostics: (documentId) => ipcRenderer.invoke('languageService:diagnostics', documentId),
+  getCodeIndentation: (request) => ipcRenderer.invoke('languageService:indentation', request),
+  getCodeSelectionRanges: (documentId, positions) => ipcRenderer.invoke('languageService:selectionRanges', documentId, positions),
 }
 
 contextBridge.exposeInMainWorld('dnSpy', api)

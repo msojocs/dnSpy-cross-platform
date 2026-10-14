@@ -9,6 +9,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
+import type { StringReferencesSettings } from '../string-references-model'
 import type { SearchLocation, SearchType } from '../../../shared/protocol'
 
 export type ThemeName = 'blue' | 'light' | 'dark' | 'hc'
@@ -410,6 +411,7 @@ export interface AppOptions {
   bookmarks: BookmarkSettings
   analyzer: AnalyzerSettings
   search: SearchSettings
+  stringReferences: StringReferencesSettings
 }
 
 const defaultEditorGeneral = (): EditorGeneralSettings => ({
@@ -711,6 +713,11 @@ export const defaultAppOptions: AppOptions = {
     searchDecompiledData: true,
     searchFrameworkAssemblies: true,
     searchCompilerGeneratedMembers: true,
+  },
+  stringReferences: {
+    caseSensitive: false,
+    regex: false,
+    matchFormatted: false,
   },
 }
 

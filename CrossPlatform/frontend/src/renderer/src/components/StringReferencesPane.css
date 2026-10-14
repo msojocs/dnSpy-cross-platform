@@ -1,130 +1,105 @@
-.string-references-pane {
+/* dnSpy's String References window: the search box, its options and Refresh over a four-column list. The
+   columns keep the widths dnSpy gives them and scroll sideways rather than squeeze. */
+.strings-pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  background: var(--surface-1);
-  color: var(--text-primary);
-}
-
-.string-references-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border-subtle);
-  flex-wrap: wrap;
-}
-
-.string-references-search {
-  flex: 1;
-  min-width: 200px;
-  padding: 4px 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-primary);
-}
-
-.string-references-search:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.string-references-toolbar button {
-  padding: 4px 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.string-references-toolbar button:hover {
-  background: var(--surface-3);
-}
-
-.string-references-toolbar button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.string-references-toolbar label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.string-references-toolbar input[type="checkbox"] {
-  cursor: pointer;
-}
-
-.string-references-table-container {
-  flex: 1;
-  overflow: auto;
-  position: relative;
-}
-
-.string-references-table {
   width: 100%;
-  border-collapse: collapse;
+  height: 100%;
 }
 
-.string-references-table thead {
-  position: sticky;
-  top: 0;
-  background: var(--surface-2);
-  z-index: 1;
+.strings-pane .search-controls,
+.strings-pane .search-options {
+  flex: none;
 }
 
-.string-references-table th {
-  padding: 8px;
-  text-align: left;
-  border-bottom: 1px solid var(--border-subtle);
-  font-weight: 600;
+/* An invalid regular expression: the box goes red and its tooltip says why, as WPF's validation does. */
+.strings-pane .search-controls input.strings-search-error {
+  border-color: var(--danger);
+}
+
+.strings-separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.strings-table {
+  display: grid;
+  flex: 1;
+  grid-template-rows: 23px minmax(0, 1fr);
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.strings-header,
+.strings-row {
+  display: grid;
+  align-items: center;
+  min-width: max-content;
+}
+
+.strings-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+/* A header sorts by its column — dnSpy's GridViewColumnSorter, which cycles up, down and unsorted — and is
+   dragged to move the column. */
+.strings-header > span {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  overflow: hidden;
+  padding: 0 6px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   cursor: pointer;
   user-select: none;
-}
-
-.string-references-table th:hover {
-  background: var(--surface-3);
-}
-
-.string-references-table td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.string-references-table tbody tr {
-  cursor: pointer;
-}
-
-.string-references-table tbody tr:hover {
-  background: var(--surface-2);
-}
-
-.string-references-table tbody tr.selected {
-  background: var(--accent-20);
-}
-
-.string-references-table tbody tr:focus {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.literal-cell {
-  font-family: var(--font-mono);
-  color: var(--syntax-string);
-  max-width: 400px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.string-references-status {
-  padding: 4px 8px;
-  border-top: 1px solid var(--border-subtle);
-  font-size: 12px;
-  color: var(--text-secondary);
+.strings-sort-arrow {
+  margin-left: 4px;
+  font-size: 9px;
+}
+
+.strings-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.strings-rows {
+  min-width: max-content;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.strings-row {
+  height: 22px;
+  cursor: default;
+  user-select: none;
+}
+
+.strings-row:hover,
+.strings-row.selected {
+  background: var(--selection);
+}
+
+.strings-cell {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 6px;
+  white-space: pre;
+}
+
+.strings-referrer-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

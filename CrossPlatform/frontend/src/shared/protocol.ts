@@ -1,56 +1,5 @@
 export const protocolVersion = 1
 
-// Roslyn language service types
-export interface CompletionItem {
-  label: string
-  kind: string
-  detail?: string
-  documentation?: string
-  insertText: string
-  sortText: string
-  filterText: string
-}
-
-export interface HoverInfo {
-  contents: string
-  range: {
-    startLine: number
-    startColumn: number
-    endLine: number
-    endColumn: number
-  }
-}
-
-export interface SignatureHelpInfo {
-  signatures: SignatureInformation[]
-  activeSignature: number
-  activeParameter: number
-}
-
-export interface SignatureInformation {
-  label: string
-  documentation: string
-  parameters: ParameterInformation[]
-}
-
-export interface ParameterInformation {
-  label: string
-  documentation: string
-}
-
-export interface DiagnosticInfo {
-  message: string
-  severity: 'error' | 'warning' | 'info' | 'hint'
-  range: {
-    startLine: number
-    startColumn: number
-    endLine: number
-    endColumn: number
-  }
-  code: string
-}
-
-
 export interface HelloResponse {
   protocolVersion: number
   backendVersion: string
@@ -510,28 +459,47 @@ export interface SearchProgress {
   results: SearchResult[]
 }
 
-/** One string reference found in a module. */
+/** dnSpy's StringReferenceKind, in the order its list sorts them. */
+export type StringReferenceKind = 'il' | 'constant' | 'attribute'
+
+/**
+ * One row of dnSpy's String References window: a string and the member it is in. `formattedLiteral` is the
+ * string as a C# literal (verbatim when `isVerbatim`); `token` is what the list sorts by after the kind, and
+ * `ilOffset` the `ldstr` an IL reference is. `nodeId` is the tree node following the row opens.
+ */
 export interface StringReference {
+  kind: StringReferenceKind
   literal: string
-  kind: 'IL' | 'Constant' | 'Attribute'
-  referrerLabel: string
+  formattedLiteral: string
+  isVerbatim: boolean
+  referrerParts: TextPart[]
+  referrerIcon: string
   moduleName: string
-  nodeId?: string | null
-  metadataToken?: number | null
-  ilOffset?: number | null
-  referrerLabelParts?: TextPart[] | null
-  icon?: string | null
-  toolTip?: string | null
+  token: number
+  nodeId: string | null
+  ilOffset: number | null
+}
+
+export interface StringReferencesSearchRequest {
+  /** Tree nodes whose assemblies are scanned, every module of each. */
+  nodeIds?: string[]
+  /** Modules an earlier scan read, which a refresh reads again. */
+  modulePaths?: string[]
+  /** The current language shows the members the compiler made (IL); C# and VB leave them out. */
+  showAllMembers?: boolean
 }
 
 export interface StringReferencesSearchResponse {
   references: StringReference[]
-  start?: number
+  start: number
+  /** The modules the scan read. */
+  modulePaths: string[]
 }
 
 export interface StringReferencesProgress {
-  references: StringReference[]
+  requestKey: string
   start: number
+  references: StringReference[]
 }
 
 /** The searches dnSpy's analyzer offers under a member, by the key a search row carries. */
@@ -1289,6 +1257,8 @@ export type ScriptOutputKind = 'output' | 'result' | 'error' | 'banner' | 'echo'
 export interface ScriptOutputEntry {
   kind: ScriptOutputKind
   text: string
+  /** An `echo` entry's semantic colors, the ones its input had when it was submitted. */
+  colors?: ClassifiedSpan[]
 }
 
 export interface ScriptEvaluateResponse {
@@ -1606,24 +1576,187 @@ export interface DnSpyApi {
   onAnalyzeProgress(callback: (progress: AnalyzeProgress) => void): () => void
   /** What a search window search found so far, sent while it still runs. */
   onSearchProgress(callback: (progress: SearchProgress) => void): () => void
-  /** Searches for all string references in the specified modules. */
-  searchStringReferences(
-    workspaceId: string,
-    moduleIds?: string[] | null,
-    searchCompilerGeneratedMembers?: boolean
-  ): Promise<StringReferencesSearchResponse>
+  /** Scans modules for the strings dnSpy's String References window lists, sending batches named by `requestKey`. */
+  searchStringReferences(workspaceId: string, request: StringReferencesSearchRequest, requestKey: string): Promise<StringReferencesSearchResponse>
+  /** Calls off the scan started with `requestKey`. */
+  cancelStringReferences(requestKey: string): Promise<void>
   /** What a string references search found so far, sent while it still runs. */
   onStringReferencesProgress(callback: (progress: StringReferencesProgress) => void): () => void
 
-  // Roslyn language service methods for C# code intelligence
-  /** Updates or creates a document in the Roslyn workspace for language service features. */
-  updateDocument(filePath: string, content: string): Promise<string>
-  /** Gets completion items at the specified position in a C# document. */
-  getCompletions(filePath: string, position: number): Promise<CompletionItem[]>
-  /** Gets hover information at the specified position in a C# document. */
-  getHover(filePath: string, position: number): Promise<HoverInfo | null>
-  /** Gets signature help at the specified position in a C# document. */
-  getSignatureHelp(filePath: string, position: number): Promise<SignatureHelpInfo | null>
-  /** Gets diagnostics for a C# document. */
-  getDiagnostics(filePath: string): Promise<DiagnosticInfo[]>
+  /** The semantic colors of the C# Interactive window's input, compiled as the session's next submission. */
+  classifyScript(code: string): Promise<ClassifyResponse>
+  /** Opens a C# code document in a Roslyn workspace of its own; the other `codeDocument*` calls take its id. */
+  openCodeDocument(request: CodeDocumentOpenRequest): Promise<CodeDocumentOpenResponse>
+  updateCodeDocument(documentId: string, text: string): Promise<void>
+  closeCodeDocument(documentId: string): Promise<void>
+  classifyCodeDocument(documentId: string): Promise<ClassifyResponse>
+  getCodeCompletion(documentId: string, position: number, triggerCharacter?: string | null): Promise<CodeCompletionResponse>
+  getCodeCompletionDescription(documentId: string, resultId: number, index: number): Promise<CodeCompletionDescriptionResponse>
+  getCodeQuickInfo(documentId: string, position: number): Promise<CodeQuickInfoResponse>
+  getCodeSignatureHelp(documentId: string, position: number, triggerCharacter?: string | null): Promise<CodeSignatureHelpResponse>
+  getCodeDiagnostics(documentId: string): Promise<CodeDiagnosticsResponse>
+  getCodeIndentation(request: CodeIndentationRequest): Promise<CodeIndentationResponse>
+  getCodeSelectionRanges(documentId: string, positions: number[]): Promise<CodeSelectionRangesResponse>
+}
+
+/** A stretch of code and the color class (one of the backend's TextColors) it is written in. */
+export interface ClassifiedSpan {
+  start: number
+  length: number
+  color: string
+}
+
+/** The colored stretches of a text, in order; text between them keeps the editor's own color. */
+export interface ClassifyResponse {
+  spans: ClassifiedSpan[]
+}
+
+/** What a code document compiles with — dnSpy's C# compiler settings, whose defaults the backend applies. */
+export interface CodeCompilerOptions {
+  optimize?: boolean
+  checkOverflow?: boolean
+  allowUnsafe?: boolean
+  preprocessorSymbols?: string
+}
+
+export interface CodeDocumentOpenRequest {
+  text: string
+  /** The assemblies the code compiles against; absent means the framework the backend runs on. */
+  references?: string[]
+  options?: CodeCompilerOptions
+}
+
+export interface CodeDocumentOpenResponse {
+  documentId: string
+}
+
+export interface CodeSpan {
+  start: number
+  length: number
+}
+
+export interface CodeTextEdit {
+  start: number
+  length: number
+  newText: string
+}
+
+export interface CodeCompletionItem {
+  index: number
+  displayText: string
+  displayTextPrefix: string
+  displayTextSuffix: string
+  inlineDescription: string
+  filterText: string
+  sortText: string
+  insertText: string
+  /** Roslyn's WellKnownTags: the kind ("Method") and accessibility ("Public") of the item. */
+  tags: string[]
+  matchPriority: number
+  preselect: boolean
+  /** The characters that commit the item as they are typed. */
+  commitCharacters: string
+  /** What committing does when it is more than putting `insertText` over the list's span. */
+  edit?: CodeTextEdit | null
+}
+
+export interface CodeCompletionList {
+  resultId: number
+  span: CodeSpan
+  /** Roslyn's builder mode: typing never commits an item. */
+  suggestionMode: boolean
+  items: CodeCompletionItem[]
+}
+
+export interface CodeCompletionResponse {
+  list: CodeCompletionList | null
+}
+
+export interface CodeCompletionDescriptionResponse {
+  parts: TextPart[]
+}
+
+export interface CodeQuickInfoSection {
+  /** Roslyn's QuickInfoSectionKinds name: Description, DocumentationComments, Usage, TypeParameters, AnonymousTypes, Exception. */
+  kind: string
+  parts: TextPart[]
+}
+
+export interface CodeQuickInfo {
+  span: CodeSpan
+  /** The dnSpy image of the symbol. */
+  glyph: string | null
+  warning: boolean
+  sections: CodeQuickInfoSection[]
+}
+
+export interface CodeQuickInfoResponse {
+  quickInfo: CodeQuickInfo | null
+}
+
+export interface CodeSignatureParameter {
+  name: string
+  display: TextPart[]
+  documentation: TextPart[]
+  isOptional: boolean
+}
+
+/** A signature laid out the way Roslyn's SignatureHelpItem is: prefix, parameters joined by separator, suffix. */
+export interface CodeSignature {
+  prefix: TextPart[]
+  separator: TextPart[]
+  suffix: TextPart[]
+  parameters: CodeSignatureParameter[]
+  documentation: TextPart[]
+  isVariadic: boolean
+}
+
+export interface CodeSignatureHelp {
+  applicableSpan: CodeSpan
+  argumentIndex: number
+  argumentCount: number
+  argumentName: string | null
+  selectedItem: number
+  items: CodeSignature[]
+}
+
+export interface CodeSignatureHelpResponse {
+  help: CodeSignatureHelp | null
+}
+
+/** One compiler message; lines and columns are 0-based. */
+export interface CodeDiagnostic {
+  id: string
+  severity: 'error' | 'warning' | 'info'
+  message: string
+  helpUri: string
+  start: number
+  length: number
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+}
+
+export interface CodeDiagnosticsResponse {
+  diagnostics: CodeDiagnostic[]
+}
+
+export interface CodeIndentationRequest {
+  documentId: string
+  /** 0-based. */
+  line: number
+  indentSize: number
+  tabSize: number
+  useTabs: boolean
+}
+
+export interface CodeIndentationResponse {
+  /** The column the line's text should start at; null keeps the editor's own indentation. */
+  indentation: number | null
+}
+
+export interface CodeSelectionRangesResponse {
+  /** For each position asked about, the spans around it, innermost first. */
+  ranges: CodeSpan[][]
 }

@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core;
+using dnSpy.Backend.Core.LanguageService;
 using dnSpy.Backend.Debugging.CorDebug;
 
 namespace dnSpy.Backend.Host;
@@ -17,6 +18,7 @@ internal sealed class JsonRpcServer {
 	readonly Stream output;
 	readonly WorkspaceManager workspaces;
 	readonly CSharpScriptService scripts;
+	readonly RoslynLanguageService languageService;
 	readonly CorDebugSessionManager? debugSessions;
 	readonly HostOptions hostOptions;
 	readonly CancellationTokenSource shutdown;
@@ -25,11 +27,12 @@ internal sealed class JsonRpcServer {
 	readonly JsonSerializerOptions jsonOptions = CreateJsonOptions();
 	volatile bool handshakeComplete;
 
-	public JsonRpcServer(Stream input, Stream output, WorkspaceManager workspaces, CSharpScriptService scripts, CorDebugSessionManager? debugSessions, HostOptions hostOptions, CancellationTokenSource shutdown) {
+	public JsonRpcServer(Stream input, Stream output, WorkspaceManager workspaces, CSharpScriptService scripts, RoslynLanguageService languageService, CorDebugSessionManager? debugSessions, HostOptions hostOptions, CancellationTokenSource shutdown) {
 		this.input = input;
 		this.output = output;
 		this.workspaces = workspaces;
 		this.scripts = scripts;
+		this.languageService = languageService;
 		this.debugSessions = debugSessions;
 		this.hostOptions = hostOptions;
 		this.shutdown = shutdown;
@@ -191,8 +194,10 @@ internal sealed class JsonRpcServer {
 					progress => WriteNotificationAsync(RpcMethods.SearchProgress, progress),
 					cancellationToken).ConfigureAwait(false);
 			case RpcMethods.StringReferencesSearch:
-				return await Task.Run(() => workspaces.StringReferencesSearch(
-					DeserializeParams<StringReferencesSearchRequest>(request)), cancellationToken).ConfigureAwait(false);
+				return await workspaces.SearchStringReferencesAsync(
+					DeserializeParams<StringReferencesSearchRequest>(request),
+					progress => WriteNotificationAsync(RpcMethods.StringReferencesProgress, progress),
+					cancellationToken).ConfigureAwait(false);
 			case RpcMethods.AnalyzeNodes:
 				return await workspaces.AnalyzeNodesAsync(DeserializeParams<AnalyzeNodesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.AnalyzeChildren:
@@ -309,6 +314,32 @@ internal sealed class JsonRpcServer {
 				return await scripts.EvaluateAsync(DeserializeParams<ScriptEvaluateRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptReset:
 				return await scripts.ResetAsync().ConfigureAwait(false);
+			case RpcMethods.ScriptClassify:
+				return await scripts.ClassifyAsync(DeserializeParams<ScriptClassifyRequest>(request).Code, cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceOpen:
+				return languageService.Open(DeserializeParams<CodeDocumentOpenRequest>(request));
+			case RpcMethods.LanguageServiceUpdate:
+				languageService.Update(DeserializeParams<CodeDocumentUpdateRequest>(request));
+				return new { updated = true };
+			case RpcMethods.LanguageServiceClose:
+				languageService.Close(DeserializeParams<CodeDocumentRequest>(request));
+				return new { closed = true };
+			case RpcMethods.LanguageServiceClassify:
+				return await languageService.ClassifyAsync(DeserializeParams<CodeDocumentRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceCompletion:
+				return await languageService.GetCompletionAsync(DeserializeParams<CodeCompletionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceCompletionDescription:
+				return await languageService.GetCompletionDescriptionAsync(DeserializeParams<CodeCompletionDescriptionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceQuickInfo:
+				return await languageService.GetQuickInfoAsync(DeserializeParams<CodePositionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceSignatureHelp:
+				return await languageService.GetSignatureHelpAsync(DeserializeParams<CodeSignatureHelpRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceDiagnostics:
+				return await languageService.GetDiagnosticsAsync(DeserializeParams<CodeDocumentRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceIndentation:
+				return await languageService.GetIndentationAsync(DeserializeParams<CodeIndentationRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceSelectionRanges:
+				return await languageService.GetSelectionRangesAsync(DeserializeParams<CodeSelectionRangesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugLaunch:
 				return await GetDebugSessions().LaunchAsync(DeserializeParams<DebugLaunchRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugListProcesses:

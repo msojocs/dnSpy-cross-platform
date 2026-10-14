@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）与 4.3（程序集树）另有按实现与测试复核的一轮，那两节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.11（字符串引用窗口）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -46,19 +46,19 @@
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
-| C# 交互窗口 | ~42% | 5 | 11 | 9 | 2 | REPL 主流程可用；脚本访问不到 dnSpy，输出一次性返回 |
+| C# 交互窗口 | ~44% | 6 | 10 | 9 | 2 | REPL 主流程可用，输入有语义着色；脚本访问不到 dnSpy，输出一次性返回 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
 | 反编译与语言 | ~42% | 5 | 12 | 9 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
-| Roslyn 语言服务 | ~88% | 4 | 3 | 1 | 0 | 已实现补全、悬停、签名帮助、诊断；语义着色仍使用词法 |
-| 字符串引用窗口 | 100% | 19 | 0 | 0 | 0 | 完整实现；支持三类来源（IL ldstr、常量、自定义特性）、子串过滤、正则、大小写、按格式化字符串匹配、列排序、跟转到引用、复制字面量；功能完全对齐 WPF |
+| Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 属 4.12 未移植 |
+| 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30，完成度约 **63%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30，完成度约 **61%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -485,35 +485,38 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.11 字符串引用窗口
 
-完成度 100%（✅ 19）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。
+完成度约 95%（✅ 20 / 🟡 2）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。2026-10-16 按实现与测试复核：此前标的 100% 那一版后端编译不过（`WorkspaceManager.StringReferences.cs` 十几处错误）、前端引用了未安装的 `react-i18next`、树右键入口恒不可见，已整体重写。
 
-跨平台版完整实现了字符串引用窗口的全部功能：扫描三类字符串来源（IL ldstr 指令、常量值、自定义特性参数），支持子串过滤、正则表达式、大小写敏感、按格式化字符串匹配，四列排序（种类、字面量、引用者、模块），双击或 Enter 跟转到引用，复制格式化/原始字面量，刷新按钮，设置持久化，隐藏编译器生成成员选项。
+跨平台实现：`BE/WorkspaceManager.StringReferences.cs`（扫描、来源格式化、跟随目标、`StringLiteralFormatter` 即 WPF 的 `StringFormatter`），RPC `stringReferences/search` 与进度通知 `stringReferences/progress`；`FE/string-references-store.ts`（扫描、刷新、跟随工作区）、`FE/string-references-model.ts`（过滤与 WPF 各比较器）、`FE/components/StringReferencesPane.tsx`、`StringReferencesContextMenu.tsx`。
 
-| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
-|---|---|---|---|---|
-| 程序集树右键与编辑菜单入口 | `Commands.cs` | `edit-menu.ts`、`AssemblyExplorerContextMenu.tsx` | ✅ | |
-| 字符串引用工具窗口 | `StringReferencesToolWindowContent.cs` | `StringReferencesPane.tsx` | ✅ | |
-| 扫描选中节点所在程序集的全部模块 | `StringReferencesService.cs` | `WorkspaceManager.StringReferences.cs` | ✅ | |
-| 不输入查询时列出全部字符串 | `StringsControlVM.cs` | `StringReferencesPane.tsx` | ✅ | |
-| IL ldstr（每条一行，带 IL 偏移） | `ILStringReference.cs` | `CreateILReference` | ✅ | |
-| 常量（字段、属性、参数默认值） | `ConstantStringReference.cs` | `CreateConstantReference` | ✅ | |
-| 自定义特性参数（含命名参数和泛型参数） | `CustomAttributeStringReference.cs` | `ScanCustomAttributes` | ✅ | |
-| 子串过滤 | `ApplyFilter` | `filteredReferences` | ✅ | |
-| 大小写敏感 | `Settings.SearchCaseSensitive` | `caseSensitive` 状态 | ✅ | |
-| 正则表达式（含非法正则提示） | `Settings.SearchIsRegex` | `useRegex` 状态 | ✅ | |
-| 按转义后的字符串匹配 | `Settings.SearchMatchFormattedString` | `matchFormatted` 状态 | ✅ | |
-| 四列（种类、字面量、引用者、模块） | `StringsWindowColumnIds` | 表头 | ✅ | |
-| 列头排序 | `UpdateSortDescriptions` | `handleSort`、`sortedReferences` | ✅ | |
-| 跟随（双击、Enter、新标签） | `FollowReference` | `handleFollow`、`handleDoubleClick` | ✅ | Ctrl+Enter / Shift+Enter 新标签 |
-| 右键转到引用 | `Commands.cs` | 双击打开 | ✅ | 简化为双击，未单独实现右键菜单 |
-| 复制格式化字面量 | `CopyStringLiteralCommand` | `handleCopyLiteral` | ✅ | |
-| 复制原始字面量 | `CopyRawStringLiteralCommand` | `handleCopyRawLiteral` | ✅ | |
-| 刷新按钮 | `RefreshCommand` | Refresh 按钮 | ✅ | |
-| 自动刷新（文档变化时） | `DocumentService.CollectionChanged` | 手动刷新 | ✅ | 简化为手动刷新 |
-| 设置持久化（3 项） | `StringReferencesSettings` | localStorage | ✅ | |
-| 隐藏编译器生成成员 | `IsCompilerGenerated` | `searchCompilerGenerated` | ✅ | |
+| 功能点 | WPF 来源 | 状态 | 备注 |
+|---|---|---|---|
+| 树右键与编辑菜单入口 | `Commands.cs` | ✅ | 选中项里有 .NET 模块中的行时出现（`GetModule()`），打开窗口、焦点进搜索框、扫描 |
+| 工具窗口 | `StringReferencesToolWindowContent.cs` | ✅ | 停靠在工具窗口区；关掉后由命令重新打开 |
+| 扫描所选节点所在程序集的全部模块 | `StringReferencesService.Analyze` | ✅ | 含 netmodule；记住扫过的模块供刷新 |
+| 未扫描时，在搜索框输入或改选项即扫描树的选中项 | `StartSearchIfNotStarted` | ✅ | |
+| IL ldstr（每条一行，带 IL 偏移） | `ILStringReference.cs` | ✅ | 空字符串不列 |
+| 常量（字段、属性、参数默认值） | `ConstantStringReference.cs` | ✅ | |
+| 自定义特性参数 | `CustomAttributeStringReference.cs` | ✅ | 构造参数（Argument #n）、命名参数、数组逐项；模块、程序集、类型、方法、字段、属性、事件、参数（含返回值）、泛型参数上的特性。字段等成员的特性按 WPF 归在类型名下，跟随仍到成员本身 |
+| 按当前反编译器隐藏编译器生成成员 | `Decompiler.ShowMember` | ✅ | C#/VB 隐藏 lambda、状态机等，IL 全部列出；切换语言自动重扫 |
+| 子串过滤 | `ApplyFilter` | ✅ | 绑定延迟 100 ms，与 WPF 相同 |
+| 区分大小写 | `SearchCaseSensitive` | ✅ | |
+| 正则表达式 | `SearchIsRegex` | ✅ | 非法模式时保留原过滤、搜索框标红并在提示里写原因。用的是 JavaScript 正则，个别 .NET 专有语法不同 |
+| 按格式化后的字符串匹配 | `SearchMatchFormattedString` | ✅ | |
+| 四列（种类、文本、来源、模块） | `StringsControl.xaml` | ✅ | WPF 的列序与列宽；字面量按普通/逐字字符串着色，来源带容器图标与语法着色，「parameter」「attribute」「generic」等用 dnSpy 的灰色并随界面语言翻译 |
+| 来源列随当前语言格式化 | `Decompiler.Write(...)` | 🟡 | 一律按 C# 格式化器（WPF `StringReference.DefaultFormatterOptions` 的选项）书写；WPF 选 VB 或 IL 时按该语言书写 |
+| 列头排序 | `StringsControlVM.UpdateSortDescriptions` | ✅ | 升序 → 降序 → 还原；无排序时按种类、令牌、IL 偏移；文本与来源列忽略大小写，模块列只在 IL 行之间比模块（照 WPF 的 `ModuleComparer` 写法） |
+| 列拖动重排与调整列宽 | `GridView AllowsColumnReorder` | ✅ | |
+| 跟随（双击、Enter，Ctrl/Shift 新标签） | `FollowReference` | 🟡 | ldstr 在 C# 视图里定位到所在语句；IL/VB 视图没有语句表（见第 2 节第 3 条），只打开方法 |
+| 右键菜单 | `Commands.cs` | ✅ | 复制字符串文本（格式化，Ctrl+C）/（原始）；转到代码中的引用 / 在新标签页中转到 |
+| Ctrl+C 复制格式化文本 | `StringSearcherCommandLoader` | ✅ | |
+| 刷新按钮 | `RefreshCommand` | ✅ | 有已扫描模块时重扫，否则扫描树的选中项 |
+| 自动刷新 | `DocumentModified`、`CollectionChanged`、`DecompilerChanged` | ✅ | 编辑、撤销/重做、重载、增删程序集、切换语言时重扫；移除的模块自动剔除；关闭工作区清空 |
+| 设置持久化（3 项） | `StringReferencesSettingsImpl` | ✅ | 存在应用选项里 |
 
-测试：后端 `WorkspaceManager.StringReferences.cs` 实现了完整的字符串扫描逻辑；前端 `StringReferencesPane.tsx` 实现了 UI 与交互。功能完全对齐 WPF。
+扫描在工作区锁内按类型分片进行，结果分批推送到列表（对应 WPF 边扫边加），新扫描会取消正在进行的那次。
+
+测试：后端 `WorkspaceStringReferencesTests.cs` 13 条（夹具 `backend/tests/StringTarget`：三类来源与来源文字、字面量格式化规则、编译器生成成员、跟随目标、整程序集扫描、按模块刷新、分批结果与一次扫描一致）；前端 `string-references-model.test.ts`（排序与过滤）、`string-references-store.test.ts`（扫描、批次、取消、刷新、跟随工作区）、`StringReferencesPane.test.tsx`（列、过滤延迟、非法正则、排序、列重排、跟随与复制、右键菜单、焦点）、`AssemblyExplorerContextMenu.test.tsx` 与 `MenuBar.test.tsx` 的入口；e2e「the String References window」。
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 
@@ -584,7 +587,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 以下 5 项全部未实现，菜单只有灰显占位：Edit Method (C#)、Edit Class / Add Class Members / Add Class (C#)、Edit Assembly Attributes (C#)、Merge with Assembly、编译器选项页。WPF 实现在 `AE/Compiler/`（`EditMethodCodeVM.cs`、`ModuleImporter.cs`、`ModulePatcher.cs` 等）。
 
-文档里没有「不做」的决定，后端也已引用 `Microsoft.CodeAnalysis.CSharp.Scripting`，Roslyn 在 Linux 上可用，所以记为 ❌ 而不是 ⛔。这是 dnSpy 最常用的编辑方式之一，也是本模块最大的缺口。
+文档里没有「不做」的决定，后端也已引用 `Microsoft.CodeAnalysis.CSharp.Scripting`，Roslyn 在 Linux 上可用，所以记为 ❌ 而不是 ⛔。这是 dnSpy 最常用的编辑方式之一，也是本模块最大的缺口。编辑器要用的语言服务（补全、Quick Info、签名帮助、诊断、智能缩进、选区）已在 4.15 做成后端服务与 `attachRoslynDocument` 绑定，移植这个编辑器时可以直接接上。
 
 #### 资源、Hex 修改、保存、撤销
 
@@ -800,7 +803,7 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 
 ### 4.14 C# 交互窗口（Scripting）
 
-完成度约 42%（✅ 5 / 🟡 11 / ❌ 9 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`BE/Scripting/CSharpScriptService.cs`，RPC `script/evaluate`、`script/reset`。
+完成度约 44%（✅ 6 / 🟡 10 / ❌ 9 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`BE/Scripting/CSharpScriptService.cs`，RPC `script/evaluate`、`script/reset`、`script/classify`。
 
 脚本在后端 Host 进程内执行；计划文档 §3.2 写的是「独立子进程隔离执行环境」，与实现不符。
 
@@ -818,7 +821,7 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 | 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | 🟡 | Enter 无条件提交 |
 | 历史 | `Text/Editor/ReplCommandInfoProvider.cs` | 🟡 | 只有 Alt+↑/↓，没有前缀匹配 |
 | Escape 清空输入、Ctrl+A 两段选择 | `ReplCommandTargetFilter.cs` | ❌ | |
-| 输入代码语义着色 | `ScriptControlVM.cs` | 🟡 | 只有词法着色 |
+| 输入代码语义着色 | `ScriptControlVM.cs` | ✅ | `script/classify` 按会话的下一次提交编译输入，用 `RoslynClassifier` 的映射给出 dnSpy 主题色，未绑定的名字为红色；回显保留输入时的颜色（见 4.15） |
 | Print / PrintLine / PrintError | `dnSpy.Contracts.DnSpy/Scripting/Roslyn/IScriptGlobals.cs` | 🟡 | 每次 Print 单独成行；缺部分重载 |
 | 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ❌ | |
 | 输出实时出现 | 同上 | 🟡 | 整次提交结束后一次返回 |
@@ -834,29 +837,35 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 | REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | 🟡 | 不生效 |
 | VB Interactive | `VisualBasic/*` | ⛔ | WPF 自己在 csproj 中排除了 VB 文件 |
 
-测试：后端 `CSharpScriptServiceTests.cs` 11 条；前端 `app-store.test.ts` 中约 10 条；e2e 1 个完整场景。
+测试：后端 `CSharpScriptServiceTests.cs` 16 条（含 5 条着色）；前端 `app-store.test.ts` 中约 13 条；e2e 2 个场景（提交与会话、语义着色）。
 
 ### 4.15 Roslyn 语言服务
 
-完成度约 88%（✅ 4 / 🟡 3 / ❌ 1）。WPF 范围：`dnSpy/Roslyn/dnSpy.Roslyn*`。跨平台版已通过 Monaco 编辑器的语言服务提供者接口集成 Roslyn 语言服务，后端使用 Microsoft.CodeAnalysis.CSharp.Workspaces 提供代码智能功能。
+完成度约 69%（✅ 3 / 🟡 5 / ❌ 0）。WPF 范围：`dnSpy/Roslyn/dnSpy.Roslyn*`。2026-10-16 按实现与测试复核；此前标的 95% 是一份没有接通的骨架（后端 `JsonRpcServer` 没有分发 `languageService/*`，签名帮助直接返回 null，前端 provider 挂在所有 csharp 模型上），已整体重写。
+
+WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier` 给输入做语义着色（`ScriptControlVM.OnCommandUpdatedAsync`，REPL 缓冲区不在 Roslyn Workspace 里，所以没有补全、悬停、签名帮助、智能缩进）；补全、Quick Info、签名帮助、智能缩进、结构导航、编译诊断只服务于「Edit Method / Class (C#)」编辑器。跨平台版按同样的划分移植：
+
+- **C# Interactive 的语义着色**已接到界面上：`script/classify` 把输入当作会话的下一次提交编译（引用、导入、前面提交声明的变量都在），用 WPF 同一套映射给出 dnSpy 主题色；绑定不上的名字按 WPF 的默认色画成红色；提交后的回显保留输入时的颜色（WPF 的 REPL 缓冲区也保留）。
+- **代码编辑器的其余能力**做到「后端服务 + 可复用的前端绑定」为止：`languageService/*` 每个文档一个 AdhocWorkspace（对应 `RoslynLanguageCompiler` 每次编辑会话一个 workspace），前端 `attachRoslynDocument(monaco, editor, { references, options })` 把一个 Monaco 编辑器接成 Roslyn 文档。它们的宿主 Edit Method (C#) 编辑器属于 4.12 的 Compiler 子模块，目前未移植，所以这些能力还没有界面入口。provider 只回答绑定过的模型，反编译文档和 C# Interactive 从不向后端发请求。
 
 实现文件：
-- 后端：`BE/WorkspaceManager.LanguageService.cs` - Roslyn 语言服务核心
-- 前端：`FE/roslyn-language-service.ts` - Monaco 语言服务提供者
-- 前端：`FE/monaco.ts` - 语言服务注册
-- 主进程：`MAIN/index.ts` - RPC 路由
-- 协议：`FE/shared/protocol.ts` - 语言服务接口定义
+
+- 后端：`BE/LanguageService/RoslynClassifier.cs`（`RoslynClassifier` 的移植）、`RoslynTextParts.cs`（`TextTagsHelper`、符号显示部件着色、`GlyphHelper` 的图标名）、`RoslynLanguageService.cs`（文档、补全、Quick Info、诊断、缩进、结构导航）、`SignatureHelpProvider.cs`、`LanguageServiceHost.cs`（MEF 宿主、引用程序集与 XML 文档）、`DocumentationText.cs`；`BE/Scripting/CSharpScriptService.cs` 的 `ClassifyAsync`
+- RPC：`script/classify`；`languageService/open`、`update`、`close`、`classify`、`completion`、`completionDescription`、`quickInfo`、`signatureHelp`、`diagnostics`、`indentation`、`selectionRanges`
+- 前端：`FE/roslyn-classification.ts`（分类结果画成 `tc-*` 内联装饰，供 REPL 与代码编辑器共用）、`FE/roslyn-language-service.ts`（各 provider 与 `attachRoslynDocument`，连同它要的 Monaco contrib：`FE/roslyn-editor-contribs.ts`；`FE/monaco.ts` 仍只导入 `editor.api`，之前那版改成整包导入后代码视图的右键光标定位回归了，已改回）、`FE/components/CSharpInteractive.tsx`、`FE/components/ColoredText.tsx` 的 `ClassifiedText`；`FE/styles.css` 里只在代码中出现的颜色（注释、字符串、局部变量、参数加粗、预处理、XML 文档注释等，取自 dark/light.dntheme）
 
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
-| 语义分类着色 | `dnSpy.Roslyn/Text/Classification/RoslynClassifier.cs` | 🟡 | Shiki TextMate 词法着色；不复用 dnSpy 主题色；语义着色需要 Monaco 的语义 token provider |
-| 补全 | `dnSpy.Roslyn/Intellisense/Completions/*` | ✅ | 已实现；通过 Roslyn Completion API 提供智能补全，支持类型、方法、属性、关键字等 |
-| Quick Info | `Intellisense/QuickInfo/*` | ✅ | 已实现；通过 Roslyn QuickInfo API 提供悬停提示，显示类型信息和文档注释 |
-| 签名帮助 | `Intellisense/SignatureHelp/*` | ✅ | 已实现；通过 Roslyn SignatureHelp API 提供方法签名提示，支持参数高亮 |
-| 智能缩进 | `dnSpy.Roslyn.EditorFeatures/SmartIndent/*` | 🟡 | Monaco 内置规则 |
-| 文本结构导航 | `dnSpy.Roslyn.EditorFeatures/TextStructureNavigation/*` | 🟡 | 不基于语法树 |
-| 编译诊断 | `dnSpy.Roslyn/Compiler/RoslynLanguageCompiler.cs` | ✅ | 已实现；实时显示编译错误和警告，支持语义诊断 |
-| 代码编辑器选项页 | `dnSpy.Roslyn/Compiler/CodeEditorOptionsDefinitions.cs` | ❌ | 有页面，但不存在 C# 代码编辑器 |
+| 语义分类着色 | `dnSpy.Roslyn/Text/Classification/RoslynClassifier.cs` | ✅ | 逐项移植：名字按绑定到的符号细分（静态类/密封类、扩展方法、字面量字段、脚本顶层变量当局部变量等），附加类分类与正则/JSON 内嵌分类跳过。C# Interactive 输入实时着色、回显保留颜色。WPF 的分类器不认识 record，会把 record 名画成默认色；这里按它自己的 `TextTagsHelper` 把 record 当类、record struct 当结构体 |
+| 补全 | `dnSpy.Roslyn/Intellisense/Completions/*` | 🟡 | Roslyn `CompletionService`：触发判断走 `ShouldTriggerCompletion`，插入文本取 Roslyn 的 InsertionText（`List<>` 插入 `List`），复杂项（override 等）预先算 `GetChangeAsync`，提交字符按规则增删，builder 模式不随键入提交，提示框里是带颜色的 `GetDescriptionAsync`，最近使用由 Monaco 的 `recentlyUsed` 承担。缺：WPF 建议框底部按种类过滤的按钮（Monaco 建议框没有过滤栏），图标是 Monaco 的而不是 dnSpy 的；缺宿主编辑器（4.12） |
+| Quick Info | `Intellisense/QuickInfo/*` | 🟡 | 按 WPF 的六个分节（说明、文档注释、用法、类型参数、匿名类型、异常）给出带颜色的文本，后端也给出符号图标名与「不是所有目标都可用」的警告标记；Monaco 的悬停框显示不了这两个图标。引用程序集优先取本机 SDK 的 Microsoft.NETCore.App.Ref，以便带上 XML 文档；缺宿主编辑器（4.12） |
+| 签名帮助 | `Intellisense/SignatureHelp/*` | 🟡 | 这一版 Roslyn 的 `SignatureHelpService` 不公开（WPF 靠 `dnSpy.Roslyn.Internal` 的 IVT 访问），改为在语义模型上实现同一组 provider：调用、对象创建（含 `new(`）、构造函数初始化器、主构造函数基类型、索引器、特性、泛型名；按参数个数排序重载，选中绑定到的那个、绑定不上时选第一个放得下的，命名参数与 params 定位到对应参数，签名与参数说明取 XML 文档。Monaco 的参数提示只能显示纯文本签名（文档部分有颜色）；缺宿主编辑器（4.12） |
+| 智能缩进 | `dnSpy.Roslyn.EditorFeatures/SmartIndent/*` | ✅ | Roslyn 的 `IIndentationService` 不公开，改用 Roslyn 格式化器：把新行的首个记号（空行时放一个占位标识符）就地格式化，取它被移到的列；按编辑器的缩进宽度、制表符宽度与是否用制表符计算。前端以 Enter 的 on-type formatting 应用。WPF 的 C# Interactive 同样没有 Roslyn 智能缩进（缓冲区没有 Document） |
+| 文本结构导航 | `dnSpy.Roslyn.EditorFeatures/TextStructureNavigation/*` | 🟡 | `GetSpanOfEnclosing` 链（记号 → 各层语法节点）作为 Monaco 的扩展/收缩选区（Shift+Alt+→/←）。`GetExtentOfWord`（双击选词、Ctrl+←/→ 按记号移动）在 Monaco 里没有对应的扩展点，仍是 Monaco 的单词规则 |
+| 编译诊断 | `dnSpy.Roslyn/Compiler/RoslynLanguageCompiler.cs` | ✅ | 与 `CompileAsync` 相同：Emit 到内存取诊断，失败时关掉 unsafe 再试一次；去掉 Hidden，带 `CSharpLanguageCompiler.GetHelpUri` 的帮助链接、行列与偏移。编译选项（优化、溢出检查、unsafe、预处理符号）取 WPF C# 编译器设置的默认值，可由打开请求覆盖。前端 `compile()` 把结果标成 Monaco 标记 |
+| 代码编辑器选项页 | `dnSpy.Roslyn/Compiler/CodeEditorOptionsDefinitions.cs` | 🟡 | 选项页在（`codeEditor`、`compiler` 两组设置），但还没有编辑器读它们 |
+
+测试：后端 `LanguageService/RoslynLanguageServiceTests.cs` 26 条（着色、补全与提示、Quick Info、四类签名帮助与重载选择、诊断与帮助链接、预处理符号、智能缩进、选区、引用与 XML 文档）、`CSharpScriptServiceTests.cs` 新增 5 条（REPL 着色、未绑定名字、前一提交的变量、着色不执行代码）；前端 `roslyn-classification.test.ts`、`roslyn-language-service.test.ts`（各 provider 的映射、只回答绑定过的模型、编辑先于请求送达）、`app-store.test.ts` 的回显颜色、`ColoredText.test.tsx`；e2e「colors the C# Interactive input the way the WPF window's Roslyn classifier does」。
 
 ### 4.16 扩展系统
 
@@ -935,16 +944,18 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 
 ## 6. 测试基线
 
-2026-10-14 应用壳复核后在本机重新跑过（后端未改动，沿用 359 通过的构建；e2e 前重建了前端）：
+2026-10-16 字符串引用窗口与 Roslyn 语言服务复核后在本机重新跑过（后端与前端都是真实构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 359 通过（本次未改动后端） |
+| 后端 `dotnet test` | 403 通过（应用壳复核时为 359） |
 | 前端 `pnpm typecheck` | 0 错误 |
-| 前端 vitest | 1041 通过（程序集树复核后为 964） |
-| e2e（Playwright Electron） | E2E_RESULT |
+| 前端 vitest | 1095 通过（应用壳复核后为 1041） |
+| e2e（Playwright Electron） | 91 通过、3 跳过、0 失败 |
 
-前端新增的用例：窗口状态（`window-state.test.ts`）、窗口标题（`app-info.test.ts`）、命令行选项解析（`command-line-options.test.ts`）、缩放档位（`zoom.test.ts`）、背景图片的尺寸与位置（`background-image.test.ts`）、消息框的「不再提示」（`message-box.test.ts`）、工具窗口菜单（`ToolWindowTabContextMenu.test.tsx`）、输出窗口的命令栏（`ToolWindows.test.tsx`）、关于对话框与它引用的两份文本是否与出处一致（`AboutDialog.test.tsx`、`about-resources.test.ts`）。CI 现在会跑前端单测（`.github/workflows/cross-platform.yml` 的 Test frontend 步骤）。
+复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.11、4.14、4.15 各节末尾。
+
+应用壳复核（2026-10-14）时前端新增的用例：窗口状态（`window-state.test.ts`）、窗口标题（`app-info.test.ts`）、命令行选项解析（`command-line-options.test.ts`）、缩放档位（`zoom.test.ts`）、背景图片的尺寸与位置（`background-image.test.ts`）、消息框的「不再提示」（`message-box.test.ts`）、工具窗口菜单（`ToolWindowTabContextMenu.test.tsx`）、输出窗口的命令栏（`ToolWindows.test.tsx`）、关于对话框与它引用的两份文本是否与出处一致（`AboutDialog.test.tsx`、`about-resources.test.ts`）。CI 现在会跑前端单测（`.github/workflows/cross-platform.yml` 的 Test frontend 步骤）。
 
 此前记录的「后端 336 通过」之后的一次「346 通过」是 `--no-build` 跑在旧 DLL 上得到的；真实构建下当时有 22 条失败，已逐条按 WPF 行为修正（1 处后端缺陷、21 条过期断言），见 `docs/assembly-tree-frontend-integration.md`。
 
@@ -958,7 +969,7 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 异常设置已实现（4.13）；表达式求值确实没有 |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 359 / 1041 / e2e 见第 6 节 |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 403 / 1095 / 91（见第 6 节） |
 | `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
 | `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 窗口尺寸与位置自 2026-10-14 起会恢复（4.1）；监视表达式仍未实现 |

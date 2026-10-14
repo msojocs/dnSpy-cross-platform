@@ -6,7 +6,9 @@ import type { ScriptOutputEntry } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
+import { attachClassifier, type Classifier } from '../roslyn-classification'
 import { useAppOptions } from './app-options'
+import { ClassifiedText } from './ColoredText'
 
 /**
  * The C# Interactive window: a log of everything submissions have printed, and a Monaco box that
@@ -29,6 +31,9 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | undefined>(undefined)
   const logRef = useRef<HTMLDivElement | null>(null)
   const runRef = useRef<() => void>(() => {})
+  const classifierRef = useRef<Classifier | undefined>(undefined)
+
+  useEffect(() => () => classifierRef.current?.dispose(), [])
 
   useEffect(() => {
     if (!useAppStore.getState().scriptStarted)
@@ -40,8 +45,9 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
     if (!editor) return
     const code = editor.getValue()
     if (!code.trim() || useAppStore.getState().scriptRunning) return
+    const colors = classifierRef.current?.current()
     editor.setValue('')
-    void evaluateScript(code)
+    void evaluateScript(code, colors)
   }
 
   // The history cursor lives here rather than in the store: it is a property of this input box, not
@@ -94,12 +100,14 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
       </div>
       <div className="script-log output-pane" role="log" ref={logRef}>
         {entries.map((entry, index) => (
-          <div key={`${index}:${entry.text}`} className={`script-entry script-${entry.kind}`}>
-            {entry.kind === 'echo' ? `> ${entry.text}` : entry.text}
+          <div key={`${index}:${entry.text}`} className={`script-entry script-${entry.kind}${entry.colors ? ' code-colors' : ''}`}>
+            {entry.kind === 'echo'
+              ? <>{'> '}{entry.colors ? <ClassifiedText text={entry.text} spans={entry.colors} /> : entry.text}</>
+              : entry.text}
           </div>
         ))}
       </div>
-      <div className="script-input">
+      <div className="script-input code-colors">
         <Editor
           path="csharp-interactive.csx"
           language="csharp"
@@ -114,6 +122,10 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
             editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run)
             editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => recallHistory(-1))
             editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => recallHistory(1))
+            // The input is colored the way the WPF window's RoslynClassifier colors it while it is typed:
+            // compiled as the session's next submission, in dnSpy's theme colors.
+            classifierRef.current?.dispose()
+            classifierRef.current = attachClassifier(monaco, editor, (code) => window.dnSpy.classifyScript(code))
           }}
           options={{
             readOnly: running,

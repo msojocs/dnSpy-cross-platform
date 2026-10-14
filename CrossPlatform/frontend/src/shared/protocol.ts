@@ -1166,13 +1166,63 @@ export interface ScriptEvaluateResponse {
 
 export type UiLocale = 'en' | 'zh-CN'
 
-/** What the process was started with — dnSpy's AppCommandLineArgs, the part that is the tree's: the files named
- * on the command line, the member `--select` names in them, and whether the session from the last run should be
- * left alone (`--no-load-files`). */
-export interface StartupOptions {
-  initialPaths: string[]
-  noLoadFiles: boolean
+/** dnSpy's AppCommandLineArgs, parsed the way it parses them. A second instance forwards its own to the first. */
+export interface AppCommandLine {
+  /** The files to open, made absolute against the directory the process was started in. */
+  paths: string[]
+  /** `--settings-file`: where the settings live instead of the profile directory. */
+  settingsFile?: string
+  /** False for `--multiple`, which never hands its arguments to a running instance. */
+  singleInstance: boolean
+  /** False for `--dont-activate`: a forwarded command line leaves the window where it is. */
+  activate: boolean
+  /** `-l`: the decompiler language, by name ("C#", "IL", "Visual Basic", "IL with C#"). */
+  language?: string
+  /** `--culture`: the user interface language, as a culture name such as `zh-CN`. */
+  culture?: string
+  /** `--select`: a token or an XML documentation id to follow in the files once they are open. */
   selectMember?: string
+  /** `--new-tab`: open a new, empty tab. */
+  newTab: boolean
+  searchText?: string
+  searchFor?: string
+  searchIn?: string
+  /** `--theme`: a theme's name or GUID. */
+  theme?: string
+  /** `--no-load-files` (dnSpy's `--dont-load-files`): leave the last session's files where they are. */
+  noLoadFiles: boolean
+  /** `--full-screen` is true and `--not-full-screen` false; neither leaves the window as it was. */
+  fullScreen?: boolean
+  /** Comma-separated tool window GUIDs, each optionally followed by `!` and a location. */
+  showToolWindow?: string
+  hideToolWindow?: string
+  showStartupTime: boolean
+  debugAttachPid?: number
+  debugAttachProcess?: string
+  extensionDirectory?: string
+  /** Every other option, by name: `--name` or `--name:value`. dnSpy's `--settings[:guid]` is one of these. */
+  userArgs: Record<string, string>
+}
+
+/** What the process was started with, and the window title it was given. */
+export interface StartupOptions {
+  commandLine: AppCommandLine
+  /** dnSpy's "dnSpy <version> (64-bit, .NET, Administrator)". */
+  title: string
+  version: string
+  /** When the main process started (epoch milliseconds), which `--show-startup-time` measures from. */
+  processStartTime: number
+}
+
+/**
+ * The options the main process keeps in a file of its own, because it has to know them before there is a
+ * renderer to ask. The option store in the renderer is the one that is written; it hands these down so the
+ * file stays a copy of what the user last chose.
+ */
+export interface AppMainSettings {
+  /** dnSpy's AllowMoreThanOneInstance: the single instance lock is not taken when it is on, so a second
+   * dnSpy starts beside this one instead of handing its command line over. Read at startup. */
+  allowMoreThanOneInstance: boolean
 }
 
 export interface DnSpyApi {
@@ -1383,6 +1433,14 @@ export interface DnSpyApi {
   toggleFullScreen(): Promise<boolean>
   isFullScreen(): Promise<boolean>
   quit(): Promise<void>
+  /** dnSpy's MsgBox: a message to read, with nothing to answer. */
+  showMessage(message: string): Promise<void>
+  /** Reports whether there are unsaved edits, which the main process holds the close back over. */
+  setUnsavedChanges(dirty: boolean): Promise<void>
+  /** Answers the close the main process asked about: whether the window may go. */
+  respondToClose(approved: boolean): Promise<void>
+  /** Fired when the window is closing and there are unsaved edits to ask about. Answer with `respondToClose`. */
+  onCloseRequested(callback: () => void): () => void
   /** dnSpy's Constants.IsRunningAsAdministrator: on Linux, uid 0. Hides "Restart as Administrator". */
   isRunningAsAdministrator(): Promise<boolean>
   /** Closes the app and starts an elevated copy in its place, the way dnSpy's runas restart does. */
@@ -1390,10 +1448,15 @@ export interface DnSpyApi {
   getBackendStatus(): Promise<BackendStatus>
   getProcessId(): Promise<number>
   setLocale(locale: UiLocale): Promise<void>
+  /** Hands the main process the option values it keeps in a file of its own, for the next start to read. */
+  updateMainSettings(settings: AppMainSettings): Promise<void>
   onWindowMaximizedChange(callback: (isMaximized: boolean) => void): () => void
   onFullScreenChange(callback: (isFullScreen: boolean) => void): () => void
   onBackendStatus(callback: (status: BackendStatus) => void): () => void
   onDebugEvent(callback: (event: DebugEvent) => void): () => void
+  /** The command line a second process handed over — dnSpy's App.SwitchToOtherInstance — for this instance
+   * to open the files in and follow the options of. */
+  onCommandLine(callback: (commandLine: AppCommandLine) => void): () => void
   /** What an analyzer search found so far, sent while it still runs. */
   onAnalyzeProgress(callback: (progress: AnalyzeProgress) => void): () => void
   /** What a search window search found so far, sent while it still runs. */

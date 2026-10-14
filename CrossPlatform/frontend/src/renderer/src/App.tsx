@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { AlertCircle, FolderOpen, X } from 'lucide-react'
-import type { DecompilerLanguage, TextSpan, TreeNode } from '../../shared/protocol'
+import type { AppCommandLine, DecompilerLanguage, SearchLocation, SearchType, TextSpan, TreeNode } from '../../shared/protocol'
 import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
-import { loadAppOptions } from './components/app-options'
+import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
+import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
 import { AssemblyExplorer } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
@@ -14,7 +15,7 @@ import { SearchPane, type SearchPaneCommands } from './components/SearchPane'
 import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPane'
 import { isAnalyzableNode } from './components/CodeEditorContextMenu'
 import { useAnalyzerStore } from './analyzer-store'
-import { useSearchStore } from './search-store'
+import { useSearchStore, updateSearchSettings } from './search-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
@@ -225,9 +226,27 @@ const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndo
 const EDITABLE_KINDS = new Set<string>(['type', 'method', 'field', 'property', 'event'])
 const isEditableKind = (kind: string): kind is CreatedKind => EDITABLE_KINDS.has(kind)
 
+/**
+ * The theme the option store holds. dnSpy keeps the theme in its settings file with everything else, which is
+ * this port's option store; a theme an older build left in a key of its own is moved into the options and that
+ * key dropped, so the View menu and the Environment › General page stop disagreeing about it.
+ */
 const loadTheme = (): ThemeName => {
-  const saved = localStorage.getItem('dnspy.theme')
-  return saved === 'light' || saved === 'dark' || saved === 'hc' || saved === 'blue' ? saved : 'dark'
+  const legacy = localStorage.getItem('dnspy.theme')
+  if (legacy === 'light' || legacy === 'dark' || legacy === 'hc' || legacy === 'blue') {
+    localStorage.removeItem('dnspy.theme')
+    saveThemeOption(legacy)
+    return legacy
+  }
+  return loadAppOptions().environmentGeneral.theme
+}
+
+/** Writes the theme where the rest of the options live, leaving the others as they are. */
+const saveThemeOption = (theme: ThemeName): void => {
+  const options = loadAppOptions()
+  if (options.environmentGeneral.theme === theme)
+    return
+  saveAppOptions({ ...options, environmentGeneral: { ...options.environmentGeneral, theme } })
 }
 
 export const App = (): React.JSX.Element => {
@@ -240,6 +259,9 @@ export const App = (): React.JSX.Element => {
   const [fullScreen, setFullScreen] = useState<boolean>(false)
   // dnSpy reads this once at startup and never again; elevation can't change under a running app.
   const [elevated, setElevated] = useState<boolean>(false)
+  // The saved options, subscribed to so a save in the Options dialog reaches the parts of the shell that
+  // read them — the theme, the main process's few settings, and the tool windows' widths among others.
+  const options = useAppOptions()
   const [renameNode, setRenameNode] = useState<TreeNode>()
   const [renameNamespaceNode, setRenameNamespaceNode] = useState<TreeNode>()
   const [editMethodNode, setEditMethodNode] = useState<TreeNode>()
@@ -474,8 +496,22 @@ export const App = (): React.JSX.Element => {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    localStorage.setItem('dnspy.theme', theme)
+    saveThemeOption(theme)
   }, [theme])
+
+  // The theme the Environment › General page saves is the same one the View menu switches, so a save there
+  // has to reach the state here — otherwise the two would show different themes until the next start. The
+  // equality check is what keeps the write above from coming back round as a change of its own.
+  useEffect(() => {
+    if (options.environmentGeneral.theme !== theme)
+      setTheme(options.environmentGeneral.theme)
+  }, [options.environmentGeneral.theme, theme])
+
+  // dnSpy's AppSettings.AllowMoreThanOneInstance is read before there is a window to ask, so the options
+  // store — which is where the user sets it — hands it to the main process, which keeps it for the next start.
+  useEffect(() => {
+    void window.dnSpy.updateMainSettings({ allowMoreThanOneInstance: options.environmentGeneral.allowMoreThanOneInstance })
+  }, [options.environmentGeneral.allowMoreThanOneInstance])
 
   useEffect(() => {
     let mounted = true
@@ -529,19 +565,94 @@ export const App = (): React.JSX.Element => {
     forceLayoutUpdate((value) => value + 1)
   }, [locale, model, t])
 
-  /** Brings a docked tab forward, adding it back when it has been closed. The explorer returns to a column
+  /** The tab set already docked at an edge of the editor's column — dnSpy's dock for that edge — or undefined
+   * when nothing is there yet. The explorer's column is the one on the left; the right has to be made. */
+  const dockAtEdge = (edge: 'left' | 'right'): TabSetNode | undefined => {
+    const editorColumn = model.getNodeById(EDITOR_COLUMN_ID)
+    const parent = editorColumn?.getParent()
+    if (!editorColumn || !(parent instanceof RowNode))
+      return undefined
+    const index = parent.getChildren().indexOf(editorColumn)
+    const sibling = parent.getChildren()[edge === 'left' ? index - 1 : index + 1]
+    return sibling instanceof TabSetNode ? sibling : undefined
+  }
+
+  /**
+   * dnSpy's IDsToolWindowService.Move: puts a tool window in the dock at the edge the location names. This
+   * port's docks are the explorer's column on the left, the tool windows' tab set under the editor, and
+   * whichever further docks the moves themselves have made — a window moved to an edge that has no dock is
+   * put in one made beside the editor's column. dnSpy's two "default" locations are where it puts a window
+   * that has never been given one: the bottom dock, or the vertical dock down the left.
+   */
+  const moveToolWindow = (tab: TabNode, location: ToolWindowLocation): void => {
+    const editorColumn = model.getNodeById(EDITOR_COLUMN_ID)
+    if (location === 'left' || location === 'default-vertical') {
+      const dock = dockAtEdge('left')
+      if (dock)
+        model.doAction(Actions.moveNode(tab.getId(), dock.getId(), DockLocation.CENTER, -1, true))
+      else if (editorColumn)
+        model.doAction(Actions.moveNode(tab.getId(), editorColumn.getId(), DockLocation.LEFT, -1, true))
+      return
+    }
+    if (location === 'right') {
+      const dock = dockAtEdge('right')
+      if (dock)
+        model.doAction(Actions.moveNode(tab.getId(), dock.getId(), DockLocation.CENTER, -1, true))
+      else if (editorColumn)
+        model.doAction(Actions.moveNode(tab.getId(), editorColumn.getId(), DockLocation.RIGHT, -1, true))
+      return
+    }
+    if (location === 'top') {
+      const documents = model.getNodeById(DOCUMENT_TABSET_ID)
+      if (documents)
+        model.doAction(Actions.moveNode(tab.getId(), documents.getId(), DockLocation.TOP, -1, true))
+      return
+    }
+    const toolWindows = model.getNodeById(TOOL_WINDOW_TABSET_ID)
+    if (toolWindows && tab.getParent() !== toolWindows)
+      model.doAction(Actions.moveNode(tab.getId(), TOOL_WINDOW_TABSET_ID, DockLocation.CENTER, -1, true))
+  }
+
+  /** The tab set docked at an edge — dnSpy's dock for that location — or undefined when nothing is there yet.
+   * The top dock is made by the first move to it, so until then there is nothing between the window and the
+   * editor's own tabs to count as one. */
+  const dockAt = (location: ToolWindowLocation): TabSetNode | undefined => {
+    if (location === 'left' || location === 'default-vertical')
+      return dockAtEdge('left')
+    if (location === 'right')
+      return dockAtEdge('right')
+    if (location === 'top') {
+      const first = model.getNodeById(EDITOR_COLUMN_ID)?.getChildren()[0]
+      return first instanceof TabSetNode && first.getId() !== DOCUMENT_TABSET_ID ? first : undefined
+    }
+    const toolWindows = model.getNodeById(TOOL_WINDOW_TABSET_ID)
+    return toolWindows instanceof TabSetNode ? toolWindows : undefined
+  }
+
+  /** dnSpy's IDsToolWindowService.CanMove: a window can be moved to an edge unless its dock is already that
+   * one — which is why a window in the leftmost dock has the Move Left command greyed out. */
+  const canMoveToolWindow = (tab: TabNode, location: ToolWindowLocation): boolean => {
+    const parent = tab.getParent()
+    return parent instanceof TabSetNode && parent !== dockAt(location)
+  }
+
+  /**
+   * Brings a docked tab forward, adding it back when it has been closed. The explorer returns to a column
    * of its own on the left, the height of everything beside it; every other tool window lives in the tab
-   * set under the editor. */
-  const showToolWindow = (tabId: string): void => {
+   * set under the editor, unless a command line names another edge for it.
+   */
+  const showToolWindow = (tabId: string, location?: ToolWindowLocation): void => {
     const tab = model.getNodeById(tabId)
     if (tab instanceof TabNode) {
       model.doAction(Actions.selectTab(tabId))
+      if (location)
+        moveToolWindow(tab, location)
       forceLayoutUpdate((value) => value + 1)
       return
     }
     const spec = restorableTabs[tabId]
     if (!spec) return
-    if (tabId === 'explorer') {
+    if (tabId === 'explorer' || location === 'default-vertical') {
       // Docking to the left of the editor's column rather than of its tab set: a tab set would put the
       // explorer beside the editor instead of beside both the editor and the tool windows.
       const column = model.getNodeById(EDITOR_COLUMN_ID) ?? model.getNodeById(DOCUMENT_TABSET_ID)
@@ -573,6 +684,38 @@ export const App = (): React.JSX.Element => {
       component: spec.component,
       enableClose: true,
     }, TOOL_WINDOW_TABSET_ID, DockLocation.CENTER, -1, true))
+    // A command line may name the edge the window is to be docked at; a window that has never been shown
+    // before is added where the tool windows live and moved from there, so the move is the same one the
+    // Move commands make.
+    const added = model.getNodeById(tabId)
+    if (added instanceof TabNode && location)
+      moveToolWindow(added, location)
+    forceLayoutUpdate((value) => value + 1)
+  }
+
+  // dnSpy's Search Assemblies shows the search window and hands its text box the focus.
+  const showSearch = (): void => {
+    showToolWindow('search')
+    useSearchStore.getState().requestFocus()
+  }
+
+  // dnSpy's Open Empty Tab (Ctrl+T is taken; the View menu and `--new-tab` are what reach it): a tab with
+  // nothing in it, which is where the next document goes rather than beside the one showing now.
+  const openEmptyTab = (): void => {
+    const targetTabSet = getTargetDocumentTabSet(model)
+    if (!targetTabSet)
+      return
+    model.doAction(Actions.addNode({
+      type: 'tab',
+      id: `empty:${Date.now()}`,
+      name: t('Start'),
+      component: 'start',
+      enableClose: true,
+    }, targetTabSet.getId(), DockLocation.CENTER, -1, true))
+    // A live Start tab shows the same nothing and is what the layout expects to find; one left open beside
+    // the empty tab would be two tabs saying the same thing.
+    if (model.getNodeById('start'))
+      model.doAction(Actions.deleteTab('start'))
     forceLayoutUpdate((value) => value + 1)
   }
 
@@ -902,18 +1045,35 @@ export const App = (): React.JSX.Element => {
     forceLayoutUpdate((value) => value + 1)
   }, [model, workspaceId, t])
 
-  useEffect(() => {
-    const beforeUnload = (event: BeforeUnloadEvent): void => {
-      if (dirty) {
-        event.preventDefault()
-        event.returnValue = ''
+  // dnSpy's DocumentSaver.AskUserToSaveIfModified, put to the window as it closes: unsaved files are offered
+  // to be saved first, "No" lets them go unsaved, and "Cancel" — or a save that was itself called off —
+  // keeps the window open. The Open List is written last, as dnSpy writes the files that are open on exit.
+  const closeRequested = async (): Promise<void> => {
+    const state = useAppStore.getState()
+    const modified = state.workspaceId ? await getModifiedModules() : []
+    if (modified.length > 0) {
+      const answer = await window.dnSpy.askSaveModified(modified.length)
+      if (answer === 'cancel' || (answer === 'save' && !await state.saveModules(modified))) {
+        await window.dnSpy.respondToClose(false)
         return
       }
-      // dnSpy writes the open files into the selected Open List list as the window closes.
-      rememberCurrentDocuments(useAppStore.getState().modules.map((module) => module.path))
     }
-    window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
+    rememberCurrentDocuments(useAppStore.getState().modules.map((module) => module.path))
+    await window.dnSpy.respondToClose(true)
+  }
+
+  // The main process holds the close back while the window has unsaved work — it cannot see what that work
+  // is, so it asks here — and calls this off entirely when there was none to ask about.
+  useEffect(() => {
+    return window.dnSpy.onCloseRequested(() => {
+      void shellCallbacksRef.current.closeRequested()
+    })
+  }, [])
+
+  useEffect(() => {
+    // dnSpy saves what is open as the window closes, and the main process needs to know whether there is
+    // anything to ask about before it lets the close through.
+    void window.dnSpy.setUnsavedChanges(dirty)
   }, [dirty])
 
   // Answers with the id of the tab the document ended up selected in — the clone a new tab is, or the one
@@ -1161,6 +1321,60 @@ export const App = (): React.JSX.Element => {
       await addDocumentTab(target)
   }
 
+  /**
+   * dnSpy's App.HandleAppArgs: what a command line asks of a window that is already up. It is used for the
+   * line this process was started with and for one a second process handed over, which is why it is handed a
+   * parsed command line rather than reading this one's. The order is dnSpy's: the language and the window
+   * state first, then the new tab, then the files — whose member `--select` names can only be followed once
+   * they are in the tree — and the tool windows and the search window last.
+   */
+  const applyCommandLine = async (commandLine: AppCommandLine): Promise<void> => {
+    const theme = resolveThemeName(commandLine.theme)
+    if (theme)
+      setTheme(theme)
+    if (commandLine.culture === 'en' || commandLine.culture === 'zh-CN')
+      setLanguage(commandLine.culture)
+    const language = resolveDecompilerLanguage(commandLine.language)
+    if (language)
+      useAppStore.getState().setDefaultLanguage(language)
+    if (commandLine.fullScreen !== undefined)
+      await window.dnSpy.setFullScreen(commandLine.fullScreen)
+    if (commandLine.newTab)
+      openEmptyTab()
+    // dnSpy's AppCommandLineArgsHandler: the windows to close first, then the ones to show, each of which
+    // may name the edge it is to be docked at.
+    for (const info of parseToolWindowInfos(commandLine.hideToolWindow)) {
+      const id = toolWindowIdForGuid(info.guid)
+      if (id && model.getNodeById(id))
+        model.doAction(Actions.deleteTab(id))
+    }
+    for (const info of parseToolWindowInfos(commandLine.showToolWindow)) {
+      const id = toolWindowIdForGuid(info.guid)
+      if (id)
+        showToolWindow(id, info.location)
+    }
+    if (commandLine.paths.length > 0) {
+      await openPaths(commandLine.paths, { remember: true, select: false })
+      await shellCallbacksRef.current.followCommandLine(commandLine.paths, commandLine.selectMember)
+    }
+    // dnSpy's search window: whichever of the three a command line gives is put in its box, and the window
+    // is brought forward for any one of them. The query is searched for at once rather than after the typing
+    // delay — nothing is going to type another letter.
+    const searchType = resolveSearchType(commandLine.searchFor)
+    const searchLocation = resolveSearchLocation(commandLine.searchIn)
+    if (searchType || searchLocation || commandLine.searchText !== undefined) {
+      const settings: { searchType?: SearchType; location?: SearchLocation; query?: string } = {}
+      if (searchType) settings.searchType = searchType
+      if (searchLocation) settings.location = searchLocation
+      if (searchType || searchLocation)
+        updateSearchSettings(settings)
+      if (commandLine.searchText !== undefined)
+        useSearchStore.getState().setQuery(commandLine.searchText)
+      showSearch()
+    }
+    forceLayoutUpdate((value) => value + 1)
+  }
+
   const openNodeId = async (nodeId: string): Promise<void> => {
     if (!workspaceId) return
     try {
@@ -1220,8 +1434,17 @@ export const App = (): React.JSX.Element => {
 
   // The store cannot open tabs or tool windows itself, so it calls back into the shell. Handlers are
   // read through a ref because both close over the current workspace and layout.
-  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine })
-  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine }
+  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested })
+  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested }
+
+  // dnSpy's App.SwitchToOtherInstance, seen from the window that keeps the single instance lock: the second
+  // process's command line arrives here the way this one's did, and is carried out on the window that is up.
+  useEffect(() => {
+    return window.dnSpy.onCommandLine((commandLine) => {
+      void shellCallbacksRef.current.applyCommandLine(commandLine)
+    })
+  }, [])
+
   useEffect(() => {
     setOpenNodeById((nodeId) => shellCallbacksRef.current.openBookmarkTarget(nodeId))
     setOpenNodeInNewTabById((nodeId) => shellCallbacksRef.current.openNodeInNewTab(nodeId))
@@ -1261,7 +1484,7 @@ export const App = (): React.JSX.Element => {
     startupHandled.current = true
     void (async () => {
       const options = await window.dnSpy.getStartupOptions()
-      const session = options.noLoadFiles ? undefined : loadSession()
+      const session = options.commandLine.noLoadFiles ? undefined : loadSession()
       if (session && session.paths.length > 0) {
         await shellCallbacksRef.current.restoreSession(session)
       } else {
@@ -1272,11 +1495,15 @@ export const App = (): React.JSX.Element => {
         forceLayoutUpdate((value) => value + 1)
       }
       enableSessionPersistence()
-      // dnSpy's command line: the files go on the Recent Files list, and what is shown of them is the member
-      // --select names, or else the first assembly among them.
-      if (options.initialPaths.length > 0) {
-        await openPaths(options.initialPaths, { remember: true, select: false })
-        await shellCallbacksRef.current.followCommandLine(options.initialPaths, options.selectMember)
+      // dnSpy's command line: the theme, the language and the window state it names, the files it lists —
+      // which go on the Recent Files list, with the member `--select` names shown of them — and the tool
+      // windows and search window it asks for.
+      await shellCallbacksRef.current.applyCommandLine(options.commandLine)
+      // dnSpy's ShowElapsedTime: what the app took to load, in a box, since `--show-startup-time` asks for it.
+      // Its ticks are a Stopwatch's — ten million to the second — so the milliseconds are what they count off.
+      if (options.commandLine.showStartupTime) {
+        const elapsed = Date.now() - options.processStartTime
+        await window.dnSpy.showMessage(`${elapsed} ms, ${elapsed * 10_000} ticks`)
       }
     })()
   }, [backendStatus.state, openPaths])
@@ -1295,12 +1522,6 @@ export const App = (): React.JSX.Element => {
     const node = navigation.items[index]
     setNavigation((current) => ({ ...current, index }))
     void addDocumentTab(node, false)
-  }
-
-  // dnSpy's Search Assemblies shows the search window and hands its text box the focus.
-  const showSearch = (): void => {
-    showToolWindow('search')
-    useSearchStore.getState().requestFocus()
   }
 
   // dnSpy shows its analyzer before it adds the member, so the row lands in a window that is already there.

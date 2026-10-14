@@ -112,11 +112,20 @@ const api: DnSpyApi = {
   toggleFullScreen: () => ipcRenderer.invoke('window:toggleFullScreen'),
   isFullScreen: () => ipcRenderer.invoke('window:isFullScreen'),
   quit: () => ipcRenderer.invoke('app:quit'),
+  showMessage: (message) => ipcRenderer.invoke('app:showMessage', message),
+  setUnsavedChanges: (dirty) => ipcRenderer.invoke('app:setUnsavedChanges', dirty),
+  respondToClose: (approved) => ipcRenderer.invoke('app:closeResponse', approved),
+  onCloseRequested: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('app:closeRequested', listener)
+    return () => ipcRenderer.removeListener('app:closeRequested', listener)
+  },
   isRunningAsAdministrator: () => ipcRenderer.invoke('app:isRunningAsAdministrator'),
   restartAsAdministrator: () => ipcRenderer.invoke('app:restartAsAdministrator'),
   getBackendStatus: () => ipcRenderer.invoke('backend:status:get'),
   getProcessId: () => ipcRenderer.invoke('app:processId'),
   setLocale: (locale: UiLocale) => ipcRenderer.invoke('app:setLocale', locale),
+  updateMainSettings: (settings) => ipcRenderer.invoke('app:mainSettings', settings),
   onWindowMaximizedChange: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, isMaximized: boolean): void => callback(isMaximized)
     ipcRenderer.on('window:maximized-changed', listener)
@@ -131,6 +140,11 @@ const api: DnSpyApi = {
     const listener = (_event: Electron.IpcRendererEvent, status: BackendStatus): void => callback(status)
     ipcRenderer.on('backend:status', listener)
     return () => ipcRenderer.removeListener('backend:status', listener)
+  },
+  onCommandLine: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, commandLine: Parameters<typeof callback>[0]): void => callback(commandLine)
+    ipcRenderer.on('app:commandLine', listener)
+    return () => ipcRenderer.removeListener('app:commandLine', listener)
   },
   onDebugEvent: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, debugEvent: Parameters<typeof callback>[0]): void => callback(debugEvent)

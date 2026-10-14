@@ -1,14 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell, type WebContents } from 'electron'
 import { spawn } from 'node:child_process'
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { BackendClient } from './backend-client'
+import { formatAppTitle } from './app-info'
+import { loadAppMainSettings, saveAppMainSettings } from './app-settings'
 import { parseCommandLine, userArguments } from './command-line'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
 import { resourceFileName, resourceFileSegments } from './resource-files'
-import type { AnalyzeChildrenRequest, AnalyzerNode, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, UiLocale } from '../shared/protocol'
+import { captureWindowState, loadWindowState, resolveWindowPlacement, saveWindowState } from './window-state'
+import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
@@ -26,9 +29,30 @@ let restartInFlight = false
 // True only for the close a successful restart asks for. The renderer's unsaved-edits guard must not
 // stand in its way — that question was already answered before the request was made.
 let closingForRestart = false
+// Whether the renderer holds edits that have not been saved, which it reports as they change. The close is
+// only held back while it does, so a window with nothing to lose still closes without a round trip.
+let rendererDirty = false
+// True once the renderer has answered that the window may close. The close a restart asks for, and the
+// second one the answer itself makes, both need it — the question is put exactly once.
+let closeApproved = false
 // dnSpy's command line: the files to open, the member `--select` names in them, and `--no-load-files` (dnSpy spells
 // it `--dont-load-files`; both are accepted so a script written against either works).
 const commandLine = parseCommandLine(userArguments(process.argv, process.defaultApp === true), process.cwd())
+/** When this process started, which is what `--show-startup-time` measures the app's loading against. */
+const processStartTime = Date.now()
+
+// dnSpy keeps its window state and the few settings the process itself needs in the user's dnSpy settings file.
+// This port keeps them beside the dialog's remembered directories, in the directory Electron gives the app.
+const windowStateFile = path.join(app.getPath('userData'), 'window-state.json')
+const appSettingsFile = path.join(app.getPath('userData'), 'app-settings.json')
+const appSettings = loadAppMainSettings(appSettingsFile)
+
+// dnSpy starts one instance and hands every later command line to the one already running
+// (App.SwitchToOtherInstance) — which is what a desktop's "Open With" relies on — unless the command line asks
+// for `--multiple` or the "allow more than one instance" option is on. The lock has to be taken before anything
+// is created: the copy that fails to take it hands its arguments over and goes away without a window.
+const keepsOneInstance = commandLine.singleInstance && !appSettings.allowMoreThanOneInstance
+const isPrimaryInstance = !keepsOneInstance || app.requestSingleInstanceLock()
 
 const nativeMessages = {
   'zh-CN': {
@@ -51,6 +75,8 @@ const nativeMessages = {
     executables: '可执行文件',
     selectWorkingDirectory: '选择工作目录',
     selectDirectory: '选择目录',
+    administrator: '管理员',
+    ok: '确定',
     restartFailed: '无法以管理员身份重启',
     restartNoResponse: '以管理员身份启动的窗口始终没有出现',
     askSaveFile: '有一个文件尚未被保存，是否要在继续之前保存？',
@@ -79,6 +105,8 @@ const nativeMessages = {
     executables: 'Executables',
     selectWorkingDirectory: 'Select Working Directory',
     selectDirectory: 'Select Directory',
+    administrator: 'Administrator',
+    ok: 'OK',
     restartFailed: 'Could not restart with elevated rights',
     restartNoResponse: 'The window started with elevated rights never appeared',
     askSaveFile: 'The file hasn\'t been saved yet. Do you want to save it before continuing?',
@@ -94,6 +122,15 @@ const nativeText = () => nativeMessages[uiLocale]
 // dnSpy's Constants.IsRunningAsAdministrator (a WindowsPrincipal role check) in Linux terms: the
 // process is elevated when it owns uid 0.
 const isRunningAsAdministrator = (): boolean => process.getuid?.() === 0
+
+/** dnSpy's AppWindow.GetDefaultTitle. The version is the packaged app's; the infos are the ones dnSpy's
+ * own main window carries, minus "Debug Build", which only a debug build of this port would have. */
+const appTitle = (): string => formatAppTitle('dnSpy', app.getVersion(), {
+  bitness: process.arch.includes('64') ? '64-bit' : '32-bit',
+  runtime: '.NET',
+  isAdministrator: isRunningAsAdministrator(),
+  administratorText: nativeText().administrator,
+})
 
 // Set on the elevated copy so it can report back that it came up; see relaunchElevated.
 const elevatedMarkerVariable = 'DNSPY_ELEVATED_MARKER'
@@ -251,12 +288,17 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
 }
 
 const createWindow = (): void => {
-  mainWindow = new BrowserWindow({
-    title: 'dnSpy',
-    width: 1000,
-    height: 600,
-    minWidth: 640,
-    minHeight: 400,
+  // dnSpy's SavedWindowStateRestorer: the size, position and state the window was left in, as long as what
+  // was saved still lands on a display. A window left full screen comes back full screen, not maximized.
+  const placement = resolveWindowPlacement(loadWindowState(windowStateFile), screen.getAllDisplays().map((display) => display.bounds))
+  const window = new BrowserWindow({
+    title: appTitle(),
+    x: placement.x,
+    y: placement.y,
+    width: placement.width,
+    height: placement.height,
+    minWidth: 250,
+    minHeight: 200,
     show: false,
     frame: false,
     backgroundColor: '#1e1e1e',
@@ -267,6 +309,23 @@ const createWindow = (): void => {
       sandbox: true,
       webSecurity: true,
     },
+  })
+  mainWindow = window
+  if (placement.isMaximized)
+    window.maximize()
+  if (placement.isFullScreen)
+    window.setFullScreen(true)
+  // dnSpy's DocumentSaver.AskUserToSaveIfModified runs while the main window closes: unsaved work is offered
+  // to be saved first, and "Cancel" keeps the window open. Whether there is any is the renderer's to know, so
+  // the close is held back and the question put to it; the window state is written only once it lets go.
+  // Restarting has already put that question — the renderer's guard must not stand in the way of it.
+  window.on('close', (event) => {
+    if (!closingForRestart && !closeApproved && rendererDirty) {
+      event.preventDefault()
+      window.webContents.send('app:closeRequested')
+      return
+    }
+    saveWindowState(windowStateFile, captureWindowState(window))
   })
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -298,13 +357,8 @@ const createWindow = (): void => {
     mainWindow = undefined
     restartInFlight = false
     closingForRestart = false
-  })
-  // Restarting closes the window like any other quit, so a document still unsaved would normally
-  // hold it open a second time over. That question was already put to the user once, before the
-  // restart was asked for, so this one close is let through.
-  mainWindow.webContents.on('will-prevent-unload', (event) => {
-    if (closingForRestart)
-      event.preventDefault()
+    closeApproved = false
+    rendererDirty = false
   })
   const sendMaximizedState = (): void => {
     mainWindow?.webContents.send('window:maximized-changed', mainWindow.isMaximized())
@@ -742,7 +796,7 @@ const registerIpc = (): void => {
   })
   ipcMain.handle('window:isFullScreen', (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false)
   ipcMain.handle('backend:status:get', () => lastBackendStatus)
-  ipcMain.handle('app:startupOptions', () => ({ initialPaths: commandLine.paths, noLoadFiles: commandLine.noLoadFiles, selectMember: commandLine.selectMember }))
+  ipcMain.handle('app:startupOptions', () => ({ commandLine, title: appTitle(), version: app.getVersion(), processStartTime }))
   ipcMain.handle('app:filterExistingPaths', (_event, paths: string[]) => paths.filter((candidate) => existsSync(candidate)))
   // dnSpy's File.Exists: a directory is not a file, and any error — missing, unreadable — just means
   // "no", so statSync inside a try rather than existsSync.
@@ -830,10 +884,37 @@ const registerIpc = (): void => {
     return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
   })
   ipcMain.handle('app:setLocale', (_event, locale: UiLocale) => {
-    if (locale === 'en' || locale === 'zh-CN')
+    if (locale === 'en' || locale === 'zh-CN') {
       uiLocale = locale
+      // The title reports the administrator rights in the user's own language, so it is written again here.
+      mainWindow?.setTitle(appTitle())
+    }
+  })
+  // The renderer's option store is where every option is written; this is the handful the main process has to
+  // know about before there is a renderer to ask, kept in a file of its own for the next start to read.
+  ipcMain.handle('app:mainSettings', (_event, settings: { allowMoreThanOneInstance?: boolean }) => {
+    appSettings.allowMoreThanOneInstance = settings.allowMoreThanOneInstance === true
+    saveAppMainSettings(appSettingsFile, appSettings)
+  })
+  // Whether the renderer holds unsaved edits. Reported as they change, so the close handler knows whether
+  // there is anything to ask about without having to call across and wait for an answer.
+  ipcMain.handle('app:setUnsavedChanges', (_event, dirty: boolean) => { rendererDirty = dirty === true })
+  // The renderer's answer to the close question. "No" — Cancel, or a save that was itself called off — leaves
+  // the window where it is, and the whole question will be put again the next time it is asked to close.
+  ipcMain.handle('app:closeResponse', (_event, approved: boolean) => {
+    if (!approved)
+      return
+    closeApproved = true
+    mainWindow?.close()
   })
   ipcMain.handle('app:quit', () => app.quit())
+  // dnSpy's MsgBox: a message, an OK button and nothing to answer. The title is the app's, as it is there.
+  ipcMain.handle('app:showMessage', async (_event, message: string) => {
+    if (mainWindow)
+      await dialog.showMessageBox(mainWindow, { type: 'info', title: 'dnSpy', message, buttons: [nativeText().ok], noLink: true })
+    else
+      dialog.showErrorBox('dnSpy', message)
+  })
   ipcMain.handle('app:isRunningAsAdministrator', () => isRunningAsAdministrator())
   ipcMain.handle('app:restartAsAdministrator', async () => {
     // The renderer has already settled the unsaved-edits question by the time it asks for this.
@@ -872,7 +953,25 @@ const installApplicationMenu = (): void => {
   ]))
 }
 
-app.whenReady().then(async () => {
+/**
+ * dnSpy's App.SwitchToOtherInstance, seen from the instance that holds the lock: a second process's command
+ * line is read here exactly as this one's was, the window is brought forward unless `--dont-activate` was
+ * asked for, and the renderer is handed the options so it can open the files and follow the rest.
+ */
+const handleForwardedCommandLine = (argv: readonly string[], workingDirectory: string): void => {
+  const forwarded = parseCommandLine(userArguments(argv, process.defaultApp === true), workingDirectory)
+  if (!mainWindow)
+    return
+  if (forwarded.activate) {
+    if (mainWindow.isMinimized())
+      mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+  mainWindow.webContents.send('app:commandLine', forwarded)
+}
+
+const start = async (): Promise<void> => {
   uiLocale = app.getLocale().toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
   dialogPathHistory = new DialogPathHistory(path.join(app.getPath('userData'), 'dialog-state.json'))
   await dialogPathHistory.load()
@@ -886,7 +985,16 @@ app.whenReady().then(async () => {
   } catch (error) {
     sendBackendStatus({ state: 'error', message: error instanceof Error ? error.message : String(error) })
   }
-})
+}
+
+if (!isPrimaryInstance) {
+  // dnSpy's second instance hands its arguments over and exits (App.SwitchToOtherInstance); the dialog the
+  // lock was refused with is Electron's, and it never opens a window.
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv, workingDirectory) => handleForwardedCommandLine(argv, workingDirectory))
+  void app.whenReady().then(start)
+}
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0)

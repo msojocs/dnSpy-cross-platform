@@ -6,7 +6,15 @@ const cwd = path.resolve('/work')
 
 describe('parseCommandLine', () => {
   it('opens every argument that is no option, made absolute against the start directory', () => {
-    expect(parseCommandLine(['a.dll', '/abs/b.exe'], cwd)).toEqual({ paths: [path.resolve(cwd, 'a.dll'), path.resolve('/abs/b.exe')], noLoadFiles: false })
+    expect(parseCommandLine(['a.dll', '/abs/b.exe'], cwd)).toEqual({
+      paths: [path.resolve(cwd, 'a.dll'), path.resolve('/abs/b.exe')],
+      singleInstance: true,
+      activate: true,
+      newTab: false,
+      noLoadFiles: false,
+      showStartupTime: false,
+      userArgs: {},
+    })
   })
 
   it('reads --select, both spellings of --no-load-files and the port\'s own --open', () => {
@@ -17,10 +25,50 @@ describe('parseCommandLine', () => {
     expect(parseCommandLine(['--no-load-files'], cwd).noLoadFiles).toBe(true)
   })
 
-  it('passes over the options it does not read, with the value of one that takes a value', () => {
-    // dnSpy's own options, and the switches Chromium and Electron read, name no file.
-    expect(parseCommandLine(['--theme', 'dark', '-l', 'C#', '--no-sandbox', '--user-data-dir=/tmp/x', '--multiple', 'e.dll'], cwd).paths)
-      .toEqual([path.resolve(cwd, 'e.dll')])
+  it('reads every option dnSpy knows, with the value of the ones that take one', () => {
+    const parsed = parseCommandLine([
+      '--theme', 'dark', '-l', 'C#', '--culture', 'de', '--multiple', '--dont-activate', '--new-tab',
+      '--search', 'Foo', '--search-for', 'method', '--search-in', 'all', '--full-screen',
+      '--show-tool-window', 'a!left,b', '--hide-tool-window', 'c', '--show-startup-time', '-pn', 'app',
+      '--settings-file', 'cfg', '--extension-directory', 'ext', '-e', '12', '--jdinfo', 'ABC', 'e.dll',
+    ], cwd)
+    expect(parsed).toMatchObject({
+      paths: [path.resolve(cwd, 'e.dll')],
+      theme: 'dark',
+      language: 'C#',
+      culture: 'de',
+      singleInstance: false,
+      activate: false,
+      newTab: true,
+      searchText: 'Foo',
+      searchFor: 'method',
+      searchIn: 'all',
+      fullScreen: true,
+      showToolWindow: 'a!left,b',
+      hideToolWindow: 'c',
+      showStartupTime: true,
+      debugAttachProcess: 'app',
+      settingsFile: path.resolve(cwd, 'cfg'),
+      extensionDirectory: path.resolve(cwd, 'ext'),
+    })
+    expect(parseCommandLine(['--not-full-screen'], cwd).fullScreen).toBe(false)
+  })
+
+  it('reads a process id the way dnSpy does: decimal, negative or hexadecimal', () => {
+    expect(parseCommandLine(['-p', '1234'], cwd).debugAttachPid).toBe(1234)
+    expect(parseCommandLine(['--pid', '0x10'], cwd).debugAttachPid).toBe(16)
+    expect(parseCommandLine(['--pid', '&H1f'], cwd).debugAttachPid).toBe(31)
+    expect(parseCommandLine(['--pid', '-1'], cwd).debugAttachPid).toBe(0xFFFF_FFFF)
+    const unparsed = parseCommandLine(['--pid', 'abc', 'x.dll'], cwd)
+    expect(unparsed.debugAttachPid).toBeUndefined()
+    expect(unparsed.paths).toEqual([path.resolve(cwd, 'x.dll')])
+  })
+
+  it('keeps every other option by name, the way dnSpy keeps an extension\'s', () => {
+    // The switches Chromium and Electron read land here too, and name no file.
+    const parsed = parseCommandLine(['--settings:{GUID}', '--no-sandbox', '--user-data-dir=/tmp/x', '--settings:other', 'e.dll'], cwd)
+    expect(parsed.paths).toEqual([path.resolve(cwd, 'e.dll')])
+    expect(parsed.userArgs).toEqual({ '--settings': '{GUID}', '--no-sandbox': '', '--user-data-dir=/tmp/x': '' })
   })
 
   it('reads everything after -- as a file, even what looks like an option', () => {

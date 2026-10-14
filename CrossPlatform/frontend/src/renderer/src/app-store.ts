@@ -227,6 +227,11 @@ interface AppState {
    * tabs being rebuilt — is not the user's state and must not be written over the archive. */
   restoringSession: boolean
   /**
+   * The language a document is decompiled in when nothing else says, which is dnSpy's
+   * IDecompilerService.Decompiler. `-l` on the command line is the one thing that sets it.
+   */
+  defaultLanguage: DecompilerLanguage
+  /**
    * Counts the times the user changed which assemblies the workspace holds — added some, loaded a module's
    * dependencies, removed one. dnSpy's analyzer starts its searches over then; an assembly opened on demand
    * to follow a reference is not counted, since dnSpy leaves the analyzer alone for those.
@@ -562,6 +567,8 @@ interface AppState {
   /** Records the tab order and the selected tab, which the shell reads off the layout it owns. */
   setDocumentOrder(order: string[], active?: string): void
   setRestoringSession(value: boolean): void
+  /** dnSpy's `-l`: the language the next document is decompiled in. */
+  setDefaultLanguage(language: DecompilerLanguage): void
   /** Brings a tool window to the front. Set by the shell, which owns the layout. */
   openToolWindow?: (tabId: string) => void
   setOpenToolWindow(open: ((tabId: string) => void) | undefined): void
@@ -673,6 +680,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   documents: {},
   documentOrder: [],
   restoringSession: false,
+  defaultLanguage: 'cSharp',
   assemblyListRevision: 0,
   output: [],
   scriptEntries: [],
@@ -964,7 +972,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ expanded: next })
   },
 
-  openDocument: async (node, language = 'cSharp') => {
+  openDocument: async (node, language = get().defaultLanguage) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
       throw new Error(t('No workspace is open.'))
@@ -2389,6 +2397,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   )),
 
   setRestoringSession: (value) => set({ restoringSession: value }),
+
+  setDefaultLanguage: (language) => set({ defaultLanguage: language }),
 
   toggleBookmark: (nodeId, line) => {
     // dnSpy names the bookmark after what the line holds — the statement on it, or the definition that

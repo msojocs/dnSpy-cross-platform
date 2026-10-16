@@ -23,18 +23,24 @@ const search = vi.fn((_workspaceId: string, _request: SearchRequest, _requestKey
   return next.promise
 })
 const cancelSearch = vi.fn(async () => undefined)
+const relabelSearch = vi.fn(async (_workspaceId: string, _requestKey: string, language: string, start: number, count: number): Promise<SearchResponse> => ({
+  results: Array.from({ length: count }, (_, offset) => result(`${language}-${start + offset}`)),
+  truncated: false,
+  start,
+}))
 
 const state = () => useSearchStore.getState()
 const lastRequestKey = (): string => search.mock.calls.at(-1)![2]
 
 beforeEach(() => {
-  Object.assign(window.dnSpy, { search, cancelSearch })
+  Object.assign(window.dnSpy, { search, cancelSearch, relabelSearch })
   saveAppOptions(defaultAppOptions)
-  useAppStore.setState({ workspaceId: 'ws', workspaceGeneration: 0, workspaceStateId: 's1', assemblyListRevision: 0, output: [], selectedNode: undefined })
+  useAppStore.setState({ workspaceId: 'ws', workspaceGeneration: 0, workspaceStateId: 's1', assemblyListRevision: 0, output: [], selectedNode: undefined, defaultLanguage: 'cSharp' })
   state().clear()
   pending = []
   search.mockClear()
   cancelSearch.mockClear()
+  relabelSearch.mockClear()
 })
 
 afterEach(() => {
@@ -75,7 +81,61 @@ describe('search store', () => {
       searchFrameworkAssemblies: false,
       searchCompilerGeneratedMembers: true,
       maxResults: 10_000,
+      language: 'cSharp',
     }, expect.any(String))
+  })
+
+  it('searches the type a row of a type\'s hierarchy folders hangs off, the way dnSpy\'s GetAncestorOrSelf does', () => {
+    saveAppOptions({ ...loadAppOptions(), search: { ...loadAppOptions().search, location: 'selectedType' } })
+    const type = { id: 't1', kind: 'type', label: 'T', hasChildren: true }
+    const folder = { id: 'f1', kind: 'basetypefolder', label: 'Base Type and Interfaces', hasChildren: true }
+    const baseType = { id: 'b1', kind: 'basetype', label: 'Object', hasChildren: true }
+    const method = { id: 'm1', kind: 'method', label: 'M()', hasChildren: false }
+    useAppStore.setState({
+      roots: [type], children: { t1: [folder, method], f1: [baseType] }, parents: { f1: 't1', b1: 'f1', m1: 't1' },
+      selectedNode: baseType, selectedNodes: [baseType, method],
+    })
+    useSearchStore.setState({ query: 'x' })
+    state().restart()
+    expect(search.mock.calls[0][1].selectedNodeIds).toEqual(['t1'])
+    // The other locations take the rows as they are.
+    updateSearchSettings({ location: 'selectedFiles' })
+    expect(search.mock.calls[1][1].selectedNodeIds).toEqual(['b1', 'm1'])
+  })
+
+  it('writes the list again through the language chosen, without searching again', async () => {
+    useSearchStore.setState({ query: 'x' })
+    state().restart()
+    const requestKey = lastRequestKey()
+    pending[0].resolve({ results: [result('A'), result('B')], truncated: false })
+    await vi.waitFor(() => expect(state().searching).toBe(false))
+    useAppStore.setState({ defaultLanguage: 'visualBasic' })
+    expect(relabelSearch).toHaveBeenCalledWith('ws', requestKey, 'visualBasic', 0, 2)
+    await vi.waitFor(() => expect(state().results.map((item) => item.name)).toEqual(['visualBasic-0', 'visualBasic-1']))
+    expect(search).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a batch found after the language changed in the new one, and drops an answer for a language left since', async () => {
+    useSearchStore.setState({ query: 'x' })
+    state().restart()
+    const requestKey = lastRequestKey()
+    state().receiveProgress({ requestKey, start: 0, results: [result('A')] })
+    const answers: ReturnType<typeof deferred<SearchResponse>>[] = []
+    relabelSearch.mockImplementation(() => {
+      const next = deferred<SearchResponse>()
+      answers.push(next)
+      return next.promise
+    })
+    useAppStore.setState({ defaultLanguage: 'il' })
+    useAppStore.setState({ defaultLanguage: 'visualBasic' })
+    // The batch was written in C#, which the search was asked with.
+    state().receiveProgress({ requestKey, start: 1, results: [result('B')] })
+    expect(relabelSearch.mock.calls.map((call) => call.slice(2))).toEqual([['il', 0, 1], ['visualBasic', 0, 1], ['visualBasic', 1, 1]])
+    answers[0].resolve({ results: [result('il-A')], truncated: false, start: 0 })
+    answers[1].resolve({ results: [result('vb-A')], truncated: false, start: 0 })
+    answers[2].resolve({ results: [result('vb-B')], truncated: false, start: 1 })
+    await vi.waitFor(() => expect(state().results.map((item) => item.name)).toEqual(['vb-A', 'vb-B']))
+    relabelSearch.mockRestore()
   })
 
   it('takes the batches a search sends ahead, then the rest with its answer', async () => {

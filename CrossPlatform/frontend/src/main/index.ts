@@ -529,6 +529,9 @@ const registerIpc = (): void => {
   ipcMain.handle('search:cancel', (event, requestKey: string) => {
     searchRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
   })
+  // The backend keeps the last few searches by the token they ran with, which a change of language writes again.
+  ipcMain.handle('search:relabel', (event, workspaceId: string, requestKey: string, language: DecompilerLanguage, start: number, count: number) =>
+    requireBackend().invoke('search/relabel', { workspaceId, progressToken: `${event.sender.id}:${requestKey}`, language, start, count }))
   // A string references scan reads every method body of the assemblies it covers; it gets the long deadline,
   // and the renderer calls it off by its key when a new scan replaces it.
   ipcMain.handle('stringReferences:search', async (event, workspaceId: string, request: StringReferencesSearchRequest, requestKey: string) => {

@@ -554,6 +554,8 @@ select:focus-visible,
   --tc-assembly-exe: #f0ca93;
   --tc-assembly-module: #b17fd7;
   --tc-il-module: #666699;
+  --tc-opcode: #ad5c85;
+  --tc-il-directive: #9999ff;
 }
 
 :root[data-theme="light"] {
@@ -582,6 +584,8 @@ select:focus-visible,
   --tc-assembly-exe: #c17b19;
   --tc-assembly-module: #642c8f;
   --tc-il-module: #660033;
+  --tc-opcode: #993366;
+  --tc-il-directive: #009900;
 }
 
 :root:not([data-theme="hc"]) .tc-operator { color: var(--tc-operator); }
@@ -613,6 +617,8 @@ select:focus-visible,
 :root:not([data-theme="hc"]) .tc-assemblyExe { color: var(--tc-assembly-exe); }
 :root:not([data-theme="hc"]) .tc-assemblyModule { color: var(--tc-assembly-module); }
 :root:not([data-theme="hc"]) .tc-ilModule { color: var(--tc-il-module); }
+:root:not([data-theme="hc"]) .tc-opCode { color: var(--tc-opcode); }
+:root:not([data-theme="hc"]) .tc-ilDirective { color: var(--tc-il-directive); }
 
 /* The colors only code has, which Roslyn's classifier gives the C# Interactive window's input and the echo of
    what was submitted: plain text and punctuation take the theme's text color here too, since the classifier's
@@ -661,7 +667,8 @@ select:focus-visible,
 :root:not([data-theme="hc"]) .code-colors .tc-text { color: var(--tc-text); }
 :root:not([data-theme="hc"]) .code-colors .tc-punctuation { color: var(--tc-punctuation); }
 :root:not([data-theme="hc"]) .code-colors .tc-comment { color: var(--tc-comment); }
-:root:not([data-theme="hc"]) .code-colors .tc-string { color: var(--tc-string); }
+:root:not([data-theme="hc"]) .code-colors .tc-string,
+:root:not([data-theme="hc"]) .code-colors .tc-char { color: var(--tc-string); }
 :root:not([data-theme="hc"]) .code-colors .tc-verbatimString { color: var(--tc-verbatim-string); }
 :root:not([data-theme="hc"]) .code-colors .tc-local { color: var(--tc-local); }
 :root:not([data-theme="hc"]) .code-colors .tc-parameter { color: var(--tc-parameter); font-weight: bold; }
@@ -1020,7 +1027,6 @@ select:focus-visible,
   color: var(--text);
 }
 
-.search-for select,
 .search-location {
   width: 130px;
   height: 24px;
@@ -1031,7 +1037,79 @@ select:focus-visible,
 
 .search-type-icon {
   display: inline-flex;
+  flex: none;
   align-items: center;
+}
+
+/* The "Search For" box: dnSpy's combo box, whose entries wear their images. */
+.search-type-box {
+  position: relative;
+}
+
+.search-type-box > button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 130px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.search-type-box > button .search-type-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-type-list {
+  position: absolute;
+  z-index: 50;
+  top: 100%;
+  left: 0;
+  min-width: 100%;
+  max-height: 360px;
+  margin: 0;
+  padding: 1px 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+  list-style: none;
+}
+
+.search-type-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px 0 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.search-type-list li.active {
+  background: var(--selection);
+}
+
+/* A result's tooltip: the member's signature, the instruction and the file, each on a line of its own. */
+.search-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(900px, calc(100vw - 8px));
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+  color: var(--text);
+  white-space: pre-wrap;
+  tab-size: 4;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
 .search-options {

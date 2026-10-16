@@ -424,12 +424,15 @@ export interface SearchRequest {
   searchFrameworkAssemblies: boolean
   searchCompilerGeneratedMembers: boolean
   maxResults?: number
+  /** The language the results are written through — the toolbar's. */
+  language?: DecompilerLanguage
 }
 
 /**
- * One result, written the way dnSpy's search list writes it. `nodeId` is what following it opens — absent for
- * a module reference, which the tree has no row for; `ilOffset` is the instruction a match in a method body
- * was found at, which following it puts the caret on.
+ * One result, written the way dnSpy's search list writes it through the language the search was asked with.
+ * `nodeId` is what following it opens — absent for a module reference, which the tree has no row for; `ilOffset`
+ * is the instruction a match in a method body was found at, which following it puts the caret on. The tooltip's
+ * lines are parted with a line break, in `toolTipParts` as in `toolTip`.
  */
 export interface SearchResult {
   nodeId?: string | null
@@ -442,6 +445,7 @@ export interface SearchResult {
   locationIcon?: string | null
   toolTip?: string | null
   ilOffset?: number | null
+  toolTipParts?: TextPart[] | null
 }
 
 export interface SearchResponse {
@@ -1440,6 +1444,8 @@ export interface DnSpyApi {
   /** Runs a search; `requestKey` names it to `cancelSearch` and to the batches `onSearchProgress` hands over. */
   search(workspaceId: string, request: SearchRequest, requestKey: string): Promise<SearchResponse>
   cancelSearch(requestKey: string): Promise<void>
+  /** Writes the results `count` from `start` of the search run as `requestKey` again, through `language`. */
+  relabelSearch(workspaceId: string, requestKey: string, language: DecompilerLanguage, start: number, count: number): Promise<SearchResponse>
   /** The analyzer rows of tree nodes — what dnSpy's analyzer adds for a member it is asked to analyze — written
    * through the decompiler named, C# when none is. */
   analyzeNodes(workspaceId: string, nodeIds: string[], language?: DecompilerLanguage): Promise<AnalyzeNodesResponse>

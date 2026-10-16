@@ -193,6 +193,8 @@ internal sealed class JsonRpcServer {
 					DeserializeParams<SearchRequest>(request),
 					progress => WriteNotificationAsync(RpcMethods.SearchProgress, progress),
 					cancellationToken).ConfigureAwait(false);
+			case RpcMethods.SearchRelabel:
+				return await workspaces.RelabelSearchAsync(DeserializeParams<SearchRelabelRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.StringReferencesSearch:
 				return await workspaces.SearchStringReferencesAsync(
 					DeserializeParams<StringReferencesSearchRequest>(request),

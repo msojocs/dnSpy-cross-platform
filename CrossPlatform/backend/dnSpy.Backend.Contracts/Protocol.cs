@@ -32,6 +32,11 @@ public static class RpcMethods {
 	/// <summary>A notification: the results a search found since the last one, sent while it still runs
 	/// when the request named a progress token.</summary>
 	public const string SearchProgress = "search/progress";
+	/// <summary>
+	/// Writes what a search found again through another language — dnSpy's DecompilerChanged, which rewrites the
+	/// search list's text and tooltips without searching again. Answered with a <see cref="SearchResponse"/>.
+	/// </summary>
+	public const string SearchRelabel = "search/relabel";
 	public const string AnalyzeNodes = "analyze/nodes";
 	public const string AnalyzeChildren = "analyze/children";
 	/// <summary>
@@ -441,7 +446,16 @@ public sealed record SearchRequest(
 	bool SearchFrameworkAssemblies = true,
 	bool SearchCompilerGeneratedMembers = true,
 	int MaxResults = 10_000,
-	string? ProgressToken = null);
+	string? ProgressToken = null,
+	DecompilerLanguage Language = DecompilerLanguage.CSharp);
+
+/// <summary>
+/// Asks for the results <paramref name="Count"/> from <paramref name="Start"/> of the search that was run with
+/// <paramref name="ProgressToken"/>, written through <paramref name="Language"/>. The workspace keeps the last few
+/// searches it ran for this; one it no longer has, or one the workspace changed under, fails with
+/// <see cref="ErrorCodes.EditConflict"/>.
+/// </summary>
+public sealed record SearchRelabelRequest(string WorkspaceId, string ProgressToken, DecompilerLanguage Language, int Start = 0, int Count = int.MaxValue);
 
 /// <summary>What a search found, in the order it found it. <paramref name="Truncated"/> says the search
 /// stopped at the limit — dnSpy's "too many results". <paramref name="Start"/> is where the first result
@@ -452,7 +466,9 @@ public sealed record SearchResponse(IReadOnlyList<SearchResultDto> Results, bool
 /// One result of dnSpy's search window: what matched, written the way its list writes it, and where it
 /// lives. <paramref name="NodeId"/> is the tree node following the result opens, absent for a module
 /// reference, which the tree has no row for. A match in a method body names the instruction's
-/// <paramref name="IlOffset"/>, which is where following it puts the caret.
+/// <paramref name="IlOffset"/>, which is where following it puts the caret. The texts are written through the
+/// language the search was asked with, and <paramref name="ToolTipParts"/> is <paramref name="ToolTip"/> in its
+/// color classes, a line break between its lines.
 /// </summary>
 public sealed record SearchResultDto(
 	string? NodeId,
@@ -464,7 +480,8 @@ public sealed record SearchResultDto(
 	string? Icon = null,
 	string? LocationIcon = null,
 	string? ToolTip = null,
-	int? IlOffset = null);
+	int? IlOffset = null,
+	IReadOnlyList<TextPartDto>? ToolTipParts = null);
 
 public sealed record HexLengthRequest(string WorkspaceId, string ModuleId);
 
@@ -1437,6 +1454,11 @@ public static class TextColors {
 	public const string ILModule = "ilModule";
 	public const string Parameter = "parameter";
 	public const string String = "string";
+	public const string Char = "char";
+	/// <summary>An IL instruction's opcode, and the label ("IL_0000") before it is <see cref="Label"/>.</summary>
+	public const string OpCode = "opCode";
+	/// <summary>A disassembler directive: ".property", ".event".</summary>
+	public const string ILDirective = "ilDirective";
 	public const string DirectoryPart = "directoryPart";
 	public const string FileNameNoExtension = "fileNameNoExtension";
 	public const string FileExtension = "fileExtension";

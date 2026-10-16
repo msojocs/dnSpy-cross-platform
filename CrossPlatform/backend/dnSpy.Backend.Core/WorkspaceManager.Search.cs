@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
-using System.Text;
 using dnlib.DotNet;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core.Search;
@@ -20,7 +18,19 @@ public sealed partial class WorkspaceManager {
 	public Task<SearchResponse> SearchAsync(SearchRequest request, Func<SearchProgressNotification, Task>? progress, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).SearchAsync(request, new AnalyzerPacing(AnalyzerSliceBudget, AnalyzerProgressInterval, 1), progress, cancellationToken);
 
+	/// <summary>
+	/// What a search found, written again through another language — dnSpy's DecompilerChanged, which rewrites the
+	/// rows of the search list rather than searching again.
+	/// </summary>
+	public Task<SearchResponse> RelabelSearchAsync(SearchRelabelRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.RelabelSearch(request), cancellationToken);
+
 	sealed partial class Workspace {
+		// The searches the client may still ask to write again, by the token they were run with, the latest last.
+		// The search window only ever shows one, and one more may be on its way in while it is replaced.
+		const int KeptSearchRuns = 4;
+		readonly List<(string Token, SearchRun Run)> keptSearchRuns = [];
+
 		public async Task<SearchResponse> SearchAsync(SearchRequest request, AnalyzerPacing pacing, Func<SearchProgressNotification, Task>? progress, CancellationToken cancellationToken) {
 			// dnSpy clears the list for an empty query; one of spaces alone has no term to look for either.
 			if (string.IsNullOrWhiteSpace(request.Query))
@@ -30,25 +40,44 @@ public sealed partial class WorkspaceManager {
 			var run = await RunAsync(w => w.PrepareSearch(request, maxResults, cancellationToken), cancellationToken).ConfigureAwait(false);
 			var sent = 0;
 			var sinceSent = Stopwatch.StartNew();
-			while (!run.Completed) {
-				var batch = await RunAsync(w => {
-					w.CheckSearchEpoch(run);
-					run.RunSlice(pacing.SliceBudget);
-					if (progressToken is null || run.Count == sent || sinceSent.Elapsed < pacing.ProgressInterval)
-						return null;
-					return w.SearchResults(run, sent);
-				}, cancellationToken).ConfigureAwait(false);
-				// Written with the gate let go: the tree has no reason to wait for the pipe.
-				if (batch is { Count: > 0 }) {
-					await progress!(new SearchProgressNotification(progressToken!, sent, batch)).ConfigureAwait(false);
-					sent += batch.Count;
-					sinceSent.Restart();
+			try {
+				while (!run.Completed) {
+					var batch = await RunAsync(w => {
+						w.CheckSearchEpoch(run);
+						run.RunSlice(pacing.SliceBudget);
+						if (progressToken is null || run.Count == sent || sinceSent.Elapsed < pacing.ProgressInterval)
+							return null;
+						return w.SearchResults(run, sent, request.Language);
+					}, cancellationToken).ConfigureAwait(false);
+					// Written with the gate let go: the tree has no reason to wait for the pipe.
+					if (batch is { Count: > 0 }) {
+						await progress!(new SearchProgressNotification(progressToken!, sent, batch)).ConfigureAwait(false);
+						sent += batch.Count;
+						sinceSent.Restart();
+					}
 				}
+				return await RunAsync(w => {
+					w.CheckSearchEpoch(run);
+					return new SearchResponse(w.SearchResults(run, sent, request.Language), run.Truncated, sent);
+				}, cancellationToken).ConfigureAwait(false);
 			}
-			return await RunAsync(w => {
-				w.CheckSearchEpoch(run);
-				return new SearchResponse(w.SearchResults(run, sent), run.Truncated, sent);
-			}, cancellationToken).ConfigureAwait(false);
+			catch (OperationCanceledException) {
+				// A search called off is one the client has let go of.
+				await RunAsync(w => w.keptSearchRuns.RemoveAll(kept => kept.Run == run), CancellationToken.None).ConfigureAwait(false);
+				throw;
+			}
+		}
+
+		public SearchResponse RelabelSearch(SearchRelabelRequest request) {
+			var run = keptSearchRuns.LastOrDefault(kept => kept.Token == request.ProgressToken).Run
+				?? throw new RpcException(ErrorCodes.EditConflict, "The search is no longer held.");
+			CheckSearchEpoch(run);
+			var start = Math.Clamp(request.Start, 0, run.Count);
+			var end = (int)Math.Min((long)start + Math.Max(request.Count, 0), run.Count);
+			var results = new List<SearchResultDto>(end - start);
+			for (var index = start; index < end; index++)
+				results.Add(SearchResultDto(run[index], request.Language));
+			return new SearchResponse(results, run.Truncated, start);
 		}
 
 		SearchRun PrepareSearch(SearchRequest request, int maxResults, CancellationToken cancellationToken) {
@@ -57,6 +86,12 @@ public sealed partial class WorkspaceManager {
 				? SearchComparerFactory.CreateLiteral(request.Query, request.CaseSensitive, request.MatchWholeWords, request.MatchAnySearchTerm)
 				: SearchComparerFactory.Create(request.Query, request.CaseSensitive, request.MatchWholeWords, request.MatchAnySearchTerm);
 			var run = new SearchRun(analyzerEpoch, maxResults);
+			if (request.ProgressToken is { } token) {
+				keptSearchRuns.RemoveAll(kept => kept.Token == token);
+				keptSearchRuns.Add((token, run));
+				if (keptSearchRuns.Count > KeptSearchRuns)
+					keptSearchRuns.RemoveAt(0);
+			}
 			// One decompiler per module: building one reads the module and its references.
 			var bamlDecompilers = new Dictionary<string, XamlDecompiler>(StringComparer.Ordinal);
 			var searcher = new FilterSearcher(new FilterSearcherOptions(
@@ -147,18 +182,20 @@ public sealed partial class WorkspaceManager {
 		}
 
 		/// <summary>The results of a run from <paramref name="from"/> on.</summary>
-		List<SearchResultDto> SearchResults(SearchRun run, int from) {
+		List<SearchResultDto> SearchResults(SearchRun run, int from, DecompilerLanguage language) {
 			var results = new List<SearchResultDto>(run.Count - from);
 			for (var index = from; index < run.Count; index++)
-				results.Add(SearchResultDto(run[index]));
+				results.Add(SearchResultDto(run[index], language));
 			return results;
 		}
 
-		SearchResultDto SearchResultDto(SearchHit hit) {
+		SearchResultDto SearchResultDto(SearchHit hit, DecompilerLanguage language) {
 			var name = new TextPartsBuilder();
-			SearchResultFormatter.Write(name, hit.NameObject, includeNamespace: false, TypeColor);
+			SearchResultFormatter.Write(name, hit.NameObject, includeNamespace: false, language, TypeColor);
 			var location = new TextPartsBuilder();
-			SearchResultFormatter.Write(location, hit.LocationObject, includeNamespace: true, TypeColor);
+			SearchResultFormatter.Write(location, hit.LocationObject, includeNamespace: true, language, TypeColor);
+			var toolTip = new TextPartsBuilder();
+			SearchResultFormatter.WriteToolTip(toolTip, hit, AssemblyLocation(hit.Document), language, TypeColor);
 			return new SearchResultDto(
 				SearchNodeId(hit),
 				SearchKind(hit.Object),
@@ -168,8 +205,23 @@ public sealed partial class WorkspaceManager {
 				location.ToParts(),
 				SearchIcon(hit.NameObject),
 				SearchIcon(hit.LocationObject),
-				SearchToolTip(hit, name.ToString()),
-				hit.Body is { } body ? (int)body.ILOffset : null);
+				toolTip.ToString(),
+				hit.Body is { } body ? (int)body.ILOffset : null,
+				toolTip.ToParts());
+		}
+
+		/// <summary>SearchResult.GetAssemblyLocation: the module's file, else its name or its assembly's; a file that is
+		/// not a .NET module by its path.</summary>
+		static string? AssemblyLocation(IModuleEntry document) {
+			if (document is not ModuleEntry { Module: var module })
+				return document.Path;
+			if (!string.IsNullOrWhiteSpace(module.Location))
+				return module.Location;
+			if (!string.IsNullOrWhiteSpace(module.Name))
+				return module.Name;
+			if (module.Assembly is not null && !string.IsNullOrWhiteSpace(module.Assembly.Name))
+				return module.Assembly.Name;
+			return null;
 		}
 
 		/// <summary>
@@ -260,29 +312,6 @@ public sealed partial class WorkspaceManager {
 			PeOnlyModuleEntry or ElfFileEntry => "binary",
 			UnknownFileEntry => "error",
 			_ => null,
-		};
-
-		/// <summary>SearchResult.CreateToolTipUI less the decompiler's member tooltip: the name, the instruction a
-		/// body match is, and the file the result is in.</summary>
-		static string SearchToolTip(SearchHit hit, string name) {
-			var tip = new StringBuilder(name);
-			if (hit.Body is { } body) {
-				tip.Append('\n').Append("IL_").Append(body.ILOffset.ToString("X4", CultureInfo.InvariantCulture)).Append(": ").Append(body.OpCode.Name);
-				if (OperandText(body.Operand) is { } operand)
-					tip.Append(' ').Append(operand);
-			}
-			var file = hit.Document is ModuleEntry { Module.Location: { Length: > 0 } location } ? location : hit.Document.Path;
-			return tip.Append('\n').Append(file).ToString();
-		}
-
-		static string? OperandText(object? operand) => operand switch {
-			null => null,
-			string text => "\"" + text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)
-				.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal).Replace("\t", "\\t", StringComparison.Ordinal) + "\"",
-			float value => value == 0 ? (1 / value == float.NegativeInfinity ? "-0.0" : "0.0") : value.ToString("R", CultureInfo.InvariantCulture),
-			double value => value == 0 ? (1 / value == double.NegativeInfinity ? "-0.0" : "0.0") : value.ToString("R", CultureInfo.InvariantCulture),
-			IFormattable value => value.ToString(null, CultureInfo.InvariantCulture),
-			_ => operand.ToString(),
 		};
 	}
 }

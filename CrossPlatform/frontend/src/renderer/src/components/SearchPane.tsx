@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import type { SearchLocation, SearchResult, SearchType, TreeNode } from '../../../shared/protocol'
+import type { SearchLocation, SearchResult, TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
-import { MAX_SEARCH_RESULTS, SEARCH_LOCATIONS, SEARCH_TYPES, findSearchResultCaret, sortSearchResults } from '../search-model'
+import { MAX_SEARCH_RESULTS, SEARCH_LOCATIONS, SEARCH_TYPES, findSearchResultCaret, searchResultOrder } from '../search-model'
 import { updateSearchSettings, useSearchStore } from '../search-store'
 import { useAppOptions, type SearchSettings } from './app-options'
 import { NodeIcon } from './AssemblyExplorer'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { ColoredText } from './ColoredText'
 import { showSearchContextMenu } from './SearchContextMenu'
+import { SearchResultToolTip, SearchTypeBox, useHoverToolTip } from './SearchPaneParts'
 
 /** What the search window needs from the shell, which owns the document tabs, the analyzer and the debugger. */
 export interface SearchPaneCommands {
@@ -43,7 +44,7 @@ const FALLBACK_HEIGHT = 600
 
 /** One line of the list: a result, or one of the two messages dnSpy puts above them. */
 type SearchLine =
-  | { kind: 'result'; result: SearchResult; index: number }
+  | { kind: 'result'; result: SearchResult; index: number; foundIndex: number }
   | { kind: 'message'; key: 'searching' | 'aborted'; text: string }
 
 /**
@@ -58,32 +59,40 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
   const searching = useSearchStore((state) => state.searching)
   const tooManyResults = useSearchStore((state) => state.tooManyResults)
   const focusRequested = useSearchStore((state) => state.focusRequested)
+  const generation = useSearchStore((state) => state.generation)
   const workspaceId = useAppStore((state) => state.workspaceId)
   const settings = useAppOptions().search
   const { t, locale } = useLanguage()
   const [expanded, setExpanded] = useState(false)
-  const [selected, setSelected] = useState<SearchResult>()
+  // The selection is the position of a result among those found: writing the list again through another
+  // language replaces the results, not the rows.
+  const [selection, setSelection] = useState<{ generation: number; foundIndex: number }>()
+  const toolTip = useHoverToolTip<number>()
   const [viewport, setViewport] = useState({ top: 0, height: 0 })
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const commandsRef = useRef(commands)
   commandsRef.current = commands
 
-  const results = useMemo(() => sortSearchResults(found), [found])
+  const order = useMemo(() => searchResultOrder(found), [found])
+  const results = useMemo(() => order.map((index) => found[index]), [order, found])
   const lines = useMemo((): SearchLine[] => {
     const messages: SearchLine[] = []
     if (searching)
       messages.push({ kind: 'message', key: 'searching', text: t('Searching...') })
     if (tooManyResults)
       messages.push({ kind: 'message', key: 'aborted', text: t('Search aborted, more than {count} results found.', { count: MAX_SEARCH_RESULTS.toLocaleString(locale) }) })
-    return [...messages, ...results.map((result, index): SearchLine => ({ kind: 'result', result, index }))]
-  }, [results, searching, tooManyResults, t, locale])
-  const selectedIndex = selected ? results.indexOf(selected) : -1
+    return [...messages, ...results.map((result, index): SearchLine => ({ kind: 'result', result, index, foundIndex: order[index] }))]
+  }, [results, order, searching, tooManyResults, t, locale])
   // A new search starts with nothing selected; a batch arriving keeps the selection where it is.
-  useEffect(() => {
-    if (selected && !found.includes(selected))
-      setSelected(undefined)
-  }, [found, selected])
+  const selectedFound = selection?.generation === generation && selection.foundIndex < found.length ? selection.foundIndex : undefined
+  const selected = selectedFound === undefined ? undefined : found[selectedFound]
+  const selectedIndex = selectedFound === undefined ? -1 : order.indexOf(selectedFound)
+  const setSelected = (foundIndex: number | undefined): void =>
+    setSelection(foundIndex === undefined ? undefined : { generation: useSearchStore.getState().generation, foundIndex })
+  // A list started over has nothing under the mouse to explain.
+  const hideToolTip = toolTip.hide
+  useEffect(() => hideToolTip(), [generation, hideToolTip])
 
   const first = Math.max(0, Math.min(lines.length, Math.floor(viewport.top / ROW_HEIGHT) - OVERSCAN))
   const last = Math.min(lines.length, Math.ceil((viewport.top + (viewport.height > 0 ? viewport.height : FALLBACK_HEIGHT)) / ROW_HEIGHT) + OVERSCAN)
@@ -173,10 +182,9 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
 
   /** Selects a result and, from the keyboard, scrolls it into sight and gives it the focus. */
   const select = (index: number, focus: boolean): void => {
-    const result = results[index]
-    if (!result)
+    if (!results[index])
       return
-    setSelected(result)
+    setSelected(order[index])
     if (!focus)
       return
     const element = listRef.current
@@ -191,10 +199,11 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
     requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-index="${index}"]`)?.focus())
   }
 
-  const openMenu = (result: SearchResult, event: React.MouseEvent<HTMLElement>): void => {
+  const openMenu = (result: SearchResult, foundIndex: number, event: React.MouseEvent<HTMLElement>): void => {
     event.preventDefault()
     event.stopPropagation()
-    setSelected(result)
+    toolTip.hide()
+    setSelected(foundIndex)
     // `currentTarget` is only readable while the event is dispatched, and the menu waits for the node.
     const returnFocusTo = event.currentTarget
     const position = { x: event.clientX, y: event.clientY }
@@ -295,19 +304,10 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
           {expanded ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
           {t('Options')}
         </button>
-        <label className="search-for">
+        <div className="search-for">
           <span>{t('Search For:')}</span>
-          <span className="search-type-icon"><NodeIcon icon={SEARCH_TYPES.find((entry) => entry.type === settings.searchType)?.icon} /></span>
-          <select
-            aria-label={t('Search For:')}
-            value={settings.searchType}
-            onChange={(event) => updateSearchSettings({ searchType: event.target.value as SearchType })}
-          >
-            {SEARCH_TYPES.map((entry) => (
-              <option key={entry.type} value={entry.type} title={entry.key ? `Ctrl+${entry.key.toUpperCase()}` : undefined}>{t(entry.label)}</option>
-            ))}
-          </select>
-        </label>
+          <SearchTypeBox value={settings.searchType} label={t('Search For:')} onChange={(searchType) => updateSearchSettings({ searchType })} />
+        </div>
         <select
           className="search-location"
           aria-label={t('Search location')}
@@ -338,24 +338,26 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
         aria-label={t('Search results')}
         aria-busy={searching}
         onKeyDown={onListKeyDown}
-        onScroll={measure}
+        onScroll={() => { toolTip.hide(); measure() }}
       >
         {first > 0 && <div role="none" style={{ height: first * ROW_HEIGHT }} />}
         {lines.slice(first, last).map((line) => line.kind === 'message'
           ? <div key={line.key} className={`search-message search-message-${line.key}`} role="none">{line.text}</div>
           : (
             <div
-              key={`${line.result.nodeId ?? line.result.kind}:${line.index}`}
-              className={`result-row search-result${line.result === selected ? ' selected' : ''}`}
+              key={`${line.result.nodeId ?? line.result.kind}:${line.foundIndex}`}
+              className={`result-row search-result${line.foundIndex === selectedFound ? ' selected' : ''}`}
               role="option"
-              aria-selected={line.result === selected}
+              aria-selected={line.foundIndex === selectedFound}
               tabIndex={line.index === tabStop ? 0 : -1}
               data-index={line.index}
               data-kind={line.result.kind}
-              title={line.result.toolTip ?? undefined}
-              onMouseDown={(event) => { if (event.button === 0 || event.button === 2) setSelected(line.result) }}
+              onMouseEnter={(event) => toolTip.enter(line.foundIndex, event)}
+              onMouseMove={toolTip.move}
+              onMouseLeave={toolTip.hide}
+              onMouseDown={(event) => { toolTip.hide(); if (event.button === 0 || event.button === 2) setSelected(line.foundIndex) }}
               onDoubleClick={(event) => open(line.result, event.shiftKey || event.ctrlKey)}
-              onContextMenu={(event) => openMenu(line.result, event)}
+              onContextMenu={(event) => openMenu(line.result, line.foundIndex, event)}
             >
               <span className="result-icon"><NodeIcon icon={line.result.icon ?? undefined} /></span>
               <span className="result-name">{settings.syntaxHighlight && line.result.nameParts ? <ColoredText parts={line.result.nameParts} /> : line.result.name}</span>
@@ -367,6 +369,9 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
           ))}
         {last < lines.length && <div role="none" style={{ height: (lines.length - last) * ROW_HEIGHT }} />}
       </div>
+      {toolTip.shown && found[toolTip.shown.target] && (
+        <SearchResultToolTip result={found[toolTip.shown.target]} syntaxHighlight={settings.syntaxHighlight} x={toolTip.shown.x} y={toolTip.shown.y} />
+      )}
     </div>
   )
 }

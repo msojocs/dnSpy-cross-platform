@@ -35,8 +35,21 @@ describe('search model', () => {
       ],
     }
     expect(findSearchResultCaret(document, 0x06000001, 7)).toEqual({ line: 3, column: 3 })
-    // A document of another method, or one with no statements — IL — has nowhere to put it.
+    // A document of another method, or one with no statements — Visual Basic — has nowhere to put it.
     expect(findSearchResultCaret(document, 0x06000002, 7)).toBeUndefined()
     expect(findSearchResultCaret({ ...document, codeStatements: undefined }, 0x06000001, 7)).toBeUndefined()
+  })
+
+  it('puts the caret on the instruction in IL, whose statements are the instructions', () => {
+    const document = {
+      text: '.method void Run()\n{\n  IL_0000: nop\n  IL_0001: ldc.i4 42\n  IL_0006: ret\n}\n',
+      spans: [],
+      codeStatements: [
+        statement({ startLine: 3, endLine: 3, startColumn: 3, endColumn: 14, ilOffset: 0, ilEndOffset: 1, sequencePointIlOffset: 0 }),
+        statement({ startLine: 4, endLine: 4, startColumn: 3, endColumn: 20, ilOffset: 1, ilEndOffset: 6, sequencePointIlOffset: 1 }),
+        statement({ startLine: 5, endLine: 5, startColumn: 3, endColumn: 14, ilOffset: 6, ilEndOffset: 7, sequencePointIlOffset: 6 }),
+      ],
+    }
+    expect(findSearchResultCaret(document, 0x06000001, 1)).toEqual({ line: 4, column: 3 })
   })
 })

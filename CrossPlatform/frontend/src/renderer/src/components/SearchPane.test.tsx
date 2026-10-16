@@ -150,7 +150,7 @@ describe('SearchPane', () => {
     const input = screen.getByRole('textbox', { name: 'Search assemblies' })
     fireEvent.keyDown(screen.getByRole('listbox', { name: 'Search results' }), { key: 't', ctrlKey: true })
     expect(loadAppOptions().search.searchType).toBe('type')
-    expect(screen.getByRole('combobox', { name: 'Search For:' })).toHaveValue('type')
+    expect(screen.getByRole('combobox', { name: 'Search For:' })).toHaveAttribute('data-value', 'type')
     expect(input).toHaveFocus()
     fireEvent.keyDown(input, { key: 'l', ctrlKey: true })
     expect(loadAppOptions().search.searchType).toBe('literal')
@@ -159,6 +159,76 @@ describe('SearchPane', () => {
     expect(screen.getByRole('combobox', { name: 'Search location' })).toHaveValue('selectedType')
     // Each change searches again.
     expect(search).toHaveBeenCalledTimes(3)
+  })
+
+  it('lists what to search for with each entry\'s image, and the Ctrl key that picks it as its tooltip', () => {
+    render(<SearchPane commands={commands()} />)
+    // The options a test before left behind reach the window only through a subscriber.
+    act(() => saveAppOptions(defaultAppOptions))
+    const box = screen.getByRole('combobox', { name: 'Search For:' })
+    expect(box).toHaveAttribute('data-value', 'any')
+    expect(box).toHaveTextContent('All of the Above')
+    expect(box).toHaveAttribute('title', 'Ctrl+B')
+    fireEvent.click(box)
+    const list = screen.getByRole('listbox', { name: 'Search For:' })
+    const entries = within(list).getAllByRole('option')
+    expect(entries).toHaveLength(24)
+    expect(entries[3]).toHaveTextContent('Type')
+    expect(entries[3]).toHaveAttribute('title', 'Ctrl+T')
+    expect(entries[0]).not.toHaveAttribute('title')
+    expect(entries.every((entry) => entry.querySelector('.search-type-icon'))).toBe(true)
+    expect(entries[22]).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(entries[19])
+    expect(loadAppOptions().search.searchType).toBe('struct')
+    expect(screen.queryByRole('listbox', { name: 'Search For:' })).toBeNull()
+    // Closed, the arrow keys step through the entries; Alt+Down opens the list, Enter takes the entry under the cursor.
+    fireEvent.keyDown(box, { key: 'ArrowDown' })
+    expect(loadAppOptions().search.searchType).toBe('delegate')
+    fireEvent.keyDown(box, { key: 'ArrowDown', altKey: true })
+    fireEvent.keyDown(box, { key: 'ArrowUp' })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(loadAppOptions().search.searchType).toBe('struct')
+    fireEvent.keyDown(box, { key: 'F4' })
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: 'Search For:' })).toBeNull()
+    expect(loadAppOptions().search.searchType).toBe('struct')
+  })
+
+  it('shows a result\'s tooltip once the mouse rests on it, in its colors, and hides it when the mouse leaves', () => {
+    vi.useFakeTimers()
+    try {
+      useSearchStore.setState({ results: [{ ...results[0], toolTip: 'void Ns.Type.Run()\nIL_0006: ldc.i4 42\n/app/App.dll',
+        toolTipParts: [{ text: 'void', color: 'keyword' }, { text: ' Ns.Type.Run()\n', color: 'text' }, { text: 'IL_0006', color: 'label' }, { text: ': ', color: 'punctuation' }, { text: 'ldc.i4', color: 'opCode' }, { text: ' 42\n/app/App.dll', color: 'text' }] }] })
+      render(<SearchPane commands={commands()} />)
+      fireEvent.mouseEnter(option('void Run()'), { clientX: 10, clientY: 10 })
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      act(() => vi.advanceTimersByTime(400))
+      const tip = screen.getByRole('tooltip')
+      expect(tip).toHaveTextContent('void Ns.Type.Run() IL_0006: ldc.i4 42 /app/App.dll', { normalizeWhitespace: true })
+      expect(tip.querySelector('.tc-opCode')).toHaveTextContent('ldc.i4')
+      fireEvent.mouseLeave(option('void Run()'))
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      // With the syntax highlighting off the tooltip is plain, as the rows are.
+      act(() => saveAppOptions({ ...loadAppOptions(), search: { ...loadAppOptions().search, syntaxHighlight: false } }))
+      fireEvent.mouseEnter(option('void Run()'), { clientX: 10, clientY: 10 })
+      act(() => vi.advanceTimersByTime(400))
+      expect(screen.getByRole('tooltip').querySelector('.tc-opCode')).toBeNull()
+      // A click hides it.
+      fireEvent.mouseDown(option('void Run()'), { button: 0 })
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the selection on its result when the list is written again through another language', () => {
+    render(<SearchPane commands={commands()} />)
+    fireEvent.mouseDown(option('void Run()'), { button: 0 })
+    act(() => useSearchStore.setState({ results: [{ ...results[0], name: 'Sub Run()' }, ...results.slice(1)] }))
+    expect(option('Sub Run()')).toHaveAttribute('aria-selected', 'true')
+    // A new search starts with nothing selected.
+    act(() => useSearchStore.setState((state) => ({ results: [...results], generation: state.generation + 1 })))
+    expect(rows().filter((row) => row.getAttribute('aria-selected') === 'true')).toEqual([])
   })
 
   it('shows dnSpy\'s six options under the expander, each switching its setting', () => {

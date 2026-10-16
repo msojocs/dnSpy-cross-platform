@@ -81,6 +81,10 @@ static class ILTypeName {
 	public static void Write(TextPartsBuilder output, ITypeDefOrRef? type, Syntax syntax, Func<ITypeDefOrRef, string>? typeColor) =>
 		Write(output, type, syntax, ThreeState.Unknown, 0, typeColor);
 
+	/// <summary>A signature's type the way DisassemblerHelpers.WriteTo(TypeSig) writes it.</summary>
+	public static void Write(TextPartsBuilder output, TypeSig? type, Syntax syntax, Func<ITypeDefOrRef, string>? typeColor) =>
+		Write(output, type, syntax, 0, typeColor);
+
 	static void Write(TextPartsBuilder output, TypeSig? type, Syntax syntax, int depth, Func<ITypeDefOrRef, string>? typeColor) {
 		if (type is null || depth++ > MaxDepth)
 			return;
@@ -234,8 +238,10 @@ static class ILTypeName {
 			output.Write(Color(), Escape(name));
 			return;
 		}
+		// DnlibExtensions.GetScopeName: an assembly or a module by its simple name, which dnlib's ScopeName is not
+		// for an assembly reference.
 		if (type is not TypeDef && type.Scope is { } scope)
-			output.Write(TextColors.Punctuation, "[").Write(TextColors.ILModule, Escape(scope.ScopeName)).Write(TextColors.Punctuation, "]");
+			output.Write(TextColors.Punctuation, "[").Write(TextColors.ILModule, Escape(scope is IFullName named ? named.Name.String : scope.ScopeName)).Write(TextColors.Punctuation, "]");
 		if (MustEscape(fullName)) {
 			output.Write(Color(), Escape(fullName));
 			return;

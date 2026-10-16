@@ -301,6 +301,90 @@ public sealed class WorkspaceSearchTests : IDisposable {
 		Assert.Equal("string GlobalFunction()", literal.Name);
 	}
 
+	[Fact]
+	public async Task WritesResultsThroughTheLanguageItIsAskedWith() {
+		var workspaceId = await OpenAsync();
+
+		async Task<(string Name, string Location)> Written(string query, string searchType, DecompilerLanguage language, string location = "SearchTarget.Library") {
+			var response = await manager.SearchAsync(new SearchRequest(workspaceId, query, searchType, Language: language), Token);
+			var result = Assert.Single(response.Results, result => result.Location == location);
+			return (result.Name, result.Location);
+		}
+
+		// Visual Basic writes a member through its own formatter and a type through its own conversion.
+		Assert.Equal(("Function Describe(Integer, [String], ParamArray Object()) As String", "SearchTarget.Library"), await Written("Describe", SearchTypes.Method, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("Widening Operator CType(Library) As String", "SearchTarget.Library"), await Written("op_Implicit", SearchTypes.Method, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("ReadOnly Property Item(Integer) As Integer", "SearchTarget.Library"), await Written("Item", SearchTypes.Property, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("Event Opened As EventHandler", "SearchTarget.Library"), await Written("Opened", SearchTypes.Event, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("Answer As Integer", "SearchTarget.Library"), await Written("Answer", SearchTypes.Field, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("Library.Nested(Of T)", "SearchTarget.Library"), await Written("Nested", SearchTypes.Type, DecompilerLanguage.VisualBasic));
+		Assert.Equal(("Sub New()", "SearchTarget.Generic(Of TKey, TValue)"), await Written(".ctor", SearchTypes.Method, DecompilerLanguage.VisualBasic, "SearchTarget.Generic(Of TKey, TValue)"));
+		// The IL decompilers leave a member to the C# formatter, and write a type as the disassembler names it.
+		Assert.Equal(("string Describe(int, [string], params object[])", "SearchTarget.Library"), await Written("Describe", SearchTypes.Method, DecompilerLanguage.IL));
+		Assert.Equal(("Nested`1", "SearchTarget.Library"), await Written("Nested", SearchTypes.Type, DecompilerLanguage.IL));
+		Assert.Equal(("Nested()", "SearchTarget.Library/Nested`1"), await Written(".ctor", SearchTypes.Method, DecompilerLanguage.ILWithCSharp, "SearchTarget.Library/Nested`1"));
+	}
+
+	[Fact]
+	public async Task WritesTheToolTipTheWayTheDecompilerDoes() {
+		var workspaceId = await OpenAsync();
+
+		async Task<string> ToolTip(string query, string searchType, DecompilerLanguage language) {
+			var response = await manager.SearchAsync(new SearchRequest(workspaceId, query, searchType, Language: language), Token);
+			var tip = Assert.Single(response.Results).ToolTip!;
+			Assert.EndsWith("\n" + TargetPath, tip, StringComparison.Ordinal);
+			return tip[..^(TargetPath.Length + 1)];
+		}
+
+		Assert.Equal("string Library.Describe(int count, [string label  = \"x\"], params object[] rest)\nIL_0002: ldc.i4 31337", await ToolTip("31337", SearchTypes.Literal, DecompilerLanguage.CSharp));
+		Assert.Equal("(constant) int Library.Answer = 0x00001092", await ToolTip("Answer", SearchTypes.Field, DecompilerLanguage.CSharp));
+		Assert.Equal("Library.Nested<T>", await ToolTip("Nested", SearchTypes.Type, DecompilerLanguage.CSharp));
+		Assert.Equal("SearchTarget.Inner", await ToolTip("Inner", SearchTypes.Namespace, DecompilerLanguage.CSharp));
+		Assert.Equal("Function Library.Describe(count As Integer, [label As String  = \"x\"], ParamArray rest As Object()) As String", await ToolTip("Describe", SearchTypes.Method, DecompilerLanguage.VisualBasic));
+		Assert.Equal("(constant) Library.Answer As Integer = &H00001092", await ToolTip("Answer", SearchTypes.Field, DecompilerLanguage.VisualBasic));
+		// IL writes a member the way its disassembler names one, a property or an event as the header of its block.
+		Assert.Equal("instance string SearchTarget.Library::Describe(int32, string, object[])\nIL_0002: ldc.i4 31337", await ToolTip("31337", SearchTypes.Literal, DecompilerLanguage.IL));
+		Assert.Equal("string SearchTarget.Library::op_Implicit(class SearchTarget.Library)", await ToolTip("op_Implicit", SearchTypes.Method, DecompilerLanguage.IL));
+		Assert.Equal("int32 SearchTarget.Library::Answer", await ToolTip("Answer", SearchTypes.Field, DecompilerLanguage.IL));
+		Assert.Equal(".property instance int32 Item(\n\tint32 index\n) { .get; }", await ToolTip("Item", SearchTypes.Property, DecompilerLanguage.IL));
+		Assert.Equal(".event [System.Runtime]System.EventHandler Opened { .addon; .removeon; }", await ToolTip("Opened", SearchTypes.Event, DecompilerLanguage.ILWithCSharp));
+		Assert.Equal("Nested`1", await ToolTip("Nested", SearchTypes.Type, DecompilerLanguage.IL));
+
+		// The tooltip is colored the way its text is.
+		var literal = Assert.Single((await manager.SearchAsync(new SearchRequest(workspaceId, "31337", SearchTypes.Literal, Language: DecompilerLanguage.IL), Token)).Results);
+		Assert.Equal(literal.ToolTip, string.Concat(literal.ToolTipParts!.Select(part => part.Text)));
+		Assert.Contains(("IL_0002", TextColors.Label), literal.ToolTipParts!.Select(part => (part.Text, part.Color)));
+		Assert.Contains(("ldc.i4", TextColors.OpCode), literal.ToolTipParts!.Select(part => (part.Text, part.Color)));
+		Assert.Contains(("31337", TextColors.Number), literal.ToolTipParts!.Select(part => (part.Text, part.Color)));
+	}
+
+	[Fact]
+	public async Task WritesWhatASearchFoundAgainThroughAnotherLanguage() {
+		var workspaceId = await OpenAsync();
+		// What the search sends ahead and what it answers with.
+		var found = new List<SearchResultDto>();
+		var response = await manager.SearchAsync(new SearchRequest(workspaceId, "Describe", SearchTypes.Any, ProgressToken: "search-1"), progress => {
+			found.AddRange(progress.Results);
+			return Task.CompletedTask;
+		}, Token);
+		found.AddRange(response.Results);
+		Assert.Equal(["string Describe(int, [string], params object[])"], found.Select(result => result.Name));
+
+		var relabeled = await manager.RelabelSearchAsync(new SearchRelabelRequest(workspaceId, "search-1", DecompilerLanguage.VisualBasic, 0, 10), Token);
+		Assert.Equal(0, relabeled.Start);
+		var result = Assert.Single(relabeled.Results);
+		Assert.Equal(("Function Describe(Integer, [String], ParamArray Object()) As String", found[0].NodeId), (result.Name, result.NodeId));
+		Assert.StartsWith("Function Library.Describe(", result.ToolTip, StringComparison.Ordinal);
+		// A range past the end is cut to what was found.
+		Assert.Empty((await manager.RelabelSearchAsync(new SearchRelabelRequest(workspaceId, "search-1", DecompilerLanguage.IL, 1, 10), Token)).Results);
+
+		// The workspace keeps only the last few searches.
+		for (var index = 2; index <= 5; index++)
+			await manager.SearchAsync(new SearchRequest(workspaceId, "Describe", SearchTypes.Any, ProgressToken: $"search-{index}"), _ => Task.CompletedTask, Token);
+		await Assert.ThrowsAsync<RpcException>(() => manager.RelabelSearchAsync(new SearchRelabelRequest(workspaceId, "search-1", DecompilerLanguage.IL), Token));
+		Assert.Single((await manager.RelabelSearchAsync(new SearchRelabelRequest(workspaceId, "search-5", DecompilerLanguage.IL), Token)).Results);
+	}
+
 	async Task<string> OpenAsync() {
 		Assert.True(File.Exists(TargetPath), "The search fixture was not copied to the test output.");
 		return (await manager.OpenAsync(new OpenWorkspaceRequest([TargetPath]), Token)).WorkspaceId;

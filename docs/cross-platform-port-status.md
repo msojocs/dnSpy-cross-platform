@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.10（分析器）、4.11（字符串引用窗口）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -41,7 +41,7 @@
 |---|---|---|---|---|---|---|
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | 100% | 29 | 0 | 0 | 1 | 全部功能点对齐 WPF：行文本随工具栏语言（C#/VB/IL）重写、结果不设上限、IL 视图定位到指令的操作数、程序集树多选与基类型行可分析 |
-| 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
+| 搜索窗口 | 100% | 29 | 0 | 0 | 0 | 全部功能点对齐 WPF：结果文本与提示随工具栏语言（C#/VB/IL）重写而不重搜、提示为各语言的成员签名、「Search For」下拉项带图标、位置作用于整个选区、IL 视图跟随到指令、命令行 `--search*` |
 | 应用壳与通用 UI | ~97% | 32 | 5 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片、会话恢复（含光标与滚动位置）齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30，完成度约 **61%**（2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30，完成度约 **62%**（2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -91,7 +91,7 @@
 
 4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。仍未绑的只剩十六进制只读视图里的几个（Ctrl+X、Ctrl+Shift+D 等，本移植版不能改字节）。主菜单现在可以用键盘操作。
 
-5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN、分析（2026-10-16 起）作用于整个选区；但位置为「选中文件 / 选中类型」的搜索、删除类型与成员、多节点合并反编译仍只看一个节点。
+5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN、分析（2026-10-16 起）、位置为「选中文件 / 同一文件夹 / 选中类型」的搜索作用于整个选区；但删除类型与成员、多节点合并反编译仍只看一个节点。
 
 6. ~~**未保存修改的保护不完整。**~~ 2026-10-14 已修：有未保存修改时关闭窗口，主进程会拦下这次关闭并反问「是否要在继续之前保存？」（是 / 否 / 取消），取消则留在原地。Reload All 与移除程序集仍按 WPF 各自询问，措辞与本移植版的其它对话框一致。
 
@@ -411,28 +411,28 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.9 搜索窗口
 
-完成度约 88%（✅ 24 / 🟡 3 / ❌ 2）。WPF 范围：`WPF/Search/`。后端的匹配器、过滤器、遍历器（`BE/Search/`）逐段对照 WPF 移植。
+完成度 100%（✅ 29）。WPF 范围：`WPF/Search/`。后端的匹配器、过滤器、遍历器（`BE/Search/`）逐段对照 WPF 移植。2026-10-16 补齐原来的 4 个 🟡 与 1 个 ❌ 并按实现与测试复核：此前「命令行 `--search*`」标 ❌，实际已随程序集树一轮接通；「位置 4 项」标「树单选」，实际前端早已传整个选区。后端、前端单测与 e2e 都在本机真实构建后跑过（见本节末尾）。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | 打开窗口（Ctrl+Shift+K、菜单、工具栏） | `Search/Commands.cs` | `FE/App.tsx`、`edit-menu.ts`、`ToolBar.tsx` | ✅ | |
 | 打开后聚焦并全选 | `Search/SearchService.cs` | `search-store.ts` 的 `requestFocus` | ✅ | |
 | 边输入边搜（500ms） | `Search/SearchControlVM.cs` | `search-store.ts` | ✅ | 另加 Enter 立即搜 |
-| 搜索类型 24 项 | `Search/SearchType.cs` | `FE/search-model.ts`、`BE/Search/SearchFilter.cs` | ✅ | 原生 select，下拉项无图标 |
-| 位置 4 项 | `Search/SearchControlVM.cs` | `BE/WorkspaceManager.Search.cs` | 🟡 | 树单选，只按一个节点算 |
+| 搜索类型 24 项 | `Search/SearchType.cs`、`SearchControl.xaml` | `FE/search-model.ts`、`SearchPaneParts.tsx` 的 `SearchTypeBox`、`BE/Search/SearchFilter.cs` | ✅ | 自绘下拉框：每项带 dnSpy 的图标（Template、StructurePublic、DelegatePublic 等与 SearchControlVM 一致），有快捷键的项以 `Ctrl+字母` 为提示；收起时上下键直接换项，Alt+↓ / F4 / Enter / 空格展开 |
+| 位置 4 项 | `Search/SearchControlVM.cs` | `BE/WorkspaceManager.Search.cs`、`search-store.ts` 的 `searchSelectionOf` | ✅ | 作用于树的整个选区；「选中类型」按 dnSpy 的 `GetAncestorOrSelf<TypeNode>` 取每行所在的类型，基类型 / 派生类型文件夹里的行算作文件夹所挂的类型（这层父子关系只有前端的树知道） |
 | 选项 6 个复选框 | `Search/SearchControl.xaml` | `SearchPane.tsx` | ✅ | |
 | 名称匹配（分词、全词、大小写、正则） | `dnSpy.Contracts.DnSpy/Search/SearchComparers.cs` | `BE/Search/SearchComparers.cs` | ✅ | |
 | 字面量匹配 | 同上、`Search/FilterSearcher.cs` | `SearchComparers.cs`、`FilterSearcher.cs` | ✅ | |
-| 遍历与过滤语义 | `Search/FilterSearcher.cs` | `BE/Search/FilterSearcher.cs` | ✅ | 包含 `<Module>` 全局函数和字段；模块引用结果无法跳转 |
+| 遍历与过滤语义 | `Search/FilterSearcher.cs` | `BE/Search/FilterSearcher.cs` | ✅ | 包含 `<Module>` 全局函数和字段；模块引用结果无法跳转（树里没有这种行，WPF 同样跳不过去） |
 | 资源搜索（含 BAML） | `Search/FilterSearcher.cs` | `ResourceTexts.cs`、`DecompileBaml` | ✅ | |
 | 在框架程序集中搜索 | `FrameworkFileUtils` | `BE/Search/FrameworkAssemblies.cs` | ✅ | |
 | 搜索编译器生成的成员 | `FilterSearcher.IsCompilerGenerated` | `BE/Search/CompilerGeneratedMembers.cs` | ✅ | 不随反编译器选项变化 |
 | 结果列表（图标、高亮、排序） | `Search/SearchResult.cs` | `SearchResultFormatter.cs`、`SearchPane.tsx` | ✅ | 按视口渲染 |
-| 结果文本随语言变化 | `Search/SearchService.cs` | 无 | 🟡 | 固定 C# 写法 |
-| 结果提示 | `SearchResult.CreateToolTipUI` | `SearchToolTip` | 🟡 | 纯文本，缺成员签名 |
+| 结果文本随语言变化 | `Search/SearchService.cs` 的 `DecompilerChanged`、`SearchResult.CreateUI` | `BE/Search/SearchResultFormatter.cs`、RPC `search/relabel`、`search-store.ts` 的 `relabel` | ✅ | 成员走反编译器的 `Write`：C# 与两种 IL 视图都是 C# 格式化器（WPF 的 IL 反编译器不覆写它），VB 是移植的 `VisualBasicFormatter`（`BE/VisualBasicMemberFormatter.cs`）；类型走各语言的 `WriteType`（IL 写成 ``Nested`1``、``SearchTarget.Library/Nested`1``）。切换语言时后端按保留的最近 4 次搜索重写已有结果，不重搜、选中项不变；切换后才到的批次再补写一次 |
+| 结果提示 | `SearchResult.CreateToolTipUI` | `SearchResultFormatter.WriteToolTip`、`SearchPaneParts.tsx` 的 `SearchResultToolTip` | ✅ | 成员走各语言的 `WriteToolTip`：C#（`CSharpMemberFormatter.WriteToolTip`，含 `(constant)`、默认值、`[deprecated]`、`(awaitable, extension)`、`(+ N overloads)`）、VB 同理、IL 用反汇编器的写法（`BE/ILMemberFormatter.cs`：`instance string NS.T::M(int32)`、`.property … { .get; }`）；方法体命中另起一行写 `IL_0002: ldc.i4 31337`，最后一行是文件路径。悬停 400ms 出现，开着语法高亮时按颜色画 |
 | 边搜边出 | `Search/DocumentSearcher.cs` | RPC `search/run` + `search/progress` | ✅ | 单线程切片 |
 | 上限 10,000 与红框 | 同上 | `BE/Search/SearchRun.cs` | ✅ | |
-| 跟随结果（含方法体内定位） | `SearchService.FollowResult` | `SearchPane.tsx`、`findSearchResultCaret` | 🟡 | 只在 C# 视图定位到语句 |
+| 跟随结果（含方法体内定位） | `SearchService.FollowResult` | `SearchPane.tsx`、`findSearchResultCaret` | ✅ | C# 定位到语句起点，IL 定位到那条指令（IL 视图的语句即指令）；VB 视图没有语句表（见第 2 节第 3 条），只打开方法 |
 | 右键：转到引用 / 新标签 | `Search/Commands.cs` | `SearchContextMenu.tsx` | ✅ | |
 | 右键：复制 token / 全名 | `CopyTokenCommand.cs` 等 | 同上 | ✅ | |
 | 右键：类断点 / 跟踪点 / 方法断点 | `DBG/.../ClassBreakpointCommands.cs` | 同上 | ✅ | |
@@ -443,9 +443,11 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 设置持久化 | `Search/SearchSettings.cs` | `app-options.ts` | ✅ | |
 | 文档变化时清空或重搜 | `Search/SearchService.cs` | `search-store.ts` | ✅ | |
 | 关闭窗口时停止并清空 | `Search/SearchToolWindowContent.cs` | `FE/App.tsx` 的 `onModelChange` | ✅ | |
-| 命令行 `--search*` | `Search/AppCommandLineArgsHandler.cs` | 无 | ❌ | |
+| 命令行 `--search*` | `Search/AppCommandLineArgsHandler.cs` | `MAIN/command-line.ts`、`FE/command-line-options.ts`、`FE/App.tsx` | ✅ | `--search`、`--search-for`、`--search-in` 与 WPF 的全部别名；WPF 设好文本后照常等 500ms 再搜，这里立即搜 |
 
-测试：后端 `WorkspaceSearchTests.cs` 21 条（新增全局函数和字段测试）；前端 `search-model.test.ts`、`search-store.test.ts`、`SearchPane.test.tsx`；e2e 3 条。
+顺带修正：IL 写其他程序集的类型时，方括号里写的是程序集全名（`['System.Runtime, Version=…']`），ILSpy 的 `GetScopeName` 只写简单名（`[System.Runtime]`），已改正，分析器的 IL 行文本同样受益。
+
+测试：后端 `WorkspaceSearchTests.cs` 18 条（新增按语言写结果、按语言写提示、`search/relabel` 3 条）、`CSharpMemberFormatterTests.cs` 9 条、`VisualBasicMemberFormatterTests.cs` 7 条；前端 `search-model.test.ts`、`search-store.test.ts`、`SearchPane.test.tsx`（新增下拉框、提示、换语言保留选中、选中类型取祖先、换语言重写与批次补写）；e2e 4 条（新增「按工具栏语言重写列表并在提示里解释结果」）。2026-10-16 本机构建后：后端 425 条、前端 1110 条全部通过，e2e 全套 93 通过、3 跳过。
 
 ### 4.10 分析器
 

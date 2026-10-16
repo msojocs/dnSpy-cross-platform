@@ -194,4 +194,15 @@ describe('findReferenceCaret', () => {
     expect(findReferenceCaret(document, source({ methodToken: 0x06000005 }))).toBeUndefined()
     expect(findReferenceCaret({ text, spans, codeStatements: [] }, source({}))).toBeUndefined()
   })
+
+  it('lands on the member an IL instruction names, the instruction being the statement', () => {
+    const il = '.method M() {\n  IL_0000: ldarg.0\n  IL_0001: callvirt     System.Double NS.Shape::Area()\n}'
+    const name = il.indexOf('Area')
+    const ilDocument = {
+      text: il,
+      spans: [{ start: name, length: 4, kind: 'reference' as const, targetNodeId: 'area' }],
+      codeStatements: [statement(2, 0, 1, { endColumn: 19 }), statement(3, 1, 6, { endColumn: 55 })],
+    }
+    expect(findReferenceCaret(ilDocument, source({ ilOffset: 1, targets: [{ nodeId: 'area' }] }))).toEqual(lineColumnOfOffset(il, name))
+  })
 })

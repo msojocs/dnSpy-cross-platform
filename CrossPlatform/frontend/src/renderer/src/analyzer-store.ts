@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import type { AnalyzeProgress, AnalyzerNode } from '../../shared/protocol'
+import type { AnalyzeProgress, AnalyzerNode, DecompilerLanguage } from '../../shared/protocol'
 import type { AnalyzerChildren, AnalyzerRow, AnalyzerTreeState } from './analyzer-model'
 import { useAppStore } from './app-store'
+import { loadAppOptions } from './components/app-options'
 import { translate as t } from './localization'
 
 // dnSpy's analyzer window. Each analyzed member is a root of its own, appended in the order it was asked
@@ -37,12 +38,28 @@ interface AnalyzerState extends AnalyzerTreeState {
    * closes, and a root whose member is gone goes with it. The rows still standing are written anew.
    */
   revalidate(): Promise<void>
+  /**
+   * What dnSpy does when another decompiler is chosen: every row is written anew through it — the rows of the
+   * keys given, or all of them. What the searches found stays; only the text changes.
+   */
+  relabel(keys?: string[]): Promise<void>
 }
 
 let nextRowKey = 0
 let nextRequestKey = 0
 
 const newRowKey = (): string => `a${++nextRowKey}`
+
+// The language each running search was asked in: rows a search sends after the language changed are written
+// in the old one, and are written again once they arrive.
+const requestLanguages = new Map<string, DecompilerLanguage>()
+
+/** The decompiler the analyzer writes its rows through: the one dnSpy's language box picks. */
+const currentLanguage = (): DecompilerLanguage => useAppStore.getState().defaultLanguage
+
+// The rows a decompiler writes: the members. An accessor row is its keyword, an assembly or a module row its
+// name, a search row its header — the same in every language.
+const RELABELED_KINDS = new Set(['type', 'method', 'field', 'property', 'event'])
 
 const message = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason)
 
@@ -106,7 +123,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       return
     let node: AnalyzerNode | null | undefined
     try {
-      node = (await window.dnSpy.analyzeNodes(workspaceId, [nodeId])).nodes[0]
+      node = (await window.dnSpy.analyzeNodes(workspaceId, [nodeId], currentLanguage())).nodes[0]
     } catch (reason) {
       appStore.appendOutput(t('Analysis failed: {message}', { message: message(reason) }))
       return
@@ -146,6 +163,8 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       return
     }
     const requestKey = `r${++nextRequestKey}`
+    const language = currentLanguage()
+    requestLanguages.set(requestKey, language)
     set((state) => ({ children: { ...state.children, [key]: { status: 'loading', requestKey, keys: [] } } }))
     // A response is only taken while the row still waits for this very request: one the row was closed
     // on, or one that outlived the workspace, is dropped.
@@ -158,6 +177,9 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
         nodeId,
         search: row.node.search ?? undefined,
         isSetter: row.node.isSetter,
+        language,
+        // dnSpy's analyzer reads the C# decompiler's own setting when it decides what a lambda is listed as.
+        decompileAnonymousMethods: loadAppOptions().decompiler.cSharp.anonymousMethods,
       }, requestKey)
       if (!stillWanted())
         return
@@ -169,6 +191,8 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
         rows: { ...state.rows, ...Object.fromEntries(childRows.map((child) => [child.key, child])) },
         children: { ...state.children, [key]: { status: 'loaded', keys, truncated: response.truncated } },
       }))
+      if (language !== currentLanguage())
+        void get().relabel(keys)
       if (response.truncated)
         useAppStore.getState().appendOutput(t('The analyzer stopped after {count} result(s).', { count: keys.length }))
     } catch (reason) {
@@ -178,6 +202,8 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       const held = (get().children[key] as Extract<AnalyzerChildren, { status: 'loading' }>).keys
       set((state) => ({ children: { ...state.children, [key]: { status: 'loaded', keys: held, truncated: false } } }))
       useAppStore.getState().appendOutput(t('Analysis failed: {message}', { message: message(reason) }))
+    } finally {
+      requestLanguages.delete(requestKey)
     }
   },
 
@@ -193,6 +219,9 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
       rows: { ...state.rows, ...Object.fromEntries(childRows.map((child) => [child.key, child])) },
       children: { ...state.children, [key]: { ...loading, keys: [...loading.keys, ...childRows.map((child) => child.key)] } },
     }))
+    const language = requestLanguages.get(requestKey)
+    if (language && language !== currentLanguage())
+      void get().relabel(childRows.map((child) => child.key))
   },
 
   collapse: (key) => {
@@ -276,7 +305,7 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
     const nodeIds = rootKeys.map((key) => get().rows[key]?.node.nodeId ?? '')
     let nodes: (AnalyzerNode | null)[]
     try {
-      nodes = (await window.dnSpy.analyzeNodes(workspaceId, nodeIds)).nodes
+      nodes = (await window.dnSpy.analyzeNodes(workspaceId, nodeIds, currentLanguage())).nodes
     } catch {
       return
     }
@@ -292,6 +321,42 @@ export const useAnalyzerStore = create<AnalyzerState>((set, get) => ({
           const node = nodes[index]
           const row = state.rows[key]
           return node && row ? [[key, { ...row, node }]] : []
+        })),
+      },
+    }))
+  },
+
+  relabel: async (keys) => {
+    const workspaceId = useAppStore.getState().workspaceId
+    if (!workspaceId)
+      return
+    const language = currentLanguage()
+    const before = get().rows
+    const targets = (keys ?? Object.keys(before)).filter((key) => {
+      const node = before[key]?.node
+      return !!node?.nodeId && !node.accessor && RELABELED_KINDS.has(node.kind)
+    })
+    // A member found any number of times is asked for once.
+    const nodeIds = [...new Set(targets.map((key) => before[key].node.nodeId!))]
+    if (nodeIds.length === 0)
+      return
+    let nodes: (AnalyzerNode | null)[]
+    try {
+      nodes = (await window.dnSpy.analyzeNodes(workspaceId, nodeIds, language)).nodes
+    } catch {
+      return
+    }
+    // A language chosen since asks again; a workspace replaced since has no rows to write.
+    if (useAppStore.getState().workspaceId !== workspaceId || currentLanguage() !== language)
+      return
+    const written = new Map(nodeIds.map((nodeId, index) => [nodeId, nodes[index]]))
+    set((state) => ({
+      rows: {
+        ...state.rows,
+        ...Object.fromEntries(targets.flatMap((key) => {
+          const row = state.rows[key]
+          const fresh = row?.node.nodeId ? written.get(row.node.nodeId) : undefined
+          return row && fresh ? [[key, { ...row, node: { ...row.node, label: fresh.label, labelParts: fresh.labelParts } }]] : []
         })),
       },
     }))
@@ -312,4 +377,7 @@ useAppStore.subscribe((state, previous) => {
   }
   if (state.workspaceStateId !== previous.workspaceStateId || state.assemblyListRevision !== previous.assemblyListRevision)
     void useAnalyzerStore.getState().revalidate()
+  // dnSpy's DecompilerChanged: the rows are written through the decompiler chosen.
+  else if (state.defaultLanguage !== previous.defaultLanguage)
+    void useAnalyzerStore.getState().relabel()
 })

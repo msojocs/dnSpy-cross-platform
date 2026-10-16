@@ -7,7 +7,7 @@ namespace dnSpy.Backend.Core;
 
 public sealed partial class WorkspaceManager {
 	public Task<AnalyzeNodesResponse> AnalyzeNodesAsync(AnalyzeNodesRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => w.AnalyzeNodes(request.NodeIds), cancellationToken);
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.AnalyzeNodes(request.NodeIds, request.Language), cancellationToken);
 
 	public Task<AnalyzeChildrenResponse> AnalyzeChildrenAsync(AnalyzeChildrenRequest request, CancellationToken cancellationToken) =>
 		AnalyzeChildrenAsync(request, null, cancellationToken);
@@ -49,13 +49,14 @@ public sealed partial class WorkspaceManager {
 
 		void NoteModelChanged() => analyzerEpoch++;
 
-		/// <summary>The analyzer rows of the nodes asked for — null for one that is not a member any more.</summary>
-		public AnalyzeNodesResponse AnalyzeNodes(IReadOnlyList<string> nodeIds) {
+		/// <summary>The analyzer rows of the nodes asked for, written in the language given — null for one that is
+		/// not a member any more.</summary>
+		public AnalyzeNodesResponse AnalyzeNodes(IReadOnlyList<string> nodeIds, DecompilerLanguage language) {
 			var rows = new List<AnalyzerNodeDto?>(nodeIds.Count);
 			foreach (var nodeId in nodeIds) {
 				AnalyzerNodeDto? row = null;
 				if (nodes.TryGetValue(nodeId, out var node) && AnalyzableMember(node) is { } member)
-					row = AnalyzerEntityDto(new AnalyzerHost(this, member.Module), member);
+					row = AnalyzerEntityDto(new AnalyzerHost(this, member.Module, language), member);
 				rows.Add(row);
 			}
 			return new AnalyzeNodesResponse(rows);
@@ -70,7 +71,7 @@ public sealed partial class WorkspaceManager {
 			if (request.Search is null)
 				return await RunAsync(w => w.GetAnalyzerEntityChildren(request), cancellationToken).ConfigureAwait(false);
 			var progressToken = progress is null ? null : request.ProgressToken;
-			var maxResults = Math.Clamp(request.MaxResults, 1, 100_000);
+			var maxResults = Math.Max(request.MaxResults, 1);
 			var (run, host) = await RunAsync(w => w.PrepareAnalyzerSearch(request, maxResults, pacing.Parallelism, cancellationToken), cancellationToken).ConfigureAwait(false);
 			// The hits written as rows so far, and the rows sent ahead: a hit in a module the workspace has no
 			// entry for makes no row, so the two counts part.
@@ -115,7 +116,7 @@ public sealed partial class WorkspaceManager {
 		AnalyzeChildrenResponse GetAnalyzerEntityChildren(AnalyzeChildrenRequest request) {
 			var member = AnalyzableMember(GetNode(request.NodeId))
 				?? throw new RpcException(ErrorCodes.InvalidParams, "Only types and members can be analyzed.");
-			var host = new AnalyzerHost(this, member.Module);
+			var host = new AnalyzerHost(this, member.Module, request.Language);
 			var memberNodeId = AnalyzerNodeId(member);
 			var rows = new List<AnalyzerNodeDto>();
 			foreach (var child in AnalyzerEntityChildren.Of(host, member, request.IsSetter)) {
@@ -141,7 +142,7 @@ public sealed partial class WorkspaceManager {
 		(AnalyzerSearchRun Run, AnalyzerHost Host) PrepareAnalyzerSearch(AnalyzeChildrenRequest request, int maxResults, int parallelism, CancellationToken cancellationToken) {
 			var member = AnalyzableMember(GetNode(request.NodeId))
 				?? throw new RpcException(ErrorCodes.InvalidParams, "Only types and members can be analyzed.");
-			var host = new AnalyzerHost(this, member.Module);
+			var host = new AnalyzerHost(this, member.Module, request.Language, request.Language == DecompilerLanguage.CSharp && request.DecompileAnonymousMethods);
 			var search = AnalyzerEntityChildren.CreateSearch(host, member, request.Search!, request.IsSetter);
 			return (new AnalyzerSearchRun(search, analyzerEpoch, maxResults, parallelism, cancellationToken), host);
 		}
@@ -253,7 +254,7 @@ public sealed partial class WorkspaceManager {
 
 		TextPartsBuilder AnalyzerLabel(AnalyzerHost host, object entity) {
 			var label = new TextPartsBuilder();
-			AnalyzerLabelFormatter.Write(label, host, entity, TypeColor);
+			AnalyzerLabelFormatter.Write(label, host, entity, host.Language, TypeColor);
 			return label;
 		}
 
@@ -280,6 +281,27 @@ public sealed partial class WorkspaceManager {
 				unchecked((int)sourceRef.Method.MDToken.Raw),
 				sourceRef.IlOffset is { } offset ? (int)offset : null,
 				targets);
+		}
+
+		/// <summary>
+		/// The member an IL instruction's operand names, written the way a reference span of a decompiled
+		/// document names it: by node alone in a module the workspace holds, by file and token in one a reference
+		/// loaded. The operand is resolved the way the analyzer resolves the one it records, so the span of a use
+		/// the analyzer found names the targets the result carries.
+		/// </summary>
+		internal SpanTarget? ILReferenceTarget(AnalyzerHost host, object operand) {
+			IMemberDef? target = operand switch {
+				TypeDef or MethodDef or FieldDef => (IMemberDef)operand,
+				IMethod method when method.IsMethod => host.ResolveMethodDef(method),
+				IField field when field.IsField => host.ResolveFieldDef(field),
+				ITypeDefOrRef type => host.ResolveTypeDef(type),
+				_ => null,
+			};
+			if (target is null || AnalyzerModuleEntry(target.Module) is not { } entry)
+				return null;
+			return IsOpenModule(entry)
+				? new SpanTarget(GetMemberNode(target, entry).Id, null, null)
+				: new SpanTarget(null, entry.Path, unchecked((int)target.MDToken.Raw));
 		}
 
 		/// <summary>A target written the way a decompiled document's span writes one: by node in a module the
@@ -334,7 +356,7 @@ public sealed partial class WorkspaceManager {
 		/// looks at several types at once, so one lookup runs at a time: it reads the workspace's indexes and
 		/// may load a module into it, neither of which is safe to do from two threads.
 		/// </summary>
-		sealed class AnalyzerHost : IAnalyzerHost {
+		internal sealed class AnalyzerHost : IAnalyzerHost {
 			const int MaxForwarderDepth = 8;
 			readonly Lock sync = new();
 			readonly Workspace workspace;
@@ -342,15 +364,29 @@ public sealed partial class WorkspaceManager {
 			readonly Dictionary<object, TypeDef?> types = new(ReferenceEqualityComparer.Instance);
 			readonly Dictionary<object, MethodDef?> methods = new(ReferenceEqualityComparer.Instance);
 			readonly Dictionary<object, FieldDef?> fields = new(ReferenceEqualityComparer.Instance);
+			readonly bool loadOnDemand;
 
-			public AnalyzerHost(Workspace workspace, ModuleDef? analyzedModule) {
+			/// <param name="language">The decompiler the rows are written through.</param>
+			/// <param name="showsOriginalCodeLocation">Whether a result found in a lambda or a state machine is
+			/// listed as the method the code was written in, which dnSpy does for the C# decompiler with its
+			/// anonymous methods setting on.</param>
+			/// <param name="loadOnDemand">Whether a reference to an assembly nothing loaded yet loads it, the
+			/// way a search does; a document that only names what it can place leaves the assembly be.</param>
+			public AnalyzerHost(Workspace workspace, ModuleDef? analyzedModule, DecompilerLanguage language = DecompilerLanguage.CSharp, bool showsOriginalCodeLocation = true, bool loadOnDemand = true) {
 				this.workspace = workspace;
+				this.loadOnDemand = loadOnDemand;
+				Language = language;
+				ShowsOriginalCodeLocation = showsOriginalCodeLocation;
 				documents = workspace.OrderedModules().Select(entry => (ModuleDef)entry.Module).ToList();
 				if (analyzedModule is not null && !documents.Contains(analyzedModule))
 					documents.Add(analyzedModule);
 			}
 
 			public IReadOnlyList<ModuleDef> Documents => documents;
+
+			public DecompilerLanguage Language { get; }
+
+			public bool ShowsOriginalCodeLocation { get; }
 
 			public TypeDef? ResolveTypeDef(IType? type) {
 				switch (type) {
@@ -412,7 +448,7 @@ public sealed partial class WorkspaceManager {
 					if (workspace.GetTypeIndex(entry).TryGetValue(fullName, out var byName))
 						return byName;
 				}
-				if (workspace.AnalyzerModuleEntry(sourceModule) is { } owner && workspace.LoadReferenceModule(owner, assemblyRef) is { } reference)
+				if (loadOnDemand && workspace.AnalyzerModuleEntry(sourceModule) is { } owner && workspace.LoadReferenceModule(owner, assemblyRef) is { } reference)
 					return FindOrFollow(reference.Module, fullName, depth);
 				return null;
 			}

@@ -4707,9 +4707,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// <summary>
 		/// The IL view. Beside the text it records what dnSpy's disassembler does: a statement per instruction —
 		/// the IL view's sequence points, which a bookmark, a hex lookup or a search hit at the caret resolves
-		/// to — and a definition span over the name of every member it declares, which is where a token bookmark
-		/// sits. Every line goes through <see cref="WriteLine"/>, so the line a statement is recorded at is the one
-		/// its text lands on.
+		/// to — a definition span over the name of every member it declares, which is where a token bookmark
+		/// sits, and a reference span over the member an instruction names, which is what the caret is put on
+		/// when the analyzer shows a use in a method. Every line goes through <see cref="WriteLine"/>, so the line
+		/// a statement is recorded at is the one its text lands on.
 		/// </summary>
 		sealed class ILFormatter {
 			readonly StringBuilder builder = new();
@@ -4719,6 +4720,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			readonly Workspace workspace;
 			readonly Func<IMemberDef, SpanTarget?>? resolveDefinition;
 			readonly Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider;
+			// What the instructions name is found the way the analyzer finds it, among what is loaded: drawing a
+			// method does not load the assemblies its calls go to.
+			AnalyzerHost? referenceHost;
 			int line = 1;
 
 			ILFormatter(string? modulePath, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
@@ -4854,7 +4858,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 								AppendSourceComment(prefix, sources[sourceIndex].Text);
 							sourceIndex++;
 						}
-						var text = $"{prefix}IL_{instruction.Offset:X4}: {instruction.OpCode.Name,-12} {FormatOperand(instruction.Operand)}".TrimEnd();
+						var head = $"{prefix}IL_{instruction.Offset:X4}: {instruction.OpCode.Name,-12} ";
+						var operand = FormatOperand(instruction.Operand);
+						var text = (head + operand).TrimEnd();
+						AddOperandReference(builder.Length + head.Length, operand, instruction.Operand);
 						// dnSpy's IL view has a statement per instruction: the line covers the instruction's bytes
 						// and nothing else, from its offset to the next one's.
 						if (modulePath is not null) {
@@ -4877,6 +4884,27 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					}
 				}
 				WriteLine($"{indent}}}");
+			}
+
+			/// <summary>
+			/// A reference span over what an instruction names: a member's own name in its full name, a type's
+			/// whole name — the stretch dnSpy's disassembler writes as a reference to it. An operand that names
+			/// nothing the workspace can place gets none.
+			/// </summary>
+			void AddOperandReference(int start, string text, object? operand) {
+				if (operand is not IMDTokenProvider || text.Length == 0)
+					return;
+				referenceHost ??= new AnalyzerHost(workspace, null, loadOnDemand: false);
+				if (workspace.ILReferenceTarget(referenceHost, operand) is not { } target)
+					return;
+				var (offset, length) = (0, text.Length);
+				if (operand is IMemberRef member && (member.IsMethod || member.IsField)) {
+					var name = member.Name.String;
+					var at = text.IndexOf("::" + name, StringComparison.Ordinal);
+					if (name.Length > 0 && at >= 0)
+						(offset, length) = (at + 2, name.Length);
+				}
+				spans.Add(new TextSpanDto(start + offset, length, "reference", target.NodeId, target.ModulePath, target.MetadataToken));
 			}
 
 			void AppendSourceComment(string indent, string source) {

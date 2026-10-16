@@ -14,7 +14,7 @@ namespace dnSpy.Backend.Core;
 /// written in parts, each in the color class dnSpy's syntax highlighting gives it; <c>typeColor</c> picks a
 /// type name's class, which only the caller can resolve a reference for.
 /// </summary>
-static class CSharpTypeName {
+static partial class CSharpTypeName {
 	// AstBuilder.MAX_CONVERTTYPE_DEPTH
 	const int MaxDepth = 50;
 

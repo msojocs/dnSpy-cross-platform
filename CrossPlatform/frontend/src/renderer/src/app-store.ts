@@ -341,7 +341,14 @@ interface AppState {
   selectNodes(nodes: readonly TreeNode[], primary?: TreeNode): void
   /** Collapse every expanded node except the selected node and its ancestors. */
   collapseTreeViewNodes(): void
-  openDocument(node: TreeNode, language?: DecompilerLanguage): Promise<string>
+  /** Decompiles a node into its document — and makes it the tree's selection unless `select` is false. */
+  openDocument(node: TreeNode, language?: DecompilerLanguage, select?: boolean): Promise<string>
+  /**
+   * dnSpy's language box: the decompiler every document is shown in. The open tabs are decompiled again in it
+   * (RedecompileTabs), the documents opened from now on use it, and it is remembered for the next start. The
+   * shell, which owns the layout, names the documents its tabs show; the recorded tab order stands in otherwise.
+   */
+  changeLanguage(language: DecompilerLanguage, openDocumentIds?: string[]): Promise<void>
   changeDocumentLanguage(nodeId: string, language: DecompilerLanguage): Promise<void>
   /** Updates the editor state (cursor position and scroll) for a document, which session restore reads back. */
   updateDocumentEditorState(nodeId: string, cursorLine?: number, cursorColumn?: number, scrollTop?: number): void
@@ -574,7 +581,8 @@ interface AppState {
   /** Records the tab order and the selected tab, which the shell reads off the layout it owns. */
   setDocumentOrder(order: string[], active?: string): void
   setRestoringSession(value: boolean): void
-  /** dnSpy's `-l`: the language the next document is decompiled in. */
+  /** dnSpy's `-l` and the language box: the language the next document is decompiled in, remembered for the
+   * next start the way dnSpy's DecompilerServiceSettings remembers it. */
   setDefaultLanguage(language: DecompilerLanguage): void
   /** Brings a tool window to the front. Set by the shell, which owns the layout. */
   openToolWindow?: (tabId: string) => void
@@ -658,6 +666,18 @@ const loadBool = (key: string, fallback: boolean): boolean => {
 // module is still evaluating, so a `const` further down would still be in its temporal dead zone.
 const bookmarksStorageKey = 'dnspy.bookmarks.v1'
 
+// dnSpy's DecompilerServiceSettings.LanguageGuid: the decompiler chosen last, which the next start opens with.
+// Up here for the same reason as the bookmark key.
+const decompilerLanguageStorageKey = 'dnspy.decompilerLanguage'
+const decompilerLanguages: readonly DecompilerLanguage[] = ['cSharp', 'visualBasic', 'il', 'ilWithCSharp']
+
+const loadDefaultLanguage = (): DecompilerLanguage => {
+  if (typeof localStorage === 'undefined')
+    return 'cSharp'
+  const saved = localStorage.getItem(decompilerLanguageStorageKey)
+  return decompilerLanguages.find((language) => language === saved) ?? 'cSharp'
+}
+
 // dnSpy's AssemblyExplorerMostRecentlyUsedList, and the list of file sets this port kept before it — read once to
 // carry the files over. Up here for the same reason as the bookmark key: `loadRecentFiles()` runs at module eval.
 const recentFilesStorageKey = 'dnspy.recentFiles.v1'
@@ -693,7 +713,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   documents: {},
   documentOrder: [],
   restoringSession: false,
-  defaultLanguage: 'cSharp',
+  defaultLanguage: loadDefaultLanguage(),
   assemblyListRevision: 0,
   output: [],
   scriptEntries: [],
@@ -985,14 +1005,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ expanded: next })
   },
 
-  openDocument: async (node, language = get().defaultLanguage) => {
+  openDocument: async (node, language = get().defaultLanguage, select = true) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
       throw new Error(t('No workspace is open.'))
     const documentId = node.id
     set((state) => ({
-      selectedNode: node,
-      selectedNodes: [node],
+      ...(select ? { selectedNode: node, selectedNodes: [node] } : {}),
       documents: {
         ...state.documents,
         [documentId]: {
@@ -1093,6 +1112,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().appendOutput(t('Decompile failed: {message}', { message }))
     }
     return documentId
+  },
+
+  changeLanguage: async (language, openDocumentIds) => {
+    get().setDefaultLanguage(language)
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return
+    // The tabs are decompiled again where they are; the tree keeps the selection it has. A document still
+    // being decompiled is one a tab is about to show, and is asked for again in the new language too.
+    const loading = Object.keys(get().documents).filter((documentId) => get().documents[documentId].loading)
+    const stale = [...new Set([...(openDocumentIds ?? get().documentOrder), ...loading])].filter((documentId) => {
+      const document = get().documents[documentId]
+      return document && document.requestedLanguage !== language
+    })
+    await Promise.all(stale.map(async (documentId) => {
+      const nodeId = get().documents[documentId]?.nodeId ?? documentId
+      const node = findNode(get(), nodeId) ?? await window.dnSpy.getNode(workspaceId, nodeId).catch(() => undefined)
+      if (node && get().workspaceId === workspaceId)
+        await get().openDocument(node, language, false)
+    }))
   },
 
   changeDocumentLanguage: async (nodeId, language) => {
@@ -2472,7 +2511,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setRestoringSession: (value) => set({ restoringSession: value }),
 
-  setDefaultLanguage: (language) => set({ defaultLanguage: language }),
+  setDefaultLanguage: (language) => {
+    if (typeof localStorage !== 'undefined')
+      localStorage.setItem(decompilerLanguageStorageKey, language)
+    set({ defaultLanguage: language })
+  },
 
   toggleBookmark: (nodeId, line) => {
     // dnSpy names the bookmark after what the line holds — the statement on it, or the definition that

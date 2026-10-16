@@ -481,6 +481,22 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(ctx.onCreateMember).toHaveBeenCalledWith('type', true, methodNode)
   })
 
+  it('analyzes every member the selection names, and a base type only when it resolves', () => {
+    const field: TreeNode = { id: 'n-field', kind: 'field', label: 'Out', hasChildren: false }
+    const ctx = context({ node: methodNode, selection: [typeNode, namespaceNode, methodNode, field] })
+    runEntry(ctx, 'analyze')
+    expect(ctx.onAnalyze).toHaveBeenCalledWith([typeNode, methodNode, field])
+
+    // The backend's answer for a base type row: one that names no type that can be found is left out, and a
+    // selection of nothing else offers no Analyze at all.
+    const baseType: TreeNode = { id: 'n-base', kind: 'basetype', label: 'Missing', hasChildren: false }
+    expect(menuKeys(context({ node: baseType, selection: [baseType], analyzeTargets: [] }))).not.toContain('analyze')
+    const resolved = context({ node: baseType, selection: [baseType], analyzeTargets: [baseType] })
+    runEntry(resolved, 'analyze')
+    expect(resolved.onAnalyze).toHaveBeenCalledWith([baseType])
+    expect(menuKeys(context({ node: namespaceNode }))).not.toContain('analyze')
+  })
+
   it('opens the module in a new tab with the row it was clicked on', () => {
     const ctx = richContext(moduleNode)
     runEntry(ctx, 'hex-0')

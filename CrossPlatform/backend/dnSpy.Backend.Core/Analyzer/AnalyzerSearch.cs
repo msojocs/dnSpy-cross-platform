@@ -56,7 +56,10 @@ abstract class AnalyzerSearch(IAnalyzerHost host) {
 	public virtual void Finish(List<AnalyzerHit> hits) {
 	}
 
-	protected MethodDef GetOriginalCodeLocation(MethodDef method) => AnalyzerHelpers.GetOriginalCodeLocation(Host, method);
+	/// <summary>The method a result found in <paramref name="method"/> is listed as: the one a lambda or a state
+	/// machine was written in when the host shows that, the method itself otherwise.</summary>
+	protected MethodDef GetOriginalCodeLocation(MethodDef method) =>
+		Host.ShowsOriginalCodeLocation ? AnalyzerHelpers.GetOriginalCodeLocation(Host, method) : method;
 
 	protected static bool CheckEquals(IMemberRef? mr1, IMemberRef? mr2) => AnalyzerHelpers.CheckEquals(mr1, mr2);
 }

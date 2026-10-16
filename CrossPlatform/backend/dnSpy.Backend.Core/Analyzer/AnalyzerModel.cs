@@ -23,6 +23,11 @@ interface IAnalyzerHost {
 
 	/// <summary>The field a FieldDef or a field MemberRef names.</summary>
 	FieldDef? ResolveFieldDef(IField? field);
+
+	/// <summary>Whether a result found in compiler-generated code is listed as the user method it was written
+	/// in — what dnSpy's GetOriginalCodeLocation does for the C# decompiler with anonymous methods on, and
+	/// for no other.</summary>
+	bool ShowsOriginalCodeLocation { get; }
 }
 
 /// <summary>

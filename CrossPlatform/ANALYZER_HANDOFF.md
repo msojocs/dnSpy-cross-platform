@@ -127,7 +127,7 @@
 
 实机验证（Playwright 驱动真实应用；当时的驱动脚本放在 `frontend/test-results/run/`，已被 Playwright 清掉，见「坑」第 12 条）：
 
-- 打开 System.Private.CoreLib + 24 个最大的框架程序集，分析 `System.Object` 的「被使用」：约 3.4–3.9s，分 16 批左右流入，停在 20,000 行，输出窗口出现「The analyzer stopped after 20000 result(s).」。
+- 打开 System.Private.CoreLib + 24 个最大的框架程序集，分析 `System.Object` 的「被使用」：约 3.4–3.9s，分 16 批左右流入，停在 20,000 行，输出窗口出现「The analyzer stopped after 20000 result(s).」（当时的上限，2026-10-16 已取消，见第六节）。
 - 同一搜索进行中，树请求等待 p50 约 15–20ms、最大约 200ms；同时反编译 `System.String` 约 1.6s，能正常完成。
 - 只开 9 个程序集时结果 16,327 行，未截断，与后端进程内直接调用的结果一致。
 
@@ -142,12 +142,13 @@
 | 差异 | 是否有意 |
 |---|---|
 | 「被应用于」的程序集行跨模块去重，WPF 每个模块各出一行 | 有意（WPF 的 quirk） |
-| `GetOriginalCodeLocation` 始终开启，WPF 只在 C# 反编译器且开启 AnonymousMethods 时才做 | 有意 |
+| ~~`GetOriginalCodeLocation` 始终开启~~ 2026-10-16 起与 WPF 一致：只在 C# 反编译器且开启 AnonymousMethods 时才做（请求带 `Language`、`DecompileAnonymousMethods`，`IAnalyzerHost.ShowsOriginalCodeLocation`） | 已对齐 |
 | 成员名不经 `IdentifierEscaper` 转义 | 与本项目程序集树保持一致 |
+| 行文本随反编译器语言重写：`AnalyzeNodesRequest`/`AnalyzeChildrenRequest` 带 `Language`，类型名 C# 走 `CSharpTypeName`、VB 走 `CSharpTypeName.VisualBasic.cs`、IL 走 `ILTypeName.cs`；前端在 `defaultLanguage` 变化时 `relabel()`，旧语言请求晚到的批次也重写 | 已对齐（2026-10-16）；VB 的 `dynamic` 写成 `Object`，WPF 写成 `unknown` |
 | 类型解析比 WPF 宽松：按全名兜底，MemberRef 用 `DontCompareTypeScope` 重试 | 有意，因为没有共享 resolver |
-| 「显示方法内的引用」只在 C# 文档里定位光标；IL/VB 文档没有语句表，只打开方法 | 已知限制 |
+| 「显示方法内的引用」在 C# 与 IL 文档里定位（IL 视图 2026-10-16 起有指令操作数的引用 span，`ILReferenceTarget` 与结果的 `Targets` 用同一种解析）；VB 文档没有语句表，只打开方法 | VB 属反编译模块的限制 |
 | 「单击展开节点」开启时，双击搜索行不再切换展开状态 | 有意，避免一次双击开了又关 |
-| 结果数上限 20,000 | 有意，用来保护 IPC 和渲染 |
+| ~~结果数上限 20,000~~ 2026-10-16 起与 WPF 一样不设上限（`MaxResults` 默认 `int.MaxValue`，客户端仍可自带上限）。实测 25 个框架程序集 `Object` 的「被使用」28,485 行、约 6 秒、JSON 约 33MB；前端排序预先大写化，28k 行每次重排约 40ms | 已对齐 |
 | 引用到未加载程序集的类型按普通类型着色（WPF 会加载后区分接口/结构等） | 有意，着色不触发加载 |
 | 并行扫描默认关闭（WPF 用 PLINQ） | 有意，见「坑」第 4 条 |
 

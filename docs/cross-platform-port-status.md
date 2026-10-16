@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.11（字符串引用窗口）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.10（分析器）、4.11（字符串引用窗口）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -40,7 +40,7 @@
 | 模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ | 一句话现状 |
 |---|---|---|---|---|---|---|
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
-| 分析器 | ~93% | 25 | 4 | 0 | 1 | 全部搜索类别、范围规则、右键菜单已移植；IL/VB 视图不能定位到语句 |
+| 分析器 | 100% | 29 | 0 | 0 | 1 | 全部功能点对齐 WPF：行文本随工具栏语言（C#/VB/IL）重写、结果不设上限、IL 视图定位到指令的操作数、程序集树多选与基类型行可分析 |
 | 搜索窗口 | ~88% | 24 | 3 | 2 | 0 | 24 种搜索类型、选项、快捷键齐全；全局函数可搜；关闭窗口停止搜索；命令行参数缺失 |
 | 应用壳与通用 UI | ~97% | 32 | 5 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片、会话恢复（含光标与滚动位置）齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
@@ -48,7 +48,7 @@
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
 | C# 交互窗口 | ~44% | 6 | 10 | 9 | 2 | REPL 主流程可用，输入有语义着色；脚本访问不到 dnSpy，输出一次性返回 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
-| 反编译与语言 | ~42% | 5 | 12 | 9 | 1 | C# 完整；IL/VB 简化且无 span，选项不生效，无导出项目 |
+| 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 属 4.12 未移植 |
@@ -58,14 +58,14 @@
 | 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30，完成度约 **61%**（2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30，完成度约 **61%**（2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
 | 工作流 | 可用程度 | 说明 |
 |---|---|---|
 | 打开程序集、浏览树、看 C# 代码、F12 跳转 | 日常可用 | 交互模型与 WPF 不同：双击才打开，每个节点一个标签 |
-| 看 IL / VB | 能看，不好用 | IL 是简化格式，IL/VB 都不能跳转、不能下断点 |
+| 看 IL / VB | 能看，不好用 | IL 是简化格式，指令的操作数可以跳转，但不能下断点；VB 不能跳转 |
 | 搜索、分析引用 | 日常可用 | 两块是移植最完整的部分 |
 | 改名、改元数据、增删成员 | 日常可用 | 五类成员的选项对话框与 WPF 逐页对齐 |
 | 改方法体 | 风险大 | 无 C# 编辑；IL 编辑器不能编辑局部变量和异常处理器，带 try/catch 的方法会丢 EH |
@@ -87,11 +87,11 @@
 
 2. **Monaco 的 contrib 没有打包。** `FE/monaco.ts` 只导入 `monaco-editor/editor/editor.api`，构建产物里也找不到 find、hover、folding、wordHighlighter、gotoLine、bracketMatching 等模块。因此所有 Monaco 实例（代码视图、C# Interactive）都没有查找替换、悬停、折叠、括号匹配、转到行、缩放。Edit→Find 已经接线，但 `getAction('actions.find')` 返回 undefined，什么也不做。修法是改为导入 `editor.main`，或按需导入 `contrib/*`。
 
-3. **IL 和 VB 文档没有 span 与语句表。** 只有 C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。这一个根因导致：IL/VB 视图里不能跳转；不能下断点，也不显示当前语句；书签只能按行号记，不能持久化；搜索和分析器结果在 IL/VB 视图里只打开方法，不定位到语句。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以同时解决格式和 span。
+3. **VB 文档没有 span 与语句表，IL 的只有一部分。** C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。IL 视图（含 IL with C#）有逐指令的语句表、成员声明处的定义 span，以及（2026-10-16 起）每条指令操作数所指成员的引用 span，所以 IL 里可以跳转、书签可以挂到指令上、分析器的「显示方法内的引用」会落到操作数上；但断点仍只按 C# 的语句表下。VB 是 C# 文本的转换，没有任何 span 与语句表（方法文档还会变成空壳类），因此 VB 视图里不能跳转、不能下断点，搜索和分析器结果只打开方法。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决格式。
 
 4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。仍未绑的只剩十六进制只读视图里的几个（Ctrl+X、Ctrl+Shift+D 等，本移植版不能改字节）。主菜单现在可以用键盘操作。
 
-5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN 作用于整个选区；但位置为「选中文件 / 选中类型」的搜索、删除类型与成员、多节点合并反编译、一次分析多个成员仍只看一个节点。
+5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN、分析（2026-10-16 起）作用于整个选区；但位置为「选中文件 / 选中类型」的搜索、删除类型与成员、多节点合并反编译仍只看一个节点。
 
 6. ~~**未保存修改的保护不完整。**~~ 2026-10-14 已修：有未保存修改时关闭窗口，主进程会拦下这次关闭并反问「是否要在继续之前保存？」（是 / 否 / 取消），取消则留在原地。Reload All 与移除程序集仍按 WPF 各自询问，措辞与本移植版的其它对话框一致。
 
@@ -111,7 +111,7 @@
 | 6 | PE-only、ELF、未知文件的 Open Hex Editor 读不出数据：`GetHexLength` / `ReadHexAsync` 走 `GetModule()`，对这三类文件抛异常 | `BE/WorkspaceManager.cs` | 代码推断 |
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
 | 8 | C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志 | `BE/Scripting/CSharpScriptService.cs` | 代码推断 |
-| 9 | 基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持 | `FE/components/CodeEditorContextMenu.tsx` | 代码推断 |
+| 9 | ~~基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持~~ 已修复（2026-10-16）：基类型行可分析，菜单打开前向后端确认引用能解析（WPF 的 CanAnalyze），解析不了的不显示「分析」 | `FE/components/CodeEditorContextMenu.tsx`、`FE/components/AssemblyExplorer.tsx` | 已核实 |
 | 10 | 编辑器里单击引用时光标显示为手形，但只有 Ctrl+单击才跳转，而且在同一标签里跳（WPF 单击跳转，Ctrl+单击开新标签） | `FE/components/DocumentView.tsx` 的 `onMouseDown` | 代码推断 |
 
 ## 4. 各模块明细
@@ -232,7 +232,7 @@
 
 ### 4.4 反编译与语言
 
-完成度约 42%（✅ 5 / 🟡 12 / ❌ 9 / ⛔ 1）。WPF 范围：`WPF/Decompiler/`、`WPF/Language/`、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
+完成度约 44%（✅ 6 / 🟡 11 / ❌ 9 / ⛔ 1）。WPF 范围：`WPF/Decompiler/`、`WPF/Language/`、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
 
 后端没有沿用仓库里的 ILSpy 分支，而是用 NuGet 上的 `ICSharpCode.Decompiler 11.1`、`ICSharpCode.BamlDecompiler`，VB 由 `ICSharpCode.CodeConverter` 从 C# 文本转换得到。
 
@@ -240,17 +240,17 @@
 |---|---|---|---|---|
 | C# 反编译 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core/CSharp/CSharpDecompiler.cs` | `BE/WorkspaceManager.cs` 的 `DecompileCSharp`，RPC `document/decompile` | ✅ | 有引用 span 和语句表 |
 | Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `ConvertToVisualBasicAsync`（CodeConverter） | 🟡 | 无 span、无语句表；方法文档会变成空壳类 |
-| IL | `.../IL/ILDecompiler.cs` | 自写 `ILFormatter` | 🟡 | 没有 `.try`、`.custom`、`.override` 等；修饰符不是 ilasm 语法；无 span |
+| IL | `.../IL/ILDecompiler.cs` | 自写 `ILFormatter` | 🟡 | 没有 `.try`、`.custom`、`.override` 等；修饰符不是 ilasm 语法；有定义 span、指令操作数的引用 span 与逐指令语句表 |
 | IL with C# | `.../Mixed/ILWithCSharpDecompiler.cs` | `DecompileILWithCSharp` | 🟡 | 同上 |
 | ILAst | `.../ILAst/ILAstDecompiler.cs` | 无 | ⛔ | WPF 只在 DEBUG 构建注册 |
-| 语言下拉与持久化 | `MainApp/ToolBarCommands.cs`、`Decompiler/DecompilerServiceSettings.cs` | `ToolBar.tsx` | 🟡 | 语言跟着标签走，新标签固定 C# |
+| 语言下拉与持久化 | `MainApp/ToolBarCommands.cs`、`Decompiler/DecompilerServiceSettings.cs` | `ToolBar.tsx`、`app-store.ts` 的 `changeLanguage` | ✅ | 2026-10-16 起为全局语言：切换时重反编译所有已开标签（含正在加载的），新标签用它，记在 `localStorage`，`-l` 也写入；分析器、字符串引用窗口跟随 |
 | C#/VB 反编译选项 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy/Settings/CSharpDecompilerSettingsPage.cs` | `options-pages.ts` | ❌ | 不传给后端，见第 2 节 |
 | IL 选项 | `.../Settings/ILDecompilerSettingsPage.cs` | `options-pages.ts` | ❌ | 同上 |
 | DecompileFullType | `Documents/Tabs/DocumentTabServiceSettings.cs` | `app-options.ts` | ❌ | 没人读取 |
-| 源码与 IL 的语句映射 | `Decompiler/MethodDebugService.cs` | `BuildCodeStatements`、`BE/StatementIlRanges.cs` | 🟡 | 只有 C# |
+| 源码与 IL 的语句映射 | `Decompiler/MethodDebugService.cs` | `BuildCodeStatements`、`BE/StatementIlRanges.cs`、`ILFormatter` | 🟡 | C# 与 IL（逐指令）有；VB 没有 |
 | 异步反编译与取消 | `Documents/Tabs/AsyncShowResult.cs` | `DocumentView.tsx` 加载提示 | 🟡 | 没有取消按钮 |
 | 反编译缓存 | `Documents/Tabs/DecompilationCache.cs` | 无 | 🟡 | 已开标签保留文本；重开同一节点会重新反编译 |
-| 换语言或编辑后刷新 | `Documents/Tabs/RedecompileTabs.cs` | `changeDocumentLanguage` | ✅ | |
+| 换语言或编辑后刷新 | `Documents/Tabs/RedecompileTabs.cs` | `changeLanguage`、`refreshAfterEdit` | ✅ | |
 | 多节点合并反编译 | `Documents/Tabs/DocumentTreeNodeDecompiler.cs` | 无 | ❌ | |
 | 程序集 / 模块节点输出 | `dnSpy.Decompiler/DecompilerBase.cs` | `DecompileWholeModuleAsSingleFile` | 🟡 | 反编译整个模块，大程序集很慢 |
 | 命名空间节点输出 | `DecompilerBase.DecompileNamespace` | 同上 | 🟡 | 输出全部类型的完整代码（WPF 只列类型名） |
@@ -449,13 +449,13 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.10 分析器
 
-完成度约 93%（✅ 25 / 🟡 4 / ⛔ 1）。WPF 范围：`Extensions/dnSpy.Analyzer/`。后端在 `BE/Analyzer/`，详细设计见 `CrossPlatform/ANALYZER_HANDOFF.md`。
+完成度 100%（✅ 29 / ⛔ 1）。WPF 范围：`Extensions/dnSpy.Analyzer/`。后端在 `BE/Analyzer/`，详细设计见 `CrossPlatform/ANALYZER_HANDOFF.md`。2026-10-16 补齐原来的 4 个 🟡 并按实现与测试复核：后端、前端单测与 e2e 都在本机真实构建后跑过（见本节末尾）。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | 工具窗口，关闭即清空 | `AnalyzerToolWindowContent.cs` | `FE/App.tsx` | ✅ | |
 | 添加：每成员一行，重复分析回到已有行 | `AnalyzerService.cs` | `FE/analyzer-store.ts` | ✅ | |
-| 行文本、图标、显示标记 | `TreeNodes/*Node.cs` | `BE/Analyzer/AnalyzerLabelFormatter.cs` | ✅ | |
+| 行文本、图标、显示标记 | `TreeNodes/*Node.cs` | `BE/Analyzer/AnalyzerLabelFormatter.cs` | ✅ | 类型名按所选反编译器书写：C# 走 `CSharpTypeName`，VB 走同一转换再按 VB 写（`Integer`、`List(Of T)`、关键字名加方括号），IL 走 `ILTypeName`（`int32`、`class [asm]NS.List`1<string>`、`!T`、`Outer/Inner`）；类型行与索引器名也按 WPF 各语言的 `FormatTypeName` / `FormatPropertyName` |
 | 属性、事件访问器行 | `TreeNodes/PropertyAccessorNode.cs` 等 | `AnalyzerEntityChildren.cs` | ✅ | |
 | 类型的 6 个搜索类别 | `TreeNodes/TypeNode.cs` 等 | `Searches/TypeSearches.cs` | ✅ | |
 | 方法的 5 个搜索类别 | `TreeNodes/MethodNode.cs` 等 | `Searches/MethodSearches.cs` | ✅ | |
@@ -463,25 +463,27 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 属性：重写 / 重写于 / 实现于 | `TreeNodes/Property*Node.cs` | `Searches/PropertySearches.cs` | ✅ | |
 | 事件：被触发于 / 重写 / 重写于 / 实现于 | `TreeNodes/Event*Node.cs` | `Searches/EventSearches.cs` | ✅ | |
 | 扫描范围（可见性、友元、IgnoresAccessChecksTo） | `TreeNodes/ScopedWhereUsedAnalyzer.cs` | `BE/Analyzer/ScopedWhereUsedAnalyzer.cs` | ✅ | |
-| lambda / 迭代器回溯到所在方法 | `TreeNodes/Helpers.cs` | `AnalyzerHelpers.cs` | ✅ | |
+| lambda / 迭代器回溯到所在方法 | `TreeNodes/Helpers.cs` | `AnalyzerHelpers.cs` | ✅ | 与 WPF 一样只在 C# 反编译器且开着「反编译匿名方法」时回溯，其他语言列出编译器生成的方法本身并带方法内位置 |
 | COM/NoPIA 类型等价、vtable 槽匹配 | `TreeNodes/TIAHelper.cs`、`ComUtils.cs` | 无 | ⛔ | 用户明确决定不做 |
 | 异步搜索：展开才搜、边搜边出、收起取消 | `TreeNodes/AsyncFetchChildrenHelper.cs` | RPC `analyze/children` + `analyze/progress` | ✅ | |
-| 结果规模与并行 | `TreeNodes/SearchNode.cs` | `WorkspaceManager.Analyzer.cs` | 🟡 | 有意设 20,000 上限，默认单线程 |
+| 结果规模与并行 | `TreeNodes/SearchNode.cs` | `WorkspaceManager.Analyzer.cs` | ✅ | 与 WPF 一样不设上限（25 个框架程序集上 `Object` 的「被使用」约 28,500 行、6 秒、分 35 批流入，前端每次重排约 40ms）；扫描按 40ms 切片单线程跑，多线程实测无收益（见交接文档「坑」第 4 条），结果与顺序同 WPF |
 | 激活行 | `AnalyzerService.OnActivated` | `AnalyzerPane.tsx` | ✅ | |
-| 显示方法内的引用 | `AnalyzerService.GoTo` | `findReferenceCaret` | 🟡 | 只在 C# 视图定位 |
+| 显示方法内的引用 | `AnalyzerService.GoTo` | `findReferenceCaret` | ✅ | C# 定位到语句里对目标的引用；IL 定位到那条指令的操作数（IL 视图现有操作数引用 span）；VB 视图本身没有语句表（见第 2 节第 3 条），只打开方法 |
 | 右键：跳转组、复制（多选按层级缩进）、复制 token / 全名 | `Analyzer/Commands.cs` | `AnalyzerContextMenu.tsx` | ✅ | 按 3 项统计 |
 | 右键：断点、分析、MSDN、移除 | 同上 | 同上 | ✅ | 按 2 项统计 |
 | 选项组与持久化 | `AnalyzerSettings.cs` | `app-options.ts` | ✅ | |
-| 从程序集树分析 | `TreeNodes/Commands.cs` | `AssemblyExplorerContextMenu.tsx` | 🟡 | 基类型行不能分析（缺陷 #9）；单选 |
+| 从程序集树分析 | `TreeNodes/Commands.cs` | `AssemblyExplorerContextMenu.tsx`、`resolveAnalyzeTargets` | ✅ | 右键菜单分析整个选区里能解析的成员（按选中顺序各加一个根）；基类型行在引用能解析时可分析；Ctrl+Shift+R 只取第一个选中项，取不到时显示分析器窗口，同 WPF |
 | 从代码编辑器、搜索窗口、分析器分析 | 同上 | `CodeEditorContextMenu.tsx` 等 | ✅ | 按 3 项统计 |
 | 没有目标时 Ctrl+Shift+R 显示窗口 | 同上 | `FE/App.tsx` | ✅ | |
 | 多选与键盘导航 | WPF TreeView | `AnalyzerPane.tsx` | ✅ | 按视口渲染 |
 | 模型变化后失效与重建 | `AnalyzerService.cs` | `analyzer-store.ts`、后端 `analyzerEpoch` | ✅ | |
-| 语言切换时重写行文本 | `AnalyzerService.DecompilerChanged` | 无 | 🟡 | 固定 C# 写法 |
+| 语言切换时重写行文本 | `AnalyzerService.DecompilerChanged` | `analyzer-store.ts` 的 `relabel` | ✅ | 工具栏语言改为全局后，切换时所有成员行按新语言重写（同一成员只问一次后端），搜索结果保留；语言切换前已发出的搜索晚到的结果也会重写 |
 
-尚未做过与 WPF 对同一程序集的逐类别结果对照（需要 Windows 环境）。
+另外，分析器窗口里 Ctrl+Shift+R 与 WPF 一样只分析第一个选中行（原先分析整个选区）。
 
-测试：后端 `WorkspaceAnalyzerTests.cs` 27 条、`WorkspaceAnalyzerScopeTests.cs` 3 条；前端 `analyzer-model.test.ts`、`analyzer-store.test.ts`、`AnalyzerPane.test.tsx`、`AnalyzerContextMenu.test.tsx`；e2e 约 7 条。
+与 WPF 仍有的、不计入差距的不同：「被应用于」的程序集行跨模块去重（WPF 多模块程序集每个模块各出一行，属 WPF 的 quirk）；类型解析比 WPF 宽松（没有共享 resolver，按全名兜底）；引用到未加载程序集的类型按普通类型着色（着色不触发加载）；VB 的 `dynamic` 写成 `Object`（WPF 的转换器写成 `unknown`）。尚未做过与 WPF 对同一程序集的逐类别结果对照（需要 Windows 环境）。
+
+测试：后端 `WorkspaceAnalyzerTests.cs` 30 条（新增按语言书写行文本、按语言决定 lambda 回溯、IL 指令操作数的引用 span 三条，以及无上限断言）、`WorkspaceAnalyzerScopeTests.cs` 3 条、`BookmarkTests` 里 IL 引用 span 的断言；前端 `analyzer-model.test.ts`（IL 定位）、`analyzer-store.test.ts`（语言、重写、晚到结果、匿名方法设置）、`AnalyzerPane.test.tsx`（Ctrl+Shift+R 取第一个）、`AnalyzerContextMenu.test.tsx`、`AssemblyExplorerContextMenu.test.tsx`（多选与基类型）、`app-store.test.ts`（全局语言切换）；e2e 约 8 条，新增「writes the analyzer in the language the toolbar picks…」覆盖 C#→VB→IL 重写、IL 里落到操作数、树多选分析。2026-10-16 本机真实构建后：后端 406、前端单测 1103、e2e 92 通过 3 跳过，全绿。
 
 ### 4.11 字符串引用窗口
 
@@ -944,16 +946,16 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 ## 6. 测试基线
 
-2026-10-16 字符串引用窗口与 Roslyn 语言服务复核后在本机重新跑过（后端与前端都是真实构建）：
+2026-10-16 分析器补齐后在本机重新跑过（后端与前端都是真实构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 403 通过（应用壳复核时为 359） |
+| 后端 `dotnet test` | 406 通过（字符串引用与 Roslyn 复核后为 403，应用壳复核时为 359） |
 | 前端 `pnpm typecheck` | 0 错误 |
-| 前端 vitest | 1095 通过（应用壳复核后为 1041） |
-| e2e（Playwright Electron） | 91 通过、3 跳过、0 失败 |
+| 前端 vitest | 1103 通过（字符串引用与 Roslyn 复核后为 1095，应用壳复核后为 1041） |
+| e2e（Playwright Electron） | 92 通过、3 跳过、0 失败 |
 
-复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.11、4.14、4.15 各节末尾。
+复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.10、4.11、4.14、4.15 各节末尾；分析器这次改 `Protocol.cs`（两个请求加语言参数、`TextColors.ILModule`）没有挪动这两个标记。
 
 应用壳复核（2026-10-14）时前端新增的用例：窗口状态（`window-state.test.ts`）、窗口标题（`app-info.test.ts`）、命令行选项解析（`command-line-options.test.ts`）、缩放档位（`zoom.test.ts`）、背景图片的尺寸与位置（`background-image.test.ts`）、消息框的「不再提示」（`message-box.test.ts`）、工具窗口菜单（`ToolWindowTabContextMenu.test.tsx`）、输出窗口的命令栏（`ToolWindows.test.tsx`）、关于对话框与它引用的两份文本是否与出处一致（`AboutDialog.test.tsx`、`about-resources.test.ts`）。CI 现在会跑前端单测（`.github/workflows/cross-platform.yml` 的 Test frontend 步骤）。
 
@@ -969,7 +971,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 异常设置已实现（4.13）；表达式求值确实没有 |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 403 / 1095 / 91（见第 6 节） |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 406 / 1103 / 92（见第 6 节） |
 | `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
 | `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 窗口尺寸与位置自 2026-10-14 起会恢复（4.1）；监视表达式仍未实现 |

@@ -262,7 +262,12 @@ public sealed class BookmarkTests : IDisposable {
 		Assert.Contains("DebugTarget.Program", names);
 		Assert.Contains("Main", names);
 		Assert.Contains("Calculate", names);
-		Assert.All(document.Spans, span => Assert.Equal(DebugTargetPath, span.TargetModulePath));
+		Assert.All(document.Spans.Where(span => span.Kind == "definition"), span => Assert.Equal(DebugTargetPath, span.TargetModulePath));
+		// What an instruction names is a reference, which — as in C# — names a node of the workspace by its id alone.
+		var calculate = Assert.Single(document.Spans, span => span.Kind == "definition" && document.Text.Substring(span.Start, span.Length) == "Calculate");
+		var call = Assert.Single(document.Spans, span => span.Kind == "reference" && span.TargetNodeId == calculate.TargetNodeId);
+		Assert.Equal("Calculate", document.Text.Substring(call.Start, call.Length));
+		Assert.Null(call.TargetModulePath);
 		// Every method's instructions are in the table, each on its own line.
 		Assert.Equal(document.CodeStatements!.Count, document.CodeStatements.Select(statement => statement.StartLine).Distinct().Count());
 	}

@@ -232,4 +232,21 @@ describe('AnalyzerPane', () => {
     fireEvent.keyDown(screen.getByRole('tree'), { key: 'c', ctrlKey: true })
     expect(pane.copyText).toHaveBeenCalledWith('NS.Type.Callee() : void @06000001\n\t\tNS.Type.Caller() : void @06000002\n')
   })
+
+  it('analyzes the row selected first with Ctrl+Shift+R, as dnSpy reads the first of its selection', async () => {
+    const analyze = vi.spyOn(useAnalyzerStore.getState(), 'analyze').mockResolvedValue(undefined)
+    render(<AnalyzerPane commands={commands()} />)
+    fireEvent.mouseDown(rowNamed('NS.Type.Caller'), { button: 0 })
+    fireEvent.mouseDown(rowNamed('NS.Type.Other'), { button: 0, ctrlKey: true })
+    fireEvent.keyDown(screen.getByRole('tree'), { key: 'R', ctrlKey: true, shiftKey: true })
+    await vi.waitFor(() => expect(analyze).toHaveBeenCalledTimes(1))
+    expect(analyze).toHaveBeenCalledWith('caller')
+
+    // A search row names nothing to analyze.
+    analyze.mockClear()
+    fireEvent.mouseDown(rowNamed('Used By'), { button: 0 })
+    fireEvent.keyDown(screen.getByRole('tree'), { key: 'R', ctrlKey: true, shiftKey: true })
+    await Promise.resolve()
+    expect(analyze).not.toHaveBeenCalled()
+  })
 })

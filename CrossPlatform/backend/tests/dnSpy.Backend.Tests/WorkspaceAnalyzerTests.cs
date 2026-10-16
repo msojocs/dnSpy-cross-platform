@@ -48,6 +48,87 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 	}
 
 	[Fact]
+	public async Task WritesRowsThroughTheDecompilerThatIsSelected() {
+		var workspaceId = await OpenAsync();
+		async Task<string> LabelAsync(MemberInfo member, DecompilerLanguage language) =>
+			Assert.IsType<AnalyzerNodeDto>(Assert.Single((await manager.AnalyzeNodesAsync(new AnalyzeNodesRequest(workspaceId, [await NodeAsync(workspaceId, member)], language), Token)).Nodes)).Label;
+
+		// The VB decompiler writes the C# conversion of a type the VB way, and keeps the base FormatPropertyName,
+		// which names an indexer by its metadata name.
+		Assert.Equal("Box(Of T)", await LabelAsync(typeof(Box<>), DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Circle.Area() : Double", await LabelAsync(Method<Circle>(nameof(Circle.Area)), DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Circle.Circle(Double) : Void", await LabelAsync(typeof(Circle).GetConstructors()[0], DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Circle.Name : String", await LabelAsync(typeof(Circle).GetProperty(nameof(Circle.Name), AnyMember)!, DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Box(Of T).Item : T", await LabelAsync(typeof(Box<>).GetProperty("Item")!, DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Usage.Indexed(Box(Of String)) : String", await LabelAsync(Method(typeof(Usage), nameof(Usage.Indexed)), DecompilerLanguage.VisualBasic));
+		Assert.Equal("AnalyzerTarget.Usage.Lambda(Circle) : Func(Of Double)", await LabelAsync(Method(typeof(Usage), nameof(Usage.Lambda)), DecompilerLanguage.VisualBasic));
+
+		// The IL decompiler: keywords of its own, a type row and a declaring type with the arity in the name, a
+		// generic instance in signature syntax, a generic parameter by "!".
+		foreach (var language in new[] { DecompilerLanguage.IL, DecompilerLanguage.ILWithCSharp }) {
+			Assert.Equal("Box`1", await LabelAsync(typeof(Box<>), language));
+			Assert.Equal("AnalyzerTarget.Circle.Area() : float64", await LabelAsync(Method<Circle>(nameof(Circle.Area)), language));
+			Assert.Equal("AnalyzerTarget.Circle.Circle(float64) : void", await LabelAsync(typeof(Circle).GetConstructors()[0], language));
+			Assert.Equal("AnalyzerTarget.Shape.Changed : EventHandler", await LabelAsync(typeof(Shape).GetEvent(nameof(Shape.Changed))!, language));
+			Assert.Equal("AnalyzerTarget.Box`1.Item : !T", await LabelAsync(typeof(Box<>).GetProperty("Item")!, language));
+			Assert.Equal("AnalyzerTarget.Usage.Indexed(class AnalyzerTarget.Box`1<string>) : string", await LabelAsync(Method(typeof(Usage), nameof(Usage.Indexed)), language));
+			Assert.Equal("AnalyzerTarget.Consumer.FriendCalls.Hit(Circle) : void", await LabelAsync(Method(typeof(FriendCalls), nameof(FriendCalls.Hit)), language));
+		}
+
+		var indexed = await manager.AnalyzeNodesAsync(new AnalyzeNodesRequest(workspaceId, [await NodeAsync(workspaceId, Method(typeof(Usage), nameof(Usage.Indexed)))], DecompilerLanguage.IL), Token);
+		var parts = Parts(Assert.IsType<AnalyzerNodeDto>(Assert.Single(indexed.Nodes)));
+		Assert.Contains(("class", "keyword"), parts);
+		Assert.Contains(("Box`1", "type"), parts);
+		Assert.Contains(("string", "keyword"), parts);
+
+		// A search writes what it finds in the language it was asked in, too.
+		var circle = await NodeAsync(workspaceId, typeof(Circle));
+		var exposedBy = (await manager.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.ExposedBy, Language: DecompilerLanguage.VisualBasic), Token)).Children;
+		Assert.Contains("AnalyzerTarget.Exposer.Make() : Circle", Labels(exposedBy));
+		Assert.Contains("AnalyzerTarget.Exposer.Field : Circle", Labels(exposedBy));
+	}
+
+	[Fact]
+	public async Task ListsTheLambdaItselfUnlessTheCSharpDecompilerShowsWhereItWasWritten() {
+		var workspaceId = await OpenAsync();
+		var area = await NodeAsync(workspaceId, Method<Circle>(nameof(Circle.Area)));
+		async Task<IReadOnlyList<AnalyzerNodeDto>> UsedByAsync(DecompilerLanguage language, bool anonymousMethods) =>
+			(await manager.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, area, AnalyzerSearchKinds.UsedBy, Language: language, DecompileAnonymousMethods: anonymousMethods), Token)).Children;
+
+		Assert.Contains("AnalyzerTarget.Usage.Lambda(Circle) : Func<double>", Labels(await UsedByAsync(DecompilerLanguage.CSharp, true)));
+
+		// Any other decompiler, or C# with anonymous methods off, lists the compiler's method, with the place in
+		// its body the call is at.
+		foreach (var (language, anonymousMethods) in new[] { (DecompilerLanguage.CSharp, false), (DecompilerLanguage.VisualBasic, true), (DecompilerLanguage.IL, true) }) {
+			var rows = await UsedByAsync(language, anonymousMethods);
+			Assert.DoesNotContain(rows, row => row.Label.StartsWith("AnalyzerTarget.Usage.Lambda(", StringComparison.Ordinal));
+			var lambda = Assert.Single(rows, row => row.Label.Contains("<Lambda>b__", StringComparison.Ordinal));
+			Assert.NotNull(lambda.Source?.IlOffset);
+		}
+		Assert.Contains(await UsedByAsync(DecompilerLanguage.IL, true), row => row.Label.StartsWith("AnalyzerTarget.Usage/'<>c__DisplayClass", StringComparison.Ordinal));
+	}
+
+	[Fact]
+	public async Task PutsAReferenceSpanOnWhatAnIlInstructionNames() {
+		var workspaceId = await OpenAsync();
+		var sum = Method(typeof(Usage), nameof(Usage.Sum));
+
+		var document = await manager.DecompileAsync(new DecompileRequest(workspaceId, await NodeAsync(workspaceId, sum), DecompilerLanguage.IL), Token);
+
+		// "callvirt System.Double AnalyzerTarget.Shape::Area()": the span covers the method's name and names the
+		// target the analyzer's result for the call carries, so "Show Reference in Method" lands on it.
+		var shapeArea = await NodeAsync(workspaceId, Method<Shape>(nameof(Shape.Area)));
+		var reference = Assert.Single(document.Spans, span => span.Kind == "reference" && span.TargetNodeId == shapeArea);
+		Assert.Equal("Area", document.Text.Substring(reference.Start, reference.Length));
+		var row = Assert.Single(await SearchAsync(workspaceId, Method<Circle>(nameof(Circle.Area)), AnalyzerSearchKinds.UsedBy), row => row.Label == "AnalyzerTarget.Usage.Sum(Shape) : double");
+		Assert.Contains(row.Source!.Targets, target => target.NodeId == reference.TargetNodeId);
+		var statement = Assert.Single(document.CodeStatements!, statement => statement.IlOffset == row.Source.IlOffset);
+		var line = document.Text.Split('\n')[statement.StartLine - 1];
+		Assert.Contains("callvirt", line, StringComparison.Ordinal);
+		Assert.Equal(1 + document.Text[..reference.Start].Count(ch => ch == '\n'), statement.StartLine);
+	}
+
+	[Fact]
 	public async Task CutsARowsLabelWhereSyntaxHighlightingChangesColor() {
 		var workspaceId = await OpenAsync();
 
@@ -383,6 +464,10 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 
 		Assert.Single(response.Children);
 		Assert.True(response.Truncated);
+		// dnSpy's searches have no limit of their own, and neither does one asked without.
+		var unlimited = await manager.AnalyzeChildrenAsync(new AnalyzeChildrenRequest(workspaceId, circle, AnalyzerSearchKinds.UsedBy), Token);
+		Assert.False(unlimited.Truncated);
+		Assert.True(unlimited.Children.Count > 1);
 	}
 
 	[Fact]

@@ -2263,6 +2263,58 @@ test.describe('the code viewer context menu', () => {
     await expect(roots.first()).toBeFocused()
   })
 
+  test('writes the analyzer in the language the toolbar picks, and shows a use in IL on the instruction\'s operand', async () => {
+    await openMain()
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    await expect(editor).toHaveAttribute('data-language-id', 'csharp')
+    const explorer = page.getByRole('tree', { name: 'Assembly Explorer' })
+    const calculateRow = explorer.locator('.tree-row[data-kind="method"]').filter({ hasText: /^Calculate\(/ })
+    await calculateRow.click()
+    await page.keyboard.press('Control+Shift+R')
+    const analyzer = page.getByRole('tree', { name: 'Analyzer' })
+    const root = analyzer.locator('.tree-row[aria-level="1"]')
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Calculate\(int, int\) : int @06[0-9A-F]{6}$/])
+
+    // dnSpy's language box is the one decompiler of the whole window: the open tab is decompiled again in it,
+    // and every analyzer row is written anew through it.
+    await page.getByLabel('Decompiler language').selectOption('visualBasic')
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Calculate\(Integer, Integer\) : Integer @06[0-9A-F]{6}$/])
+    await expect(editor).toHaveAttribute('data-language-id', 'vb')
+    await page.getByLabel('Decompiler language').selectOption('il')
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Calculate\(int32, int32\) : int32 @06[0-9A-F]{6}$/])
+    await expect(editor).toHaveAttribute('data-language-id', 'il')
+
+    // A result found in a body goes to the instruction, with the caret on the member it names.
+    await analyzer.locator('.tree-row[aria-level="2"]').filter({ hasText: 'Used By' }).locator('.tree-expander').click()
+    const caller = analyzer.locator('.tree-row[aria-level="3"]').filter({ hasText: /^DebugTarget\.Program\.Main\(string\[\]\) : void @06[0-9A-F]{6}$/ })
+    await expect(caller).toHaveCount(1)
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+    await caller.dblclick()
+    const call = editor.locator('.view-line').filter({ hasText: /call\s+System\.Int32\sDebugTarget\.Program::Calculate\(/ })
+    const operand = call.locator('.code-reference').filter({ hasText: /^Calculate$/ })
+    await expect(operand).toBeVisible()
+    const caret = editor.locator('.cursors-layer > .cursor')
+    await expect.poll(async () => {
+      const caretBox = await caret.boundingBox()
+      const operandBox = await operand.boundingBox()
+      if (!caretBox || !operandBox)
+        return false
+      const caretMiddle = caretBox.y + caretBox.height / 2
+      return Math.abs(caretBox.x - operandBox.x) <= 2 && caretMiddle >= operandBox.y && caretMiddle <= operandBox.y + operandBox.height
+    }).toBe(true)
+
+    // Analyze over a selection of the tree adds a root for each member in it.
+    const mainRow = explorer.locator('.tree-row[data-kind="method"]').filter({ hasText: /^Main\(/ })
+    await mainRow.click()
+    await calculateRow.click({ modifiers: ['Control'] })
+    await calculateRow.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: /^Analyze/ }).click()
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Calculate\(int32, int32\) : int32 /, /^DebugTarget\.Program\.Main\(string\[\]\) : void /])
+    await page.getByLabel('Decompiler language').selectOption('cSharp')
+    await expect(root).toHaveText([/^DebugTarget\.Program\.Calculate\(int, int\) : int /, /^DebugTarget\.Program\.Main\(string\[\]\) : void /])
+  })
+
   test('words and sorts the searches in the language the window is in', async () => {
     await openMain()
     const worker = page.getByRole('tree', { name: 'Assembly Explorer' }).locator('.tree-row[data-kind="type"]').filter({ hasText: /^Worker @/ })

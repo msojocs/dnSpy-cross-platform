@@ -35,6 +35,7 @@ import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
 import { loadAppOptions, useAppOptions, type MemberKind } from './app-options'
 import { ColoredText } from './ColoredText'
+import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { hasEmptyNamespaceSibling, resourceTargets, showAssemblyExplorerContextMenu, type AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 
 interface AssemblyExplorerProps {
@@ -531,6 +532,23 @@ const TreeRow = memo(({ node, depth, display, onActivate, onContextMenu }: Explo
 /** The rows ResourceRef.TryCreate can name a resource from: a getter-only property, or a method. */
 const RESOURCE_READER_KINDS = new Set(['property', 'method'])
 
+/**
+ * The selected rows dnSpy's Analyze takes — its FilesCommand.GetMemberRefs, which keeps the rows whose
+ * reference resolves to a member. A member row always does; a base type row only when the type it names can
+ * be found, which the backend answers, so the menu offers Analyze exactly when there is something to add.
+ */
+export const resolveAnalyzeTargets = async (selection: TreeNode[]): Promise<TreeNode[]> => {
+  const candidates = selection.filter(isAnalyzableNode)
+  const baseTypes = candidates.filter((node) => node.kind === 'basetype')
+  const workspaceId = useAppStore.getState().workspaceId
+  if (baseTypes.length === 0 || !workspaceId)
+    return candidates
+  const resolved = await window.dnSpy.analyzeNodes(workspaceId, baseTypes.map((node) => node.id))
+    .then((response) => new Set(baseTypes.filter((_, index) => response.nodes[index]).map((node) => node.id)))
+    .catch(() => new Set<string>())
+  return candidates.filter((node) => node.kind !== 'basetype' || resolved.has(node.id))
+}
+
 /** The drag a root row starts carries the ids of the roots it moves, under a type of the tree's own. */
 const ROOT_DRAG_TYPE = 'application/x-dnspy-tree-roots'
 
@@ -612,9 +630,10 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can
       // tell — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the hex target. The
       // Save commands are headed by the files they would write, which only the backend can name too.
-      const [readsResource, resourceNames] = await Promise.all([
+      const [readsResource, resourceNames, analyzeTargets] = await Promise.all([
         RESOURCE_READER_KINDS.has(node.kind) ? store.findResource(node.id).then((id) => id !== null) : Promise.resolve(false),
         resources.length > 0 ? store.getResourceItemNames(resources.map((resource) => resource.id)) : Promise.resolve(undefined),
+        resolveAnalyzeTargets(selection),
         store.resolveHexTarget(node),
       ])
       const state = useAppStore.getState()
@@ -627,6 +646,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         resourceNames,
         hexTarget: state.hexTarget,
         hasEmptyNamespaceSibling: hasEmptyNamespaceSibling(node, state.children, state.parents),
+        analyzeTargets,
       }, position, { returnFocusTo })
     })()
   }, [t])

@@ -367,9 +367,13 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
     const key = event.key
     const ctrl = event.ctrlKey || event.metaKey
     if (ctrl && event.shiftKey && key.toLowerCase() === 'r') {
-      // Ctrl+Shift+R analyzes what the analyzer has selected; the shell's own binding stays out of it.
+      // Ctrl+Shift+R analyzes the row selected first, as dnSpy's binding reads TopLevelSelection[0]; with none
+      // it can analyze, it brings the window forward, which is where the focus already is. The shell's own
+      // binding stays out of it.
       event.preventDefault()
-      analyze(selectedRows().filter((row) => row.node.nodeId && ['type', 'method', 'field', 'property', 'event'].includes(row.node.kind)))
+      const first = store().rows[store().selection[0]]
+      if (first?.node.nodeId && ['type', 'method', 'field', 'property', 'event'].includes(first.node.kind))
+        analyze([first])
       return true
     }
     if (ctrl && key.toLowerCase() === 'c') {

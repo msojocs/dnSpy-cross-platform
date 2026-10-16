@@ -566,6 +566,13 @@ export interface AnalyzeChildrenRequest {
   nodeId: string
   search?: AnalyzerSearchKind
   isSetter?: boolean
+  /** The decompiler the rows are written through, C# when none is named. */
+  language?: DecompilerLanguage
+  /** With C#, whether a result found in a lambda or a state machine is listed as the method it was written in
+   * — the C# decompiler's anonymous methods setting, which dnSpy's analyzer reads. */
+  decompileAnonymousMethods?: boolean
+  /** A limit the search stops at; dnSpy's has none, and none is the default. */
+  maxResults?: number
 }
 
 export interface AnalyzeChildrenResponse {
@@ -1433,8 +1440,9 @@ export interface DnSpyApi {
   /** Runs a search; `requestKey` names it to `cancelSearch` and to the batches `onSearchProgress` hands over. */
   search(workspaceId: string, request: SearchRequest, requestKey: string): Promise<SearchResponse>
   cancelSearch(requestKey: string): Promise<void>
-  /** The analyzer rows of tree nodes — what dnSpy's analyzer adds for a member it is asked to analyze. */
-  analyzeNodes(workspaceId: string, nodeIds: string[]): Promise<AnalyzeNodesResponse>
+  /** The analyzer rows of tree nodes — what dnSpy's analyzer adds for a member it is asked to analyze — written
+   * through the decompiler named, C# when none is. */
+  analyzeNodes(workspaceId: string, nodeIds: string[], language?: DecompilerLanguage): Promise<AnalyzeNodesResponse>
   /**
    * What an analyzer row expands to: a member's searches and accessor rows, or what a search finds. A
    * search can run for a while; `requestKey` names it to `cancelAnalyze`, which a row collapsed while its

@@ -97,9 +97,11 @@ export const flattenAnalyzerTree = (state: AnalyzerTreeState, compose: (node: An
       const row = state.rows[key]
       return row ? [{ key, row, text: compose(row.node) }] : []
     })
+    // A search can find tens of thousands of rows and the tree is drawn again for every batch, so each text is
+    // upper-cased once rather than in every comparison.
     if (sort)
-      entries = entries.map((entry, index) => ({ entry, index }))
-        .sort((a, b) => compareOrdinalIgnoreCase(a.entry.text, b.entry.text) || a.index - b.index)
+      entries = entries.map((entry, index) => ({ entry, index, upper: entry.text.toUpperCase() }))
+        .sort((a, b) => (a.upper < b.upper ? -1 : a.upper > b.upper ? 1 : 0) || a.index - b.index)
         .map(({ entry }) => entry)
     for (const { key, row, text } of entries) {
       lines.push({ kind: 'row', key, depth, row, text })
@@ -166,8 +168,9 @@ interface DecompiledMethod {
  * Where dnSpy's "Show Reference in Method" puts the caret (AnalyzerService.GoTo): on the statement whose IL
  * holds the instruction the result was found at — the one the debugger would stop on for that offset — and
  * there on the first reference to what the instruction names, or at the statement's start when the text
- * names it some other way. Nothing when the document has no statement for it: a result without an offset,
- * or a view such as IL that carries no statement map.
+ * names it some other way. That holds in C# and in IL, whose statement is the instruction itself and whose
+ * reference is the member the instruction names. Nothing when the document has no statement for it: a result
+ * without an offset, or the Visual Basic view, a conversion of the C# text that carries no statement map.
  */
 export const findReferenceCaret = (document: DecompiledMethod, source: AnalyzerSource): { line: number; column: number } | undefined => {
   const ilOffset = source.ilOffset

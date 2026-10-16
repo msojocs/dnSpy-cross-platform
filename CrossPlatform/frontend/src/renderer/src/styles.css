@@ -553,6 +553,7 @@ select:focus-visible,
   --tc-assembly: #c4c4c4;
   --tc-assembly-exe: #f0ca93;
   --tc-assembly-module: #b17fd7;
+  --tc-il-module: #666699;
 }
 
 :root[data-theme="light"] {
@@ -580,6 +581,7 @@ select:focus-visible,
   --tc-assembly: #414141;
   --tc-assembly-exe: #c17b19;
   --tc-assembly-module: #642c8f;
+  --tc-il-module: #660033;
 }
 
 :root:not([data-theme="hc"]) .tc-operator { color: var(--tc-operator); }
@@ -610,6 +612,7 @@ select:focus-visible,
 :root:not([data-theme="hc"]) .tc-assembly { color: var(--tc-assembly); }
 :root:not([data-theme="hc"]) .tc-assemblyExe { color: var(--tc-assembly-exe); }
 :root:not([data-theme="hc"]) .tc-assemblyModule { color: var(--tc-assembly-module); }
+:root:not([data-theme="hc"]) .tc-ilModule { color: var(--tc-il-module); }
 
 /* The colors only code has, which Roslyn's classifier gives the C# Interactive window's input and the echo of
    what was submitted: plain text and punctuation take the theme's text color here too, since the classifier's

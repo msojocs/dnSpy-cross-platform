@@ -163,9 +163,10 @@ export const externalMemberTarget = (ctx: Pick<CodeEditorMenuContext, 'reference
 }
 
 /** Whether a node is one Analyze takes: a type or a member — what `isMemberRef` asks of the reference — or
- * a derived type row of the assembly tree, which names a type as well. */
+ * a base or derived type row of the assembly tree, which names a type as well. A base type row only names
+ * one when its reference resolves, which the backend answers when asked to analyze it. */
 export const isAnalyzableNode = (node: TreeNode | undefined): node is TreeNode =>
-  node !== undefined && ['type', 'method', 'field', 'property', 'event', 'derivedtype'].includes(node.kind)
+  node !== undefined && ['type', 'method', 'field', 'property', 'event', 'derivedtype', 'basetype'].includes(node.kind)
 
 /**
  * The method dnSpy's "Edit Method Body" acts on: the reference under the caret when that reference *is* a

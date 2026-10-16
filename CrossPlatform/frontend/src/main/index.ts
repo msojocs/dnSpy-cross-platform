@@ -12,7 +12,7 @@ import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
 import { resourceFileName, resourceFileSegments } from './resource-files'
 import { captureWindowState, loadWindowState, resolveWindowPlacement, saveWindowState } from './window-state'
-import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, SearchRequest, SearchResult, StringReference, StringReferencesSearchRequest, UiLocale } from '../shared/protocol'
+import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, DecompilerLanguage, SearchRequest, SearchResult, StringReference, StringReferencesSearchRequest, UiLocale } from '../shared/protocol'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
@@ -545,7 +545,7 @@ const registerIpc = (): void => {
   ipcMain.handle('stringReferences:cancel', (event, requestKey: string) => {
     stringReferencesRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
   })
-  ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds }))
+  ipcMain.handle('analyze:nodes', (_event, workspaceId: string, nodeIds: string[], language?: DecompilerLanguage) => requireBackend().invoke('analyze/nodes', { workspaceId, nodeIds, language }))
   // An analyzer search walks every module that can see the member, which on a framework assembly takes a
   // while; it gets the long deadline, and the renderer can call it off by the key it named it with — a row
   // collapsed while its search runs, the way dnSpy cancels a search node that is folded away.

@@ -2898,3 +2898,40 @@ describe('saving the modules a command lets go of', () => {
     expect(useAppStore.getState().dirty).toBe(true)
   })
 })
+
+describe('changeLanguage', () => {
+  const node = (id: string): TreeNode => ({ id, kind: 'type', label: id, hasChildren: false })
+  const documentIn = (nodeId: string, language: DecompilerLanguage): DocumentState => ({
+    nodeId, title: nodeId, language: language === 'cSharp' ? 'csharp' : 'il', text: '', spans: [], diagnostics: [], codeStatements: [], loading: false, requestedLanguage: language,
+  })
+
+  it('decompiles every open tab again in the language chosen, leaves the selection, and remembers it', async () => {
+    const decompile = vi.fn(async (_workspaceId: string, nodeId: string, language: DecompilerLanguage) => ({
+      title: nodeId, language: language === 'visualBasic' ? 'visual-basic' : 'csharp', text: `${nodeId} in ${language}`, spans: [], diagnostics: [],
+    }))
+    const getNode = vi.fn(async (_workspaceId: string, nodeId: string) => node(nodeId))
+    Object.assign(window.dnSpy, { decompile, getNode })
+    const selected = node('selected')
+    useAppStore.setState({
+      workspaceId: 'ws',
+      roots: [node('a')],
+      selectedNode: selected,
+      selectedNodes: [selected],
+      documents: { a: documentIn('a', 'cSharp'), b: documentIn('b', 'cSharp'), closed: documentIn('closed', 'cSharp'), already: documentIn('already', 'visualBasic'), opening: { ...documentIn('opening', 'cSharp'), loading: true } },
+      documentOrder: ['a', 'b', 'a', 'already'],
+      defaultLanguage: 'cSharp',
+    })
+
+    await useAppStore.getState().changeLanguage('visualBasic')
+
+    // The open tabs that showed another language, each once, and a document a tab is still waiting for — a
+    // closed one waits until it is opened again.
+    expect(decompile.mock.calls.map(([, nodeId, language]) => [nodeId, language]).sort()).toEqual([['a', 'visualBasic'], ['b', 'visualBasic'], ['opening', 'visualBasic']])
+    expect(useAppStore.getState().documents.a.text).toBe('a in visualBasic')
+    expect(useAppStore.getState().documents.closed.requestedLanguage).toBe('cSharp')
+    expect(useAppStore.getState().selectedNode).toBe(selected)
+    expect(useAppStore.getState().defaultLanguage).toBe('visualBasic')
+    expect(localStorage.getItem('dnspy.decompilerLanguage')).toBe('visualBasic')
+    localStorage.removeItem('dnspy.decompilerLanguage')
+  })
+})

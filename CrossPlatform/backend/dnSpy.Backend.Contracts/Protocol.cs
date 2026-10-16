@@ -1315,8 +1315,9 @@ public static class AnalyzerSearchKinds {
 
 /// <summary>Asks for the analyzer rows of tree nodes — what dnSpy adds to its analyzer when a member is
 /// analyzed. Several are asked at once so a client can check every row it holds after the workspace
-/// changed.</summary>
-public sealed record AnalyzeNodesRequest(string WorkspaceId, IReadOnlyList<string> NodeIds);
+/// changed, or write them anew in another language. <see cref="Language"/> is the decompiler the rows are
+/// written through, the way dnSpy's analyzer nodes write themselves through the one selected.</summary>
+public sealed record AnalyzeNodesRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, DecompilerLanguage Language = DecompilerLanguage.CSharp);
 
 /// <summary>One row per node asked for, in the same order. A node that cannot be analyzed — it is not a
 /// member, or the member it named is gone — answers null rather than failing the whole request.</summary>
@@ -1328,9 +1329,13 @@ public sealed record AnalyzeNodesResponse(IReadOnlyList<AnalyzerNodeDto?> Nodes)
 /// <see cref="IsSetter"/> is the flag the property's "set" row carries, which widens the setter's "Used
 /// By" to the attributes that assign the property by name. A search asked with a
 /// <see cref="ProgressToken"/> sends what it finds ahead, in <see cref="RpcMethods.AnalyzeProgress"/>
-/// notifications that carry the token back.
+/// notifications that carry the token back. A search has no limit of its own, as dnSpy's has none;
+/// <see cref="MaxResults"/> is for a client that wants one.
+/// <see cref="Language"/> is the decompiler the rows are written through, and with
+/// <see cref="DecompileAnonymousMethods"/> it decides what a result found in a lambda or a state machine is
+/// shown as: the method the code was written in, which only the C# decompiler with that setting on shows.
 /// </summary>
-public sealed record AnalyzeChildrenRequest(string WorkspaceId, string NodeId, string? Search = null, bool IsSetter = false, int MaxResults = 20_000, string? ProgressToken = null);
+public sealed record AnalyzeChildrenRequest(string WorkspaceId, string NodeId, string? Search = null, bool IsSetter = false, int MaxResults = int.MaxValue, string? ProgressToken = null, DecompilerLanguage Language = DecompilerLanguage.CSharp, bool DecompileAnonymousMethods = true);
 
 /// <summary>The rows, in the order the search found them, and whether the search stopped at the limit.
 /// <see cref="Start"/> is where the first of them stands among everything the search found: the rows
@@ -1428,6 +1433,8 @@ public static class TextColors {
 	public const string Assembly = "assembly";
 	public const string AssemblyExe = "assemblyExe";
 	public const string AssemblyModule = "assemblyModule";
+	/// <summary>The "[System.Runtime]" the IL decompiler writes in front of a type of another assembly.</summary>
+	public const string ILModule = "ilModule";
 	public const string Parameter = "parameter";
 	public const string String = "string";
 	public const string DirectoryPart = "directoryPart";

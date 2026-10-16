@@ -80,7 +80,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onSortAssemblies?(): void
   /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
   onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
-  onAnalyze?(node: TreeNode): void
+  /** dnSpy's Analyze over the selection: every row it names a member for gets a root of its own. */
+  onAnalyze?(nodes: TreeNode[]): void
   /** dnSpy's Find String References in Module over the selection: scans every module of their assemblies. */
   onFindStringReferences?(nodes: TreeNode[]): void
   /** Opens an address in the browser, which is how dnSpy's Search MSDN command runs. */
@@ -121,6 +122,12 @@ export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, H
    * "Move Types to Empty Namespace" only when there is somewhere to move them to.
    */
   hasEmptyNamespaceSibling: boolean
+  /**
+   * The selected rows Analyze takes, which the backend answered before the menu opened: a base type row
+   * names a type only when its reference resolves — dnSpy's CanAnalyze. Without an answer the rows are
+   * judged by their kind alone.
+   */
+  analyzeTargets?: TreeNode[]
 }
 
 type AsmMenuIcon = (ctx: AssemblyExplorerMenuContext) => ReactNode
@@ -193,6 +200,10 @@ const deleteLabel = (ctx: AssemblyExplorerMenuContext): string => ctx.t('Delete 
 /** The rows a command acts on: every selected row when the right-clicked one is among them, else that row. */
 const selectionOf = (ctx: Pick<AssemblyExplorerMenuContext, 'node' | 'selection'>): TreeNode[] =>
   ctx.selection && ctx.selection.length > 0 ? ctx.selection : [ctx.node]
+
+/** The selected rows Analyze takes, in the order they were selected. */
+const analyzeTargets = (ctx: AssemblyExplorerMenuContext): TreeNode[] =>
+  ctx.analyzeTargets ?? selectionOf(ctx).filter(isAnalyzableNode)
 
 /** The documents Remove acts on: the selected roots — RemoveAssemblyCommand.CanExecute wants every node a root. */
 const removalTargets = (ctx: AssemblyExplorerMenuContext): TreeNode[] => {
@@ -450,7 +461,7 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // searcher: it shows for any selection with a row in a .NET module (DocumentsCommand's GetModule), and
   // scans every module of those rows' assemblies.
   { group: GROUP_OTHER, order: 0, key: 'find-string-references', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find String References in Module'), visible: (ctx) => ctx.onFindStringReferences !== undefined && selectionOf(ctx).some(isInDotNetModule), run: (ctx) => ctx.onFindStringReferences?.(selectionOf(ctx).filter(isInDotNetModule)) },
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => isAnalyzableNode(ctx.node) && ctx.onAnalyze !== undefined, run: (ctx) => ctx.onAnalyze?.(ctx.node) },
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => ctx.onAnalyze !== undefined && analyzeTargets(ctx).length > 0, run: (ctx) => ctx.onAnalyze?.(analyzeTargets(ctx)) },
   { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => msdnNamesOf(ctx).length > 0 && ctx.onOpenUrl !== undefined, run: (ctx) => { for (const name of msdnNamesOf(ctx)) ctx.onOpenUrl?.(msdnPageUrl(name)) } },
   // dnSpy's DocumentTreeViewCommand only answers for a single selected row.
   { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: (ctx) => ctx.readsResource === true && selectionOf(ctx).length === 1 && ctx.onGoToResource !== undefined, run: (ctx) => ctx.onGoToResource?.(ctx.node) },

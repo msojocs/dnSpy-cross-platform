@@ -8,7 +8,7 @@ import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation,
 import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
 import { normalizeZoom, zoomIn, zoomOut } from './zoom'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
-import { AssemblyExplorer } from './components/AssemblyExplorer'
+import { AssemblyExplorer, resolveAnalyzeTargets } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar, type ThemeName } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
@@ -357,8 +357,9 @@ export const App = (): React.JSX.Element => {
   const undoEdit = useAppStore((state) => state.undoEdit)
   const redoEdit = useAppStore((state) => state.redoEdit)
   const activeDocumentId = useAppStore((state) => state.activeDocumentId)
-  const activeDocumentLanguage = useAppStore((state) => state.activeDocumentId ? state.documents[state.activeDocumentId]?.requestedLanguage : undefined)
-  const changeDocumentLanguage = useAppStore((state) => state.changeDocumentLanguage)
+  // dnSpy's language box names the one decompiler every document is shown in.
+  const defaultLanguage = useAppStore((state) => state.defaultLanguage)
+  const changeLanguage = useAppStore((state) => state.changeLanguage)
   const saveModuleAs = useAppStore((state) => state.saveModuleAs)
   const saveModule = useAppStore((state) => state.saveModule)
   const saveAllModules = useAppStore((state) => state.saveAllModules)
@@ -1055,12 +1056,15 @@ export const App = (): React.JSX.Element => {
         }
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'r') {
         // dnSpy's Analyze. The code viewer and the analyzer bind the key themselves; from the assembly tree
-        // it analyzes the selected member, and anywhere else it brings an open analyzer forward.
+        // it analyzes the member the first selected row names, and anywhere else — or for a row that names
+        // none, such as a base type that does not resolve — it brings an open analyzer forward.
         event.preventDefault()
-        if (target?.closest('.assembly-tree:not(.analyzer-tree)') && isAnalyzableNode(selectedNode))
-          void openAnalysis(selectedNode)
-        else if (model.getNodeById('analysis'))
-          showToolWindow('analysis')
+        const first = useAppStore.getState().selectedNodes[0] ?? selectedNode
+        const showAnalyzer = (): void => { if (model.getNodeById('analysis')) showToolWindow('analysis') }
+        if (target?.closest('.assembly-tree:not(.analyzer-tree)') && isAnalyzableNode(first))
+          void resolveAnalyzeTargets([first]).then(([node]) => node ? openAnalysis(node) : showAnalyzer())
+        else
+          showAnalyzer()
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'p') {
         event.preventDefault()
         collapseTreeViewNodes()
@@ -1692,6 +1696,12 @@ export const App = (): React.JSX.Element => {
     await useAnalyzerStore.getState().analyze(node.id)
   }
 
+  // Analyze over a selection adds a root per member, in the order they were selected.
+  const openAnalyses = async (nodes: TreeNode[]): Promise<void> => {
+    for (const node of nodes)
+      await openAnalysis(node)
+  }
+
   // dnSpy resolves the member a reference names only when Analyze runs, which for a member of a module the
   // workspace does not hold means opening that module first — the way following the reference would.
   const analyzeReference = async (target: TextSpan): Promise<void> => {
@@ -1863,7 +1873,7 @@ export const App = (): React.JSX.Element => {
     onAddMethodBreakpoints: (targets) => { void addMethodBreakpoints(targets) },
     onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
     onAddClassTracepoint: (node) => setClassTracepointNode(node),
-    onAnalyze: (node) => { void openAnalysis(node) },
+    onAnalyze: (nodes) => { void openAnalyses(nodes) },
     onFindStringReferences: (nodes) => findStringReferences(nodes),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     copyText: (text) => {
@@ -2176,7 +2186,7 @@ export const App = (): React.JSX.Element => {
         fullScreen={fullScreen} onToggleFullScreen={() => void window.dnSpy.toggleFullScreen()}
         canGoBack={navigation.index > 0} canGoForward={navigation.index >= 0 && navigation.index < navigation.items.length - 1} onBack={goBack} onForward={goForward}
         canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo}
-        decompilerLanguage={activeDocumentLanguage} onLanguageChange={(language) => { if (activeDocumentId) void changeDocumentLanguage(activeDocumentId, language) }}
+        decompilerLanguage={defaultLanguage} onLanguageChange={(language) => { void changeLanguage(language, orderedDocumentKeys(model).order) }}
         debugAvailable={backendStatus.capabilities?.['debug.coreclr.launch'] === true} debugState={debugState}
         onStart={() => setDebugProgramDialogOpen(true)} onContinue={() => void continueDebug()} onPause={() => void pauseDebug()}
         onRestart={() => { void stopDebug().then(() => setDebugProgramDialogOpen(true)) }}

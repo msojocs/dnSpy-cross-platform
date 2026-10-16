@@ -35,7 +35,7 @@ beforeEach(() => {
   analyzeNodes.mockClear()
   analyzeChildren.mockClear()
   cancelAnalyze.mockClear()
-  useAppStore.setState({ workspaceId: 'ws', workspaceGeneration: 0, workspaceStateId: 's1', assemblyListRevision: 0, output: [] })
+  useAppStore.setState({ workspaceId: 'ws', workspaceGeneration: 0, workspaceStateId: 's1', assemblyListRevision: 0, output: [], defaultLanguage: 'cSharp' })
   state().clear()
 })
 
@@ -75,7 +75,7 @@ describe('analyzer store', () => {
     const root = state().rootKeys[0]
     const search = (state().children[root] as { keys: string[] }).keys[0]
     await state().expand(search)
-    expect(analyzeChildren).toHaveBeenLastCalledWith('ws', { nodeId: 'n1', search: 'usedBy', isSetter: false }, expect.any(String))
+    expect(analyzeChildren).toHaveBeenLastCalledWith('ws', { nodeId: 'n1', search: 'usedBy', isSetter: false, language: 'cSharp', decompileAnonymousMethods: true }, expect.any(String))
     const found = (state().children[search] as { keys: string[] }).keys
     expect(found.map((key) => state().rows[key].node.label)).toEqual(['Found.M() : void'])
     expect(state().rows[found[0]].parentKey).toBe(search)
@@ -167,7 +167,7 @@ describe('analyzer store', () => {
   it('carries a setter row\'s flag into the searches under it', async () => {
     analyzeNodes.mockResolvedValueOnce({ nodes: [node({ nodeId: 'set', label: 'set', accessor: 'set', isSetter: true })] })
     await state().analyze('set')
-    expect(analyzeChildren).toHaveBeenLastCalledWith('ws', { nodeId: 'set', search: undefined, isSetter: true }, expect.any(String))
+    expect(analyzeChildren).toHaveBeenLastCalledWith('ws', expect.objectContaining({ nodeId: 'set', search: undefined, isSetter: true }), expect.any(String))
   })
 
   it('reports a search that failed and leaves its row empty', async () => {
@@ -222,6 +222,69 @@ describe('analyzer store', () => {
 
     useAppStore.setState({ assemblyListRevision: 1 })
     await vi.waitFor(() => expect(state().children[search]).toBeUndefined())
+  })
+
+  it('writes its rows and its searches in the language the decompiler box names', async () => {
+    useAppStore.setState({ defaultLanguage: 'il' })
+    await state().analyze('n1')
+    expect(analyzeNodes).toHaveBeenLastCalledWith('ws', ['n1'], 'il')
+    const search = (state().children[state().rootKeys[0]] as { keys: string[] }).keys[0]
+    await state().expand(search)
+    expect(analyzeChildren).toHaveBeenLastCalledWith('ws', expect.objectContaining({ search: 'usedBy', language: 'il' }), expect.any(String))
+  })
+
+  it('writes every member row anew, once per member, when another decompiler is chosen', async () => {
+    await state().analyze('n1')
+    const root = state().rootKeys[0]
+    const search = (state().children[root] as { keys: string[] }).keys[0]
+    await state().expand(search)
+    const [hit] = (state().children[search] as { keys: string[] }).keys
+    analyzeNodes.mockClear()
+    analyzeNodes.mockImplementationOnce(async (_workspaceId, nodeIds) => ({
+      nodes: nodeIds.map((id) => node({ nodeId: id, label: `VB ${id}`, labelParts: [{ text: `VB ${id}`, color: 'text' }] })),
+    }))
+
+    useAppStore.setState({ defaultLanguage: 'visualBasic' })
+
+    await vi.waitFor(() => expect(state().rows[root].node.label).toBe('VB n1'))
+    // A search row is its header in any language, so only the members are asked for.
+    expect(analyzeNodes).toHaveBeenCalledTimes(1)
+    expect(analyzeNodes).toHaveBeenLastCalledWith('ws', ['n1', 'n1-hit'], 'visualBasic')
+    expect(state().rows[hit].node.label).toBe('VB n1-hit')
+    expect(state().rows[hit].node.labelParts).toEqual([{ text: 'VB n1-hit', color: 'text' }])
+    expect(state().rows[search].node.label).toBe('Used By')
+    // What the search found stays found.
+    expect(state().children[search]).toMatchObject({ status: 'loaded' })
+  })
+
+  it('writes anew what a search finds after the language changed under it', async () => {
+    await state().analyze('n1')
+    const search = (state().children[state().rootKeys[0]] as { keys: string[] }).keys[0]
+    const answer = deferred<AnalyzeChildrenResponse>()
+    analyzeChildren.mockImplementationOnce(() => answer.promise)
+    const expanding = state().expand(search)
+    useAppStore.setState({ defaultLanguage: 'il' })
+    analyzeNodes.mockClear()
+    analyzeNodes.mockImplementationOnce(async (_workspaceId, nodeIds) => ({ nodes: nodeIds.map((id) => node({ nodeId: id, label: `IL ${id}` })) }))
+    answer.resolve({ children: [node({ nodeId: 'late', label: 'C# late' })], truncated: false })
+    await expanding
+    const [late] = (state().children[search] as { keys: string[] }).keys
+    await vi.waitFor(() => expect(state().rows[late].node.label).toBe('IL late'))
+    expect(analyzeNodes).toHaveBeenLastCalledWith('ws', ['late'], 'il')
+  })
+
+  it('lists a lambda as itself when the C# decompiler does not decompile anonymous methods', async () => {
+    const { loadAppOptions, saveAppOptions } = await import('./components/app-options')
+    const options = loadAppOptions()
+    saveAppOptions({ ...options, decompiler: { ...options.decompiler, cSharp: { ...options.decompiler.cSharp, anonymousMethods: false } } })
+    try {
+      await state().analyze('n1')
+      const search = (state().children[state().rootKeys[0]] as { keys: string[] }).keys[0]
+      await state().expand(search)
+      expect(analyzeChildren).toHaveBeenLastCalledWith('ws', expect.objectContaining({ decompileAnonymousMethods: false }), expect.any(String))
+    } finally {
+      saveAppOptions(options)
+    }
   })
 
   it('empties itself when the workspace goes', async () => {

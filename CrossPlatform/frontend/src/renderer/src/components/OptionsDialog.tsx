@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, RotateCcw, Search, X } from 'lucide-react'
 import { useLanguage } from '../localization'
 import { trapTabKey } from './modal-stack'
 import { loadAppOptions, resetAppOptions, saveAppOptions, type AppOptions } from './app-options'
+import { CloseGlyph, SubmenuArrowGlyph, TreeExpanderGlyph } from './DsGlyphs'
+import { FontOptions } from './FontOptions'
 import {
   OPTION_PAGES,
   collectResets,
@@ -10,6 +11,7 @@ import {
   firstSelectablePage,
   hasChildren,
   pageControls,
+  selectOptions,
   type ControlSpec,
   type GroupSpec,
   type PageSpec,
@@ -56,7 +58,7 @@ const readValue = (options: AppOptions, path: string): unknown => {
 /** Everything a page contributes to the search index, including its group headers. */
 const pageHaystack = (page: PageSpec, t: Translate): string => {
   const groups = (page.groups ?? [])
-    .map((group) => `${group.titleKey ? t(group.titleKey) : ''} ${group.controls.map((control) => t(control.labelKey)).join(' ')}`)
+    .map((group) => `${group.titleKey ? t(group.titleKey) : ''} ${group.controls.map((control) => `${t(control.labelKey)}${control.kind === 'select' ? ` ${selectOptions(control).map((option) => t(option.labelKey)).join(' ')}` : ''}`).join(' ')}`)
     .join(' ')
   return `${t(page.titleKey)} ${page.descriptionKey ? t(page.descriptionKey) : ''} ${groups}`
 }
@@ -146,13 +148,38 @@ const ControlRow = ({ spec, options, onChange, t }: ControlRowProps): React.JSX.
           disabled={isDisabled}
           onChange={(event) => onChange(spec.path, event.target.value)}
         >
-          {spec.options.map((option) => (
+          {selectOptions(spec).map((option) => (
             <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
           ))}
         </select>
       </label>
     )
   }
+
+  // GeneralAppSettingsPage's ClearAllWarningsCommand: enabled while some message is silenced, and done at once.
+  if (spec.kind === 'button') {
+    const held = Array.isArray(value) ? value.length > 0 : Boolean(value)
+    return (
+      <div className="options-row options-row-button">
+        <button
+          type="button"
+          disabled={!held || isDisabled}
+          onClick={() => {
+            // dnSpy's MessageBoxService.EnableAllWarnings does not wait for OK: the saved options lose the list
+            // now, and the page's copy follows so OK does not put it back.
+            const saved = loadAppOptions()
+            saveAppOptions(setNested(spec.path.split('.'), [])(saved))
+            onChange(spec.path, [])
+          }}
+        >
+          {t(spec.labelKey)}
+        </button>
+      </div>
+    )
+  }
+
+  if (spec.kind === 'fonts')
+    return <FontOptions options={options} onChange={(byTheme) => onChange(spec.path, byTheme)} />
 
   if (spec.kind === 'text') {
     return (
@@ -290,11 +317,8 @@ const PageNode = ({ page, selectedPageId, onSelect, expanded, onToggle, level, t
             onToggle(page.id)
         }}
       >
-        <ChevronRight
-          size={12}
-          className={`options-tree-chevron${isExpanded ? ' options-tree-chevron-expanded' : ''}`}
-          aria-hidden="true"
-        />
+        {/* The settings tree is a SharpTreeView, so it wears ExpandCollapseToggleStyle's expander. */}
+        <TreeExpanderGlyph expanded={isExpanded} className="options-tree-chevron" />
         <span className="options-tree-label">{t(page.titleKey)}</span>
         <span className="options-tree-count">{children.length}</span>
       </button>
@@ -392,12 +416,12 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
       <div ref={dialog} className="modal options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title" onKeyDown={(event) => trapTabKey(event, dialog.current)}>
         <div className="modal-title">
           <span id="options-title">{t('Options')}</span>
-          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="options-body">
           <div className="options-sidebar" role="group" aria-label={t('Categories')}>
+            {/* AppSettingsDlg's search box is a plain TextBox, with no image beside it. */}
             <div className="options-search">
-              <Search size={13} aria-hidden="true" />
               <input
                 ref={searchInput}
                 type="search"
@@ -408,7 +432,7 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
               />
               {search && (
                 <button type="button" className="icon-button" aria-label={t('Clear search')} title={t('Clear')} onClick={() => setSearch('')}>
-                  <X size={12} />
+                  <CloseGlyph />
                 </button>
               )}
             </div>
@@ -436,7 +460,7 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
                     <p className="options-detail-breadcrumb">
                       {selectionPath.map((page, index) => (
                         <span key={page.id}>
-                          {index > 0 && <ChevronRight size={12} aria-hidden="true" />}
+                          {index > 0 && <SubmenuArrowGlyph />}
                           <span>{t(page.titleKey)}</span>
                         </span>
                       ))}
@@ -466,7 +490,7 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
         </div>
         <div className="modal-actions">
           <button type="button" onClick={handleReset}>
-            <RotateCcw size={13} /> {t('Restore Defaults')}
+            {t('Restore Defaults')}
           </button>
           <span className="modal-action-spacer" />
           <button type="button" onClick={onClose}>{t('Cancel')}</button>

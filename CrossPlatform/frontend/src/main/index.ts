@@ -6,13 +6,18 @@ import path from 'node:path'
 import { BackendClient } from './backend-client'
 import { readBackgroundImages } from './background-images'
 import { formatAppTitle } from './app-info'
-import { loadAppMainSettings, saveAppMainSettings } from './app-settings'
+import { loadAppMainSettings, saveAppMainSettings, toAppMainSettings } from './app-settings'
 import { parseCommandLine, userArguments } from './command-line'
 import { DialogPathHistory } from './dialog-path-history'
 import { waitForElevatedStart } from './elevated-start'
+import { nativeMessagesFor } from './native-messages'
 import { resourceFileName, resourceFileSegments } from './resource-files'
-import { captureWindowState, loadWindowState, resolveWindowPlacement, saveWindowState } from './window-state'
+import { captureWindowState, loadWindowState, resolveWindowPlacement, saveWindowState, toSavedWindowState, type SavedWindowState } from './window-state'
+import { readThemeFiles, themeDirectories } from './theme-files'
+import { rendererEntries, resolveSettingsFile, SettingsFile } from './settings-file'
+import { listSystemFonts } from './system-fonts'
 import type { AnalyzeChildrenRequest, AnalyzerNode, AppCommandLine, BackendStatus, DebugLaunchOptions, DecompilerLanguage, SearchRequest, SearchResult, StringReference, StringReferencesSearchRequest, UiLocale } from '../shared/protocol'
+import { isUiLocale, matchUiLocale } from '../shared/ui-locales'
 
 let mainWindow: BrowserWindow | undefined
 let backend: BackendClient | undefined
@@ -47,7 +52,21 @@ const processStartTime = Date.now()
 // This port keeps them beside the dialog's remembered directories, in the directory Electron gives the app.
 const windowStateFile = path.join(app.getPath('userData'), 'window-state.json')
 const appSettingsFile = path.join(app.getPath('userData'), 'app-settings.json')
-const appSettings = loadAppMainSettings(appSettingsFile)
+// dnSpy's settings file, when `--settings-file` names one or a portable one sits beside the program: then all of
+// it lives there, the renderer's options included, and the profile directory's files are left alone.
+const settingsFilePath = resolveSettingsFile(commandLine.settingsFile, path.dirname(app.getPath('exe')))
+const settingsFile = settingsFilePath ? new SettingsFile(settingsFilePath) : undefined
+// The renderer of a run with a settings file gets a session of its own that is never written to disk, so the
+// profile's options and those of the file stay apart; the preload fills its storage from the file.
+const SETTINGS_FILE_PARTITION = 'dnspy-settings-file'
+const appSettings = settingsFile ? toAppMainSettings(settingsFile.get('appSettings')) : loadAppMainSettings(appSettingsFile)
+const readWindowState = (): SavedWindowState | undefined => settingsFile ? toSavedWindowState(settingsFile.get('windowState')) : loadWindowState(windowStateFile)
+const writeWindowState = (state: SavedWindowState): void => {
+  if (settingsFile)
+    settingsFile.set('windowState', state)
+  else
+    saveWindowState(windowStateFile, state)
+}
 
 // dnSpy starts one instance and hands every later command line to the one already running
 // (App.SwitchToOtherInstance) — which is what a desktop's "Open With" relies on — unless the command line asks
@@ -56,72 +75,7 @@ const appSettings = loadAppMainSettings(appSettingsFile)
 const keepsOneInstance = commandLine.singleInstance && !appSettings.allowMoreThanOneInstance
 const isPrimaryInstance = !keepsOneInstance || app.requestSingleInstanceLock()
 
-const nativeMessages = {
-  'zh-CN': {
-    openAssembly: '打开程序集',
-    dotNetAssemblies: '.NET 程序集',
-    allFiles: '所有文件',
-    xmlFiles: 'XML 文件',
-    replaceResource: '替换嵌入的资源',
-    resourceTooLarge: '资源文件不能超过 64 MiB。',
-    saveModuleAs: '模块另存为',
-    saveCode: '保存代码',
-    saveResource: '保存资源',
-    saveResources: '保存资源',
-    codeFiles: '代码文件',
-    openBookmarks: '导入书签',
-    openBreakpoints: '导入断点',
-    selectDebugTarget: '选择要调试的 .NET 程序',
-    dotNetPrograms: '.NET 程序',
-    selectDebugHost: '选择宿主可执行文件',
-    executables: '可执行文件',
-    selectWorkingDirectory: '选择工作目录',
-    selectDirectory: '选择目录',
-    administrator: '管理员',
-    ok: '确定',
-    dontShowAgain: '不再显示此消息',
-    restartFailed: '无法以管理员身份重启',
-    restartNoResponse: '以管理员身份启动的窗口始终没有出现',
-    askSaveFile: '有一个文件尚未被保存，是否要在继续之前保存？',
-    askSaveFiles: '有多个文件尚未被保存，是否要在继续前保存它们？',
-    yes: '是',
-    no: '否',
-    cancel: '取消',
-  },
-  en: {
-    openAssembly: 'Open Assembly',
-    dotNetAssemblies: '.NET Assemblies',
-    allFiles: 'All Files',
-    xmlFiles: 'XML Files',
-    replaceResource: 'Replace Embedded Resource',
-    resourceTooLarge: 'Resource files are limited to 64 MiB.',
-    saveModuleAs: 'Save Module As',
-    saveCode: 'Save Code',
-    saveResource: 'Save Resource',
-    saveResources: 'Save Resources',
-    codeFiles: 'Code Files',
-    openBookmarks: 'Import Bookmarks',
-    openBreakpoints: 'Import Breakpoints',
-    selectDebugTarget: 'Select .NET Program to Debug',
-    dotNetPrograms: '.NET Programs',
-    selectDebugHost: 'Select Host Executable',
-    executables: 'Executables',
-    selectWorkingDirectory: 'Select Working Directory',
-    selectDirectory: 'Select Directory',
-    administrator: 'Administrator',
-    ok: 'OK',
-    dontShowAgain: "Don't show this message again",
-    restartFailed: 'Could not restart with elevated rights',
-    restartNoResponse: 'The window started with elevated rights never appeared',
-    askSaveFile: 'The file hasn\'t been saved yet. Do you want to save it before continuing?',
-    askSaveFiles: 'The files haven\'t been saved yet. Do you want to save them before continuing?',
-    yes: 'Yes',
-    no: 'No',
-    cancel: 'Cancel',
-  },
-} as const
-
-const nativeText = () => nativeMessages[uiLocale]
+const nativeText = () => nativeMessagesFor(uiLocale)
 
 // dnSpy's Constants.IsRunningAsAdministrator (a WindowsPrincipal role check) in Linux terms: the
 // process is elevated when it owns uid 0.
@@ -299,7 +253,7 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
 const createWindow = (): void => {
   // dnSpy's SavedWindowStateRestorer: the size, position and state the window was left in, as long as what
   // was saved still lands on a display. A window left full screen comes back full screen, not maximized.
-  const placement = resolveWindowPlacement(loadWindowState(windowStateFile), screen.getAllDisplays().map((display) => display.bounds))
+  const placement = resolveWindowPlacement(readWindowState(), screen.getAllDisplays().map((display) => display.bounds))
   const window = new BrowserWindow({
     title: appTitle(),
     x: placement.x,
@@ -317,6 +271,7 @@ const createWindow = (): void => {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      ...(settingsFile ? { partition: SETTINGS_FILE_PARTITION } : {}),
     },
   })
   mainWindow = window
@@ -334,7 +289,7 @@ const createWindow = (): void => {
       window.webContents.send('app:closeRequested')
       return
     }
-    saveWindowState(windowStateFile, captureWindowState(window))
+    writeWindowState(captureWindowState(window))
   })
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -388,7 +343,7 @@ const createWindow = (): void => {
 
 const registerAppProtocol = (): void => {
   const rendererRoot = path.resolve(__dirname, '../renderer')
-  protocol.handle('app', async (request) => {
+  const handler = async (request: Request): Promise<Response> => {
     try {
       const url = new URL(request.url)
       const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html'
@@ -403,7 +358,11 @@ const registerAppProtocol = (): void => {
       console.error('[app protocol]', error)
       return new Response('Not found', { status: 404 })
     }
-  })
+  }
+  protocol.handle('app', handler)
+  // A run with a settings file shows the renderer in a session of its own, which needs the scheme too.
+  if (settingsFile)
+    session.fromPartition(SETTINGS_FILE_PARTITION).protocol.handle('app', handler)
 }
 
 const contentTypeFor = (filePath: string): string => {
@@ -943,7 +902,7 @@ const registerIpc = (): void => {
     return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
   })
   ipcMain.handle('app:setLocale', (_event, locale: UiLocale) => {
-    if (locale === 'en' || locale === 'zh-CN') {
+    if (isUiLocale(locale)) {
       uiLocale = locale
       // The title reports the administrator rights in the user's own language, so it is written again here.
       mainWindow?.setTitle(appTitle())
@@ -953,7 +912,10 @@ const registerIpc = (): void => {
   // know about before there is a renderer to ask, kept in a file of its own for the next start to read.
   ipcMain.handle('app:mainSettings', (_event, settings: { allowMoreThanOneInstance?: boolean }) => {
     appSettings.allowMoreThanOneInstance = settings.allowMoreThanOneInstance === true
-    saveAppMainSettings(appSettingsFile, appSettings)
+    if (settingsFile)
+      settingsFile.set('appSettings', appSettings)
+    else
+      saveAppMainSettings(appSettingsFile, appSettings)
   })
   // Whether the renderer holds unsaved edits. Reported as they change, so the close handler knows whether
   // there is anything to ask about without having to call across and wait for an answer.
@@ -992,6 +954,21 @@ const registerIpc = (): void => {
       dialog.showErrorBox('dnSpy', message)
   })
   ipcMain.handle('app:isRunningAsAdministrator', () => isRunningAsAdministrator())
+  ipcMain.handle('app:listSystemFonts', () => listSystemFonts())
+  // The renderer's half of the settings file: read before the page's scripts run, written back as it unloads,
+  // which is when dnSpy writes its settings file too. Without a settings file the profile's storage is used.
+  ipcMain.on('app:rendererSettings', (event) => {
+    event.returnValue = settingsFile ? settingsFile.get('renderer') ?? {} : null
+  })
+  ipcMain.on('app:saveRendererSettings', (event, entries: Record<string, unknown>) => {
+    if (settingsFile && typeof entries === 'object' && entries !== null)
+      settingsFile.set('renderer', rendererEntries(entries))
+    event.returnValue = true
+  })
+  // dnSpy reads its themes before the window opens; the preload asks for them the same way, before the first paint.
+  ipcMain.on('app:themeFiles', (event) => {
+    event.returnValue = readThemeFiles(themeDirectories(path.dirname(app.getPath('exe')), app.getPath('userData')))
+  })
   ipcMain.handle('app:restartAsAdministrator', async () => {
     // The renderer has already settled the unsaved-edits question by the time it asks for this.
     // Only once the elevated copy is up does this window go — unlike dnSpy, which closes first and
@@ -1048,8 +1025,13 @@ const handleForwardedCommandLine = (argv: readonly string[], workingDirectory: s
 }
 
 const start = async (): Promise<void> => {
-  uiLocale = app.getLocale().toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
-  dialogPathHistory = new DialogPathHistory(path.join(app.getPath('userData'), 'dialog-state.json'))
+  // The renderer names the language it settles on as soon as it is up; until then the native dialogs follow the
+  // operating system's, matched the way the renderer matches its "System" language.
+  uiLocale = matchUiLocale([app.getLocale()]) ?? 'en'
+  dialogPathHistory = new DialogPathHistory(path.join(app.getPath('userData'), 'dialog-state.json'), settingsFile && {
+    read: () => settingsFile.get('dialogState'),
+    write: (settings) => settingsFile.set('dialogState', settings),
+  })
   await dialogPathHistory.load()
   installApplicationMenu()
   registerAppProtocol()

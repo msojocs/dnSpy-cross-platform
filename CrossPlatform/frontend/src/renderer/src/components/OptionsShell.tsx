@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 import { trapTabKey, useModalLayer } from './modal-stack'
 
 export interface OptionsTab {
@@ -64,7 +64,7 @@ export const OptionsShell = ({ title, tabs, onAccept, onClose, onReset, invalid 
         aria-label={t(title)}
         onKeyDown={(event) => trapTabKey(event, dialog.current)}
       >
-        <div className="modal-title"><span>{t(title)}</span><button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span>{t(title)}</span><button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         {!hideTabStrip && (
           <div className="options-tabs" role="tablist">
             {tabs.map((entry, index) => (

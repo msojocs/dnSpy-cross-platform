@@ -35,6 +35,8 @@ import type {
 } from '../../shared/protocol'
 import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
 import { getActiveLocale, translate as t } from './localization'
+import { formatDateTime } from './dotnet-date-format'
+import { loadAppOptions } from './components/app-options'
 import { spansOfTrimmed } from './roslyn-classification'
 
 export type { BreakpointConditionKind, BreakpointHitCountKind, BreakpointSettings }
@@ -242,7 +244,12 @@ interface AppState {
    * to follow a reference is not counted, since dnSpy leaves the analyzer alone for those.
    */
   assemblyListRevision: number
-  output: string[]
+  /** The Output window's own pane: what the port reports of its work (opening, saving, editing, failures). */
+  output: OutputLine[]
+  /** The Output window's Debug pane, dnSpy's OutputLogger: what the debugger and the debuggee write. */
+  debugOutput: OutputLine[]
+  /** The pane "Show output from" has selected. */
+  outputPane: OutputPaneId
   busy: boolean
   dirty: boolean
   workspaceStateId?: string
@@ -621,9 +628,11 @@ interface AppState {
   setExceptionConditions(keys: string[], conditions: DebugExceptionCondition[]): Promise<void>
   /** Throws the diff away and puts the engine back to the settings the definition files name. */
   restoreDefaultExceptionSettings(): Promise<void>
-  appendOutput(message: string): void
-  /** Empties the Output window — dnSpy's Clear All. */
-  clearOutput(): void
+  /** Writes a message to an Output pane, a line at a time, each with a timestamp while the option asks for one. */
+  appendOutput(message: string, pane?: OutputPaneId): void
+  /** Empties an Output pane, the selected one by default — dnSpy's Clear All. */
+  clearOutput(pane?: OutputPaneId): void
+  selectOutputPane(pane: OutputPaneId): void
   clearError(): void
   /** Builds the C# Interactive session the first time the window is opened, printing the banner. */
   startScript(): Promise<void>
@@ -640,7 +649,27 @@ interface AppState {
   showScriptHelp(): void
 }
 
-const timestamp = (): string => new Date().toLocaleTimeString(getActiveLocale())
+/** The panes the Output window's "Show output from" lists: the port's own log, and the debugger's. */
+export type OutputPaneId = 'dnSpy' | 'debug'
+
+/** One line of an Output pane: its text, and the timestamp OutputBufferVM wrote in front of it, if any. */
+export interface OutputLine {
+  timestamp?: string
+  text: string
+}
+
+/**
+ * OutputBufferVM.WriteInternal: every line a message makes starts with the time it was written, in the format
+ * the Output window's options give, while "Show timestamps" is on — a line written with it off keeps none.
+ */
+const outputLines = (message: string): OutputLine[] => {
+  const { showTimestamps, timestampDateTimeFormat } = loadAppOptions().output.general
+  const timestamp = showTimestamps && timestampDateTimeFormat.trim() ? formatDateTime(new Date(), timestampDateTimeFormat, getActiveLocale()) : undefined
+  return message.split(/\r\n|\r|\n/).map((text) => timestamp === undefined ? { text } : { timestamp, text })
+}
+
+/** How many lines a pane keeps before the oldest go. */
+const OUTPUT_LIMIT = 10000
 
 /**
  * The module a File-menu save acts on: the one the tree has selected, or the first the workspace holds
@@ -716,6 +745,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   defaultLanguage: loadDefaultLanguage(),
   assemblyListRevision: 0,
   output: [],
+  debugOutput: [],
+  outputPane: 'dnSpy',
   scriptEntries: [],
   scriptRunning: false,
   scriptHistory: [],
@@ -2092,7 +2123,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   launchDebug: async (options) => {
     if (!options.program) return
-    set({ debugState: 'starting', error: undefined })
+    // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
+    set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
     let sessionId: string | undefined
     try {
       // The workspace id travels with the launch: it is how the engine turns a decompiled line into an IL offset.
@@ -2111,30 +2143,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       // A launch that does not break during startup is held by the engine until this lands: the
       // debuggee would otherwise run to completion in the time the launch request alone takes.
       await window.dnSpy.configurationDone(sessionId)
-      get().appendOutput(t('Started debugging {target}.', { target: options.program }))
+      get().appendOutput(t('Started debugging {target}.', { target: options.program }), 'debug')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // A launch that was never released would sit suspended forever, so a failure here stops the
       // session rather than leaving the debuggee behind.
       if (sessionId) await get().stopDebug()
       set({ debugState: 'inactive', error: message })
-      get().appendOutput(t('Debug launch failed: {message}', { message }))
+      get().appendOutput(t('Debug launch failed: {message}', { message }), 'debug')
     }
   },
 
   attachDebug: async (processId) => {
-    set({ debugState: 'starting', error: undefined })
+    // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
+    set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
     try {
       const started = await window.dnSpy.attachDebug(processId, get().workspaceId)
       set({ debugSessionId: started.sessionId, debugCapabilities: started.capabilities })
       if (get().lineBreakpoints.length > 0)
         await syncLineBreakpoints(get, set)
       await get().loadExceptionSettings()
-      get().appendOutput(t('Attached to process {processId}.', { processId }))
+      get().appendOutput(t('Attached to process {processId}.', { processId }), 'debug')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       set({ debugState: 'inactive', error: message })
-      get().appendOutput(t('Debug attach failed: {message}', { message }))
+      get().appendOutput(t('Debug attach failed: {message}', { message }), 'debug')
     }
   },
 
@@ -2155,8 +2188,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (exceptionName)
         get().appendOutput(exceptionModule
           ? t('Exception thrown: {name} in {module}.', { name: exceptionName, module: exceptionModule })
-          : t('Exception thrown: {name}.', { name: exceptionName }))
-      get().appendOutput(t('Debugger stopped: {reason}.', { reason: t(reason) }))
+          : t('Exception thrown: {name}.', { name: exceptionName }), 'debug')
+      get().appendOutput(t('Debugger stopped: {reason}.', { reason: t(reason) }), 'debug')
       await refreshDebugState(get, set, threadId)
       set({ debugState: 'stopped' })
       await get().revealStoppedLocation()
@@ -2172,7 +2205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
     } else if (event.event === 'output') {
       const output = typeof event.body?.output === 'string' ? event.body.output.trimEnd() : ''
-      if (output) get().appendOutput(output)
+      if (output) get().appendOutput(output, 'debug')
     } else if (event.event === 'terminated' || event.event === 'exited') {
       set({
         debugState: 'inactive',
@@ -2188,7 +2221,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       get().appendOutput(event.event === 'exited'
         ? t('Debug target exited with code {code}.', { code: String(event.body?.exitCode ?? '') })
-        : t('Debug session terminated.'))
+        : t('Debug session terminated.'), 'debug')
     }
   },
 
@@ -2725,11 +2758,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  appendOutput: (message) => set((state) => ({
-    output: [...state.output.slice(-999), `${timestamp()}  ${message}`],
-  })),
+  appendOutput: (message, pane = 'dnSpy') => set((state) => {
+    const key = pane === 'debug' ? 'debugOutput' : 'output'
+    return { [key]: [...state[key], ...outputLines(message)].slice(-OUTPUT_LIMIT) }
+  }),
 
-  clearOutput: () => set({ output: [] }),
+  clearOutput: (pane) => set((state) => (pane ?? state.outputPane) === 'debug' ? { debugOutput: [] } : { output: [] }),
+
+  selectOutputPane: (outputPane) => set({ outputPane }),
 
   clearError: () => set({ error: undefined }),
 

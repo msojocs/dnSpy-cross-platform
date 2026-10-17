@@ -126,7 +126,34 @@ describe('OptionsDialog', () => {
 
     fireEvent.click(screen.getByRole('treeitem', { name: /^Font/ }))
     expect(screen.getByRole('heading', { name: 'Font', level: 2 })).toBeInTheDocument()
-    expect((screen.getByLabelText('Font') as HTMLInputElement).value).toBe('Cascadia Mono')
+    // FontAppSettingsPage starts on the text editor, at FontUtilities' default size of 10 points.
+    expect((screen.getByLabelText('Font') as HTMLSelectElement).value).toBe('textEditor')
+    expect((screen.getByLabelText('Font Size') as HTMLInputElement).value).toBe('10')
+  })
+
+  it('lists the font categories by name and keeps a size per category and theme', () => {
+    openDialog()
+    fireEvent.click(screen.getByRole('treeitem', { name: /^Font/ }))
+    const category = screen.getByLabelText('Font') as HTMLSelectElement
+    expect([...category.options].map((option) => option.text)).toEqual(['Hex Editor', 'Output Window', 'Text Editor'])
+    fireEvent.change(category, { target: { value: 'hexEditor' } })
+    const size = screen.getByLabelText('Font Size') as HTMLInputElement
+    fireEvent.change(size, { target: { value: '14' } })
+    fireEvent.blur(size)
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    const fonts = loadAppOptions().environmentFont.byTheme['64EFBB2C-0ACA-467C-8389-9FA350376F3F']
+    expect(fonts?.hexEditor?.fontSize).toBeCloseTo(14 * 96 / 72)
+    expect(fonts?.textEditor).toBeUndefined()
+  })
+
+  it('enables every silenced message at once — dnSpy\'s Enable all warning messages', () => {
+    const options = loadAppOptions()
+    saveAppOptions({ ...options, environmentGeneral: { ...options.environmentGeneral, ignoredWarnings: ['a'] } })
+    openDialog()
+    const button = screen.getByRole('button', { name: 'Enable all warning messages' })
+    fireEvent.click(button)
+    expect(loadAppOptions().environmentGeneral.ignoredWarnings).toEqual([])
+    expect(button).toBeDisabled()
   })
 
   it('renders every option of the upstream debugger settings page', () => {

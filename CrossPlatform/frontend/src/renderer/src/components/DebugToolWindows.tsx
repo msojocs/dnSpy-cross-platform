@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Download, LoaderCircle, Plus, Settings, Trash2, Upload } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import type { DebugVariable } from '../../../shared/protocol'
 import { breakpointConditionsSummary, breakpointsFile, methodBreakpointName, parseLineBreakpointEntries, parseFunctionBreakpoints, useAppStore } from '../app-store'
 import type { BreakpointSettings, LineBreakpoint } from '../app-store'
 import { useLanguage } from '../localization'
 import { BreakpointSettingsDialog } from './BreakpointSettingsDialog'
+import { DsIcon } from './DsIcon'
+import { TreeExpanderGlyph } from './DsGlyphs'
 
 export const LocalsPane = (): React.JSX.Element => {
   const variables = useAppStore((state) => state.debugVariables)
@@ -37,7 +39,9 @@ const VariableRow = ({ variable, depth }: { variable: DebugVariable; depth: numb
       <div className="debug-table-row" role="row">
         <span className="debug-variable-name" style={{ paddingLeft: `${7 + depth * 15}px` }}>
           <button className="tree-expander" aria-label={t(expanded ? 'Collapse {name}' : 'Expand {name}', { name: variable.name })} disabled={variable.variablesReference === 0} onClick={() => void toggle()}>
-            {loading ? <LoaderCircle className="spin" size={12} /> : expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {/* The variables windows expand a value with the tree's ExpandCollapseToggleStyle; while its children
+                load the port shows its spinner, which dnSpy has no counterpart of. */}
+            {loading ? <LoaderCircle className="spin" size={12} /> : <TreeExpanderGlyph expanded={expanded} />}
           </button>
           {variable.name}
         </span>
@@ -68,14 +72,14 @@ export const WatchPane = (): React.JSX.Element => {
     <div className="debug-tool-pane">
       <div className="debug-input-row">
         <input aria-label={t('Watch expression')} placeholder={t('Expression')} value={expression} disabled={disabled} title={canEvaluate ? undefined : t('Not supported by this debug engine')} onChange={(event) => setExpression(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} />
-        <button className="icon-button" aria-label={t('Add watch')} title={t('Add watch')} disabled={disabled || !expression.trim()} onClick={submit}><Plus size={14} /></button>
+        <button className="icon-button" aria-label={t('Add watch')} title={t('Add watch')} disabled={disabled || !expression.trim()} onClick={submit}><DsIcon name="Watch" /></button>
       </div>
       <div className="debug-table debug-table-watch" role="table" aria-label={t('Watch')}>
         <div className="debug-table-header">{t('Expression')}</div><div className="debug-table-header">{t('Value')}</div><div className="debug-table-header">{t('Type')}</div><div />
         {values.map((variable) => (
           <div className="debug-table-row" role="row" key={variable.name}>
             <span>{variable.name}</span><span title={variable.value}>{variable.value}</span><span>{variable.type}</span>
-            <button className="icon-button" aria-label={t('Remove {name}', { name: variable.name })} onClick={() => removeWatch(variable.name)}><Trash2 size={13} /></button>
+            <button className="icon-button" aria-label={t('Remove {name}', { name: variable.name })} onClick={() => removeWatch(variable.name)}><DsIcon name="DeleteWatch" /></button>
           </div>
         ))}
       </div>
@@ -210,15 +214,17 @@ export const BreakpointsPane = (): React.JSX.Element => {
 
   return (
     <div className="debug-tool-pane">
+      {/* CodeBreakpointsControl.xaml's import and export buttons, with the images dnSpy gives them; the
+          settings and remove buttons on each row are its context menu's _Settings and Remove Breakpoint. */}
       <div className="bookmarks-toolbar">
-        <button className="icon-button" title={t('Import Breakpoints')} aria-label={t('Import Breakpoints')} onClick={() => void runImport()}><Upload size={14} /></button>
+        <button className="icon-button" title={t('Import Breakpoints')} aria-label={t('Import Breakpoints')} onClick={() => void runImport()}><DsIcon name="Import" /></button>
         <button
           className="icon-button"
           title={t('Export Breakpoints')}
           aria-label={t('Export Breakpoints')}
           disabled={lineBreakpoints.length === 0 && breakpoints.length === 0}
           onClick={() => void exportBreakpoints()}
-        ><Download size={14} /></button>
+        ><DsIcon name="Open" /></button>
         {status ? <span className="bookmarks-status">{status}</span> : null}
       </div>
       <div className="result-list">
@@ -242,9 +248,9 @@ export const BreakpointsPane = (): React.JSX.Element => {
                   title={t('Breakpoint settings')}
                   onClick={() => setEditing({ kind: 'line', key: breakpoint.id })}
                 >
-                  <Settings size={13} />
+                  <DsIcon name="Settings" />
                 </button>
-                <button className="icon-button" aria-label={t('Remove {name}', { name: label })} onClick={() => void removeLineBreakpoint(breakpoint.id)}><Trash2 size={13} /></button>
+                <button className="icon-button" aria-label={t('Remove {name}', { name: label })} onClick={() => void removeLineBreakpoint(breakpoint.id)}><DsIcon name="Cancel" /></button>
               </div>
               {summary && <div className="breakpoint-summary">{summary}</div>}
             </div>
@@ -253,7 +259,7 @@ export const BreakpointsPane = (): React.JSX.Element => {
       </div>
       <div className="debug-input-row">
         <input aria-label={t('Function breakpoint')} placeholder="Namespace.Type.Method" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} />
-        <button className="icon-button" aria-label={t('Add function breakpoint')} title={t('Add function breakpoint')} disabled={!name.trim()} onClick={submit}><Plus size={14} /></button>
+        <button className="icon-button" aria-label={t('Add function breakpoint')} title={t('Add function breakpoint')} disabled={!name.trim()} onClick={submit}><DsIcon name="Add" /></button>
       </div>
       <div className="result-list">
         {breakpoints.map((breakpoint) => {
@@ -274,9 +280,9 @@ export const BreakpointsPane = (): React.JSX.Element => {
                   title={t('Breakpoint settings')}
                   onClick={() => setEditing({ kind: 'function', key: breakpoint.name })}
                 >
-                  <Settings size={13} />
+                  <DsIcon name="Settings" />
                 </button>
-                <button className="icon-button" aria-label={t('Remove {name}', { name: breakpoint.name })} onClick={() => void removeBreakpoint(breakpoint.name)}><Trash2 size={13} /></button>
+                <button className="icon-button" aria-label={t('Remove {name}', { name: breakpoint.name })} onClick={() => void removeBreakpoint(breakpoint.name)}><DsIcon name="Cancel" /></button>
               </div>
               {summary && <div className="breakpoint-summary">{summary}</div>}
             </div>

@@ -4,9 +4,11 @@ import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 import 'monaco-editor/languages/definitions/csharp/register'
 import 'monaco-editor/languages/definitions/vb/register'
 import 'monaco-editor/languages/definitions/xml/register'
-import { ilLanguage, ilLanguageConfiguration, ilThemeRules } from './il-language'
+import { ilLanguage, ilLanguageConfiguration } from './il-language'
+import { monacoThemeData } from './monaco-theme'
+import { resolveTheme } from './theme-service'
 
-// Shiki's adapter wraps create/setTheme; ESM module namespace exports are read-only.
+// A plain object over the module namespace, whose exports are read-only, for the loader to be handed.
 const monaco = { ...monacoApi, editor: { ...monacoApi.editor } }
 
 self.MonacoEnvironment = {
@@ -17,22 +19,22 @@ if (!monaco.languages.getLanguages().some((language) => language.id === 'il'))
   monaco.languages.register({ id: 'il', extensions: ['.il'], aliases: ['IL', 'MSIL', 'CIL'] })
 monaco.languages.setMonarchTokensProvider('il', ilLanguage)
 monaco.languages.setLanguageConfiguration('il', ilLanguageConfiguration)
-monaco.editor.defineTheme('dnspy-light', { base: 'vs', inherit: true, rules: ilThemeRules.light, colors: {} })
-monaco.editor.defineTheme('dnspy-dark', { base: 'vs-dark', inherit: true, rules: ilThemeRules.dark, colors: {} })
-monaco.editor.defineTheme('dnspy-high-contrast', { base: 'hc-black', inherit: true, rules: ilThemeRules.highContrast, colors: {} })
-// The same three with the editor's own background taken away, which is what shows the Background Image
-// window's picture behind the code the way dnSpy's own text views show it. Nothing else of the theme moves.
-monaco.editor.defineTheme('dnspy-light-transparent', { base: 'vs', inherit: true, rules: ilThemeRules.light, colors: { 'editor.background': '#00000000' } })
-monaco.editor.defineTheme('dnspy-dark-transparent', { base: 'vs-dark', inherit: true, rules: ilThemeRules.dark, colors: { 'editor.background': '#00000000' } })
-monaco.editor.defineTheme('dnspy-high-contrast-transparent', { base: 'hc-black', inherit: true, rules: ilThemeRules.highContrast, colors: { 'editor.background': '#00000000' } })
+
+const definedThemes = new Set<string>()
 
 /**
- * The Monaco theme for one of the port's four themes. With the Background Image window showing a picture the
- * editor goes without a background of its own, so the picture is what the code is read against.
+ * The Monaco theme for the dnSpy theme the options name (see theme-service.ts), defined the first time it is
+ * asked for. With the Background Image window showing a picture the editor goes without a background of its
+ * own, so the picture is what the code is read against, the way dnSpy's own text views show it.
  */
 export const monacoThemeName = (theme: string, transparentBackground = false): string => {
-  const base = theme === 'light' ? 'dnspy-light' : theme === 'hc' ? 'dnspy-high-contrast' : 'dnspy-dark'
-  return transparentBackground ? `${base}-transparent` : base
+  const dsTheme = resolveTheme(theme)
+  const name = `dnspy-${dsTheme.guid.toLowerCase()}${transparentBackground ? '-transparent' : ''}`
+  if (!definedThemes.has(name)) {
+    monaco.editor.defineTheme(name, monacoThemeData(dsTheme, transparentBackground))
+    definedThemes.add(name)
+  }
+  return name
 }
 
 let initialization: Promise<void> | undefined

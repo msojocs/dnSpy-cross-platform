@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import { Check, CircleDot, ClipboardCopy, Crosshair, Globe, Hash, ScanSearch } from 'lucide-react'
 import type { SearchResult, TreeNode } from '../../../shared/protocol'
 import type { SearchSettings } from './app-options'
 import { isAnalyzableNode, searchMsdnUrl } from './CodeEditorContextMenu'
+import { MenuEntryIcon } from './DsIcon'
 
 /**
  * What the search window's context menu acts on: the result that was right-clicked, which the list selects
@@ -49,7 +49,8 @@ const GROUP_DEBUG = 2000
 const GROUP_OTHER = 5000
 const GROUP_OPTIONS = 10000
 
-const iconProps = { size: 14, strokeWidth: 1.7, 'aria-hidden': true as const }
+/** The dnSpy image an entry wears — its ExportMenuItem's Icon (DsImagesAttribute.X); an entry without one has none. */
+const image = (name: string) => (): ReactNode => <MenuEntryIcon name={name} />
 
 const formatToken = (token: number): string => `0x${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
 
@@ -67,7 +68,7 @@ const option = (order: number, key: SearchOptionKey, entryKey: string, label: st
   group: GROUP_OPTIONS,
   order,
   key: entryKey,
-  icon: (ctx) => ctx.settings[key] ? <Check {...iconProps} /> : null,
+  icon: (ctx) => <MenuEntryIcon checked={ctx.settings[key]} />,
   label: (ctx) => ctx.t(label),
   visible: () => true,
   run: (ctx) => ctx.setOption(key, !ctx.settings[key]),
@@ -79,17 +80,17 @@ const ENTRIES: SearchMenuEntry[] = [
   { group: GROUP_TABS, order: 10, key: 'open-in-new-tab', label: (ctx) => ctx.t('Open in New Tab'), shortcut: (ctx) => ctx.t('Shift+Dbl Click'), visible: () => true, run: (ctx) => ctx.open(true) },
 
   // 1000 — Copying (GROUP_CTX_SEARCH_TOKENS).
-  { group: GROUP_TOKENS, order: 0, key: 'copy-md-token', icon: () => <Hash {...iconProps} />, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => ctx.node?.metadataToken != null, run: (ctx) => { if (ctx.node?.metadataToken != null) ctx.copyText(formatToken(ctx.node.metadataToken)) } },
-  { group: GROUP_TOKENS, order: 10, key: 'copy-full-name', icon: () => <ClipboardCopy {...iconProps} />, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText(name) } },
+  { group: GROUP_TOKENS, order: 0, key: 'copy-md-token', label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => ctx.node?.metadataToken != null, run: (ctx) => { if (ctx.node?.metadataToken != null) ctx.copyText(formatToken(ctx.node.metadataToken)) } },
+  { group: GROUP_TOKENS, order: 10, key: 'copy-full-name', label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText(name) } },
 
   // 2000 — Debugger (GROUP_CTX_SEARCH_DEBUG).
-  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: () => <CircleDot {...iconProps} />, label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => ctx.addClassBreakpoint !== undefined && nodeOfKind(ctx, 'type') !== undefined, run: (ctx) => { const node = nodeOfKind(ctx, 'type'); if (node) ctx.addClassBreakpoint?.(node) } },
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => ctx.addClassBreakpoint !== undefined && nodeOfKind(ctx, 'type') !== undefined, run: (ctx) => { const node = nodeOfKind(ctx, 'type'); if (node) ctx.addClassBreakpoint?.(node) } },
   { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => ctx.addClassTracepoint !== undefined && nodeOfKind(ctx, 'type') !== undefined, run: (ctx) => { const node = nodeOfKind(ctx, 'type'); if (node) ctx.addClassTracepoint?.(node) } },
-  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: () => <Crosshair {...iconProps} />, label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => ctx.addMethodBreakpoints !== undefined && nodeOfKind(ctx, 'method', 'property', 'event') !== undefined, run: (ctx) => { const node = nodeOfKind(ctx, 'method', 'property', 'event'); if (node) ctx.addMethodBreakpoints?.([node]) } },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => ctx.addMethodBreakpoints !== undefined && nodeOfKind(ctx, 'method', 'property', 'event') !== undefined, run: (ctx) => { const node = nodeOfKind(ctx, 'method', 'property', 'event'); if (node) ctx.addMethodBreakpoints?.([node]) } },
 
   // 5000 — Other (GROUP_CTX_SEARCH_OTHER).
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: () => <ScanSearch {...iconProps} />, label: (ctx) => ctx.t('Analyze'), shortcut: () => 'Ctrl+Shift+R', visible: (ctx) => ctx.analyze !== undefined && isAnalyzableNode(ctx.node), run: (ctx) => { if (isAnalyzableNode(ctx.node)) ctx.analyze?.(ctx.node) } },
-  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: () => <Globe {...iconProps} />, label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => ctx.openUrl !== undefined && fullNameOf(ctx) !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.openUrl?.(searchMsdnUrl(name)) } },
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: image('Search'), label: (ctx) => ctx.t('Analyze'), shortcut: () => 'Ctrl+Shift+R', visible: (ctx) => ctx.analyze !== undefined && isAnalyzableNode(ctx.node), run: (ctx) => { if (isAnalyzableNode(ctx.node)) ctx.analyze?.(ctx.node) } },
+  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: image('Search'), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => ctx.openUrl !== undefined && fullNameOf(ctx) !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.openUrl?.(searchMsdnUrl(name)) } },
 
   // 10000 — Options (GROUP_CTX_SEARCH_OPTIONS), checked while they are on.
   option(0, 'syntaxHighlight', 'syntax-highlight', 'Syntax Highlight'),

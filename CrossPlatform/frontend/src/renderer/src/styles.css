@@ -3,89 +3,49 @@
   font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "Noto Sans CJK SC", system-ui, sans-serif;
   font-size: 12px;
   letter-spacing: 0;
-  --bg: #1d1f21;
-  --surface: #25282b;
-  --surface-2: #2d3034;
-  --surface-raised: #34383d;
-  --border: #454a50;
-  --border-strong: #60666d;
-  --text: #e5e7e9;
-  --text-muted: #aab0b6;
-  --accent: #3e8ac7;
-  --accent-hover: #50a0df;
-  --accent-soft: #244d6c;
-  --selection: #24547a;
+  /* The port's own names for the colours its rules share, each one the resource of dnSpy's theme the
+     matching WPF template reads (theme-service.ts writes every resource as --wpf-<key>): the main window's
+     background, a tool window's content, the command bars, the menus, the borders, text, the selection and
+     the captions of the docked panes. */
+  --bg: var(--wpf-EnvironmentBackgroundBrush);
+  --surface: var(--wpf-TreeViewBackground);
+  --surface-2: var(--wpf-EnvironmentCommandBar-color);
+  --surface-raised: var(--wpf-ContextMenuBackground);
+  --border: var(--wpf-EnvironmentToolWindowBorder);
+  --border-strong: var(--wpf-CommonControlsTextBoxBorder);
+  --text: var(--wpf-TreeViewForeground);
+  --text-muted: color-mix(in srgb, var(--wpf-TreeViewForeground) 62%, var(--wpf-TreeViewBackground));
+  --accent: var(--wpf-SystemColorsHighlight);
+  --accent-hover: color-mix(in srgb, var(--wpf-SystemColorsHighlight) 80%, white);
+  --accent-soft: var(--wpf-ToolBarButtonHover);
+  --selection: var(--wpf-TreeViewItemSelectedBackground);
   --danger: #e46464;
   --warning: #dfb45c;
   --success: #61b978;
   /* A docked pane's caption, in the colours dnSpy paints the two states: the pane last worked in is the
-     blue one and the rest stay in the surface colour. */
-  --caption: #2d3034;
-  --caption-text: #aab0b6;
-  --caption-active: #007acc;
-  --caption-active-text: #ffffff;
+     active one and the rest stay inactive (EnvironmentTitleBarActive and EnvironmentTitleBarInactive). */
+  --caption: var(--wpf-EnvironmentTitleBarInactive);
+  --caption-text: var(--wpf-EnvironmentTitleBarInactiveText);
+  --caption-active: var(--wpf-EnvironmentTitleBarActive);
+  --caption-active-text: var(--wpf-EnvironmentTitleBarActiveText);
   --menu-height: 26px;
   --toolbar-height: 34px;
   --status-height: 23px;
 }
 
-:root[data-theme="blue"] {
-  --bg: #17212b;
-  --surface: #202d39;
-  --surface-2: #283846;
-  --surface-raised: #304354;
-  --border: #486070;
-  --border-strong: #668092;
-  --text: #eef4f7;
-  --text-muted: #b8c8d2;
-  --accent: #48a3d8;
-  --accent-hover: #69bae8;
-  --accent-soft: #255877;
-  --selection: #2b668c;
-  --caption-active: var(--accent);
-}
-
-:root[data-theme="light"] {
+/* The colour scheme decides the browser's own chrome — scroll bars, form controls — so it follows whether the
+   theme is a dark or a light one, as dnSpy's IsDark and IsLight do. */
+:root[data-theme-kind="light"] {
   color-scheme: light;
-  --bg: #f2f3f5;
-  --surface: #ffffff;
-  --surface-2: #e7e9ec;
-  --surface-raised: #f8f9fa;
-  --border: #c5c9ce;
-  --border-strong: #9da3aa;
-  --text: #22272b;
-  --text-muted: #616971;
-  --accent: #176ea7;
-  --accent-hover: #0c5c91;
-  --accent-soft: #cce6f7;
-  --selection: #b9dcf3;
   --danger: #b3261e;
   --warning: #926800;
   --success: #28783c;
-  --caption-active: var(--accent);
 }
 
-:root[data-theme="hc"] {
-  color-scheme: dark;
-  --bg: #000;
-  --surface: #000;
-  --surface-2: #111;
-  --surface-raised: #000;
-  --border: #fff;
-  --border-strong: #fff;
-  --text: #fff;
-  --text-muted: #fff;
-  --accent: #00ffff;
-  --accent-hover: #ffff00;
-  --accent-soft: #003b3b;
-  --selection: #004a66;
+:root[data-theme-kind="hc"] {
   --danger: #ff7b7b;
   --warning: #ffff00;
   --success: #00ff7f;
-  --caption: #111;
-  --caption-text: #fff;
-  --caption-active: var(--accent);
-  --caption-active-text: #000;
 }
 
 * {
@@ -103,20 +63,72 @@ body,
 
 body {
   background: var(--bg);
-  color: var(--text);
+  color: var(--wpf-EnvironmentForeground, var(--text));
   user-select: none;
 }
 
 button,
 input,
-select {
-  color: inherit;
+select,
+textarea {
   font: inherit;
   letter-spacing: 0;
 }
 
 button {
+  color: inherit;
+}
+
+button {
   border: 0;
+}
+
+/* dnSpy's CommonControls styles: every text box, combo box and check box in the theme's colours, which a
+   window's own rules refine where it draws its controls differently. */
+:where(input:not([type]), input[type='text'], input[type='search'], input[type='number'], textarea, select) {
+  border: 1px solid var(--wpf-CommonControlsTextBoxBorder);
+  background: var(--wpf-CommonControlsTextBoxBackground);
+  color: var(--wpf-CommonControlsTextBoxText);
+}
+
+:where(input:not([type]):hover, input[type='text']:hover, input[type='search']:hover, input[type='number']:hover, textarea:hover) {
+  border-color: var(--wpf-CommonControlsTextBoxMouseOverBorder);
+}
+
+:where(input:not([type]):focus, input[type='text']:focus, input[type='search']:focus, input[type='number']:focus, textarea:focus) {
+  border-color: var(--wpf-CommonControlsTextBoxBorderFocused);
+  background: var(--wpf-CommonControlsTextBoxBackgroundFocused);
+  color: var(--wpf-CommonControlsTextBoxTextFocused);
+}
+
+:where(input:disabled, textarea:disabled) {
+  border-color: var(--wpf-CommonControlsTextBoxBorderDisabled);
+  background: var(--wpf-CommonControlsTextBoxBackgroundDisabled);
+  color: var(--wpf-CommonControlsTextBoxTextDisabled);
+}
+
+:where(select) {
+  border-color: var(--wpf-CommonControlsComboBoxBorder);
+  background: var(--wpf-CommonControlsComboBoxBackground);
+  color: var(--wpf-CommonControlsComboBoxText);
+}
+
+:where(option) {
+  background: var(--wpf-CommonControlsComboBoxListBackground);
+  color: var(--wpf-CommonControlsComboBoxListItemText);
+}
+
+:where(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--wpf-CommonControlsCheckBoxGlyph);
+}
+
+:where(::selection) {
+  background: var(--wpf-CommonControlsTextBoxSelection);
+}
+
+/* The theme's scroll bars (EnvironmentScrollBar*), which Chromium draws from these two colours. */
+* {
+  scrollbar-color: var(--wpf-EnvironmentScrollBarThumbBackground) var(--wpf-EnvironmentScrollBarBackground);
 }
 
 button:focus-visible,
@@ -144,9 +156,15 @@ select:focus-visible,
   display: flex;
   align-items: stretch;
   padding: 0 0 0 4px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  /* dnSpy's main window caption and its menu, which sits on it (MainWindowStyle, the Menu style). */
+  background: var(--wpf-EnvironmentMainWindowActiveCaption);
+  color: var(--wpf-SystemColorsMenuText);
   -webkit-app-region: drag;
+}
+
+/* A window that is not the active one draws its caption in the inactive colours, as MetroWindow does. */
+:root[data-window-active='false'] .menu-bar {
+  background: var(--wpf-EnvironmentMainWindowInactiveCaption);
 }
 
 .menu-root {
@@ -157,13 +175,21 @@ select:focus-visible,
 .menu-root > button {
   height: 100%;
   padding: 0 9px;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--text);
+  color: inherit;
 }
 
-.menu-root > button:hover,
+/* The top-level menu item templates: a hovered header and an open one. */
+.menu-root > button:hover {
+  border-color: var(--wpf-TopLevelMenuHeaderHoverBorder);
+  background: var(--wpf-TopLevelMenuHeaderHoverBackground);
+}
+
 .menu-root > button.active {
-  background: var(--selection);
+  border-color: var(--wpf-ToolBarMenuBorder);
+  border-bottom-color: transparent;
+  background: var(--wpf-ToolBarOpenHeaderBackground);
 }
 
 .menu-popup {
@@ -175,8 +201,9 @@ select:focus-visible,
   width: max-content;
   min-width: 220px;
   padding: 3px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
+  border: 1px solid var(--wpf-ToolBarMenuBorder);
+  background: var(--wpf-ToolBarSubMenuBackground);
+  color: var(--wpf-SystemColorsMenuText);
   box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
 }
 
@@ -192,7 +219,8 @@ select:focus-visible,
 }
 
 .menu-item.menu-item-open {
-  background: var(--selection);
+  background: var(--wpf-EnvironmentCommandBarMenuItemMouseOver);
+  color: var(--wpf-EnvironmentCommandBarMenuItemMouseOverText);
 }
 
 .menu-item {
@@ -211,13 +239,16 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+/* The sub menu item template's highlighted and disabled states. */
 .menu-item:not(:disabled):hover {
-  background: var(--selection);
+  outline: 1px solid var(--wpf-MenuItemHighlightedInnerBorder);
+  outline-offset: -1px;
+  background: var(--wpf-EnvironmentCommandBarMenuItemMouseOver);
+  color: var(--wpf-EnvironmentCommandBarMenuItemMouseOverText);
 }
 
 .menu-item:disabled {
-  color: var(--text-muted);
-  opacity: 0.55;
+  color: var(--wpf-MenuItemDisabledForeground);
 }
 
 .menu-check {
@@ -227,13 +258,12 @@ select:focus-visible,
 
 .menu-shortcut {
   padding-left: 22px;
-  color: var(--text-muted);
 }
 
 .menu-separator {
   height: 1px;
-  margin: 3px 5px;
-  background: var(--border);
+  margin: 3px 5px 3px 26px;
+  background: var(--wpf-MenuItemSeparatorFillTop);
 }
 
 .window-controls {
@@ -243,22 +273,28 @@ select:focus-visible,
   -webkit-app-region: no-drag;
 }
 
+/* MetroWindow's caption buttons: their glyphs and the hover and pressed fills of the main window's theme. */
 .window-control-button {
   display: grid;
   place-items: center;
   width: 42px;
   height: 100%;
   padding: 0;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--text);
+  color: var(--wpf-EnvironmentMainWindowButtonActiveGlyph);
 }
 
 .window-control-button:hover {
-  background: var(--surface-raised);
+  border-color: var(--wpf-EnvironmentMainWindowButtonHoverActiveBorder);
+  background: var(--wpf-EnvironmentMainWindowButtonHoverActive);
+  color: var(--wpf-EnvironmentMainWindowButtonHoverActiveGlyph);
 }
 
 .window-control-button:active {
-  background: var(--selection);
+  border-color: var(--wpf-EnvironmentMainWindowButtonDownBorder);
+  background: var(--wpf-EnvironmentMainWindowButtonDown);
+  color: var(--wpf-EnvironmentMainWindowButtonDownGlyph);
 }
 
 .window-close-button:hover,
@@ -267,15 +303,18 @@ select:focus-visible,
   color: #fff;
 }
 
+/* The ToolBar style: ToolBarHorizontalBackground, with the menu's text colour. */
 .tool-bar {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 3px 6px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--wpf-ToolBarHorizontalBackground);
+  color: var(--wpf-SystemColorsMenuText);
 }
 
+/* ToolBar.ButtonStyleKey, which the main tool bar and every window's command bar use: hovered, pressed and
+   checked fills and borders from the theme, and a disabled image faded the way DsImage fades it. */
 .icon-button {
   display: inline-grid;
   place-items: center;
@@ -283,26 +322,34 @@ select:focus-visible,
   height: 25px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 2px;
   background: transparent;
-  color: var(--text);
+  color: inherit;
 }
 
 .icon-button:not(:disabled):hover {
-  border-color: var(--border-strong);
-  background: var(--selection);
+  border-color: var(--wpf-ToolBarButtonHoverBorder);
+  background: var(--wpf-ToolBarButtonHover);
+}
+
+.icon-button:not(:disabled):active {
+  border-color: var(--wpf-ToolBarButtonPressedBorder);
+  background: var(--wpf-ToolBarButtonPressed);
+}
+
+.icon-button[aria-pressed='true'] {
+  border-color: var(--wpf-ToolBarButtonHoverBorder);
+  background: var(--wpf-ToolBarButtonChecked);
 }
 
 .icon-button:disabled {
-  color: var(--text-muted);
-  opacity: 0.42;
+  opacity: 0.3;
 }
 
 .toolbar-separator {
   align-self: stretch;
   width: 1px;
   margin: 2px 4px;
-  background: var(--border);
+  background: var(--wpf-ToolBarSeparatorFill);
 }
 
 .toolbar-spacer,
@@ -314,10 +361,9 @@ select:focus-visible,
   height: 24px;
   min-width: 105px;
   padding: 0 20px 0 5px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  background: var(--surface);
-  color: var(--text);
+  border: 1px solid var(--wpf-CommonControlsComboBoxBorder);
+  background: var(--wpf-CommonControlsComboBoxBackground);
+  color: var(--wpf-CommonControlsComboBoxText);
 }
 
 /* A toolbar button that is on, which is what the Full Screen toggle is: dnSpy paints the pressed state in
@@ -403,15 +449,22 @@ select:focus-visible,
   margin-left: auto;
 }
 
+/* The port's status bar is part of the main window's frame, in its caption's colours; while a program is
+   debugged it takes the StatusBar style's debugging colours, which is what dnSpy's own status bar wears. */
 .status-bar {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
   padding: 0 8px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-muted);
+  border-top: 1px solid var(--wpf-ToolBarSeparatorFill);
+  background: var(--wpf-EnvironmentMainWindowActiveCaption);
+  color: var(--wpf-EnvironmentMainWindowActiveCaptionText);
+}
+
+.status-bar.status-bar-debugging {
+  background: var(--wpf-StatusBarDebuggingBackground);
+  color: var(--wpf-StatusBarDebuggingForeground);
 }
 
 .status-bar > span:not(.status-spacer):not(.status-indicator) {
@@ -442,6 +495,12 @@ select:focus-visible,
   background: var(--surface);
 }
 
+/* The Output window is a text view in the Output Window appearance category: OutputWindowText's colours. */
+.output-pane {
+  background: var(--tcbg-outputwindowtext, var(--surface));
+  color: var(--tc-outputwindowtext, var(--text));
+}
+
 .tree-row {
   display: flex;
   align-items: center;
@@ -451,18 +510,16 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+/* The tree view item template: TreeViewItemMouseOver under the pointer, TreeViewItemSelected for the selection. */
 .tree-row:hover {
-  background: color-mix(in srgb, var(--selection) 55%, transparent);
+  background: var(--wpf-TreeViewItemMouseOverTextBackground);
+  color: var(--wpf-TreeViewItemMouseOverForeground);
 }
 
-.tree-row.selected {
-  background: var(--selection);
-  color: var(--text);
-}
-
+.tree-row.selected,
 .tree-row.multi-selected {
-  background: color-mix(in srgb, var(--selection) 75%, transparent);
-  color: var(--text);
+  background: var(--wpf-TreeViewItemSelectedBackground);
+  color: var(--wpf-TreeViewItemSelectedForeground);
 }
 
 .tree-expander {
@@ -522,171 +579,10 @@ select:focus-visible,
   text-overflow: ellipsis;
 }
 
-/* dnSpy's syntax highlighting of a tree row's text: each stretch carries the color class the backend gave
-   it (TextColors), drawn in the colors of dnSpy's own themes — dark.dntheme for the dark and blue themes,
-   light.dntheme for the light one. Plain text and punctuation keep the row's color, and the high-contrast
-   theme, whose dnSpy counterpart defines none of these, keeps everything plain. */
-:root {
-  --tc-operator: #b4b4b4;
-  --tc-number: #b5cea8;
-  --tc-keyword: #569cd6;
-  --tc-error: #ff0000;
-  --tc-namespace: #ffd700;
-  --tc-type: #4ec9b0;
-  --tc-static-type: #378d7b;
-  --tc-delegate: #33ccff;
-  --tc-enum: #b8d7a3;
-  --tc-interface: #9b9b82;
-  --tc-value-type: #009933;
-  --tc-generic-parameter: #4b8595;
-  --tc-instance-method: #ff8000;
-  --tc-static-method: #e67300;
-  --tc-extension-method: #cc6600;
-  --tc-instance-field: #aa70ff;
-  --tc-enum-field: #bd63c5;
-  --tc-literal-field: #c266ff;
-  --tc-static-field: #8d8dc6;
-  --tc-instance-event: #cc6699;
-  --tc-static-event: #db94b8;
-  --tc-instance-property: #248f8f;
-  --tc-static-property: #1f8e8e;
-  --tc-assembly: #c4c4c4;
-  --tc-assembly-exe: #f0ca93;
-  --tc-assembly-module: #b17fd7;
-  --tc-il-module: #666699;
-  --tc-opcode: #ad5c85;
-  --tc-il-directive: #9999ff;
-}
-
-:root[data-theme="light"] {
-  --tc-operator: inherit;
-  --tc-number: #5b2da8;
-  --tc-keyword: #0000ff;
-  --tc-namespace: #9e7e00;
-  --tc-type: #2b91af;
-  --tc-static-type: #1b5d70;
-  --tc-delegate: #6666ff;
-  --tc-enum: #336600;
-  --tc-interface: #1e667a;
-  --tc-generic-parameter: #2b91af;
-  --tc-instance-method: #880000;
-  --tc-static-method: #880000;
-  --tc-extension-method: #960000;
-  --tc-instance-field: #cc3399;
-  --tc-enum-field: #6f008a;
-  --tc-literal-field: #9900ff;
-  --tc-static-field: #990099;
-  --tc-instance-event: #990033;
-  --tc-static-event: #660033;
-  --tc-instance-property: #996633;
-  --tc-static-property: #7a5229;
-  --tc-assembly: #414141;
-  --tc-assembly-exe: #c17b19;
-  --tc-assembly-module: #642c8f;
-  --tc-il-module: #660033;
-  --tc-opcode: #993366;
-  --tc-il-directive: #009900;
-}
-
-:root:not([data-theme="hc"]) .tc-operator { color: var(--tc-operator); }
-:root:not([data-theme="hc"]) .tc-number { color: var(--tc-number); }
-:root:not([data-theme="hc"]) .tc-keyword { color: var(--tc-keyword); }
-:root:not([data-theme="hc"]) .tc-error { color: var(--tc-error); }
-:root:not([data-theme="hc"]) .tc-namespace { color: var(--tc-namespace); }
-:root:not([data-theme="hc"]) .tc-type,
-:root:not([data-theme="hc"]) .tc-sealedType { color: var(--tc-type); }
-:root:not([data-theme="hc"]) .tc-staticType { color: var(--tc-static-type); }
-:root:not([data-theme="hc"]) .tc-delegate { color: var(--tc-delegate); }
-:root:not([data-theme="hc"]) .tc-enum { color: var(--tc-enum); }
-:root:not([data-theme="hc"]) .tc-interface { color: var(--tc-interface); }
-:root:not([data-theme="hc"]) .tc-valueType { color: var(--tc-value-type); }
-:root:not([data-theme="hc"]) .tc-typeGenericParameter,
-:root:not([data-theme="hc"]) .tc-methodGenericParameter { color: var(--tc-generic-parameter); }
-:root:not([data-theme="hc"]) .tc-instanceMethod { color: var(--tc-instance-method); }
-:root:not([data-theme="hc"]) .tc-staticMethod { color: var(--tc-static-method); }
-:root:not([data-theme="hc"]) .tc-extensionMethod { color: var(--tc-extension-method); font-style: italic; }
-:root:not([data-theme="hc"]) .tc-instanceField { color: var(--tc-instance-field); }
-:root:not([data-theme="hc"]) .tc-enumField { color: var(--tc-enum-field); }
-:root:not([data-theme="hc"]) .tc-literalField { color: var(--tc-literal-field); }
-:root:not([data-theme="hc"]) .tc-staticField { color: var(--tc-static-field); }
-:root:not([data-theme="hc"]) .tc-instanceEvent { color: var(--tc-instance-event); }
-:root:not([data-theme="hc"]) .tc-staticEvent { color: var(--tc-static-event); }
-:root:not([data-theme="hc"]) .tc-instanceProperty { color: var(--tc-instance-property); }
-:root:not([data-theme="hc"]) .tc-staticProperty { color: var(--tc-static-property); }
-:root:not([data-theme="hc"]) .tc-assembly { color: var(--tc-assembly); }
-:root:not([data-theme="hc"]) .tc-assemblyExe { color: var(--tc-assembly-exe); }
-:root:not([data-theme="hc"]) .tc-assemblyModule { color: var(--tc-assembly-module); }
-:root:not([data-theme="hc"]) .tc-ilModule { color: var(--tc-il-module); }
-:root:not([data-theme="hc"]) .tc-opCode { color: var(--tc-opcode); }
-:root:not([data-theme="hc"]) .tc-ilDirective { color: var(--tc-il-directive); }
-
-/* The colors only code has, which Roslyn's classifier gives the C# Interactive window's input and the echo of
-   what was submitted: plain text and punctuation take the theme's text color here too, since the classifier's
-   colors replace the editor's own highlighting rather than adding to it. Values from dark.dntheme and
-   light.dntheme; the rules are scoped to code so the tree's rows keep their plain text and punctuation. */
-:root {
-  --tc-text: #dcdcdc;
-  --tc-punctuation: #dcdcdc;
-  --tc-comment: #57a64a;
-  --tc-string: #d69d85;
-  --tc-verbatim-string: #d69d85;
-  --tc-local: #dcdcdc;
-  --tc-parameter: #dcdcdc;
-  --tc-label: #806f4d;
-  --tc-module: #378d7b;
-  --tc-preprocessor-keyword: #9b9b9b;
-  --tc-preprocessor-text: #dcdcdc;
-  --tc-excluded-code: #9b9b9b;
-  --tc-xml-doc-attribute: #c8c8c8;
-  --tc-xml-doc-cdata: #e9d585;
-  --tc-xml-doc-comment: #608b4e;
-  --tc-xml-doc-text: #608b4e;
-  --tc-dark-gray: #7f7f7f;
-}
-
-:root[data-theme="light"] {
-  --tc-text: #000000;
-  --tc-punctuation: #000000;
-  --tc-comment: #008000;
-  --tc-string: #a31515;
-  --tc-verbatim-string: #800000;
-  --tc-local: #000000;
-  --tc-parameter: #000000;
-  --tc-label: #663300;
-  --tc-module: #1b5d70;
-  --tc-preprocessor-keyword: #808080;
-  --tc-preprocessor-text: #000000;
-  --tc-excluded-code: #808080;
-  --tc-xml-doc-attribute: #808080;
-  --tc-xml-doc-cdata: #808080;
-  --tc-xml-doc-comment: #808080;
-  --tc-xml-doc-text: #008000;
-}
-
-:root:not([data-theme="hc"]) .code-colors .tc-darkGray { color: var(--tc-dark-gray); }
-:root:not([data-theme="hc"]) .code-colors .tc-text { color: var(--tc-text); }
-:root:not([data-theme="hc"]) .code-colors .tc-punctuation { color: var(--tc-punctuation); }
-:root:not([data-theme="hc"]) .code-colors .tc-comment { color: var(--tc-comment); }
-:root:not([data-theme="hc"]) .code-colors .tc-string,
-:root:not([data-theme="hc"]) .code-colors .tc-char { color: var(--tc-string); }
-:root:not([data-theme="hc"]) .code-colors .tc-verbatimString { color: var(--tc-verbatim-string); }
-:root:not([data-theme="hc"]) .code-colors .tc-local { color: var(--tc-local); }
-:root:not([data-theme="hc"]) .code-colors .tc-parameter { color: var(--tc-parameter); font-weight: bold; }
-:root:not([data-theme="hc"]) .code-colors .tc-label { color: var(--tc-label); }
-:root:not([data-theme="hc"]) .code-colors .tc-module { color: var(--tc-module); }
-:root:not([data-theme="hc"]) .code-colors .tc-preprocessorKeyword { color: var(--tc-preprocessor-keyword); }
-:root:not([data-theme="hc"]) .code-colors .tc-preprocessorText { color: var(--tc-preprocessor-text); }
-:root:not([data-theme="hc"]) .code-colors .tc-excludedCode { color: var(--tc-excluded-code); }
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeName,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeQuotes,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentAttributeValue { color: var(--tc-xml-doc-attribute); }
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentCDataSection { color: var(--tc-xml-doc-cdata); }
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentComment,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentDelimiter,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentName,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentProcessingInstruction { color: var(--tc-xml-doc-comment); }
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentEntityReference,
-:root:not([data-theme="hc"]) .code-colors .tc-xmlDocCommentText { color: var(--tc-xml-doc-text); }
+/* dnSpy's syntax highlighting of text — a tree row's, a search result's, the code the classifier colours: each
+   stretch carries the colour class the backend or Roslyn gave it (TextColors), and the theme service writes a
+   rule per class with the theme's colour, weight and slant. A colour the theme leaves to the text around it has
+   no rule, which is how plain text and punctuation keep the row's colour in the trees. */
 
 /* The line a search shows while it is still running — dnSpy's "Searching..." message node. */
 .analyzer-searching .tree-label {
@@ -805,7 +701,8 @@ select:focus-visible,
 /* Where the selected frame is stopped: the whole line tinted, and an arrow in the margin so it can be told
    apart from the cursor line and from a breakpoint sitting on the same statement. */
 .debug-stopped-line {
-  background: var(--accent-soft);
+  background: var(--tcbg-currentstatement, var(--accent-soft));
+  color: var(--tc-currentstatement);
 }
 
 .debug-stopped-glyph::before {
@@ -816,7 +713,7 @@ select:focus-visible,
   width: 0;
   height: 0;
   margin: auto;
-  border-left: 9px solid var(--accent);
+  border-left: 9px solid var(--tcbg-currentstatementmarker, var(--accent));
   border-top: 5px solid transparent;
   border-bottom: 5px solid transparent;
 }
@@ -836,6 +733,7 @@ select:focus-visible,
 
 .start-view {
   background: var(--bg);
+  color: var(--wpf-EnvironmentForeground);
 }
 
 .command-button {
@@ -844,14 +742,15 @@ select:focus-visible,
   gap: 7px;
   min-height: 30px;
   padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--surface-2);
+  border: 1px solid var(--wpf-CommonControlsButtonBorder);
+  background: var(--wpf-CommonControlsButton);
+  color: var(--wpf-CommonControlsButtonText);
 }
 
 .command-button:not(:disabled):hover {
-  border-color: var(--accent);
-  background: var(--selection);
+  border-color: var(--wpf-CommonControlsButtonBorderHover);
+  background: var(--wpf-CommonControlsButtonHover);
+  color: var(--wpf-CommonControlsButtonHoverText);
 }
 
 /* The Output window: dnSpy's command bar over the text, which is the same shape its own control has. */
@@ -875,8 +774,7 @@ select:focus-visible,
   padding: 5px 8px;
   overflow: auto;
   user-select: text;
-  font-family: "Cascadia Mono", "JetBrains Mono", monospace;
-  line-height: 19px;
+  line-height: 1.45;
   white-space: pre;
 }
 
@@ -884,6 +782,34 @@ select:focus-visible,
 .output-word-wrap {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.output-pane:focus {
+  outline: none;
+}
+
+/* The Output options' line number margin: the numbers in a column of their own, in the LineNumber colour. */
+.output-line-numbers .output-line {
+  display: grid;
+  grid-template-columns: var(--output-number-width) minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.output-line-number {
+  text-align: right;
+  user-select: none;
+}
+
+/* "Show output from": the label and the pane box, the way OutputControl lays them out on its command bar. */
+.output-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 3px;
+}
+
+.output-source select {
+  width: 220px;
 }
 
 .script-pane {
@@ -1213,9 +1139,9 @@ select:focus-visible,
   padding: 8px 12px;
   overflow: auto;
   user-select: text;
-  background: var(--bg);
-  color: var(--text);
-  font: 13px/20px "Cascadia Mono", "JetBrains Mono", monospace;
+  background: var(--tcbg-hextext, var(--surface));
+  color: var(--tc-hextext, var(--text));
+  line-height: 1.5;
   white-space: pre;
 }
 
@@ -1282,8 +1208,8 @@ select:focus-visible,
 }
 
 .metadata-table-header {
-  background: var(--surface-2);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
 }
 
@@ -1322,9 +1248,10 @@ select:focus-visible,
   min-width: 320px;
   max-width: min(96vw, 1100px);
   max-height: min(92vh, 820px);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--surface);
+  /* DialogWindowStyle: the dialog's background and text, its border and its caption in the active colours. */
+  border: 1px solid var(--wpf-DialogWindowActiveDefaultBorder);
+  background: var(--wpf-DialogWindowBackground);
+  color: var(--wpf-DialogWindowForeground);
   box-shadow: 0 14px 36px rgb(0 0 0 / 45%);
 }
 
@@ -1333,8 +1260,8 @@ select:focus-visible,
   align-items: center;
   min-height: 32px;
   padding-left: 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--wpf-DialogWindowActiveCaption);
+  color: var(--wpf-DialogWindowActiveCaptionText);
   font-weight: 600;
 }
 
@@ -1358,9 +1285,8 @@ select:focus-visible,
   min-width: 0;
   height: 25px;
   padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  background: var(--bg);
+  border: 1px solid var(--wpf-CommonControlsTextBoxBorder);
+  background: var(--wpf-CommonControlsTextBoxBackground);
 }
 
 .modal-actions {
@@ -1369,8 +1295,6 @@ select:focus-visible,
   gap: 7px;
   min-height: 43px;
   padding: 6px 9px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
 }
 
 .modal-actions button {
@@ -1381,22 +1305,34 @@ select:focus-visible,
   min-width: 72px;
   height: 27px;
   padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 2px;
-  background: var(--surface);
+  border: 1px solid var(--wpf-CommonControlsButtonBorder);
+  background: var(--wpf-CommonControlsButton);
+  color: var(--wpf-CommonControlsButtonText);
 }
 
+/* The Button style's states: hovered, pressed, the default button and a disabled one. */
 .modal-actions button:not(:disabled):hover {
-  background: var(--selection);
+  border-color: var(--wpf-CommonControlsButtonBorderHover);
+  background: var(--wpf-CommonControlsButtonHover);
+  color: var(--wpf-CommonControlsButtonHoverText);
+}
+
+.modal-actions button:not(:disabled):active {
+  border-color: var(--wpf-CommonControlsButtonBorderPressed);
+  background: var(--wpf-CommonControlsButtonPressed);
+  color: var(--wpf-CommonControlsButtonPressedText);
 }
 
 .modal-actions button.primary {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--wpf-CommonControlsButtonBorderDefault);
+  background: var(--wpf-CommonControlsButtonDefault);
+  color: var(--wpf-CommonControlsButtonDefaultText);
 }
 
 .modal-actions button:disabled {
-  opacity: 0.45;
+  border-color: var(--wpf-CommonControlsButtonBorderDisabled);
+  background: var(--wpf-CommonControlsButtonDisabled);
+  color: var(--wpf-CommonControlsButtonDisabledText);
 }
 
 .modal-action-spacer {
@@ -1429,7 +1365,8 @@ select:focus-visible,
   position: sticky;
   top: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
 }
 
@@ -1584,8 +1521,8 @@ select:focus-visible,
   top: 0;
   height: 25px;
   padding: 5px 7px;
-  background: var(--surface-2);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
 }
 
@@ -1659,8 +1596,8 @@ select:focus-visible,
   padding: 5px 7px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
 }
 
@@ -1813,8 +1750,8 @@ select:focus-visible,
 
 .exception-header {
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
 }
 
 .exception-header > span,
@@ -1960,7 +1897,7 @@ select:focus-visible,
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
 }
 
@@ -2059,7 +1996,7 @@ select:focus-visible,
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font-family: inherit;
   font-size: 12px;
@@ -2137,7 +2074,7 @@ select:focus-visible,
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font-size: 11px;
 }
@@ -2178,27 +2115,30 @@ select:focus-visible,
 
 /* FlexLayout is restyled with the same semantic tokens as the rest of the app. */
 .flexlayout__layout,
-.flexlayout__tab,
-.flexlayout__tabset,
 .flexlayout__border_inner {
-  background: var(--surface);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.flexlayout__tab,
+.flexlayout__tabset {
+  background: var(--wpf-EnvironmentToolWindow);
   color: var(--text);
 }
 
 .flexlayout__layout {
   --flexlayout-font-size: 12px;
   --flexlayout-font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "Noto Sans CJK SC", system-ui, sans-serif;
-  --flexlayout-color-popup-border: var(--border-strong);
-  --flexlayout-color-popup-unselected: var(--text);
-  --flexlayout-color-popup-unselected-background: var(--surface-raised);
+  --flexlayout-color-popup-border: var(--wpf-ContextMenuBorderBrush);
+  --flexlayout-color-popup-unselected: var(--wpf-SystemColorsMenuText);
+  --flexlayout-color-popup-unselected-background: var(--wpf-ContextMenuBackground);
 }
 
+/* The tab strips sit on the main window's background, as dnSpy's tab controls do. */
 .flexlayout__tabset_header,
 .flexlayout__tabset_tabbar_outer,
-.flexlayout__border_tab_divider,
-.flexlayout__border_button {
-  background: var(--surface-2);
-  color: var(--text-muted);
+.flexlayout__border_tab_divider {
+  background: var(--bg);
 }
 
 .flexlayout__tab_button,
@@ -2207,41 +2147,92 @@ select:focus-visible,
   padding: 0 8px;
   border: 0;
   border-radius: 0;
-  color: var(--text-muted);
 }
 
-.flexlayout__tab_button--selected,
-.flexlayout__border_button--selected {
-  border-top: 1px solid var(--accent);
-  background: var(--surface);
-  color: var(--text);
+/* Document tabs (a tab strip on top) are dnSpy's file tabs: an unselected tab is the strip's text on the strip,
+   a tab under the pointer the hot gradient, the selected one the selected gradient in the group last worked
+   in and the inactive gradient elsewhere, with a rule of the selected colour along the bottom of the strip. */
+.flexlayout__tabset_tabbar_outer_top {
+  border-bottom: 2px solid var(--wpf-EnvironmentFileTabInactiveBorder);
 }
 
-.flexlayout__tab_button:hover,
+.flexlayout__tabset_tabbar_outer_top.flexlayout__tabset-selected {
+  border-bottom-color: var(--wpf-EnvironmentFileTabSelectedBorder);
+}
+
+.flexlayout__tabset_tabbar_outer_top .flexlayout__tab_button {
+  background: transparent;
+  color: var(--wpf-EnvironmentFileTabText);
+}
+
+.flexlayout__tabset_tabbar_outer_top .flexlayout__tab_button:hover {
+  background: var(--wpf-EnvironmentFileTabHotGradient);
+  color: var(--wpf-EnvironmentFileTabHotText);
+}
+
+.flexlayout__tabset_tabbar_outer_top .flexlayout__tab_button--selected,
+.flexlayout__tabset_tabbar_outer_top .flexlayout__tab_button--selected:hover {
+  background: var(--wpf-EnvironmentFileTabInactiveGradient);
+  color: var(--wpf-EnvironmentFileTabInactiveText);
+}
+
+.flexlayout__tabset_tabbar_outer_top.flexlayout__tabset-selected .flexlayout__tab_button--selected,
+.flexlayout__tabset_tabbar_outer_top.flexlayout__tabset-selected .flexlayout__tab_button--selected:hover {
+  background: var(--wpf-EnvironmentFileTabSelectedGradient);
+  color: var(--wpf-EnvironmentFileTabSelectedText);
+}
+
+.flexlayout__tabset_tabbar_outer_top .flexlayout__tab_button_trailing {
+  color: inherit;
+}
+
+/* Tool window tabs (a strip at the bottom of a docked group) are dnSpy's tool window tabs: the tab gradient and
+   its text, the hovered colours under the pointer, and the selected tab joined to the pane in its colour. */
+.flexlayout__tabset_tabbar_outer_bottom .flexlayout__tab_button,
+.flexlayout__border_button {
+  background: var(--wpf-EnvironmentToolWindowTabGradient);
+  color: var(--wpf-EnvironmentToolWindowTabText);
+}
+
+.flexlayout__tabset_tabbar_outer_bottom .flexlayout__tab_button:hover,
 .flexlayout__border_button:hover {
-  background: var(--selection);
-  color: var(--text);
+  background: var(--wpf-EnvironmentToolWindowTabMouseOverBackgroundGradient);
+  color: var(--wpf-EnvironmentToolWindowTabMouseOverText);
+}
+
+.flexlayout__tabset_tabbar_outer_bottom .flexlayout__tab_button--selected,
+.flexlayout__tabset_tabbar_outer_bottom .flexlayout__tab_button--selected:hover,
+.flexlayout__border_button--selected,
+.flexlayout__border_button--selected:hover {
+  background: var(--wpf-EnvironmentToolWindowTabSelectedTab);
+  color: var(--wpf-EnvironmentToolWindowTabSelectedText);
+}
+
+.flexlayout__tabset_tabbar_outer_bottom.flexlayout__tabset-selected .flexlayout__tab_button--selected {
+  color: var(--wpf-EnvironmentToolWindowTabSelectedActiveText);
 }
 
 .flexlayout__splitter,
 .flexlayout__splitter_drag {
-  background: var(--border);
+  background: var(--bg);
 }
 
-.flexlayout__splitter:hover {
-  background: var(--accent);
+/* GridSplitterPreviewFill: what dnSpy draws while a splitter is dragged. */
+.flexlayout__splitter:hover,
+.flexlayout__splitter_drag {
+  background: var(--wpf-GridSplitterPreviewFill);
 }
 
-.flexlayout__tab_button_trailing,
 .flexlayout__tab_button_overflow {
-  color: var(--text-muted);
+  color: var(--wpf-EnvironmentFileTabText);
 }
 
+/* Every context menu is dnSpy's ContextMenu style: its background, border and the sub menu items' colours. */
 .flexlayout__popup_menu_container {
   min-width: 238px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-raised);
-  color: var(--text);
+  border: 1px solid var(--wpf-ContextMenuBorderBrush);
+  background: var(--wpf-ContextMenuBackground);
+  color: var(--wpf-SystemColorsMenuText);
   border-radius: 0;
   box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
 }
@@ -2257,18 +2248,20 @@ select:focus-visible,
 
 .flexlayout__popup_menu_item:hover,
 .flexlayout__popup_menu_item:focus-visible {
-  background: var(--selection);
+  outline: 1px solid var(--wpf-MenuItemHighlightedInnerBorder);
+  outline-offset: -1px;
+  background: var(--wpf-EnvironmentCommandBarMenuItemMouseOver);
+  color: var(--wpf-EnvironmentCommandBarMenuItemMouseOverText);
 }
 
 .flexlayout__popup_menu_divider {
-  margin: 3px 5px;
-  background: var(--border);
+  margin: 3px 5px 3px 26px;
+  background: var(--wpf-MenuItemSeparatorFillTop);
 }
 
 .document-tab-menu-icon {
   display: grid;
   place-items: center;
-  color: var(--text-muted);
 }
 
 .document-tab-menu-label {
@@ -2279,7 +2272,6 @@ select:focus-visible,
 
 .document-tab-menu-shortcut {
   padding-left: 22px;
-  color: var(--text-muted);
 }
 
 /* A docked pane's caption: the title, the dotted rule dnSpy runs from it to the pane's own buttons, and
@@ -2299,13 +2291,13 @@ select:focus-visible,
   align-items: center;
   height: 25px;
   padding-left: 8px;
-  background: var(--caption);
+  background: var(--wpf-EnvironmentTitleBarInactiveGradient, var(--caption));
   color: var(--caption-text);
   user-select: none;
 }
 
 .dock-caption-active {
-  background: var(--caption-active);
+  background: var(--wpf-EnvironmentTitleBarActiveGradient, var(--caption-active));
   color: var(--caption-active-text);
 }
 
@@ -2315,28 +2307,52 @@ select:focus-visible,
   white-space: nowrap;
 }
 
-/* The dots are the pane's own text colour let through, which is what keeps them legible on both captions. */
+/* The drag handle dnSpy draws between the title and the buttons: EnvironmentTitleBarDragHandle's dots, the
+   active one's on the active caption (a DrawingBrush tiling a dot pattern, which the radial gradient repeats). */
 .dock-caption-dots {
   flex: 1 1 auto;
-  height: 6px;
+  height: 5px;
   margin: 0 8px;
-  background-image: repeating-linear-gradient(to right, currentColor 0 1px, transparent 1px 5px);
-  opacity: 0.35;
+  background-image: radial-gradient(circle at 0.5px 0.5px, var(--wpf-EnvironmentTitleBarDragHandle) 0.5px, transparent 0.8px);
+  background-size: 4px 4px;
 }
 
+.dock-caption-active .dock-caption-dots {
+  background-image: radial-gradient(circle at 0.5px 0.5px, var(--wpf-EnvironmentTitleBarDragHandleActive) 0.5px, transparent 0.8px);
+}
+
+/* The caption buttons are the tool window buttons of the theme, in their active or inactive colours. */
 .dock-caption-button {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
   width: 26px;
   height: 100%;
-  border: 0;
+  border: 1px solid transparent;
   background: transparent;
-  color: inherit;
+  color: var(--wpf-EnvironmentToolWindowButtonInactiveGlyph);
+}
+
+.dock-caption-active .dock-caption-button {
+  color: var(--wpf-EnvironmentToolWindowButtonActiveGlyph);
 }
 
 .dock-caption-button:hover:not(:disabled) {
-  background: rgb(255 255 255 / 18%);
+  border-color: var(--wpf-EnvironmentToolWindowButtonHoverInactiveBorder);
+  background: var(--wpf-EnvironmentToolWindowButtonHoverInactive);
+  color: var(--wpf-EnvironmentToolWindowButtonHoverInactiveGlyph);
+}
+
+.dock-caption-active .dock-caption-button:hover:not(:disabled) {
+  border-color: var(--wpf-EnvironmentToolWindowButtonHoverActiveBorder);
+  background: var(--wpf-EnvironmentToolWindowButtonHoverActive);
+  color: var(--wpf-EnvironmentToolWindowButtonHoverActiveGlyph);
+}
+
+.dock-caption-button:active:not(:disabled) {
+  border-color: var(--wpf-EnvironmentToolWindowButtonDownBorder);
+  background: var(--wpf-EnvironmentToolWindowButtonDown);
+  color: var(--wpf-EnvironmentToolWindowButtonDownActiveGlyph);
 }
 
 .dock-caption-button:disabled {
@@ -2558,7 +2574,7 @@ select:focus-visible,
   padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -2875,7 +2891,7 @@ fieldset.options-group {
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -2944,7 +2960,7 @@ fieldset.options-group {
   padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -3121,7 +3137,7 @@ fieldset.options-group {
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -3270,7 +3286,7 @@ fieldset.options-group {
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
   resize: vertical;
@@ -3342,7 +3358,7 @@ fieldset.options-group {
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -3423,8 +3439,8 @@ fieldset.options-group {
 
 .bookmarks-header {
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
 }
 
 /* A header sorts by its column — dnSpy's GridViewColumnSorter, which cycles up, down and unsorted. */
@@ -3496,7 +3512,7 @@ fieldset.options-group {
   height: 20px;
   padding: 0 4px;
   border: 1px solid var(--accent);
-  background: var(--bg);
+  background: var(--wpf-CommonControlsTextBoxBackground);
   color: var(--text);
   font: inherit;
 }
@@ -3508,29 +3524,11 @@ fieldset.options-group {
   white-space: nowrap;
 }
 
-/* The window's own syntax highlighting (BookmarksSettings.SyntaxHighlight): the name in dnSpy's BookmarkName
-   color, bold for the active bookmark, parameter names bold, and the module path in the file name colors of
-   WriteFilename. The Location column's other classes are the shared ones above. */
-:root {
-  --tc-bookmark-name: #d69d85;
-  --tc-directory-part: inherit;
-  --tc-file-name: #569cd6;
-  --tc-file-extension: #9b9b82;
-}
-
-:root[data-theme="light"] {
-  --tc-bookmark-name: #a31515;
-  --tc-file-name: #990000;
-  --tc-file-extension: #3366cc;
-}
-
-:root:not([data-theme="hc"]) .bookmarks-pane .tc-bookmarkName,
-:root:not([data-theme="hc"]) .bookmarks-pane .tc-activeBookmarkName { color: var(--tc-bookmark-name); }
+/* The Bookmarks window's own syntax highlighting (BookmarksSettings.SyntaxHighlight): the name in the theme's
+   BookmarkName colour, the active bookmark's bold, and the module path in the file name colours — all the
+   theme service's rules; only the active bookmark's weight is the window's own. */
 .bookmarks-pane .tc-activeBookmarkName,
 .bookmarks-pane .tc-parameter { font-weight: 600; }
-:root:not([data-theme="hc"]) .bookmarks-pane .tc-directoryPart { color: var(--tc-directory-part); }
-:root:not([data-theme="hc"]) .bookmarks-pane .tc-fileNameNoExtension { color: var(--tc-file-name); }
-:root:not([data-theme="hc"]) .bookmarks-pane .tc-fileExtension { color: var(--tc-file-extension); }
 
 /* dnSpy's Open from GAC dialog: the list on the left, the search, the duplicates switch and the selected
    file's details on the right. */
@@ -3575,7 +3573,8 @@ fieldset.options-group {
   position: sticky;
   top: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
 }
 
@@ -3671,3 +3670,58 @@ fieldset.options-group {
 .icon-delegate { color: #b180d7; }
 .icon-enum-item,
 .icon-constant { color: #c0a05a; }
+
+/* ---- dnSpy's icon service: the images its menus and tool windows wear, and its templates' glyphs ----
+   The images come from ds-image.ts (DsIcon); the glyphs are the Path data of dnSpy's WPF templates
+   (DsGlyphs.tsx), filled with the text colour of wherever they sit. */
+.ds-glyph {
+  display: block;
+  flex: none;
+}
+
+/* MenuService.Add16x16Image draws a disabled entry's image at 30% opacity. The row is already dimmed to
+   55%, so the image takes the rest. */
+.menu-item:disabled .ds-icon,
+.flexlayout__popup_menu_item--disabled .ds-icon {
+  opacity: 0.55;
+}
+
+/* The MenuItem templates' GlyphPanel: an 18×18 square behind the check mark, which a checked entry shows
+   in place of its image. */
+.ds-menu-check-panel {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  background: var(--wpf-EnvironmentCommandBarSelectedIcon);
+  color: var(--wpf-EnvironmentCommandBarCheckBox);
+}
+
+.menu-item:disabled .ds-menu-check-panel,
+.flexlayout__popup_menu_item--disabled .ds-menu-check-panel {
+  background: transparent;
+}
+
+/* The submenu header template's RightArrow, in the entry's own text colour. */
+.menu-submenu-arrow {
+  display: grid;
+  justify-items: end;
+  color: var(--text);
+}
+
+/* ExpandCollapseToggleStyle: TreeViewGlyph at rest, TreeViewGlyphMouseOver under the pointer. */
+/* ExpandCollapseToggleStyle draws the triangle in TreeViewGlyph, and TreeViewGlyphMouseOver under the pointer. */
+.ds-tree-expander {
+  color: var(--wpf-TreeViewGlyph, var(--text-muted));
+}
+
+:hover > .ds-tree-expander {
+  color: var(--wpf-TreeViewGlyphMouseOver, var(--accent-hover));
+}
+
+/* A caption or close button's glyph sits in the middle of whatever button holds it. */
+.window-control-button .ds-glyph,
+.dock-caption-button .ds-glyph,
+.icon-button .ds-glyph {
+  margin: auto;
+}

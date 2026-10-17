@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import appIconUrl from '../../../../../packaging/linux/icons/128x128.png'
 // Both of these are read where they are written — the notices beside the package they describe and the
 // credits out of the WPF tree — and are copied into this package's resources/ so the bundler has them,
@@ -7,6 +6,7 @@ import appIconUrl from '../../../../../packaging/linux/icons/128x128.png'
 import thirdPartyNotices from '../../../../resources/THIRD-PARTY-NOTICES.md?raw'
 import credits from '../../../../resources/CREDITS.txt?raw'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 
 interface AboutDialogProps {
   onClose(): void
@@ -68,7 +68,7 @@ export const AboutDialog = ({ onClose }: AboutDialogProps): React.JSX.Element =>
       <div ref={dialog} className="modal about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" aria-describedby="about-description" onKeyDown={keepFocusInDialog}>
         <div className="modal-title">
           <span id="about-title">{t('About dnSpy')}</span>
-          <button ref={closeButton} type="button" className="icon-button" aria-label={t('Close About')} title={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button ref={closeButton} type="button" className="icon-button" aria-label={t('Close About')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="about-content">
           <div className="about-brand">

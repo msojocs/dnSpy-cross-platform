@@ -5,7 +5,7 @@ import path from 'node:path'
 
 const assemblyPath = path.resolve(import.meta.dirname, '../../../backend/dnSpy.Backend.Contracts/bin/Debug/net10.0/dnSpy.Backend.Contracts.dll')
 
-test('uses C# TextMate colors across themes and retains IL highlighting', async () => {
+test('draws C# in the colours of dnSpy\'s themes and retains IL highlighting', async () => {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'dnspy-highlighting-'))
   const application = await electron.launch({
     args: ['.', '--no-sandbox', `--user-data-dir=${profile}`],
@@ -35,9 +35,10 @@ test('uses C# TextMate colors across themes and retains IL highlighting', async 
 
     expect(errors).toEqual([])
     await expect.poll(() => tokenColor('HelloRequest')).toBe('rgb(78, 201, 176)')
+    // The Type colour of light.dntheme, blue.dntheme and dark.dntheme.
     for (const [theme, color] of [
-      ['Light', 'rgb(38, 127, 153)'],
-      ['High Contrast', 'rgb(255, 183, 87)'],
+      ['Light', 'rgb(43, 145, 175)'],
+      ['Blue', 'rgb(43, 145, 175)'],
       ['Dark', 'rgb(78, 201, 176)'],
     ]) {
       await page.getByRole('menuitem', { name: 'View' }).click()
@@ -49,7 +50,7 @@ test('uses C# TextMate colors across themes and retains IL highlighting', async 
 
     await page.getByLabel('Decompiler language').selectOption('il')
     await expect(editor).toHaveAttribute('data-language-id', 'il')
-    await expect.poll(() => tokenColor('.class')).toBe('rgb(86, 156, 214)')
+    await expect.poll(() => tokenColor('.class')).toBe('rgb(153, 153, 255)')
     // Switching back uses the same model path and must restore the TextMate provider.
     await page.getByLabel('Decompiler language').selectOption('cSharp')
     await expect(editor).toHaveAttribute('data-language-id', 'csharp')

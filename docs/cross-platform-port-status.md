@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -42,7 +42,7 @@
 | 书签 | 100% | 18 | 0 | 0 | 0 | 完整实现；支持列排序、WPF XML 导入导出、Location 列格式化；功能完全对齐 WPF |
 | 分析器 | 100% | 29 | 0 | 0 | 1 | 全部功能点对齐 WPF：行文本随工具栏语言（C#/VB/IL）重写、结果不设上限、IL 视图定位到指令的操作数、程序集树多选与基类型行可分析 |
 | 搜索窗口 | 100% | 29 | 0 | 0 | 0 | 全部功能点对齐 WPF：结果文本与提示随工具栏语言（C#/VB/IL）重写而不重搜、提示为各语言的成员签名、「Search For」下拉项带图标、位置作用于整个选区、IL 视图跟随到指令、命令行 `--search*` |
-| 应用壳与通用 UI | ~97% | 32 | 5 | 0 | 3 | 窗口状态、单实例、退出询问、工具窗口与标签组命令、缩放、背景图片、会话恢复（含光标与滚动位置）齐备；反编译设置已接通后端；Options 里 Environment 的字体只有一组 |
+| 应用壳与通用 UI | 100% | 37 | 0 | 0 | 3 | 全部功能点对齐 WPF：读 `.dntheme` 的主题服务（界面与代码视图都按主题资源着色，支持用户主题）、15 种界面语言、按类别与主题的字体页、带 Debug 窗格的 Output 窗口、dnSpy 图标集覆盖菜单与工具窗口、`--settings-file` 与便携模式、`-p`/`-pn` 附加 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~47% | 30 | 21 | 35 | 4 | 启动、单步、断点、异常设置可用；没有表达式求值，多个窗口是占位 |
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
@@ -55,10 +55,10 @@
 | 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
-| 其他杂项 | 不计 | 3 | 3 | 1 | 7 | 多为 WPF/Windows 基础设施；更新检查缺失 |
+| 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30，完成度约 **62%**（2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 260 / 🟡 84 / ❌ 138 / ⛔ 30，完成度约 **63%**（2026-10-17 应用壳补齐前为 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30；2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -81,7 +81,9 @@
 1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。注意：由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，某些 WPF dnSpy 特有的选项（如 `ShowTokenAndRvaComments`、`SortMembers` 等）在基础 ILSpy 中不存在，暂时被忽略。仍改了没效果的是：
    - 文本编辑器、Hex 编辑器、Disassembler / Code Style、书签语法高亮、REPL；
    - 调试器选项（JIT 优化抑制、Just My Code、忽略 Debugger.Break、忽略未处理异常等）；
-   - Output 的来源、General 的版本号与 PublicKeyToken 等程序集树页选项。
+   - General 的版本号与 PublicKeyToken 等程序集树页选项。
+
+   Output 页的自动换行、行号、时间戳与时间格式（2026-10-17 起）和 Environment › Font 页已生效。
 
    此外 General 页的 `CheckForUpdatesOnStartup` 没有对应功能（⛔）。
 
@@ -95,7 +97,7 @@
 
 6. ~~**未保存修改的保护不完整。**~~ 2026-10-14 已修：有未保存修改时关闭窗口，主进程会拦下这次关闭并反问「是否要在继续之前保存？」（是 / 否 / 取消），取消则留在原地。Reload All 与移除程序集仍按 WPF 各自询问，措辞与本移植版的其它对话框一致。
 
-7. **图标与本地化。** 程序集树、分析器、搜索结果、类型选择器、工具栏、工具窗口菜单与输出窗口按钮都已用 dnSpy 自己的图标集（`dnSpy/dnSpy.Images` 的 XAML 矢量图转成 SVG，按 dnSpy 的 ThemedImageCreator 算法随主题背景换色）；主菜单、其余工具窗口内部仍是 lucide-react。界面语言只有 English 和简体中文，WPF 有 15 种。
+7. ~~**图标与本地化。**~~ 2026-10-17 已补齐：主菜单、各右键菜单与工具窗口命令栏也换成 dnSpy 图标集（`dnSpy/dnSpy.Images` 的 XAML 矢量图转成 SVG，按 dnSpy 的 ThemedImageCreator 算法随主题背景换色），只剩 WPF 没有的加载动画仍是 lucide-react；界面语言与 WPF 一样 15 种，译文由各语言的 resx 生成（`scripts/generate-locales.mjs`），resx 里没有的移植版自有字符串回落英文。
 
 ## 3. 审计中发现的疑似缺陷
 
@@ -118,17 +120,27 @@
 
 ### 4.1 应用壳与通用 UI 框架
 
-完成度约 97%（✅ 32 / 🟡 5 / ❌ 0 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
+完成度 100%（✅ 37 / 🟡 0 / ❌ 0 / ⛔ 3）。WPF 范围：`WPF/MainApp`、`Menus`、`ToolBars`、`ToolWindows`、`Tabs`、`Themes`、`Settings`、`Culture`、`BackgroundImage`、`Output`、`FileLists`、`Commands`。
 
 2026-10-14 按实现与测试复核。此前这一节有 7 个 ❌ 与 17 个 🟡；补上的部分：窗口状态记忆、单实例与参数转发、退出时的未保存询问、工具窗口与标签组的右键命令、标签内容缩放、背景图片渲染、Environment 的字体与 RestoreTabs、主菜单键盘操作、标签快捷键与全局快捷键、关于与帮助菜单、输出窗口的命令栏、消息框的「不再提示」、工具栏与部分图标、**反编译器设置传递给后端（2026-10-14 晚）**。
 
-仍有的差距集中在三处：dnSpy 的 `.dntheme` 主题文件不能加载，界面语言只有两种；菜单与部分工具窗口的图标仍是 lucide；部分 WPF dnSpy 特有的反编译选项在 NuGet 版 ILSpy 中不存在。
+2026-10-17 补齐剩余的 7 个 🟡（此前表头写的 ✅ 32 / 🟡 5 与表内不符，表内实为 ✅ 30 / 🟡 7）：
+
+- **主题**：移植了 dnSpy 的主题服务。`.dntheme` 按 `Theme.cs` 读取，没写出的颜色按 `ColorInfos.cs` 的颜色树继承或取默认值（`scripts/generate-themes.mjs` 把颜色树与 dnSpy 自带的四个主题生成到 `FE/themes.generated.ts`），程序目录与用户目录下 `Themes/*.dntheme` 也会加载；每个 WPF 资源键写成 `--wpf-<键名>` CSS 变量，样式表照 WPF 模板引用它们（菜单、工具栏、文档标签、工具窗口标题与标签、树、表头、对话框、按钮、文本框、滚动条、状态栏），文本颜色写成 `tc-*` 规则；代码视图的 Monaco 主题也由主题生成（编辑器底色、选区、当前行、行号、各类 token），C# 的 TextMate 作用域映射到 dnSpy 的颜色类型，不再用 VS 的 dark+/light+。Blue 主题因此与 WPF 一样是浅色编辑器。高对比度主题只在系统处于高对比度时列出，系统切换时按 `ThemeService` 自动换主题。
+- **界面语言**：与 WPF 一样 15 种。`scripts/generate-locales.mjs` 按英文原文在各语言 resx 里找对应条目生成译文表，没有 resx 对应的移植版自有字符串回落英文（WPF 对 resx 缺的条目也是回落英文）；View → Language 与 WPF 一样是「System」加各语言的本族语名称。
+- **字体**：Environment › Font 页照 `FontAppSettingsPage`：类别下拉框（Hex Editor、Output Window、Text Editor）、系统字体列表（等宽字体加粗，Hex Editor 只列等宽字体）、以磅为单位的字号框；字体按主题各存一份（`ThemeFontSettings`），三个类别分别驱动代码视图与 C# 交互窗口、十六进制视图、输出窗口。默认字体按 `FontUtilities` 的候选列表取第一个已安装的。
+- **Output 窗口**：「Show output from」下拉框与 Ctrl+1…Ctrl+0 切换窗格；Debug 窗格是调试器的输出（开始调试时清空并切到它，同 `OutputLogger`），另有一个移植版自己的「dnSpy」窗格记录打开、保存、编辑等消息（WPF 用消息框或不显示）。Clear All（Ctrl+L）、Save（Ctrl+S，文件名 `Output-<窗格>.txt`）、Word Wrap（Ctrl+E Ctrl+W）、右键菜单的 Copy / Clear All / Show Line Numbers / Show Timestamps / Word Wrap 都有；时间戳按 Output 选项页的 .NET 格式串写在每行前，换行、行号、时间戳与选项页是同一份设置。
+- **消息框**：General 页加上「Enable all warning messages」按钮，与 WPF 一样立即生效。
+- **图标**：主菜单、各右键菜单、工具窗口工具栏都换成 dnSpy 图像集，菜单勾选标记、子菜单箭头、树展开三角、标题栏按钮用 WPF 模板里的矢量路径；只剩 WPF 没有对应物的加载动画仍用 lucide。
+- **命令行**：`--settings-file` 生效，且与 WPF 一样支持便携模式（程序目录下有 `dnSpy.json` 就用它）：渲染进程的选项、窗口状态、主进程设置与对话框目录都存进这一个文件，渲染进程改用不落盘的独立会话；`-p` / `-pn` 启动后附加到指定进程。
+
+部分 WPF dnSpy 特有的反编译选项在 NuGet 版 ILSpy 中不存在，这属于 4.4。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | 主窗口与自绘标题栏 | `MainApp/MainWindow.xaml`、`AppWindow.cs` | `MAIN/index.ts`（`frame:false`）、`FE/components/WindowControls.tsx` | ✅ | 标题按 `AppWindow.GetDefaultTitle` 写成 "dnSpy 6.6.0 (64-bit, .NET, Administrator)"，随界面语言变 |
 | 窗口位置、尺寸、最大化记忆 | `MainApp/SavedWindowState.cs` | `MAIN/window-state.ts` | ✅ | `userData/window-state.json`；还原前按 dnSpy 的 50×50 规则看是否仍落在某个显示器上，落不上用默认的 10,10,1300,730；最大化与全屏各记各的，取其一 |
-| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/command-line.ts`、`FE/command-line-options.ts` | 🟡 | 文件路径、`--`、`--multiple`、`--dont-activate`、`-l`、`--culture`、`--select`、`--new-tab`、`--theme`、`--search*`、`--no-load-files`、`--full-screen`、`--show/hide-tool-window`（含 `!location`）、`--show-startup-time` 都生效；`-p`/`-pn`/`-e` 是 Windows 的 JIT 调试入口，`--settings-file` 与 `--extension-directory` 没有对应物，只被读下不生效 |
+| 命令行参数 | `MainApp/AppCommandLineArgs.cs` | `MAIN/command-line.ts`、`MAIN/settings-file.ts`、`FE/command-line-options.ts` | ✅ | 文件路径、`--`、`--multiple`、`--dont-activate`、`-l`、`--culture`（任意区域名，按语言回落）、`--select`、`--new-tab`、`--theme`（名称或 GUID，含用户主题）、`--search*`、`--no-load-files`、`--full-screen`、`--show/hide-tool-window`（含 `!location`）、`--show-startup-time`、`--settings-file`（含便携的 `dnSpy.json`）、`-p`/`-pn`（启动后附加，同调试器的 `AppCommandLineArgsHandler`）都生效。`-e`/`--jdinfo` 是 Windows 注册的 JIT 调试入口，`--extension-directory` 对应 4.16 不支持的扩展，二者只被读下 |
 | 单实例与参数转发 | `MainApp/App.xaml.cs` 的 `SwitchToOtherInstance` | `MAIN/index.ts` | ✅ | 后启动的进程把命令行交给先启动的窗口。默认与 WPF 一样「允许多开」（`AppSettings.AllowMoreThanOneInstance` 默认为 true），勾掉选项或写 `--multiple` 才是多开 |
 | 以管理员身份重启 | `MainApp/RestartAsAdministratorCommand.cs` | `MAIN/index.ts` 的 `relaunchElevated`、`MAIN/elevated-start.ts` | ✅ | pkexec；提权副本固定走 X11 |
 | 退出时的未保存提示 | `MainApp/ViewCommands.cs` | `MAIN/index.ts`、`FE/App.tsx` | ✅ | 有未保存修改时主进程拦下关闭并反问，按「保存/放弃/取消」决定关或留 |
@@ -150,24 +162,24 @@
 | 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberRecentFiles` | ✅ | 每个文件一条，见 4.3 |
 | 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `OpenListDialog.tsx` | ✅ | 见 4.3 |
 | 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
-| 主题 | `Themes/ThemeService.cs`、`*.dntheme` | `FE/App.tsx`、`styles.css` | 🟡 | 四个主题可切换，且与 Options 的 Theme 共用同一份存储（原先两套）；仍不能加载 `.dntheme`，Blue 主题的编辑器配色与 WPF 不同 |
-| 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx` | 🟡 | 只有 English、简体中文（WPF 15 种） |
-| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；仍有页面不生效的是文本编辑器、Hex 编辑器、调试器等 |
-| Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ✅ | Theme、Allow more than one instance、RestoreTabs、DecompileFullType、UseMemoryMappedIO 均已生效；CheckForUpdates 没有对应功能，选项仍在（⛔） |
-| Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs` | `options-pages.ts`、`CodeEditor` 的 options | 🟡 | 字体族与字号现在驱动代码视图与 C# 交互窗口（此前写死 Cascadia Mono 13）；WPF 那一页是按外观分类（文本编辑器、UI、Hex…）逐项配字体与颜色，本移植版只有一组，对应其中的文本编辑器 |
+| 主题 | `Themes/ThemeService.cs`、`Theme.cs`、`ColorInfos.cs`、`*.dntheme` | `FE/theme-service.ts`、`FE/themes.generated.ts`、`FE/monaco-theme.ts`、`MAIN/theme-files.ts`、`styles.css` | ✅ | 读 dnSpy 自带的四个 `.dntheme` 与 `Themes` 目录里的用户主题，颜色继承与默认值同 `Theme.cs`；界面按 WPF 资源键着色，代码视图的 Monaco 主题由主题生成；菜单与 General 页列出 `VisibleThemes`（高对比度主题只在系统高对比度时出现），系统高对比度切换时自动换主题并记下 |
+| 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx`、`FE/locales/*`、`FE/locales.generated.ts`、`shared/ui-locales.ts` | ✅ | 15 种，与 WPF 的 resx 相同；译文由 resx 生成，resx 没有的条目回落英文；View → Language 为「System」加各语言本族语名称；原生对话框的字符串同样按语言 |
+| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；Output 页的自动换行、行号与时间戳生效；仍有页面不生效的是文本编辑器、Hex 编辑器、调试器等 |
+| Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ✅ | Theme（列出所有可见主题）、Allow more than one instance、RestoreTabs、DecompileFullType、UseMemoryMappedIO 均已生效，「Enable all warning messages」按钮立即恢复被「不再提示」的消息；CheckForUpdates 没有对应功能，选项仍在（⛔） |
+| Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs`、`Settings/Fonts/*` | `FE/components/FontOptions.tsx`、`FE/fonts.ts`、`MAIN/system-fonts.ts` | ✅ | 三个用户可见的外观类别（Hex Editor、Output Window、Text Editor）各配字体与字号，按主题分别保存；字体列表来自系统（Chromium 的本地字体接口，取不到时用 fontconfig），等宽加粗，Hex Editor 只列等宽；字号以磅显示、像素保存，范围同 `FilterFontSize` |
 | 背景图片 | `BackgroundImage/*` | `FE/components/BackgroundImage.tsx`、`MAIN/background-images.ts` | ✅ | 图片与文件夹路径、九个位置、四边百分比边距、偏移、不透明度、Stretch 与 StretchDirection、最大尺寸、缩放、随机轮播与间隔；主进程展开文件夹并把图片读成 data URL。图片开启时编辑器背景透明，图片显示在代码后面（dnSpy 画在每个文本视图里）；Hex 视图仍是不透明的 |
-| Output 窗口 | `Output/*` | `FE/components/ToolWindows.tsx` 的 `OutputPane` | 🟡 | 有清空、另存为、自动换行（按窗口单独记录）；没有来源切换——本移植版只有一路日志，没有多条缓冲可切 |
-| 消息框 | `MainApp/MessageBoxService.cs` | `FE/message-box.ts`、`MAIN/index.ts` | 🟡 | 「不再提示」已实现（`ShowIgnorableMessage` 的语义：抑制后按「继续」，抑制清单随选项一起存，Reset 会清掉）；dnSpy General 页的「Enable all warning messages」按钮没有对应物，只有一条消息用它 |
+| Output 窗口 | `Output/*`、`DBG/ToolWindows/Logger/OutputLogger.cs` | `FE/components/ToolWindows.tsx` 的 `OutputPane`、`FE/app-store.ts` | ✅ | 「Show output from」切换 Debug 与 dnSpy 两个窗格（Ctrl+1…0），开始调试时清空并切到 Debug；Clear All、Save、Word Wrap、Copy、Show Line Numbers、Show Timestamps 与快捷键同 `OutputContent`；时间戳按选项的 .NET 格式串、在写入时打上；用 Output Window 类别的字体与 OutputWindowText 颜色。dnSpy 窗格是移植版自有的（WPF 不记录这类消息） |
+| 消息框 | `MainApp/MessageBoxService.cs` | `FE/message-box.ts`、`MAIN/index.ts` | ✅ | 「不再提示」已实现（`ShowIgnorableMessage` 的语义：抑制后按「继续」，抑制清单随选项一起存，Reset 会清掉）；General 页的「Enable all warning messages」按钮与 WPF 一样清空抑制清单 |
 | 关于 | `MainApp/AboutScreen.cs`、`LicenseInfo/*` | `AboutDialog.tsx` | ✅ | 标题按 `AboutScreen` 写成 "dnSpy <版本> (.NET)"，版本读打包版本；鸣谢与第三方许可折在对话框里，内容取自 `dnSpy/dnSpy/LicenseInfo/CREDITS.txt` 与 `CrossPlatform/packaging/licenses/THIRD-PARTY-NOTICES.md`（有单测比对副本是否过期）。dnSpy 那一页还会列出已加载的扩展程序集与一个「Check for updates」按钮：本移植版没有扩展可列，更新也不在范围内 |
 | 帮助链接 | `MainApp/AboutCommands.cs` | `MenuBar.tsx` | ✅ | 与 dnSpy 的项一致：最新发布、问题、Wiki、源代码 |
 | 启动时检查更新 | `MainApp/StartupUpdateCheck.cs` | 无 | ⛔ | 计划写明「更新机制不进入 MVP」；但 General 页仍留着无效的复选框 |
 | Windows 资源管理器集成 | `MainApp/Settings/WindowsExplorerIntegration.cs` | 无 | ⛔ | 注册表功能；Linux 的 .desktop 也没声明 MimeType |
 | MEF 扩展加载 | `Extension/ExtensionService.cs` | 无 | ⛔ | 见 4.16 |
-| 图标服务 | `Images/ImageService.cs` | `FE/ds-image.ts`、`FE/components/DsIcon.tsx`；其余 lucide-react | 🟡 | 树类行、工具栏、工具窗口菜单、输出窗口按钮用 dnSpy 图标集并按主题换色；主菜单与其余工具窗口仍是 lucide |
+| 图标服务 | `Images/ImageService.cs` | `FE/ds-image.ts`、`FE/components/DsIcon.tsx`、`FE/components/DsGlyphs.tsx` | ✅ | 树类行、主菜单与各右键菜单（按 WPF 菜单项的 `Icon` 属性）、工具栏、各工具窗口的命令栏都用 dnSpy 图标集并按主题换色；勾选标记、子菜单箭头、展开三角、窗口与工具窗口按钮用 WPF 模板的矢量路径。加载动画仍是 lucide，WPF 没有对应物 |
 | 全局快捷键 | `Commands/CommandService.cs` | `FE/App.tsx` 的 keydown 处理 | ✅ | 菜单上标出的都已绑定；Go to Token 改回 dnSpy 的 Ctrl+D；Shift+Alt+Enter 不再被 Alt+Enter 截住。仍未绑定的是十六进制只读视图里的几个（Ctrl+X 等，本移植版不能改字节） |
-| 设置存储 | `Settings/SettingsService.cs` | localStorage 的 `dnspy.*` 键 | ✅ | 不支持 `--settings-file` 和便携模式 |
+| 设置存储 | `Settings/SettingsService.cs`、`App/AppDirectories.cs` | localStorage 的 `dnspy.*` 键、`MAIN/settings-file.ts` | ✅ | 默认存于用户配置目录；`--settings-file` 或程序目录下的 `dnSpy.json`（便携模式）时全部设置存进该文件 |
 
-测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`ToolWindowTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`AboutDialog.test.tsx`、`ToolWindows.test.tsx`、`command-line-options.test.ts`、`zoom.test.ts`、`background-image.test.ts`、`message-box.test.ts`、`window-state.test.ts`、`app-info.test.ts`、`app-settings.ts`（无单测）、`app-store-session.test.ts`（含光标与滚动位置恢复测试） 等；e2e `layout.spec.ts`、`session-close.spec.ts`。反解码器选项是否生效、Output 的来源切换、`.dntheme`、图标替换的其余部分都还没有测试。
+测试：`MenuBar.test.tsx`、`OptionsDialog.test.tsx`、`DockPane.test.tsx`、`DocumentTabContextMenu.test.tsx`、`ToolWindowTabContextMenu.test.tsx`、`WindowsDialog.test.tsx`、`AboutDialog.test.tsx`、`ToolWindows.test.tsx`（输出窗格、时间戳、行号）、`command-line-options.test.ts`、`zoom.test.ts`、`background-image.test.ts`、`message-box.test.ts`、`window-state.test.ts`、`app-info.test.ts`、`app-store-session.test.ts`、`theme-service.test.ts`（主题解析、继承、资源变量、高对比度、Monaco 主题）、`csharp-highlighting.test.ts`、`fonts.test.ts`（字体与 .NET 时间格式）、`settings-file.test.ts`（设置文件、主题目录、fontconfig）、`localization.test.tsx`、`locales.test.ts`、`ui-locales.test.ts`、`native-messages.test.ts`、`generated-locales.test.ts` 等；e2e `layout.spec.ts`、`session-close.spec.ts`、`app.spec.ts` 的主题持久化与语言切换、`csharp-highlighting.spec.ts`（三个主题的代码颜色）。
 
 ### 4.2 工程基础设施（新增，WPF 无对应）
 
@@ -856,7 +868,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 - 后端：`BE/LanguageService/RoslynClassifier.cs`（`RoslynClassifier` 的移植）、`RoslynTextParts.cs`（`TextTagsHelper`、符号显示部件着色、`GlyphHelper` 的图标名）、`RoslynLanguageService.cs`（文档、补全、Quick Info、诊断、缩进、结构导航）、`SignatureHelpProvider.cs`、`LanguageServiceHost.cs`（MEF 宿主、引用程序集与 XML 文档）、`DocumentationText.cs`；`BE/Scripting/CSharpScriptService.cs` 的 `ClassifyAsync`
 - RPC：`script/classify`；`languageService/open`、`update`、`close`、`classify`、`completion`、`completionDescription`、`quickInfo`、`signatureHelp`、`diagnostics`、`indentation`、`selectionRanges`
-- 前端：`FE/roslyn-classification.ts`（分类结果画成 `tc-*` 内联装饰，供 REPL 与代码编辑器共用）、`FE/roslyn-language-service.ts`（各 provider 与 `attachRoslynDocument`，连同它要的 Monaco contrib：`FE/roslyn-editor-contribs.ts`；`FE/monaco.ts` 仍只导入 `editor.api`，之前那版改成整包导入后代码视图的右键光标定位回归了，已改回）、`FE/components/CSharpInteractive.tsx`、`FE/components/ColoredText.tsx` 的 `ClassifiedText`；`FE/styles.css` 里只在代码中出现的颜色（注释、字符串、局部变量、参数加粗、预处理、XML 文档注释等，取自 dark/light.dntheme）
+- 前端：`FE/roslyn-classification.ts`（分类结果画成 `tc-*` 内联装饰，供 REPL 与代码编辑器共用）、`FE/roslyn-language-service.ts`（各 provider 与 `attachRoslynDocument`，连同它要的 Monaco contrib：`FE/roslyn-editor-contribs.ts`；`FE/monaco.ts` 仍只导入 `editor.api`，之前那版改成整包导入后代码视图的右键光标定位回归了，已改回）、`FE/components/CSharpInteractive.tsx`、`FE/components/ColoredText.tsx` 的 `ClassifiedText`；`tc-*` 的颜色、加粗与斜体由主题服务（`FE/theme-service.ts`）按当前 `.dntheme` 写出
 
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
@@ -896,13 +908,13 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 ### 4.18 其他杂项
 
-不计完成度（✅ 3 / 🟡 3 / ❌ 1 / ⛔ 7）。
+不计完成度（✅ 5 / 🟡 1 / ❌ 1 / ⛔ 7）。
 
 | 项目 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
-| 本地化资源（15 种语言） | `WPF/Properties/*.resx` 等 | 🟡 | 只有 2 种 |
+| 本地化资源（15 种语言） | `WPF/Properties/*.resx` 等 | ✅ | 15 种，译文由 resx 生成，见 4.1 |
 | 许可证与鸣谢 | `WPF/LicenseInfo/*` | 🟡 | 安装包里齐全；应用内看不到 |
-| 图标库 `dnSpy.Images` | `dnSpy/dnSpy.Images/` | 🟡 | 树、分析器、搜索结果、类型选择器的行已用原图（转成 SVG、按主题换色）；菜单、工具栏仍是 lucide-react |
+| 图标库 `dnSpy.Images` | `dnSpy/dnSpy.Images/` | ✅ | 全部 245 张原图转成 SVG、按主题换色，树、菜单、工具栏与各工具窗口都在用 |
 | 更新检查 | `WPF/MainApp/UpdateService.cs` | ❌ | 选项页复选框无效，会误导用户 |
 | 打开列表与默认列表 | `WPF/FileLists/*` | ✅ | 与 4.1 重复；默认列表取本机 .NET 共享框架 |
 | netcorefiles（dbgshim） | `DBG/netcorefiles/` | ✅ | 改用 `Microsoft.Diagnostics.DbgShim` NuGet 包 |
@@ -944,18 +956,18 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 **P3：扩展范围**
 
-字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor；Mono/Unity 调试；脚本 `Resolve<T>` API；扩展系统；更多界面语言；更新检查。
+字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor；Mono/Unity 调试；脚本 `Resolve<T>` API；扩展系统；更新检查。
 
 ## 6. 测试基线
 
-2026-10-16 分析器补齐后在本机重新跑过（后端与前端都是真实构建）：
+2026-10-17 应用壳补齐后在本机重新跑过（后端与前端都是真实构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 406 通过（字符串引用与 Roslyn 复核后为 403，应用壳复核时为 359） |
-| 前端 `pnpm typecheck` | 0 错误 |
-| 前端 vitest | 1103 通过（字符串引用与 Roslyn 复核后为 1095，应用壳复核后为 1041） |
-| e2e（Playwright Electron） | 92 通过、3 跳过、0 失败 |
+| 后端 `dotnet test` | 425 通过（分析器补齐后为 406，字符串引用与 Roslyn 复核后为 403，应用壳复核时为 359） |
+| 前端 `tsc --noEmit`（`tsconfig.json`、`tsconfig.node.json`） | 0 错误 |
+| 前端 vitest | 1201 通过（分析器补齐后为 1103，字符串引用与 Roslyn 复核后为 1095，应用壳复核后为 1041） |
+| e2e（Playwright Electron） | 93 通过、3 跳过、0 失败 |
 
 复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.10、4.11、4.14、4.15 各节末尾；分析器这次改 `Protocol.cs`（两个请求加语言参数、`TextColors.ILModule`）没有挪动这两个标记。
 
@@ -965,7 +977,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、程序集树（键盘、图标、最近文件、命令行、Reload、移除与撤销）、断点判定与跟踪点、异常设置、书签。
 
-明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。应用壳这一批新功能里，`.dntheme` 加载、界面语言、图标的其余部分都还没有测试；窗口状态与关闭询问有单测，但没有 e2e。
+明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框和 Modules/Threads 面板。应用壳里，`--settings-file` 与 `-p`/`-pn` 只有单测、没有 e2e，系统高对比度切换只在单测里模拟；窗口状态与关闭询问有单测，但没有 e2e。
 
 ## 7. 与现有文档的出入
 

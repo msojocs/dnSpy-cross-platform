@@ -1,32 +1,10 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import {
-  Binary,
-  CircleDashed,
-  CircleDot,
-  CircleOff,
-  CirclePause,
-  CirclePlay,
-  ClipboardCopy,
-  Copy,
-  CopyPlus,
-  Cpu,
-  Crosshair,
-  Eraser,
-  FileCode,
-  Globe,
-  Hash,
-  Pencil,
-  Play,
-  Plus,
-  ScanSearch,
-  Search,
-  Trash2,
-} from 'lucide-react'
 import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { methodBreakpointName, type LineBreakpoint, type MethodBreakpointTarget } from '../app-store'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
+import { MenuEntryIcon } from './DsIcon'
 
 export type DebugState = 'inactive' | 'starting' | 'running' | 'stopped'
 
@@ -126,9 +104,11 @@ const GROUP_HEX = 9000
 const GROUP_OTHER = 14000
 const GROUP_EDITOR = 15000
 
-const iconProps = { size: 14, strokeWidth: 1.7, 'aria-hidden': true as const }
-/** An entry whose icon does not depend on the document — which is all but the breakpoint toggle. */
-const fixedIcon = (node: ReactNode): CodeMenuIcon => () => node
+/** The dnSpy image an entry wears — its ExportMenuItem's Icon (DsImagesAttribute.X). dnSpy's breakpoint
+ *  toggles change their header with the breakpoint under the caret but keep one image. */
+const image = (name: string): CodeMenuIcon => () => <MenuEntryIcon name={name} />
+/** An entry whose ExportMenuItem has no Icon: its icon column stays blank, as dnSpy's does. */
+const noImage: CodeMenuIcon = () => null
 
 // Commands dnSpy shows only where this port has nothing to run: setting the instruction pointer, class
 // breakpoints and tracepoints, exception-break settings, entering an assembly the workspace does not
@@ -250,12 +230,11 @@ const createInReference = (ctx: CodeEditorMenuContext, kind: CreatedKind, nested
 
 /** The shared hex group (GROUP_HEX), wearing this menu's entry shape. `CodeEditorMenuContext` is a
  *  `HexMenuContext`, so the entries' predicates and actions drop straight in. */
-const hexIcon = fixedIcon(<Binary {...iconProps} />)
 const HEX_ENTRIES: CodeMenuEntry[] = hexMenuEntries.map((entry) => ({
   group: GROUP_HEX,
   order: entry.order,
   key: `hex-${entry.order}`,
-  icon: hexIcon,
+  icon: entry.icon ? image(entry.icon) : noImage,
   label: entry.label,
   shortcut: entry.shortcut,
   visible: entry.visible,
@@ -279,60 +258,60 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // 0 — Tab commands (GROUP_CTX_DOCVIEWER_TABS). dnSpy's entry follows the TextReference under the
   // caret — `OpenReferenceInNewTabCtxMenuCommand` is visible only when the caret names one — so it
   // shows on a reference and nowhere else.
-  { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: fixedIcon(<CopyPlus {...iconProps} />), label: (ctx) => ctx.t('Open in New Tab'), visible: (ctx) => ctx.referenceTarget !== undefined && isNavigableSpan(ctx.referenceTarget) && ctx.onOpenInNewTab !== undefined, run: (ctx) => { const target = ctx.referenceTarget; if (target) ctx.onOpenInNewTab?.(target) } },
+  { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: noImage, label: (ctx) => ctx.t('Open in New Tab'), visible: (ctx) => ctx.referenceTarget !== undefined && isNavigableSpan(ctx.referenceTarget) && ctx.onOpenInNewTab !== undefined, run: (ctx) => { const target = ctx.referenceTarget; if (target) ctx.onOpenInNewTab?.(target) } },
 
   // 1000 — Debugger (GROUP_CTX_DOCVIEWER_DEBUG)
   // dnSpy's first entry debugs the exe of the document's module ("Debug <module.exe>"). This port has a
   // single launch path, so it wears that command's header and state instead.
-  { group: GROUP_DEBUG, order: 0, key: 'start-debugging', icon: fixedIcon(<Play {...iconProps} />), label: (ctx) => ctx.t('Start Debugging...'), shortcut: 'F5', visible: (ctx) => ctx.canStartDebug && ctx.debugState === 'inactive' && ctx.onStartDebug !== undefined, run: (ctx) => ctx.onStartDebug?.() },
+  { group: GROUP_DEBUG, order: 0, key: 'start-debugging', icon: image('Run'), label: (ctx) => ctx.t('Start Debugging...'), shortcut: 'F5', visible: (ctx) => ctx.canStartDebug && ctx.debugState === 'inactive' && ctx.onStartDebug !== undefined, run: (ctx) => ctx.onStartDebug?.() },
   // The header flips between Add and Delete exactly as dnSpy's `GetToggleCreateBreakpointKind` does.
-  { group: GROUP_DEBUG, order: 10, key: 'toggle-breakpoint', icon: (ctx) => ctx.breakpoint ? <CircleOff {...iconProps} /> : <CircleDot {...iconProps} />, label: toggleBreakpointLabel, shortcut: 'F9', visible: (ctx) => ctx.statement !== undefined && ctx.onToggleBreakpoint !== undefined, run: (ctx) => ctx.onToggleBreakpoint?.() },
-  { group: GROUP_DEBUG, order: 20, key: 'enable-breakpoint', icon: (ctx) => ctx.breakpoint?.enabled ? <CirclePause {...iconProps} /> : <CirclePlay {...iconProps} />, label: enableBreakpointLabel, shortcut: 'Ctrl+F9', visible: (ctx) => ctx.breakpoint !== undefined && ctx.onSetBreakpointEnabled !== undefined, run: (ctx) => ctx.onSetBreakpointEnabled?.(ctx.breakpoint?.enabled !== true) },
-  { group: GROUP_DEBUG, order: 30, key: 'show-next-statement', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Show Next Statement'), shortcut: 'Alt + Numpad *', visible: (ctx) => ctx.stopped && ctx.onShowNextStatement !== undefined, run: (ctx) => ctx.onShowNextStatement?.() },
-  { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: never },
-  { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: fixedIcon(<Cpu {...iconProps} />), label: (ctx) => ctx.t('Go to Disassembly'), visible: (ctx) => ctx.stopped && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
-  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassBreakpoint?.(node) } },
-  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: fixedIcon(null), label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassTracepoint?.(node) } },
-  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: fixedIcon(<CircleDashed {...iconProps} />), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => { const target = methodBreakpointTarget(ctx); if (target) ctx.onAddMethodBreakpoints?.([target]) } },
-  { group: GROUP_DEBUG, order: 1000, key: 'break-when-exception-thrown', icon: fixedIcon(<CircleDot {...iconProps} />), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
+  { group: GROUP_DEBUG, order: 10, key: 'toggle-breakpoint', icon: image('CheckDot'), label: toggleBreakpointLabel, shortcut: 'F9', visible: (ctx) => ctx.statement !== undefined && ctx.onToggleBreakpoint !== undefined, run: (ctx) => ctx.onToggleBreakpoint?.() },
+  { group: GROUP_DEBUG, order: 20, key: 'enable-breakpoint', icon: image('ToggleAllBreakpoints'), label: enableBreakpointLabel, shortcut: 'Ctrl+F9', visible: (ctx) => ctx.breakpoint !== undefined && ctx.onSetBreakpointEnabled !== undefined, run: (ctx) => ctx.onSetBreakpointEnabled?.(ctx.breakpoint?.enabled !== true) },
+  { group: GROUP_DEBUG, order: 30, key: 'show-next-statement', icon: image('GoToNext'), label: (ctx) => ctx.t('Show Next Statement'), shortcut: 'Alt + Numpad *', visible: (ctx) => ctx.stopped && ctx.onShowNextStatement !== undefined, run: (ctx) => ctx.onShowNextStatement?.() },
+  { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: image('GoToNextInList'), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: never },
+  { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: image('DisassemblyWindow'), label: (ctx) => ctx.t('Go to Disassembly'), visible: (ctx) => ctx.stopped && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassBreakpoint?.(node) } },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassTracepoint?.(node) } },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => { const target = methodBreakpointTarget(ctx); if (target) ctx.onAddMethodBreakpoints?.([target]) } },
+  { group: GROUP_DEBUG, order: 1000, key: 'break-when-exception-thrown', icon: image('Add'), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
 
   // 3000 — Delete commands (GROUP_CTX_DOCVIEWER_ASMED_DELETE). One entry per deletable node type, so
   // exactly one is ever on screen: the kind of the reference under the caret picks it, and its header
   // names that kind.
-  { group: GROUP_ASMED_DELETE, order: 20, key: 'delete-type', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Delete Type'), shortcut: 'Del', visible: referenceIs('type'), run: deleteReference },
-  { group: GROUP_ASMED_DELETE, order: 30, key: 'delete-method', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Delete Method'), shortcut: 'Del', visible: referenceIs('method'), run: deleteReference },
-  { group: GROUP_ASMED_DELETE, order: 40, key: 'delete-field', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Delete Field'), shortcut: 'Del', visible: referenceIs('field'), run: deleteReference },
-  { group: GROUP_ASMED_DELETE, order: 50, key: 'delete-property', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Delete Property'), shortcut: 'Del', visible: referenceIs('property'), run: deleteReference },
-  { group: GROUP_ASMED_DELETE, order: 60, key: 'delete-event', icon: fixedIcon(<Trash2 {...iconProps} />), label: (ctx) => ctx.t('Delete Event'), shortcut: 'Del', visible: referenceIs('event'), run: deleteReference },
+  { group: GROUP_ASMED_DELETE, order: 20, key: 'delete-type', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Type'), shortcut: 'Del', visible: referenceIs('type'), run: deleteReference },
+  { group: GROUP_ASMED_DELETE, order: 30, key: 'delete-method', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Method'), shortcut: 'Del', visible: referenceIs('method'), run: deleteReference },
+  { group: GROUP_ASMED_DELETE, order: 40, key: 'delete-field', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Field'), shortcut: 'Del', visible: referenceIs('field'), run: deleteReference },
+  { group: GROUP_ASMED_DELETE, order: 50, key: 'delete-property', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Property'), shortcut: 'Del', visible: referenceIs('property'), run: deleteReference },
+  { group: GROUP_ASMED_DELETE, order: 60, key: 'delete-event', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Event'), shortcut: 'Del', visible: referenceIs('event'), run: deleteReference },
 
   // 4000 — Create commands (GROUP_CTX_DOCVIEWER_ASMED_NEW). A member is created in the type the
   // reference belongs to, which is how the Edit menu files them under the selection too.
-  { group: GROUP_ASMED_NEW, order: 50, key: 'create-nested-type', icon: fixedIcon(<Plus {...iconProps} />), label: (ctx) => ctx.t('Create Nested Type...'), visible: referenceIs('type'), run: (ctx) => createInReference(ctx, 'type', true) },
-  { group: GROUP_ASMED_NEW, order: 60, key: 'create-method', icon: fixedIcon(<Plus {...iconProps} />), label: (ctx) => ctx.t('Create Method...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'method') },
-  { group: GROUP_ASMED_NEW, order: 70, key: 'create-field', icon: fixedIcon(<Plus {...iconProps} />), label: (ctx) => ctx.t('Create Field...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'field') },
-  { group: GROUP_ASMED_NEW, order: 80, key: 'create-property', icon: fixedIcon(<Plus {...iconProps} />), label: (ctx) => ctx.t('Create Property...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'property') },
-  { group: GROUP_ASMED_NEW, order: 90, key: 'create-event', icon: fixedIcon(<Plus {...iconProps} />), label: (ctx) => ctx.t('Create Event...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'event') },
+  { group: GROUP_ASMED_NEW, order: 50, key: 'create-nested-type', icon: image('NewClass'), label: (ctx) => ctx.t('Create Nested Type...'), visible: referenceIs('type'), run: (ctx) => createInReference(ctx, 'type', true) },
+  { group: GROUP_ASMED_NEW, order: 60, key: 'create-method', icon: image('NewMethod'), label: (ctx) => ctx.t('Create Method...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'method') },
+  { group: GROUP_ASMED_NEW, order: 70, key: 'create-field', icon: image('NewField'), label: (ctx) => ctx.t('Create Field...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'field') },
+  { group: GROUP_ASMED_NEW, order: 80, key: 'create-property', icon: image('NewProperty'), label: (ctx) => ctx.t('Create Property...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'property') },
+  { group: GROUP_ASMED_NEW, order: 90, key: 'create-event', icon: image('NewEvent'), label: (ctx) => ctx.t('Create Event...'), visible: isMemberRef, run: (ctx) => createInReference(ctx, 'event') },
 
   // 5000 — Settings (GROUP_CTX_DOCVIEWER_ASMED_SETTINGS): the Edit X... dialogs, the same ones Alt+Enter
   // opens in the assembly explorer.
-  { group: GROUP_ASMED_SETTINGS, order: 20, key: 'edit-type', icon: fixedIcon(<Pencil {...iconProps} />), label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: referenceIs('type'), run: editReference },
-  { group: GROUP_ASMED_SETTINGS, order: 30, key: 'edit-method', icon: fixedIcon(<Pencil {...iconProps} />), label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: referenceIs('method'), run: editReference },
-  { group: GROUP_ASMED_SETTINGS, order: 50, key: 'edit-field', icon: fixedIcon(<Pencil {...iconProps} />), label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: referenceIs('field'), run: editReference },
-  { group: GROUP_ASMED_SETTINGS, order: 60, key: 'edit-property', icon: fixedIcon(<Pencil {...iconProps} />), label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: referenceIs('property'), run: editReference },
-  { group: GROUP_ASMED_SETTINGS, order: 70, key: 'edit-event', icon: fixedIcon(<Pencil {...iconProps} />), label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: referenceIs('event'), run: editReference },
+  { group: GROUP_ASMED_SETTINGS, order: 20, key: 'edit-type', icon: image('Settings'), label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: referenceIs('type'), run: editReference },
+  { group: GROUP_ASMED_SETTINGS, order: 30, key: 'edit-method', icon: image('Settings'), label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: referenceIs('method'), run: editReference },
+  { group: GROUP_ASMED_SETTINGS, order: 50, key: 'edit-field', icon: image('Settings'), label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: referenceIs('field'), run: editReference },
+  { group: GROUP_ASMED_SETTINGS, order: 60, key: 'edit-property', icon: image('Settings'), label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: referenceIs('property'), run: editReference },
+  { group: GROUP_ASMED_SETTINGS, order: 70, key: 'edit-event', icon: image('Settings'), label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: referenceIs('event'), run: editReference },
 
   // 6000 — IL edits (GROUP_CTX_DOCVIEWER_ASMED_ILED). dnSpy's C# compile commands, Merge with Assembly
   // and Edit IL Instructions have no equivalent here; the two that do act on the method the caret names.
-  { group: GROUP_ASMED_ILED, order: 20, key: 'edit-il-instructions', icon: fixedIcon(<FileCode {...iconProps} />), label: (ctx) => ctx.t('Edit IL Instructions'), shortcut: 'Ctrl+Shift+E', visible: never },
-  { group: GROUP_ASMED_ILED, order: 21, key: 'edit-method-body', icon: fixedIcon(<FileCode {...iconProps} />), label: (ctx) => ctx.t('Edit Method Body...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onEditMethodBody !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onEditMethodBody?.(node) } },
-  { group: GROUP_ASMED_ILED, order: 21, key: 'replace-method-body-with-stub', icon: fixedIcon(<Eraser {...iconProps} />), label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onReplaceMethodBodyWithStub !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onReplaceMethodBodyWithStub?.(node) } },
+  { group: GROUP_ASMED_ILED, order: 20, key: 'edit-il-instructions', icon: image('Editor'), label: (ctx) => ctx.t('Edit IL Instructions'), shortcut: 'Ctrl+Shift+E', visible: never },
+  { group: GROUP_ASMED_ILED, order: 21, key: 'edit-method-body', icon: image('Editor'), label: (ctx) => ctx.t('Edit Method Body...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onEditMethodBody !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onEditMethodBody?.(node) } },
+  { group: GROUP_ASMED_ILED, order: 21, key: 'replace-method-body-with-stub', icon: noImage, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onReplaceMethodBodyWithStub !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onReplaceMethodBodyWithStub?.(node) } },
 
   // 7000 — Tokens (GROUP_CTX_DOCVIEWER_TOKENS): where to go, then what to copy.
-  { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Go to Entry Point'), visible: never },
-  { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: fixedIcon(<Crosshair {...iconProps} />), label: (ctx) => ctx.t('Go to Global Cctor'), visible: never },
-  { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+Shift+D', visible: never },
-  { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: fixedIcon(<Hash {...iconProps} />), label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
-  { group: GROUP_TOKENS, order: 60, key: 'copy-full-name', icon: fixedIcon(<ClipboardCopy {...iconProps} />), label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
+  { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: image('EntryPoint'), label: (ctx) => ctx.t('Go to Entry Point'), visible: never },
+  { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: noImage, label: (ctx) => ctx.t('Go to Global Cctor'), visible: never },
+  { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: noImage, label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+Shift+D', visible: never },
+  { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: noImage, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
+  { group: GROUP_TOKENS, order: 60, key: 'copy-full-name', icon: noImage, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
 
   // 9000 — Hex editor. The entries live in hex-menu.ts, shared with the Edit menu, which shows the same
   // group (dnSpy registers them once, for whichever document has the focus).
@@ -343,17 +322,17 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
 
   // 14000 — Other (GROUP_CTX_DOCVIEWER_OTHER). Analyze takes a member of the workspace by its node, and a
   // member of a module the workspace does not hold by the reference itself.
-  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: fixedIcon(<ScanSearch {...iconProps} />), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
-  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: fixedIcon(<Globe {...iconProps} />), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
+  { group: GROUP_OTHER, order: 0, key: 'analyze', icon: image('Search'), label: (ctx) => ctx.t('Analyze'), shortcut: 'Ctrl+Shift+R', visible: (ctx) => (isMemberRef(ctx) && ctx.onAnalyze !== undefined) || (externalMemberTarget(ctx) !== undefined && ctx.onAnalyzeReference !== undefined), run: (ctx) => { const external = externalMemberTarget(ctx); if (ctx.referenceNode) ctx.onAnalyze?.(ctx.referenceNode); else if (external) ctx.onAnalyzeReference?.(external) } },
+  { group: GROUP_OTHER, order: 10, key: 'search-msdn', icon: image('Search'), label: (ctx) => ctx.t('Search MSDN'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.onOpenUrl !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.onOpenUrl?.(searchMsdnUrl(name)) } },
   // dnSpy's TextEditorCommand: the reference under the caret is a getter-only property or a method of a
   // strongly typed resources class, which the backend answered before the menu opened.
-  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Go to Resource'), visible: (ctx) => ctx.readsResource === true && ctx.referenceNode !== undefined && ctx.onGoToResource !== undefined, run: (ctx) => { if (ctx.referenceNode) ctx.onGoToResource?.(ctx.referenceNode) } },
+  { group: GROUP_OTHER, order: 20, key: 'go-to-resource', icon: noImage, label: (ctx) => ctx.t('Go to Resource'), visible: (ctx) => ctx.readsResource === true && ctx.referenceNode !== undefined && ctx.onGoToResource !== undefined, run: (ctx) => { if (ctx.referenceNode) ctx.onGoToResource?.(ctx.referenceNode) } },
 
   // 15000 — Editor (GROUP_CTX_DOCVIEWER_EDITOR). The document is read-only, so Cut and Paste have
   // nothing to do; Copy is still needed, since the menu replaces Monaco's own.
-  { group: GROUP_EDITOR, order: 0, key: 'copy', icon: fixedIcon(<Copy {...iconProps} />), label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: (ctx) => ctx.hasSelection && ctx.onCopy !== undefined, run: (ctx) => ctx.onCopy?.() },
-  { group: GROUP_EDITOR, order: 10, key: 'find', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: (ctx) => ctx.onFind !== undefined, run: (ctx) => ctx.onFind?.() },
-  { group: GROUP_EDITOR, order: 20, key: 'incremental-search', icon: fixedIcon(<Search {...iconProps} />), label: (ctx) => ctx.t('Incremental Search'), shortcut: 'Ctrl+I', visible: never },
+  { group: GROUP_EDITOR, order: 0, key: 'copy', icon: image('Copy'), label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: (ctx) => ctx.hasSelection && ctx.onCopy !== undefined, run: (ctx) => ctx.onCopy?.() },
+  { group: GROUP_EDITOR, order: 10, key: 'find', icon: image('Search'), label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: (ctx) => ctx.onFind !== undefined, run: (ctx) => ctx.onFind?.() },
+  { group: GROUP_EDITOR, order: 20, key: 'incremental-search', icon: image('Search'), label: (ctx) => ctx.t('Incremental Search'), shortcut: 'Ctrl+I', visible: never },
 ]
 
 /**

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 
 /**
  * Splits a command line the way a shell would, so `"a b" c` becomes two arguments. The upstream dialog
@@ -173,7 +173,7 @@ export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.
       <div ref={dialog} className="modal debug-program-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-program-title" onKeyDown={keepFocusInDialog}>
         <div className="modal-title">
           <span id="debug-program-title">{t('Debug Program')}</span>
-          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="debug-program-fields">
           <label htmlFor="debug-program-engine">{t('Debug Engine')}</label>

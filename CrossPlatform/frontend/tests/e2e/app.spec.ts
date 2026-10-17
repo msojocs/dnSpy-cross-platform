@@ -286,14 +286,19 @@ test.describe('the workspace shell', () => {
     await expect(page.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('menuitem', { name: 'View' }).click()
     await page.getByRole('menuitem', { name: /^Theme$/ }).hover()
-    await page.getByRole('menuitem', { name: 'High Contrast' }).click()
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'hc')
+    // ThemesMenu lists the high-contrast theme only while the system is in high contrast, which it is not here.
+    await expect(page.getByRole('menuitem', { name: 'High Contrast' })).toHaveCount(0)
+    await page.getByRole('menuitem', { name: 'Blue', exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'blue')
+    // The theme's resources are what the stylesheet draws with: the blue theme's tool windows are white.
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--wpf-EnvironmentToolWindow').trim())).toBe('#ffffff')
   })
 
   test('switches to Simplified Chinese and persists the language', async () => {
     await page.getByRole('menuitem', { name: 'View' }).click()
     await page.getByRole('menuitem', { name: 'Language' }).hover()
-    await page.getByRole('menuitem', { name: 'Simplified Chinese' }).click()
+    // The submenu names each language the way dnSpy does, by its native name.
+    await page.getByRole('menuitem', { name: '中文（中国）' }).click()
 
     await expect(page.getByRole('menuitem', { name: '文件' })).toBeVisible()
     await expect(page.getByText('就绪', { exact: true })).toBeVisible()
@@ -339,12 +344,12 @@ test.describe('the workspace shell', () => {
       color: getComputedStyle(token).color,
       fontWeight: getComputedStyle(token).fontWeight,
     })).filter((token) => token.text?.trim()))
-    expect(ilTokens.find((token) => token.text === '.method')?.color).toBe('rgb(86, 156, 214)')
-    expect(ilTokens.find((token) => token.text === 'IL_0000')?.color).toBe('rgb(215, 186, 125)')
-    expect(ilTokens.find((token) => token.text === 'ldarg.0')?.color).toBe('rgb(197, 134, 192)')
-    expect(ilTokens.find((token) => token.text === 'ldarg.0')?.fontWeight).toBe('700')
+    // dark.dntheme's IL colours: ILDirective, Label, OpCode, Type and the member colour.
+    expect(ilTokens.find((token) => token.text === '.method')?.color).toBe('rgb(153, 153, 255)')
+    expect(ilTokens.find((token) => token.text === 'IL_0000')?.color).toBe('rgb(128, 111, 77)')
+    expect(ilTokens.find((token) => token.text === 'ldarg.0')?.color).toBe('rgb(173, 92, 133)')
     expect(ilTokens.find((token) => token.text === 'System.Int32')?.color).toBe('rgb(78, 201, 176)')
-    expect(ilTokens.find((token) => token.text === '<ProtocolVersion>k__BackingField')?.color).toBe('rgb(220, 220, 170)')
+    expect(ilTokens.find((token) => token.text === '<ProtocolVersion>k__BackingField')?.color).toBe('rgb(255, 128, 0)')
     await page.screenshot({ path: 'test-results/dnspy-il-highlighting.png' })
 
     await page.getByLabel('Decompiler language').selectOption('ilWithCSharp')
@@ -2368,7 +2373,7 @@ test.describe('the code viewer context menu', () => {
 
     await page.getByRole('menuitem', { name: 'View' }).click()
     await page.getByRole('menuitem', { name: 'Language' }).hover()
-    await page.getByRole('menuitem', { name: 'Simplified Chinese' }).click()
+    await page.getByRole('menuitem', { name: '中文（中国）' }).click()
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
     // The same rows in dnSpy's Chinese wording, sorted again — by code unit, the way dnSpy's
     // OrdinalIgnoreCase does, so 实 (U+5B9E) comes before 扩 (U+6269) and both before 被 (U+88AB).

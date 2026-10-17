@@ -31,6 +31,8 @@ export interface FileMenuContext {
 interface FileEntry {
   group: number
   order: number
+  /** dnSpy's image for the entry, or none where its ExportMenuItem has no Icon. */
+  icon?: string
   label(ctx: FileMenuContext): string
   shortcut?: string
   /** dnSpy's IsVisible: the entry is left out of the menu altogether when this is false. */
@@ -73,31 +75,31 @@ export const recentFileLabel = (path: string): string =>
  */
 const FILE_ENTRIES: FileEntry[] = [
   // 0 — Save
-  { group: GROUP_SAVE, order: 0, label: (ctx) => ctx.t('Export to Project...'), enabled: () => false },
+  { group: GROUP_SAVE, order: 0, icon: 'Solution', label: (ctx) => ctx.t('Export to Project...'), enabled: () => false },
   // "Save" is ApplicationCommands.Save, which has no Header of its own: the header is the command's own
   // text, and its gesture is SaveKey (Ctrl+S).
-  { group: GROUP_SAVE, order: 10, label: (ctx) => ctx.t('Save'), shortcut: 'Ctrl+S', enabled: (ctx) => ctx.hasWorkspace && ctx.dirty, action: (ctx) => ctx.onSave() },
+  { group: GROUP_SAVE, order: 10, icon: 'Save', label: (ctx) => ctx.t('Save'), shortcut: 'Ctrl+S', enabled: (ctx) => ctx.hasWorkspace && ctx.dirty, action: (ctx) => ctx.onSave() },
   { group: GROUP_SAVE, order: 20, label: (ctx) => ctx.t('Save Module...'), enabled: (ctx) => ctx.hasModule, action: (ctx) => ctx.onSaveModule() },
-  { group: GROUP_SAVE, order: 30, label: (ctx) => ctx.t('Save All...'), shortcut: 'Ctrl+Shift+S', enabled: (ctx) => ctx.hasWorkspace && ctx.dirty, action: (ctx) => ctx.onSaveAll() },
+  { group: GROUP_SAVE, order: 30, icon: 'SaveAll', label: (ctx) => ctx.t('Save All...'), shortcut: 'Ctrl+Shift+S', enabled: (ctx) => ctx.hasWorkspace && ctx.dirty, action: (ctx) => ctx.onSaveAll() },
 
   // 1000 — Open and the commands that work on what is open
-  { group: GROUP_OPEN, order: 0, label: (ctx) => ctx.t('Open...'), shortcut: 'Ctrl+O', enabled: always, action: (ctx) => ctx.onOpen() },
-  { group: GROUP_OPEN, order: 10, label: (ctx) => ctx.t('Open from GAC...'), shortcut: 'Ctrl+Shift+O', enabled: always, action: (ctx) => ctx.onOpenFromGac() },
+  { group: GROUP_OPEN, order: 0, icon: 'OpenFolder', label: (ctx) => ctx.t('Open...'), shortcut: 'Ctrl+O', enabled: always, action: (ctx) => ctx.onOpen() },
+  { group: GROUP_OPEN, order: 10, icon: 'Library', label: (ctx) => ctx.t('Open from GAC...'), shortcut: 'Ctrl+Shift+O', enabled: always, action: (ctx) => ctx.onOpenFromGac() },
   { group: GROUP_OPEN, order: 20, label: (ctx) => ctx.t('Open List...'), enabled: always, action: (ctx) => ctx.onOpenList() },
   { group: GROUP_OPEN, order: 30, label: (ctx) => ctx.t('Recent Files'), enabled: (ctx) => ctx.recentFiles.length > 0, submenu: recentFiles },
   { group: GROUP_OPEN, order: 40, label: (ctx) => ctx.t('Reload All Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onReloadAll() },
   // Close All and Close Old In-Memory Modules share dnSpy's Order 50; the stable sort keeps this order.
-  { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close All'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAll() },
+  { group: GROUP_OPEN, order: 50, icon: 'CloseAll', label: (ctx) => ctx.t('Close All'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAll() },
   { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close Old In-Memory Modules'), enabled: () => false },
   { group: GROUP_OPEN, order: 55, label: (ctx) => ctx.t('Close All Framework Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllFramework() },
   { group: GROUP_OPEN, order: 60, label: (ctx) => ctx.t('Close All Missing Files'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllMissing() },
-  { group: GROUP_OPEN, order: 100, label: (ctx) => ctx.t('Sort Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSortAssemblies() },
+  { group: GROUP_OPEN, order: 100, icon: 'SortAscending', label: (ctx) => ctx.t('Sort Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSortAssemblies() },
 
   // 1000000 — Exit
   // dnSpy's RestartAsAdministratorCommand is visible only while the app is not already elevated,
   // and unlike the entries above it is never greyed: it is either there and clickable, or gone.
   { group: GROUP_EXIT, order: 900000, label: (ctx) => ctx.t('Restart as Administrator'), visible: (ctx) => !ctx.elevated, enabled: always, action: (ctx) => ctx.onRestartAsAdministrator() },
-  { group: GROUP_EXIT, order: 1000000, label: (ctx) => ctx.t('Exit'), shortcut: 'Alt+F4', enabled: always, action: (ctx) => ctx.onQuit() },
+  { group: GROUP_EXIT, order: 1000000, icon: 'CloseSolution', label: (ctx) => ctx.t('Exit'), shortcut: 'Alt+F4', enabled: always, action: (ctx) => ctx.onQuit() },
 ]
 
 export const buildFileMenu = (ctx: FileMenuContext): MenuItem[] => {
@@ -126,6 +128,7 @@ export const buildFileMenu = (ctx: FileMenuContext): MenuItem[] => {
       items.push({
         label: entry.label(ctx),
         shortcut: entry.shortcut,
+        icon: entry.icon,
         disabled: submenu ? entry.enabled?.(ctx) === false : action ? entry.enabled?.(ctx) === false : true,
         submenu,
         action: action ? () => action(ctx) : undefined,

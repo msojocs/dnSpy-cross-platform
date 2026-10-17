@@ -1,6 +1,6 @@
 import * as monaco from 'monaco-editor/editor/editor.api'
 import { describe, expect, it } from 'vitest'
-import { ilLanguage, ilLanguageConfiguration, ilThemeRules } from './il-language'
+import { ilLanguage, ilLanguageConfiguration } from './il-language'
 
 describe('IL Monaco language', () => {
   it('recognizes representative CIL opcodes and editor pairs', () => {
@@ -10,7 +10,6 @@ describe('IL Monaco language', () => {
     expect(ilLanguage.directives).toEqual(expect.arrayContaining(['.class', '.maxstack', '.method']))
     expect(ilLanguageConfiguration.comments).toEqual({ lineComment: '//', blockComment: ['/*', '*/'] })
     expect(ilLanguageConfiguration.brackets).toContainEqual(['{', '}'])
-    expect(ilThemeRules.dark).toContainEqual(expect.objectContaining({ token: 'keyword.opcode.il' }))
   })
 
   it('tokenizes directives, offsets, opcodes, modifiers and types', () => {

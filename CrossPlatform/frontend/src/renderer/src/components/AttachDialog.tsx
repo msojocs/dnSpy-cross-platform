@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, X } from 'lucide-react'
 import type { DebugProcess } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
+import { DsIcon } from './DsIcon'
 
 export const AttachDialog = ({ onClose }: { onClose(): void }): React.JSX.Element => {
   const [processes, setProcesses] = useState<DebugProcess[]>([])
@@ -24,8 +25,8 @@ export const AttachDialog = ({ onClose }: { onClose(): void }): React.JSX.Elemen
   return (
     <div className="modal-backdrop">
       <div className="modal attach-dialog" role="dialog" aria-modal="true" aria-labelledby="attach-title">
-        <div className="modal-title"><span id="attach-title">{t('Attach to Process')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
-        <div className="attach-filter"><input autoFocus aria-label={t('Filter processes')} placeholder={t('Filter')} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="icon-button" title={t('Refresh')} aria-label={t('Refresh')} onClick={refresh}><RefreshCw className={loading ? 'spin' : ''} size={14} /></button></div>
+        <div className="modal-title"><span id="attach-title">{t('Attach to Process')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
+        <div className="attach-filter"><input autoFocus aria-label={t('Filter processes')} placeholder={t('Filter')} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="icon-button" title={t('Refresh')} aria-label={t('Refresh')} onClick={refresh}><DsIcon name="Refresh" className={loading ? 'spin' : undefined} /></button></div>
         <div className="process-list" role="list">
           {filtered.map((process) => (
             <button key={process.processId} className={`process-row${selectedProcessId === process.processId ? ' selected' : ''}`} onClick={() => setSelectedProcessId(process.processId)} onDoubleClick={() => void attachDebug(process.processId).then(onClose)}>

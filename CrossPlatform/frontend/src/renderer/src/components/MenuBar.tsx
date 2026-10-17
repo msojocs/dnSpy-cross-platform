@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronRight } from 'lucide-react'
-import { useLanguage, type LanguagePreference } from '../localization'
+import { languageChoices, useLanguage, type LanguagePreference } from '../localization'
 import { buildEditMenu, type ActiveDocument, type CreatedKind, type HexShowKind, type MenuItem } from './edit-menu'
 import { buildFileMenu } from './file-menu'
 import type { HexBodyKind } from '../app-store'
 import type { HexRange, HexTargetResponse } from '../../../shared/protocol'
 import { WindowControls } from './WindowControls'
+import { MenuEntryIcon } from './DsIcon'
+import { SubmenuArrowGlyph } from './DsGlyphs'
+import { themeKey, themeMenuName, useThemes } from '../theme-service'
 
-export type ThemeName = 'blue' | 'light' | 'dark' | 'hc'
+/** A theme by the key the theme service gives it (theme-service.ts). */
+export type ThemeName = string
 
 const repositoryUrl = 'https://github.com/msojocs/dnSpy'
 
@@ -179,12 +182,6 @@ interface MenuBarProps {
   onShowOptions(category?: 'environment' | 'decompiler' | 'debugger'): void
 }
 
-const languageOptions: { value: LanguagePreference; label: string }[] = [
-  { value: 'system', label: 'System Default' },
-  { value: 'en', label: 'English' },
-  { value: 'zh-CN', label: 'Simplified Chinese' },
-]
-
 export const MenuBar = ({
   hasWorkspace,
   hasModule,
@@ -338,6 +335,7 @@ export const MenuBar = ({
   const [openMenu, setOpenMenu] = useState<string>()
   const host = useRef<HTMLDivElement>(null)
   const { language, t } = useLanguage()
+  const { visible: visibleThemes } = useThemes()
   const isDebugging = debugState !== 'inactive'
   // dnSpy's GetEnableAllBookmarksKind: an empty list gets no entry at all, every bookmark on gets
   // "Disable All", and one bookmark off is enough for "Enable All". Those first two kinds are what
@@ -348,10 +346,10 @@ export const MenuBar = ({
   // the menu and only become disabled when their action is unavailable.
   const windowTabGroupItems: MenuItem[] = [
     ...(canNewHorizontalTabGroup ? [
-      { label: t('New Horizontal Tab Group'), action: onNewHorizontalTabGroup },
+      { label: t('New Horizontal Tab Group'), icon: 'SplitScreenHorizontally', action: onNewHorizontalTabGroup },
     ] : []),
     ...(canNewVerticalTabGroup ? [
-      { label: t('New Vertical Tab Group'), action: onNewVerticalTabGroup },
+      { label: t('New Vertical Tab Group'), icon: 'SplitScreenVertically', action: onNewVerticalTabGroup },
     ] : []),
     ...(canMoveToNextTabGroup ? [{ label: t('Move to Next Tab Group'), action: onMoveToNextTabGroup }] : []),
     ...(canMoveAllToNextTabGroup ? [
@@ -367,7 +365,7 @@ export const MenuBar = ({
   // split and move command is gone — and is controlled by IsEnabled alone.
   const windowTabGroupItemsWithCloseAll: MenuItem[] = [
     ...windowTabGroupItems,
-    { label: t('Close All Tabs'), disabled: !canCloseAllTabs, action: onCloseAllTabs },
+    { label: t('Close All Tabs'), icon: 'CloseDocumentGroup', disabled: !canCloseAllTabs, action: onCloseAllTabs },
   ]
   const windowTabGroupCloseItems: MenuItem[] = [
     ...(canCloseTabGroup ? [{ label: t('Close Tab Group'), action: onCloseTabGroup }] : []),
@@ -377,8 +375,8 @@ export const MenuBar = ({
     ...(canMergeAllTabGroups ? [{ label: t('Merge All Tab Groups'), action: onMergeAllTabGroups }] : []),
   ]
   const windowTabGroupOrientationItems: MenuItem[] = [
-    ...(canUseVerticalTabGroups ? [{ label: t('Use Vertical Tab Groups'), action: onUseVerticalTabGroups }] : []),
-    ...(canUseHorizontalTabGroups ? [{ label: t('Use Horizontal Tab Groups'), action: onUseHorizontalTabGroups }] : []),
+    ...(canUseVerticalTabGroups ? [{ label: t('Use Vertical Tab Groups'), icon: 'SplitScreenVertically', action: onUseVerticalTabGroups }] : []),
+    ...(canUseHorizontalTabGroups ? [{ label: t('Use Horizontal Tab Groups'), icon: 'SplitScreenHorizontally', action: onUseHorizontalTabGroups }] : []),
   ]
   // WPF shows up to 10 tabs directly in the Window menu, numbered 1 through 10, followed by a
   // "Windows..." entry that opens a dialog with all tabs. Match WPF's limit and structure.
@@ -391,6 +389,8 @@ export const MenuBar = ({
   if (windowTabs.length > 0) {
     windowTabItems.push({ label: t('Windows...'), action: () => onShowWindowsDialog?.() })
   }
+  // Every entry wears the image its ExportMenuItem names (Icon = DsImagesAttribute.X) and an entry dnSpy
+  // gives none to stays blank; a checked entry draws the check mark in the same column instead.
   const menus: Record<string, MenuItem[]> = {
     // dnSpy's File menu in full: see file-menu.ts for the ordering and the disabled entries.
     [t('File')]: buildFileMenu({
@@ -450,113 +450,116 @@ export const MenuBar = ({
       onEditNode,
     }),
     [t('View')]: [
-      { label: t('Word Wrap'), shortcut: 'Ctrl+E, Ctrl+W', checked: wordWrap, action: onToggleWordWrap },
+      { label: t('Word Wrap'), icon: 'WordWrap', shortcut: 'Ctrl+E, Ctrl+W', checked: wordWrap, action: onToggleWordWrap },
       { label: t('Highlight Current Line'), checked: highlightCurrentLine, action: onToggleHighlightCurrentLine },
-      { label: t('Full Screen'), shortcut: 'Shift+Alt+Enter', checked: fullScreen, action: onToggleFullScreen },
-      { label: t('Collapse Tree View Nodes'), shortcut: 'Ctrl+Shift+P', action: onCollapseTreeViewNodes },
+      { label: t('Full Screen'), icon: 'AutoSizeOptimize', shortcut: 'Shift+Alt+Enter', checked: fullScreen, action: onToggleFullScreen },
+      { label: t('Collapse Tree View Nodes'), icon: 'OneLevelUp', shortcut: 'Ctrl+Shift+P', action: onCollapseTreeViewNodes },
       {
         label: t('Theme'),
-        submenu: [
-          { label: t('Blue'), checked: theme === 'blue', action: () => onTheme('blue') },
-          { label: t('Dark'), checked: theme === 'dark', action: () => onTheme('dark') },
-          { label: t('Light'), checked: theme === 'light', action: () => onTheme('light') },
-          { label: t('High Contrast'), checked: theme === 'hc', action: () => onTheme('hc') },
-        ],
+        // dnSpy's ThemesMenu: every theme the theme service shows, in its order, the one in use checked.
+        submenu: visibleThemes.map((item) => ({
+          label: themeMenuName(item, t),
+          checked: themeKey(item) === theme,
+          action: () => onTheme(themeKey(item)),
+        })),
       },
       {
         label: t('Language'),
-        submenu: languageOptions.map((option) => ({
-          label: t(option.label),
+        // dnSpy's ShowSupportedLanguagesCommand: "System" and then the languages by their native names.
+        submenu: languageChoices().map((option) => ({
+          label: option.label,
           checked: language === option.value,
           action: () => onSetLanguage(option.value),
         })),
       },
       { separator: true },
-      { label: t('Code'), shortcut: 'Ctrl+Alt+0', disabled: !canShowCode, action: onShowCode },
-      { label: t('Assembly Explorer'), shortcut: 'Ctrl+Alt+L', checked: visibleToolWindows.has('explorer'), action: onShowExplorer },
-      { label: t('Output'), shortcut: 'Alt+2', checked: visibleToolWindows.has('output'), action: onShowOutput },
-      { label: t('C# Interactive'), shortcut: 'Ctrl+Alt+N', checked: visibleToolWindows.has('csharp-interactive'), action: onShowCSharpInteractive },
+      { label: t('Code'), icon: 'MarkupTag', shortcut: 'Ctrl+Alt+0', disabled: !canShowCode, action: onShowCode },
+      { label: t('Assembly Explorer'), icon: 'Assembly', shortcut: 'Ctrl+Alt+L', checked: visibleToolWindows.has('explorer'), action: onShowExplorer },
+      { label: t('Output'), icon: 'Output', shortcut: 'Alt+2', checked: visibleToolWindows.has('output'), action: onShowOutput },
+      { label: t('C# Interactive'), icon: 'CSInteractiveWindow', shortcut: 'Ctrl+Alt+N', checked: visibleToolWindows.has('csharp-interactive'), action: onShowCSharpInteractive },
       {
         // dnSpy's bookmark commands, in the order its View menu group and sort orders give them: the
         // window, the commands, then the labelled and in-document walks. Enable/Disable All is a single
         // entry whose header follows the bookmarks around it, which is how dnSpy writes it.
         label: t('Bookmarks'),
+        icon: 'BookmarkMainMenuItem',
         submenu: [
-          { label: t('Bookmarks Window'), shortcut: 'Ctrl+K, Ctrl+W', checked: visibleToolWindows.has('bookmarks'), action: onShowBookmarks },
+          { label: t('Bookmarks Window'), icon: 'BookmarkMainMenuItem', shortcut: 'Ctrl+K, Ctrl+W', checked: visibleToolWindows.has('bookmarks'), action: onShowBookmarks },
           { separator: true },
-          { label: t('Toggle Bookmark'), shortcut: 'Ctrl+K, Ctrl+K', action: onToggleBookmark },
+          { label: t('Toggle Bookmark'), icon: 'Bookmark', shortcut: 'Ctrl+K, Ctrl+K', action: onToggleBookmark },
           ...(bookmarksCount > 0 ? [{
             label: t(allBookmarksEnabled ? 'Disable All Bookmarks' : 'Enable All Bookmarks'),
+            icon: 'BookmarkDisabled',
             action: allBookmarksEnabled ? onDisableAllBookmarks : onEnableAllBookmarks,
           }] : []),
-          { label: t('Enable/Disable Bookmark'), shortcut: 'Ctrl+K, Ctrl+E', action: onEnableBookmark },
-          { label: t('Previous Bookmark'), shortcut: 'Ctrl+K, Ctrl+P', disabled: bookmarksCount === 0, action: onPreviousBookmark },
-          { label: t('Next Bookmark'), shortcut: 'Ctrl+K, Ctrl+N', disabled: bookmarksCount === 0, action: onNextBookmark },
-          { label: t('Clear Bookmarks'), shortcut: 'Ctrl+K, Ctrl+L', disabled: bookmarksCount === 0, action: onClearBookmarks },
+          { label: t('Enable/Disable Bookmark'), icon: 'Bookmark', shortcut: 'Ctrl+K, Ctrl+E', action: onEnableBookmark },
+          { label: t('Previous Bookmark'), icon: 'PreviousBookmark', shortcut: 'Ctrl+K, Ctrl+P', disabled: bookmarksCount === 0, action: onPreviousBookmark },
+          { label: t('Next Bookmark'), icon: 'NextBookmark', shortcut: 'Ctrl+K, Ctrl+N', disabled: bookmarksCount === 0, action: onNextBookmark },
+          { label: t('Clear Bookmarks'), icon: 'ClearBookmark', shortcut: 'Ctrl+K, Ctrl+L', disabled: bookmarksCount === 0, action: onClearBookmarks },
           { separator: true },
-          { label: t('Previous Bookmark With Same Label'), disabled: bookmarksCount === 0, action: onPreviousBookmarkWithSameLabel },
-          { label: t('Next Bookmark With Same Label'), disabled: bookmarksCount === 0, action: onNextBookmarkWithSameLabel },
+          { label: t('Previous Bookmark With Same Label'), icon: 'PreviousBookmarkInFolder', disabled: bookmarksCount === 0, action: onPreviousBookmarkWithSameLabel },
+          { label: t('Next Bookmark With Same Label'), icon: 'NextBookmarkInFolder', disabled: bookmarksCount === 0, action: onNextBookmarkWithSameLabel },
           { separator: true },
-          { label: t('Previous Bookmark In Document'), disabled: bookmarksCount === 0, action: onPreviousBookmarkInDocument },
-          { label: t('Next Bookmark In Document'), disabled: bookmarksCount === 0, action: onNextBookmarkInDocument },
+          { label: t('Previous Bookmark In Document'), icon: 'PreviousBookmarkInFile', disabled: bookmarksCount === 0, action: onPreviousBookmarkInDocument },
+          { label: t('Next Bookmark In Document'), icon: 'NextBookmarkInFile', disabled: bookmarksCount === 0, action: onNextBookmarkInDocument },
           { label: t('Clear All Bookmarks In Document'), disabled: bookmarksCount === 0, action: onClearBookmarksInDocument },
         ],
       },
       { separator: true },
-      { label: t('Options...'), action: () => onShowOptions('environment') },
+      { label: t('Options...'), icon: 'Settings', action: () => onShowOptions('environment') },
     ],
     [t('Debug')]: [
       {
         label: t('Window'),
         submenu: [
-          { label: t('Breakpoints'), shortcut: 'Ctrl+Alt+B', checked: visibleToolWindows.has('breakpoints'), action: onShowBreakpoints },
-          { label: t('Module Breakpoints'), checked: visibleToolWindows.has('module-breakpoints'), action: onShowModuleBreakpoints },
-          { label: t('Exception Settings'), shortcut: 'Ctrl+Alt+E', checked: visibleToolWindows.has('exception-settings'), action: onShowExceptionSettings },
-          { label: t('Output'), shortcut: 'Alt+2', checked: visibleToolWindows.has('output'), action: onShowOutput },
+          { label: t('Breakpoints'), icon: 'BreakpointsWindow', shortcut: 'Ctrl+Alt+B', checked: visibleToolWindows.has('breakpoints'), action: onShowBreakpoints },
+          { label: t('Module Breakpoints'), icon: 'ModulePublic', checked: visibleToolWindows.has('module-breakpoints'), action: onShowModuleBreakpoints },
+          { label: t('Exception Settings'), icon: 'ExceptionSettings', shortcut: 'Ctrl+Alt+E', checked: visibleToolWindows.has('exception-settings'), action: onShowExceptionSettings },
+          { label: t('Output'), icon: 'Output', shortcut: 'Alt+2', checked: visibleToolWindows.has('output'), action: onShowOutput },
           ...(isDebugging ? [
             { separator: true },
-            { label: t('Watch 1'), checked: visibleToolWindows.has('watch'), action: onShowWatch },
-            { label: t('Autos'), shortcut: 'Ctrl+Alt+V, A', checked: visibleToolWindows.has('autos'), action: onShowAutos },
-            { label: t('Locals'), shortcut: 'Alt+4', checked: visibleToolWindows.has('locals'), action: onShowLocals },
-            { label: t('Static Fields'), checked: visibleToolWindows.has('static-fields'), action: onShowStaticFields },
+            { label: t('Watch 1'), icon: 'FileSystemWatcher', checked: visibleToolWindows.has('watch'), action: onShowWatch },
+            { label: t('Autos'), icon: 'AutosWindow', shortcut: 'Ctrl+Alt+V, A', checked: visibleToolWindows.has('autos'), action: onShowAutos },
+            { label: t('Locals'), icon: 'LocalsWindow', shortcut: 'Alt+4', checked: visibleToolWindows.has('locals'), action: onShowLocals },
+            { label: t('Static Fields'), icon: 'FieldShortcut', checked: visibleToolWindows.has('static-fields'), action: onShowStaticFields },
             { separator: true },
-            { label: t('Call Stack'), shortcut: 'Ctrl+Alt+C', checked: visibleToolWindows.has('callstack'), action: onShowCallStack },
-            { label: t('Threads'), shortcut: 'Ctrl+Alt+H', checked: visibleToolWindows.has('threads'), action: onShowThreads },
-            { label: t('Modules'), shortcut: 'Ctrl+Alt+U', checked: visibleToolWindows.has('modules'), action: onShowModules },
-            { label: t('Processes'), shortcut: 'Ctrl+Alt+Z', checked: visibleToolWindows.has('processes'), action: onShowProcesses },
+            { label: t('Call Stack'), icon: 'CallStackWindow', shortcut: 'Ctrl+Alt+C', checked: visibleToolWindows.has('callstack'), action: onShowCallStack },
+            { label: t('Threads'), icon: 'Thread', shortcut: 'Ctrl+Alt+H', checked: visibleToolWindows.has('threads'), action: onShowThreads },
+            { label: t('Modules'), icon: 'ModulesWindow', shortcut: 'Ctrl+Alt+U', checked: visibleToolWindows.has('modules'), action: onShowModules },
+            { label: t('Processes'), icon: 'Process', shortcut: 'Ctrl+Alt+Z', checked: visibleToolWindows.has('processes'), action: onShowProcesses },
             { separator: true },
-            { label: t('Memory'), checked: visibleToolWindows.has('memory'), action: onShowMemory },
-            { label: t('Disassembly'), shortcut: 'Alt+8', checked: visibleToolWindows.has('disassembly'), action: onShowDisassembly },
+            { label: t('Memory'), icon: 'MemoryWindow', checked: visibleToolWindows.has('memory'), action: onShowMemory },
+            { label: t('Disassembly'), icon: 'DisassemblyWindow', shortcut: 'Alt+8', checked: visibleToolWindows.has('disassembly'), action: onShowDisassembly },
           ] : []),
         ],
       },
       { separator: true },
-      { label: debugState === 'stopped' ? t('Continue') : t('Start Debugging...'), shortcut: 'F5', disabled: !debugAvailable || (debugState !== 'inactive' && debugState !== 'stopped'), action: debugState === 'stopped' ? onContinueDebug : onStartDebug },
-      { label: t('Attach to Process...'), disabled: !debugAvailable || debugState !== 'inactive', action: onAttachDebug },
+      { label: debugState === 'stopped' ? t('Continue') : t('Start Debugging...'), icon: 'Run', shortcut: 'F5', disabled: !debugAvailable || (debugState !== 'inactive' && debugState !== 'stopped'), action: debugState === 'stopped' ? onContinueDebug : onStartDebug },
+      { label: t('Attach to Process...'), icon: 'Process', disabled: !debugAvailable || debugState !== 'inactive', action: onAttachDebug },
       ...(isDebugging ? [
         { separator: true },
-        { label: t('Pause'), disabled: debugState !== 'running', action: onPauseDebug },
-        { label: t('Step Into'), shortcut: 'F11', disabled: debugState !== 'stopped', action: onStepIn },
-        { label: t('Step Over'), shortcut: 'F10', disabled: debugState !== 'stopped', action: onStepOver },
-        { label: t('Step Out'), shortcut: 'Shift+F11', disabled: debugState !== 'stopped', action: onStepOut },
-        { label: t('Stop Debugging'), shortcut: 'Shift+F5', disabled: false, action: onStopDebug },
+        { label: t('Pause'), icon: 'Pause', disabled: debugState !== 'running', action: onPauseDebug },
+        { label: t('Step Into'), icon: 'StepInto', shortcut: 'F11', disabled: debugState !== 'stopped', action: onStepIn },
+        { label: t('Step Over'), icon: 'StepOver', shortcut: 'F10', disabled: debugState !== 'stopped', action: onStepOver },
+        { label: t('Step Out'), icon: 'StepOut', shortcut: 'Shift+F11', disabled: debugState !== 'stopped', action: onStepOut },
+        { label: t('Stop Debugging'), icon: 'Stop', shortcut: 'Shift+F5', disabled: false, action: onStopDebug },
       ] : []),
       { separator: true },
       { label: t('Toggle Breakpoint'), shortcut: 'F9', disabled: !canToggleBreakpoint, action: onToggleBreakpoint },
       ...(hasFunctionBreakpoints ? [
-        { label: t('Delete All Breakpoints'), shortcut: 'Ctrl+Shift+F9', action: onDeleteAllBreakpoints },
+        { label: t('Delete All Breakpoints'), icon: 'ClearBreakpointGroup', shortcut: 'Ctrl+Shift+F9', action: onDeleteAllBreakpoints },
       ] : []),
       ...(canEnableAllBreakpoints ? [
-        { label: t('Enable All Breakpoints'), action: onEnableAllBreakpoints },
+        { label: t('Enable All Breakpoints'), icon: 'EnableAllBreakpoints', action: onEnableAllBreakpoints },
       ] : []),
       ...(canDisableAllBreakpoints ? [
-        { label: t('Disable All Breakpoints'), action: onDisableAllBreakpoints },
+        { label: t('Disable All Breakpoints'), icon: 'DisableAllBreakpoints', action: onDisableAllBreakpoints },
       ] : []),
       { separator: true },
-      { label: t('Options...'), action: () => onShowOptions('debugger') },
+      { label: t('Options...'), icon: 'Settings', action: () => onShowOptions('debugger') },
     ],
     [t('Window')]: [
-      { label: t('New Window'), shortcut: 'Ctrl+N', disabled: !canNewWindow, action: onNewWindow },
+      { label: t('New Window'), icon: 'NewWindow', shortcut: 'Ctrl+N', disabled: !canNewWindow, action: onNewWindow },
       { label: t('Close'), shortcut: 'Ctrl+F4', disabled: !canCloseWindow, action: onCloseWindow },
       // Close All Tabs keeps its group non-empty, so this separator is unconditional like WPF's.
       { separator: true },
@@ -681,9 +684,9 @@ const MenuPopup = ({ items, onClose, depth = 0 }: { items: MenuItem[]; onClose: 
                 disabled={item.disabled}
                 onClick={() => setOpenIndex(openIndex === index ? undefined : index)}
               >
-                <span className="menu-check" />
+                <span className="menu-check"><MenuEntryIcon name={item.icon} checked={item.checked} /></span>
                 <span>{item.label}</span>
-                <span className="menu-shortcut"><ChevronRight size={12} /></span>
+                <span className="menu-shortcut menu-submenu-arrow"><SubmenuArrowGlyph /></span>
               </button>
               {openIndex === index && item.submenu.length > 0 && (
                 <MenuPopup items={item.submenu} onClose={onClose} depth={depth + 1} />
@@ -701,7 +704,7 @@ const MenuPopup = ({ items, onClose, depth = 0 }: { items: MenuItem[]; onClose: 
             onPointerEnter={() => setOpenIndex(undefined)}
             onClick={() => { onClose(); item.action?.() }}
           >
-            <span className="menu-check">{item.checked && <Check size={13} />}</span>
+            <span className="menu-check"><MenuEntryIcon name={item.icon} checked={item.checked} /></span>
             <span>{item.label}</span>
             <span className="menu-shortcut">{item.shortcut}</span>
           </button>

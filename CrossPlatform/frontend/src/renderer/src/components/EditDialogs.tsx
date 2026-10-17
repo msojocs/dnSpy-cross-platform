@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Plus, Save, Trash2, X } from 'lucide-react'
 import type { IlInstruction, MethodBodyResponse, TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
+import { DsIcon } from './DsIcon'
 
 interface RenameDialogProps {
   node: TreeNode
@@ -22,7 +23,7 @@ export const RenameDialog = ({ node, onClose }: RenameDialogProps): React.JSX.El
         event.preventDefault()
         void renameNode(node, name).then((renamed) => { if (renamed) onClose() })
       }}>
-        <div className="modal-title"><span id="rename-title">{t('Rename')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="rename-title">{t('Rename')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="modal-content">
           <label>{t('Name')}<input ref={input} value={name} onChange={(event) => setName(event.target.value)} /></label>
         </div>
@@ -56,7 +57,7 @@ export const RenameNamespaceDialog = ({ node, onClose }: RenameDialogProps): Rea
         }
         void renameNamespace(node, name).then((renamed) => { if (renamed) onClose() })
       }}>
-        <div className="modal-title"><span id="rename-namespace-title">{t('Edit Namespace')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="rename-namespace-title">{t('Edit Namespace')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="modal-content">
           <label>{t('Name')}<input ref={input} value={name} onChange={(event) => setName(event.target.value)} /></label>
         </div>
@@ -98,7 +99,7 @@ export const GoToTokenDialog = ({ node, onClose }: GoToTokenDialogProps): React.
           else setError(t('The token {token} does not name a row in {module}.', { token: token.trim(), module: node.label }))
         }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
       }}>
-        <div className="modal-title"><span id="go-to-token-title">{t('Go to Token')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="go-to-token-title">{t('Go to Token')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="modal-content">
           <label>{t('Token')}<input ref={input} aria-label={t('Token')} placeholder="0x06000001" value={token} onChange={(event) => { setToken(event.target.value); setError(undefined) }} /></label>
           {error && <div className="modal-error">{error}</div>}
@@ -162,7 +163,7 @@ export const MethodBodyEditor = ({ node, onClose }: MethodBodyEditorProps): Reac
   return (
     <div className="modal-backdrop">
       <div className="modal il-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="il-editor-title">
-        <div className="modal-title"><span id="il-editor-title">{t('Edit IL · {name}', { name: node.label })}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="il-editor-title">{t('Edit IL · {name}', { name: node.label })}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="il-editor-options">
           <label>{t('Max stack')} <input type="number" min="0" max="65535" value={body?.maxStack ?? 0} onChange={(event) => setBody((current) => current ? { ...current, maxStack: Number(event.target.value) } : current)} /></label>
           <label><input type="checkbox" checked={body?.initLocals ?? false} onChange={(event) => setBody((current) => current ? { ...current, initLocals: event.target.checked } : current)} /> {t('Initialize locals')}</label>
@@ -178,16 +179,17 @@ export const MethodBodyEditor = ({ node, onClose }: MethodBodyEditorProps): Reac
                 <option value="">{t('None')}</option><option value="number">{t('Number')}</option><option value="string">{t('String')}</option><option value="branch">{t('Branch')}</option><option value="switch">{t('Switch')}</option><option value="local">{t('Local')}</option><option value="argument">{t('Argument')}</option><option value="token">{t('Token')}</option>
               </select>
               <input aria-label={t('Operand {index}', { index })} value={instruction.operand ?? ''} title={instruction.operandDisplay} onChange={(event) => updateInstruction(index, { operand: event.target.value })} />
-              <button type="button" className="icon-button" title={t('Delete instruction')} aria-label={t('Delete instruction {index}', { index })} onClick={() => setBody((current) => current ? { ...current, instructions: current.instructions.filter((_, instructionIndex) => instructionIndex !== index) } : current)}><Trash2 size={14} /></button>
+              {/* ListBoxHelperBase's Remove wears DsImages.Cancel; its Append New and the dialog's buttons have no image. */}
+              <button type="button" className="icon-button" title={t('Delete instruction')} aria-label={t('Delete instruction {index}', { index })} onClick={() => setBody((current) => current ? { ...current, instructions: current.instructions.filter((_, instructionIndex) => instructionIndex !== index) } : current)}><DsIcon name="Cancel" /></button>
             </div>
           ))}
         </div>
         {error && <div className="modal-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" onClick={() => setBody((current) => current ? { ...current, instructions: [...current.instructions, { label: `L${current.instructions.length}`, opCode: 'nop' }] } : current)}><Plus size={14} /> {t('Add')}</button>
+          <button type="button" onClick={() => setBody((current) => current ? { ...current, instructions: [...current.instructions, { label: `L${current.instructions.length}`, opCode: 'nop' }] } : current)}>{t('Add')}</button>
           <span className="modal-action-spacer" />
           <button type="button" onClick={onClose}>{t('Cancel')}</button>
-          <button type="button" className="primary" disabled={!body || saving || (body.hasExceptionHandlers && !clearHandlers)} onClick={() => void save()}><Save size={14} /> {t('Apply')}</button>
+          <button type="button" className="primary" disabled={!body || saving || (body.hasExceptionHandlers && !clearHandlers)} onClick={() => void save()}>{t('Apply')}</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import Editor from './CodeEditor'
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, LoaderCircle } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
@@ -11,7 +11,8 @@ import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '..
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
-import { useAppOptions } from './app-options'
+import { useCategoryFont } from '../fonts'
+import { DsIcon } from './DsIcon'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
 import type { CreatedKind, HexShowKind } from './edit-menu'
 
@@ -425,9 +426,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
           ? 'xml'
           : 'csharp'
   const editorTheme = monacoThemeName(theme, transparentBackground)
-  const font = useAppOptions().environmentFont
-  const editorFontFamily = `'${font.fontFamily}', 'JetBrains Mono', monospace`
-  const editorFontSize = font.fontSize
+  // The Text Editor category of Environment › Font, in the theme in use.
+  const { fontFamily: editorFontFamily, fontSize: editorFontSize } = useCategoryFont('textEditor')
 
   return (
     <div className="document-view" data-reference-count={document.spans.filter(isNavigableSpan).length}>
@@ -435,7 +435,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
         {!['csharp', 'visual-basic', 'il'].includes(document.language) && <span className="document-language-label">{document.language === 'xml' ? 'XAML/XML' : document.language}</span>}
         {document.diagnostics.length > 0 && (
           <span className="document-diagnostic" title={document.diagnostics.map((diagnostic) => diagnostic.message).join('\n')}>
-            <AlertTriangle size={14} /> {document.diagnostics.length}
+            {/* The port's own count of the decompiler's warnings, in dnSpy's StatusWarning image. */}
+            <DsIcon name="StatusWarning" /> {document.diagnostics.length}
           </span>
         )}
       </div>

@@ -1276,7 +1276,8 @@ export interface ScriptEvaluateResponse {
   entries: ScriptOutputEntry[]
 }
 
-export type UiLocale = 'en' | 'zh-CN'
+/** The user interface languages: English and the cultures dnSpy ships a `*.Resources.<culture>.resx` for. */
+export type UiLocale = 'cs' | 'de' | 'en' | 'es-ES' | 'fa' | 'fr' | 'hu' | 'it' | 'pt-BR' | 'pt-PT' | 'ru' | 'tr' | 'uk' | 'vi' | 'zh-CN'
 
 /** dnSpy's AppCommandLineArgs, parsed the way it parses them. A second instance forwards its own to the first. */
 export interface AppCommandLine {
@@ -1343,8 +1344,18 @@ export interface BackgroundImageData {
   dataUrl: string
 }
 
+/** A `.dntheme` file of one of the Themes directories dnSpy reads its themes from, and where it was found. */
+export interface ThemeFile {
+  path: string
+  text: string
+}
+
 export interface DnSpyApi {
   openAssemblies(): Promise<string[]>
+  /** The `.dntheme` files of the Themes directories — next to the executable, then the user's — read before
+   * the first paint, so a theme of the user's is on the window from the start, the way dnSpy loads them before
+   * its window opens. Absent outside Electron. */
+  themeFiles?: ThemeFile[]
   getStartupOptions(): Promise<StartupOptions>
   /** Narrows a remembered path list to the files still on disk. Used before restoring a session, where
    * one file that has since been deleted would otherwise fail the whole open. */
@@ -1577,6 +1588,8 @@ export interface DnSpyApi {
   getBackendStatus(): Promise<BackendStatus>
   getProcessId(): Promise<number>
   setLocale(locale: UiLocale): Promise<void>
+  /** The font families installed on the machine, for when the renderer cannot list them itself. */
+  listSystemFonts?(): Promise<string[]>
   /** Hands the main process the option values it keeps in a file of its own, for the next start to read. */
   updateMainSettings(settings: AppMainSettings): Promise<void>
   onWindowMaximizedChange(callback: (isMaximized: boolean) => void): () => void

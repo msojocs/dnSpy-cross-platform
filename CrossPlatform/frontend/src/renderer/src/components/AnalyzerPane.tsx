@@ -1,5 +1,5 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, LoaderCircle, Search } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import type { AnalyzerSource } from '../../../shared/protocol'
 import { analyzerCopyText, composeAnalyzerParts, composeAnalyzerText, findReferenceCaret, flattenAnalyzerTree, type AnalyzerLine, type AnalyzerRow } from '../analyzer-model'
 import { useAnalyzerStore } from '../analyzer-store'
@@ -8,6 +8,7 @@ import { useLanguage } from '../localization'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './app-options'
 import { iconFamily, NodeIcon } from './AssemblyExplorer'
 import { ColoredText } from './ColoredText'
+import { TreeExpanderGlyph } from './DsGlyphs'
 import { showAnalyzerContextMenu, type AnalyzerMenuContext } from './AnalyzerContextMenu'
 
 /** What the analyzer needs from the shell, which owns the document tabs and the clipboard. */
@@ -88,7 +89,7 @@ const AnalyzerTreeRow = memo(({ line, selected, focused, expanded, loading, show
         }}
         onDoubleClick={(event) => event.stopPropagation()}
       >
-        {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
+        {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? <TreeExpanderGlyph expanded={expanded} /> : null}
       </button>
       <span className={`tree-icon kind-${node.kind} icon-${iconFamily(icon)}`}><NodeIcon icon={icon} expanded={expanded} /></span>
       {/* A row the backend sent no colors for — a search's header — is plain text in dnSpy too. */}
@@ -475,7 +476,8 @@ export const AnalyzerPane = ({ commands }: { commands: AnalyzerPaneCommands }): 
       {lines.slice(first, last).map((line) => line.kind === 'searching' ? (
         <div key={line.key} className="tree-row analyzer-searching" style={indent(line.depth)} role="treeitem" aria-level={line.depth + 1}>
           <span className="tree-expander" />
-          <span className="tree-icon icon-search"><Search size={15} strokeWidth={1.6} aria-hidden /></span>
+          {/* AsyncFetchChildrenHelper's searching node wears DsImages.Search. */}
+          <span className="tree-icon icon-search"><NodeIcon icon="Search" /></span>
           <span className="tree-label">{t('Searching...')}</span>
         </div>
       ) : (

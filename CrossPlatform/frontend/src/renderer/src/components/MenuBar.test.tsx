@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setSystemHighContrast } from '../theme-service'
 import { MenuBar } from './MenuBar'
 
 type DebugState = 'inactive' | 'starting' | 'running' | 'stopped'
@@ -320,11 +321,56 @@ describe('MenuBar', () => {
     renderMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: 'View' }))
     fireEvent.pointerEnter(screen.getByRole('menuitem', { name: /^Theme$/ }))
-    // The submenu is the second `role="menu"` in document order, nested inside the View popup.
+    // The submenu is the second `role="menu"` in document order, nested inside the View popup. ThemesMenu
+    // lists VisibleThemes, which leaves the high-contrast theme out while the system is not in high contrast.
     const entries = within(screen.getAllByRole('menu')[1]).getAllByRole('menuitem')
-    expect(entries.map((item) => item.textContent)).toEqual(['Blue', 'Dark', 'Light', 'High Contrast'])
+    expect(entries.map((item) => item.textContent)).toEqual(['Blue', 'Dark', 'Light'])
     expect(entries[0].getAttribute('aria-checked')).toBe('false')
     expect(entries[1].getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('lists the high-contrast theme while the system is in high contrast', () => {
+    setSystemHighContrast(true)
+    try {
+      renderMenu()
+      fireEvent.click(screen.getByRole('menuitem', { name: 'View' }))
+      fireEvent.pointerEnter(screen.getByRole('menuitem', { name: /^Theme$/ }))
+      const entries = within(screen.getAllByRole('menu')[1]).getAllByRole('menuitem')
+      expect(entries.map((item) => item.textContent)).toEqual(['Blue', 'Dark', 'Light', 'High Contrast'])
+    } finally {
+      setSystemHighContrast(false)
+    }
+  })
+
+  it('lists the languages the way dnSpy does: System, then every language by its native name', () => {
+    const onSetLanguage = vi.fn()
+    renderMenuWith({ onSetLanguage })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'View' }))
+    fireEvent.pointerEnter(screen.getByRole('menuitem', { name: /^Language$/ }))
+    const entries = within(screen.getAllByRole('menu')[1]).getAllByRole('menuitem')
+    expect(entries.map((item) => item.textContent)).toEqual([
+      'System',
+      'čeština',
+      'Deutsch',
+      'English',
+      'español (España)',
+      'français',
+      'italiano',
+      'magyar',
+      'português (Brasil)',
+      'português (Portugal)',
+      'Tiếng Việt',
+      'Türkçe',
+      'русский',
+      'українська',
+      'فارسی',
+      '中文（中国）',
+    ])
+    // Nothing was chosen, so the operating system's language is the one checked.
+    expect(entries[0].getAttribute('aria-checked')).toBe('true')
+    expect(entries.slice(1).every((item) => item.getAttribute('aria-checked') === 'false')).toBe(true)
+    fireEvent.click(entries[2])
+    expect(onSetLanguage).toHaveBeenCalledWith('de')
   })
 
   it('leaves Code disabled until a document tab is active', () => {

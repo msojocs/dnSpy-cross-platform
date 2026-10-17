@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
 import type { SearchResult, SearchType } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
 import { SEARCH_TYPES } from '../search-model'
 import { NodeIcon } from './AssemblyExplorer'
 import { ColoredText } from './ColoredText'
+import { ComboBoxArrowGlyph } from './DsGlyphs'
 
 /** How long the mouse rests on a row before its tooltip shows — the system's hover time WPF's tooltips wait. */
 export const TOOLTIP_DELAY_MS = 400
@@ -180,7 +180,7 @@ export const SearchTypeBox = ({ value, label, onChange }: { value: SearchType; l
       >
         <span className="search-type-icon"><NodeIcon icon={current.icon} /></span>
         <span className="search-type-name">{t(current.label)}</span>
-        <ChevronDown size={12} aria-hidden />
+        <ComboBoxArrowGlyph />
       </button>
       {open && (
         <ul ref={listRef} id={`${id}-list`} className="search-type-list" role="listbox" aria-label={label}>

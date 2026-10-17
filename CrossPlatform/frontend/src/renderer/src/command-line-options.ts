@@ -1,26 +1,12 @@
 import type { DecompilerLanguage, SearchLocation, SearchType } from '../../shared/protocol'
-import type { ThemeName } from './components/app-options'
+import { findTheme, themeKey } from './theme-service'
 
-/**
- * dnSpy's theme GUIDs, from the `guid` attribute of each `.dntheme` file it ships. `--theme` takes either a
- * GUID or a name, so both spellings have to lead to the same theme.
- */
-const themeGuid: Record<string, ThemeName> = {
-  '61aa341e-281d-4154-985f-c81e9269034b': 'blue',
-  '64efbb2c-0aca-467c-8389-9fa350376f3f': 'dark',
-  'b3d71e74-c353-4206-9ad1-05847be95cbe': 'light',
-  'd0ea082a-bf0d-439f-b396-547c29d97e37': 'hc',
-}
-
-/** `--theme`: a theme's name — dnSpy's `name` attribute, not its menu name, compared exactly as it compares
- * it — or its GUID, which is read either case and with or without the braces. */
-export const resolveThemeName = (value: string | undefined): ThemeName | undefined => {
-  if (!value)
-    return undefined
-  const trimmed = value.trim()
-  if (trimmed === 'blue' || trimmed === 'light' || trimmed === 'dark' || trimmed === 'hc')
-    return trimmed
-  return themeGuid[trimmed.replace(/^\{|\}$/g, '').toLowerCase()]
+/** `--theme`: a theme's GUID — read either case and with or without the braces — or its name, dnSpy's `name`
+ * attribute rather than its menu name, compared exactly as AppCommandLineArgsHandler compares it. Any theme the
+ * theme service loaded will do, the user's own included; what comes back is the key the options keep it under. */
+export const resolveThemeName = (value: string | undefined): string | undefined => {
+  const theme = findTheme(value?.trim())
+  return theme ? themeKey(theme) : undefined
 }
 
 /** dnSpy's AppToolWindowLocation, the four edges plus the two the window remembers for itself. */

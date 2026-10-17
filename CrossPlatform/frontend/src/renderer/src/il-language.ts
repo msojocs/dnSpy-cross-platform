@@ -1,4 +1,4 @@
-import type { editor, languages } from 'monaco-editor'
+import type { languages } from 'monaco-editor'
 
 const opcodes = [
   'add', 'add.ovf', 'add.ovf.un', 'and', 'arglist', 'beq', 'beq.s', 'bge', 'bge.s', 'bge.un', 'bge.un.s',
@@ -53,54 +53,6 @@ const modifiers = [
   'sealed', 'sequential', 'serializable', 'specialname', 'static', 'stdcall', 'struct', 'synchronized', 'thiscall',
   'tls', 'to', 'try', 'unicode', 'unmanaged', 'vararg', 'virtual', 'winapi',
 ]
-
-export const ilThemeRules = {
-  light: createThemeRules({
-    directive: '0000FF', opcode: 'AF00DB', modifier: '0000FF', type: '267F99', offset: '098658',
-    variable: '001080', member: '795E26', string: 'A31515', number: '098658', comment: '008000',
-  }),
-  dark: createThemeRules({
-    directive: '569CD6', opcode: 'C586C0', modifier: '4FC1FF', type: '4EC9B0', offset: 'D7BA7D',
-    variable: '9CDCFE', member: 'DCDCAA', string: 'CE9178', number: 'B5CEA8', comment: '6A9955',
-  }),
-  highContrast: createThemeRules({
-    directive: '6FC3DF', opcode: 'DDB6F2', modifier: '9CDCFE', type: '4EC9B0', offset: 'FFD700',
-    variable: '9CDCFE', member: 'FFFF00', string: 'FF9D88', number: 'B5CEA8', comment: '7CA668',
-  }),
-} satisfies Record<string, editor.ITokenThemeRule[]>
-
-interface ILThemePalette {
-  directive: string
-  opcode: string
-  modifier: string
-  type: string
-  offset: string
-  variable: string
-  member: string
-  string: string
-  number: string
-  comment: string
-}
-
-function createThemeRules(palette: ILThemePalette): editor.ITokenThemeRule[] {
-  return [
-    { token: 'keyword.directive.il', foreground: palette.directive },
-    { token: 'keyword.opcode.il', foreground: palette.opcode, fontStyle: 'bold' },
-    { token: 'keyword.modifier.il', foreground: palette.modifier },
-    { token: 'type.keyword.il', foreground: palette.type },
-    { token: 'type.identifier.il', foreground: palette.type },
-    { token: 'constant.offset.il', foreground: palette.offset },
-    { token: 'constant.module-id.il', foreground: palette.variable },
-    { token: 'variable.il', foreground: palette.variable },
-    { token: 'identifier.member.il', foreground: palette.member },
-    { token: 'string.il', foreground: palette.string },
-    { token: 'string.escape.il', foreground: palette.string },
-    { token: 'number.il', foreground: palette.number },
-    { token: 'number.float.il', foreground: palette.number },
-    { token: 'number.hex.il', foreground: palette.number },
-    { token: 'comment.il', foreground: palette.comment },
-  ]
-}
 
 export const ilLanguage: languages.IMonarchLanguage = {
   defaultToken: '',

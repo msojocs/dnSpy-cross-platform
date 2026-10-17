@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LoaderCircle, X } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import {
   applyDocumentListChanges,
   documentListRows,
@@ -9,6 +9,7 @@ import {
   type StoredDocumentLists,
 } from '../document-lists'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 
 /**
  * dnSpy's Open List dialog (OpenDocumentListDlg): the lists the user saved, and one per .NET shared framework
@@ -83,7 +84,7 @@ export const OpenListDialog = ({ onClose, onOpen }: {
           }
         }}
       >
-        <div className="modal-title"><span id="open-list-title">{t('Open List')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="open-list-title">{t('Open List')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="attach-filter">
           <label htmlFor="open-list-search">{t('Search')}</label>
           <input id="open-list-search" ref={searchRef} autoFocus value={search} onChange={(event) => setSearch(event.target.value)} />

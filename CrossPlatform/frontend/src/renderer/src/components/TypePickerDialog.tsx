@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, LoaderCircle, X } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import type { TreeNode } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
 import { iconFamily, NodeIcon } from './AssemblyExplorer'
+import { CloseGlyph, TreeExpanderGlyph } from './DsGlyphs'
 import { trapTabKey, useModalLayer } from './modal-stack'
 
 /**
@@ -103,7 +104,7 @@ const PickerRow = ({ node, parents, mode, children, expanded, loading, selectedI
             onToggle(node, parents)
           }}
         >
-          {loading[node.id] ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? open ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
+          {loading[node.id] ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? <TreeExpanderGlyph expanded={open} /> : null}
         </button>
         <span className={`tree-icon kind-${node.kind} icon-${iconFamily(node.icon)}`}><NodeIcon icon={node.icon} expanded={open} /></span>
         <span className="tree-label">{label}</span>
@@ -241,7 +242,7 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
       >
         <div className="modal-title">
           <span>{t(title ?? PICKER_TITLES[mode])}</span>
-          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="picker-body">
           {error && <div className="picker-error">{error}</div>}

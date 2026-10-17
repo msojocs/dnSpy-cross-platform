@@ -67,7 +67,7 @@ describe('analyzer store', () => {
   it('says so when the node is not something to analyze', async () => {
     await state().analyze('gone-1')
     expect(state().rootKeys).toEqual([])
-    expect(useAppStore.getState().output.at(-1)).toContain('Only types and members can be analyzed.')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Only types and members can be analyzed.')
   })
 
   it('runs a search when its row is opened, and keeps what it found', async () => {
@@ -176,7 +176,7 @@ describe('analyzer store', () => {
     analyzeChildren.mockRejectedValueOnce(new Error('boom'))
     await state().expand(search)
     expect(state().children[search]).toEqual({ status: 'loaded', keys: [], truncated: false })
-    expect(useAppStore.getState().output.at(-1)).toContain('boom')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('boom')
   })
 
   it('removes only roots, with everything under them', async () => {

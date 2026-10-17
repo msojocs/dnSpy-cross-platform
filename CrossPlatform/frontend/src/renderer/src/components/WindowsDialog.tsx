@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 
 /** One row of the Windows dialog — a document tab the layout currently shows. */
 export interface WindowTabEntry {
@@ -101,7 +101,7 @@ export const WindowsDialog = ({ tabs, onActivate, canSave, onSave, onCloseTabs, 
       <div ref={dialog} className="modal windows-dialog" role="dialog" aria-modal="true" aria-labelledby="windows-dialog-title" onKeyDown={keepFocusInDialog}>
         <div className="modal-title">
           <span id="windows-dialog-title">{t('Windows')}</span>
-          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="windows-dialog-table" role="grid" aria-label={t('Windows')}>
           <div className="windows-dialog-header" role="row">

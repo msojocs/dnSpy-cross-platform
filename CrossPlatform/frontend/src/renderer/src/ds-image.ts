@@ -1,5 +1,6 @@
 import { useInsertionEffect } from 'react'
 import { DS_IMAGES } from './ds-images.generated'
+import { toHexColor } from './named-colors'
 
 /**
  * dnSpy's images in the colours of the theme they are drawn on. dnSpy draws every image of its set over the
@@ -92,7 +93,8 @@ const toHex = (rgb: Rgb): string => `#${rgb.map((value) => value.toString(16).pa
 
 /** A CSS colour as the computed style writes it — "rgb(37, 40, 43)" — or as a hex triplet. */
 export const parseCssColor = (value: string): Rgb | undefined => {
-  const trimmed = value.trim()
+  // A colour name is the hex triplet it stands for; a transparent one is no background to draw over.
+  const trimmed = toHexColor(value.trim()) ?? value.trim()
   if (/^#[0-9a-f]{6}$/i.test(trimmed))
     return parseHex(trimmed)
   const match = trimmed.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i)
@@ -132,7 +134,7 @@ const readBackground = (): ImageBackground => {
     return WHITE
   const root = document.documentElement
   const color = parseCssColor(getComputedStyle(root).getPropertyValue('--surface')) ?? WHITE.color
-  return { color, highContrast: root.dataset.theme === 'hc' }
+  return { color, highContrast: root.dataset.themeKind === 'hc' }
 }
 
 /** The CSS class an image is drawn with. */

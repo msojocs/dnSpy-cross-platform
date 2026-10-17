@@ -1,3 +1,5 @@
+import { themeKey, themeMenuName, visibleThemes } from '../theme-service'
+
 /**
  * Declarative description of the Options dialog tree.
  *
@@ -32,7 +34,8 @@ export interface SelectOption {
 export interface SelectSpec extends BaseControlSpec {
   kind: 'select'
   path: string
-  options: SelectOption[]
+  /** The choices, or a function giving them for a list that is only known at run time (the loaded themes). */
+  options: SelectOption[] | (() => SelectOption[])
 }
 
 export interface NumberSpec extends BaseControlSpec {
@@ -56,7 +59,23 @@ export interface TextAreaSpec extends BaseControlSpec {
   rows: number
 }
 
-export type ControlSpec = CheckboxSpec | SelectSpec | NumberSpec | TextSpec | TextAreaSpec
+/** A command button on a page, which acts on the options being edited rather than binding one of them. */
+export interface ButtonSpec extends BaseControlSpec {
+  kind: 'button'
+  /** The option the button clears; the button is enabled while it holds anything. */
+  path: string
+}
+
+/** The Environment › Font page's own controls: the category, its font family and its size (FontAppSettingsPage). */
+export interface FontsSpec extends BaseControlSpec {
+  kind: 'fonts'
+  path: string
+}
+
+export type ControlSpec = CheckboxSpec | SelectSpec | NumberSpec | TextSpec | TextAreaSpec | ButtonSpec | FontsSpec
+
+/** A select's choices, whether they are fixed or read when the page is shown. */
+export const selectOptions = (spec: SelectSpec): SelectOption[] => typeof spec.options === 'function' ? spec.options() : spec.options
 
 /** A group of controls. Upstream renders a titled group as a WPF `GroupBox`. */
 export interface GroupSpec {
@@ -125,19 +144,15 @@ export const collectResets = (pages: PageSpec[]): Map<string, string[]> => {
 }
 
 /**
- * Upstream's Environment category has exactly two pages. "Integrate with Windows
- * Explorer" (a registry-backed shell setting) and the "Enable all warning messages" /
- * "Reset ignored updates" buttons are left out: the first has no Electron equivalent
- * and the second pair are commands, not settings. The messages a "Don't show again" has
- * silenced are kept with the other options, so the Reset the Options dialog offers brings
- * them back; dnSpy's own button does the same thing, and is the only way it offers.
+ * Upstream's Environment category has exactly two pages. "Integrate with Windows Explorer" (a registry-backed
+ * shell setting) has no Electron equivalent, and "Reset ignored updates" belongs to the update check this port
+ * leaves out, so neither is here. "Enable all warning messages" brings back every message a "Don't show again"
+ * has silenced, which the port keeps with the rest of its options.
+ *
+ * The theme box is GeneralAppSettingsPage's ThemesVM: the themes the theme service shows, by the names
+ * ThemeHelpers.GetName gives them — dnSpy's own four by their translated names.
  */
-const THEME_OPTIONS: SelectOption[] = [
-  { value: 'blue', labelKey: 'Blue Theme' },
-  { value: 'light', labelKey: 'Light Theme' },
-  { value: 'dark', labelKey: 'Dark Theme' },
-  { value: 'hc', labelKey: 'High Contrast' },
-]
+const themeOptions = (): SelectOption[] => visibleThemes().map((theme) => ({ value: themeKey(theme), labelKey: themeMenuName(theme) }))
 
 const environmentCategory: PageSpec = {
   id: 'environment',
@@ -152,12 +167,13 @@ const environmentCategory: PageSpec = {
         {
           id: 'general',
           controls: [
-            { kind: 'select', path: 'environmentGeneral.theme', labelKey: 'Theme', options: THEME_OPTIONS },
+            { kind: 'select', path: 'environmentGeneral.theme', labelKey: 'Theme', options: themeOptions },
             { kind: 'checkbox', path: 'environmentGeneral.allowMoreThanOneInstance', labelKey: 'Allow more than one instance (restart required)' },
             { kind: 'checkbox', path: 'environmentGeneral.decompileFullType', labelKey: "Decompile a member's enclosing class instead of the class member" },
             { kind: 'checkbox', path: 'environmentGeneral.restoreTabs', labelKey: 'Restore tabs at startup' },
             { kind: 'checkbox', path: 'environmentGeneral.useMemoryMappedIO', labelKey: 'Use memory mapped I/O' },
             { kind: 'checkbox', path: 'environmentGeneral.checkForUpdateOnStartup', labelKey: 'Check for updates on startup' },
+            { kind: 'button', path: 'environmentGeneral.ignoredWarnings', labelKey: 'Enable all warning messages' },
           ],
         },
       ],
@@ -165,13 +181,12 @@ const environmentCategory: PageSpec = {
     {
       id: 'environment.font',
       titleKey: 'Font',
-      descriptionKey: 'The font and size used by the text editor.',
+      descriptionKey: 'The fonts and sizes used by the text editor, the hex editor and the Output window.',
       groups: [
         {
           id: 'font',
           controls: [
-            { kind: 'text', path: 'environmentFont.fontFamily', labelKey: 'Font', placeholder: 'Cascadia Mono' },
-            { kind: 'number', path: 'environmentFont.fontSize', labelKey: 'Size', min: 6, max: 24, step: 1 },
+            { kind: 'fonts', path: 'environmentFont.byTheme', labelKey: 'Font' },
           ],
         },
       ],

@@ -1,6 +1,7 @@
 import { Actions, showPopupMenu, TabSetNode, type IPopupMenuItem, type PopupMenuEntry, type TabNode } from 'flexlayout-react'
-import { Check, ChevronDown, X } from 'lucide-react'
 import { useLanguage } from '../localization'
+import { CloseGlyph, DropDownGlyph } from './DsGlyphs'
+import { MenuEntryIcon } from './DsIcon'
 
 interface DockPaneProps {
   /** The pane's tab: its name is what the caption is titled with, and its tab set is the pane the caption
@@ -34,7 +35,7 @@ export const DockPane = ({ tab, children }: DockPaneProps): React.JSX.Element =>
       key: child.getId(),
       content: (
         <>
-          <span className="dock-menu-check" aria-hidden="true">{child === selected ? <Check size={13} /> : null}</span>
+          <span className="dock-menu-check" aria-hidden="true"><MenuEntryIcon checked={child === selected} /></span>
           <span className="dock-menu-label">{child.getName()}</span>
         </>
       ),
@@ -56,12 +57,13 @@ export const DockPane = ({ tab, children }: DockPaneProps): React.JSX.Element =>
         <span className="dock-caption-title" title={name}>{name}</span>
         <span className="dock-caption-dots" aria-hidden="true" />
         <button type="button" className="dock-caption-button dock-caption-menu" aria-label={t('Window')} aria-haspopup="menu" onClick={showWindowMenu}>
-          <ChevronDown size={12} aria-hidden="true" />
+          {/* The caption's MenuButton and PART_Close, with the tool window template's own glyphs. */}
+          <DropDownGlyph />
         </button>
         {/* Closing a pane's last tab takes the pane with it when the dock does not outlive its windows,
             which is what upstream does with the ✕ in the same corner. */}
         <button type="button" className="dock-caption-button dock-caption-close" aria-label={t('Close')} disabled={!tab.isCloseable()} onClick={() => model.doAction(Actions.deleteTab(tab.getId()))}>
-          <X size={13} aria-hidden="true" />
+          <CloseGlyph />
         </button>
       </div>
       <div className="dock-pane-body">{children}</div>

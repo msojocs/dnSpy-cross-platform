@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Copy, Minus, Square, X } from 'lucide-react'
 import { useLanguage } from '../localization'
+import { CloseGlyph, MaximizeGlyph, MinimizeGlyph, RestoreGlyph } from './DsGlyphs'
 
+/** The caption buttons of dnSpy's main window: MetroWindow's minimize, maximize or restore, and close
+ *  (WinSysButton), each drawn with the template's own glyph. */
 export const WindowControls = (): React.JSX.Element => {
   const [isMaximized, setIsMaximized] = useState(false)
   const { t } = useLanguage()
@@ -31,7 +33,7 @@ export const WindowControls = (): React.JSX.Element => {
         title={t('Minimize')}
         onClick={() => void window.dnSpy.minimizeWindow()}
       >
-        <Minus size={15} strokeWidth={1.5} />
+        <MinimizeGlyph />
       </button>
       <button
         type="button"
@@ -40,7 +42,7 @@ export const WindowControls = (): React.JSX.Element => {
         title={isMaximized ? t('Restore') : t('Maximize')}
         onClick={() => void toggleMaximize()}
       >
-        {isMaximized ? <Copy size={12} strokeWidth={1.4} /> : <Square size={12} strokeWidth={1.4} />}
+        {isMaximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
       <button
         type="button"
@@ -49,7 +51,7 @@ export const WindowControls = (): React.JSX.Element => {
         title={t('Close')}
         onClick={() => void window.dnSpy.closeWindow()}
       >
-        <X size={16} strokeWidth={1.5} />
+        <CloseGlyph />
       </button>
     </div>
   )

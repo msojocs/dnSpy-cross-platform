@@ -43,6 +43,8 @@ export interface HexMenuContext {
 /** One entry of dnSpy's Edit menu hex group (MenuConstants.GROUP_HEX), in the group's own order. */
 export interface HexMenuEntry {
   order: number
+  /** The dnSpy image the entry wears (its ExportMenuItem's Icon), or none where dnSpy's has none. */
+  icon?: string
   label(ctx: HexMenuContext): string
   shortcut?: string
   visible(ctx: HexMenuContext): boolean
@@ -88,21 +90,23 @@ const statementCommandShows = (ctx: HexMenuContext): boolean =>
  * they are driven by the resolved hex target rather than by which kind of document holds the focus; the
  * first opens the file the selection or the open document belongs to, so its own rule reads that instead.
  */
+// Every command that opens the hex editor wears DsImages.Binary; the body writers and the copy and paste
+// commands have no image (dnSpy.AsmEditor/Hex/Commands.cs).
 export const hexMenuEntries: HexMenuEntry[] = [
-  { order: 0, label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && (isDocumentRow(ctx) || ctx.documentAvailable === true), run: (ctx) => ctx.onOpenHex() },
+  { order: 0, icon: 'Binary', label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && (isDocumentRow(ctx) || ctx.documentAvailable === true), run: (ctx) => ctx.onOpenHex() },
   // An address reference inside a code document — dnSpy's ShowAddressReferenceInHexEditorCommand.
-  { order: 10, label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
+  { order: 10, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
   // The two "Show Instructions" commands are mutually exclusive upstream: this one runs off the
   // statement under the caret, the other off the selected method.
-  { order: 20, label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: statementCommandShows, run: (ctx) => ctx.onShowHexAt('statement') },
+  { order: 20, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: statementCommandShows, run: (ctx) => ctx.onShowHexAt('statement') },
   // A node of a hex document's own tree (PE headers, metadata tables), which this port does not model.
-  { order: 30, label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
+  { order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
   // A PE section header or a metadata stream node, likewise absent here.
-  { order: 40, label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
-  { order: 50, label: (ctx) => ctx.t('Show Instructions in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('instructions') },
-  { order: 60, label: (ctx) => ctx.t('Show Method Body in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('body') },
-  { order: 70, label: (ctx) => ctx.t('Show Initial Value in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.fieldInitialValue), run: (ctx) => ctx.onShowHexAt('fieldInitialValue') },
-  { order: 80, label: (ctx) => ctx.t('Show in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.resource), run: (ctx) => ctx.onShowHexAt('resource') },
+  { order: 40, icon: 'Binary', label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
+  { order: 50, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('instructions') },
+  { order: 60, icon: 'Binary', label: (ctx) => ctx.t('Show Method Body in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('body') },
+  { order: 70, icon: 'Binary', label: (ctx) => ctx.t('Show Initial Value in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.fieldInitialValue), run: (ctx) => ctx.onShowHexAt('fieldInitialValue') },
+  { order: 80, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.resource), run: (ctx) => ctx.onShowHexAt('resource') },
   // The backend hands each write command its bytes only when they exist and fit the body, which is
   // exactly dnSpy's visibility test, so a null template is what hides the entry.
   { order: 90, label: (ctx) => ctx.t("Hex Write 'return true' Body"), visible: (ctx) => hasTarget(ctx.hexTarget?.method?.returnTrueBody), run: (ctx) => ctx.onHexWriteBody('returnTrue') },

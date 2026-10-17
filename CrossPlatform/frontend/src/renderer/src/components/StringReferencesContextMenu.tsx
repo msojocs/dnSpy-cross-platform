@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import { Copy } from 'lucide-react'
 import type { StringReference } from '../../../shared/protocol'
+import { MenuEntryIcon } from './DsIcon'
 
 /** What the String References window's context menu acts on: the row that was right-clicked, which the list
  * selects before the menu opens. */
@@ -27,10 +27,9 @@ interface StringReferencesMenuEntry {
 const GROUP_COPY = 0
 const GROUP_FOLLOW = 1000
 
-const iconProps = { size: 14, strokeWidth: 1.7, 'aria-hidden': true as const }
-
+// dnSpy's string searcher gives only the formatted copy an image (DsImagesAttribute.Copy).
 const ENTRIES: StringReferencesMenuEntry[] = [
-  { group: GROUP_COPY, order: 0, key: 'copy-literal', icon: <Copy {...iconProps} />, label: (ctx) => ctx.t('Copy String Literal (Formatted)'), shortcut: () => 'Ctrl+C', visible: () => true, run: (ctx) => ctx.copyText(ctx.reference.formattedLiteral) },
+  { group: GROUP_COPY, order: 0, key: 'copy-literal', icon: <MenuEntryIcon name="Copy" />, label: (ctx) => ctx.t('Copy String Literal (Formatted)'), shortcut: () => 'Ctrl+C', visible: () => true, run: (ctx) => ctx.copyText(ctx.reference.formattedLiteral) },
   { group: GROUP_COPY, order: 1, key: 'copy-raw-literal', label: (ctx) => ctx.t('Copy String Literal (Raw)'), visible: () => true, run: (ctx) => ctx.copyText(ctx.reference.literal) },
   { group: GROUP_FOLLOW, order: 0, key: 'go-to-reference', label: (ctx) => ctx.t('Go To Reference in Code'), shortcut: (ctx) => ctx.t('Dbl Click'), visible: (ctx) => ctx.reference.nodeId !== null, run: (ctx) => ctx.follow(false) },
   { group: GROUP_FOLLOW, order: 1, key: 'go-to-reference-new-tab', label: (ctx) => ctx.t('Go To Reference in Code (New Tab)'), visible: (ctx) => ctx.reference.nodeId !== null, run: (ctx) => ctx.follow(true) },

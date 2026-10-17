@@ -11,6 +11,9 @@ export interface MenuItem {
   disabled?: boolean
   checked?: boolean
   separator?: boolean
+  /** The name of the dnSpy image the entry wears in its icon column (ds-images.generated.ts) — its
+   *  ExportMenuItem's Icon. An entry dnSpy gives no image to leaves this out. */
+  icon?: string
   submenu?: MenuItem[]
   action?: () => void
 }
@@ -85,6 +88,8 @@ export type CreatedKind = 'type' | 'method' | 'field' | 'property' | 'event'
 interface EditEntry {
   group: number
   order: number
+  /** dnSpy's image for the entry, or none where its ExportMenuItem has no Icon. */
+  icon?: string
   label(ctx: EditMenuContext): string
   shortcut?: string
   visible(ctx: EditMenuContext): boolean
@@ -146,6 +151,7 @@ const deleteSelected = (ctx: EditMenuContext): void => ctx.onDelete()
 const HEX_ENTRIES: EditEntry[] = hexMenuEntries.map((entry) => ({
   group: GROUP_HEX,
   order: entry.order,
+  icon: entry.icon,
   label: entry.label,
   shortcut: entry.shortcut,
   visible: entry.visible,
@@ -157,31 +163,31 @@ const HEX_ENTRIES: EditEntry[] = hexMenuEntries.map((entry) => ({
 // the table keeps the first of each label and drops the rest rather than printing duplicates.
 const EDIT_ENTRIES: EditEntry[] = [
   // 0 — Undo/Redo
-  { group: GROUP_UNDO, order: 0, label: (ctx) => ctx.t('Undo'), shortcut: 'Ctrl+Z', visible: always, enabled: (ctx) => ctx.canUndo, action: (ctx) => ctx.onUndo() },
-  { group: GROUP_UNDO, order: 10, label: (ctx) => ctx.t('Redo'), shortcut: 'Ctrl+Y', visible: always, enabled: (ctx) => ctx.canRedo, action: (ctx) => ctx.onRedo() },
+  { group: GROUP_UNDO, order: 0, icon: 'Undo', label: (ctx) => ctx.t('Undo'), shortcut: 'Ctrl+Z', visible: always, enabled: (ctx) => ctx.canUndo, action: (ctx) => ctx.onUndo() },
+  { group: GROUP_UNDO, order: 10, icon: 'Redo', label: (ctx) => ctx.t('Redo'), shortcut: 'Ctrl+Y', visible: always, enabled: (ctx) => ctx.canRedo, action: (ctx) => ctx.onRedo() },
 
   // 1000 — Find
-  { group: GROUP_FIND, order: 0, label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: always, enabled: (ctx) => ctx.activeDocument === 'code', action: (ctx) => ctx.onFind() },
-  { group: GROUP_FIND, order: 10, label: (ctx) => ctx.t('Search Assemblies'), shortcut: 'Ctrl+Shift+K', visible: always, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSearchAssemblies() },
+  { group: GROUP_FIND, order: 0, icon: 'Search', label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: always, enabled: (ctx) => ctx.activeDocument === 'code', action: (ctx) => ctx.onFind() },
+  { group: GROUP_FIND, order: 10, icon: 'Search', label: (ctx) => ctx.t('Search Assemblies'), shortcut: 'Ctrl+Shift+K', visible: always, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSearchAssemblies() },
   // MenuBarCommand.IsVisible: the tree's selection has a row in a .NET module.
-  { group: GROUP_FIND, order: 20, label: (ctx) => ctx.t('Find String References in Module'), visible: inDotNetModule, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onFindStringReferences() },
+  { group: GROUP_FIND, order: 20, icon: 'Search', label: (ctx) => ctx.t('Find String References in Module'), visible: inDotNetModule, enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onFindStringReferences() },
 
   // 2000 — AsmEditor: Delete
   // RemoveAssemblyCommand.EditMenuCommand: the selection's documents, which are the tree's root rows.
-  { group: GROUP_DELETE, order: 0, label: (ctx) => ctx.t('Remove {name}', { name: ctx.selectionLabel ?? '' }), shortcut: 'Del', visible: kindIs('assembly', 'pedocument', 'elfdocument', 'unknowndocument'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 10, label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
-  { group: GROUP_DELETE, order: 20, label: deleteLabel, shortcut: 'Del', visible: kindIs('type'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 30, label: deleteLabel, shortcut: 'Del', visible: kindIs('method'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 40, label: deleteLabel, shortcut: 'Del', visible: kindIs('field'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 50, label: deleteLabel, shortcut: 'Del', visible: kindIs('property'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 60, label: deleteLabel, shortcut: 'Del', visible: kindIs('event'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 70, label: (ctx) => ctx.t('Delete Namespace'), shortcut: 'Del', visible: kindIs('namespace'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 80, label: deleteLabel, shortcut: 'Del', visible: kindIs('resource'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 90, label: deleteLabel, shortcut: 'Del', visible: kindIs('resourceentry') },
+  { group: GROUP_DELETE, order: 0, icon: 'Cancel', label: (ctx) => ctx.t('Remove {name}', { name: ctx.selectionLabel ?? '' }), shortcut: 'Del', visible: kindIs('assembly', 'pedocument', 'elfdocument', 'unknowndocument'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 10, icon: 'Cancel', label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
+  { group: GROUP_DELETE, order: 20, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('type'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 30, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('method'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 40, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('field'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 50, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('property'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 60, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('event'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 70, icon: 'Cancel', label: (ctx) => ctx.t('Delete Namespace'), shortcut: 'Del', visible: kindIs('namespace'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 80, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('resource'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 90, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('resourceentry') },
 
   // 3000 — AsmEditor: Misc
-  { group: GROUP_MISC, order: 0, label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.selectionKind === 'namespace' && ctx.selectionLabel !== '-' && ctx.hasEmptyNamespaceSibling, action: (ctx) => ctx.onMoveTypesToEmptyNamespace() },
-  { group: GROUP_MISC, order: 10, label: (ctx) => ctx.t('Rename Namespace'), visible: kindIs('namespace'), action: (ctx) => ctx.onRenameNamespace() },
+  { group: GROUP_MISC, order: 0, icon: 'Namespace', label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.selectionKind === 'namespace' && ctx.selectionLabel !== '-' && ctx.hasEmptyNamespaceSibling, action: (ctx) => ctx.onMoveTypesToEmptyNamespace() },
+  { group: GROUP_MISC, order: 10, icon: 'Namespace', label: (ctx) => ctx.t('Rename Namespace'), visible: kindIs('namespace'), action: (ctx) => ctx.onRenameNamespace() },
   { group: GROUP_MISC, order: 20, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: never },
   // dnSpy shows the reverse of this one on a module document standing on its own — a module whose parent
   // is not an assembly row. Every module in this tree hangs off an assembly row, so that rule would never
@@ -194,46 +200,46 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_NEW, order: 10, label: (ctx) => ctx.t('Add New NetModule to Assembly...'), visible: never },
   { group: GROUP_NEW, order: 20, label: (ctx) => ctx.t('Add Existing NetModule to Assembly...'), visible: never },
   { group: GROUP_NEW, order: 30, label: (ctx) => ctx.t('Create NetModule...'), visible: never },
-  { group: GROUP_NEW, order: 40, label: (ctx) => ctx.t('Create Type...'), visible: kindIs('type', 'namespace', 'module'), action: (ctx) => ctx.onCreateMember('type') },
-  { group: GROUP_NEW, order: 50, label: (ctx) => ctx.t('Create Nested Type...'), visible: isMember, action: (ctx) => ctx.onCreateMember('type', true) },
-  { group: GROUP_NEW, order: 60, label: (ctx) => ctx.t('Create Method...'), visible: isMember, action: (ctx) => ctx.onCreateMember('method') },
-  { group: GROUP_NEW, order: 70, label: (ctx) => ctx.t('Create Field...'), visible: isMember, action: (ctx) => ctx.onCreateMember('field') },
-  { group: GROUP_NEW, order: 80, label: (ctx) => ctx.t('Create Property...'), visible: isMember, action: (ctx) => ctx.onCreateMember('property') },
-  { group: GROUP_NEW, order: 90, label: (ctx) => ctx.t('Create Event...'), visible: isMember, action: (ctx) => ctx.onCreateMember('event') },
+  { group: GROUP_NEW, order: 40, icon: 'NewClass', label: (ctx) => ctx.t('Create Type...'), visible: kindIs('type', 'namespace', 'module'), action: (ctx) => ctx.onCreateMember('type') },
+  { group: GROUP_NEW, order: 50, icon: 'NewClass', label: (ctx) => ctx.t('Create Nested Type...'), visible: isMember, action: (ctx) => ctx.onCreateMember('type', true) },
+  { group: GROUP_NEW, order: 60, icon: 'NewMethod', label: (ctx) => ctx.t('Create Method...'), visible: isMember, action: (ctx) => ctx.onCreateMember('method') },
+  { group: GROUP_NEW, order: 70, icon: 'NewField', label: (ctx) => ctx.t('Create Field...'), visible: isMember, action: (ctx) => ctx.onCreateMember('field') },
+  { group: GROUP_NEW, order: 80, icon: 'NewProperty', label: (ctx) => ctx.t('Create Property...'), visible: isMember, action: (ctx) => ctx.onCreateMember('property') },
+  { group: GROUP_NEW, order: 90, icon: 'NewEvent', label: (ctx) => ctx.t('Create Event...'), visible: isMember, action: (ctx) => ctx.onCreateMember('event') },
   { group: GROUP_NEW, order: 100, label: (ctx) => ctx.t('Create File Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 110, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 120, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 130, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 140, label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 150, label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: kindIs('resource', 'resourceentry') },
+  { group: GROUP_NEW, order: 140, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: kindIs('resource', 'resourceentry') },
+  { group: GROUP_NEW, order: 150, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 170, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 180, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: kindIs('resource', 'resourceentry') },
   { group: GROUP_NEW, order: 190, label: (ctx) => ctx.t('Create Resource...'), visible: kindIs('resource', 'resourceentry') },
 
   // 5000 — AsmEditor: Settings
-  { group: GROUP_SETTINGS, order: 0, label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
-  { group: GROUP_SETTINGS, order: 10, label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
-  { group: GROUP_SETTINGS, order: 20, label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: kindIs('type'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 30, label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: kindIs('method'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 40, label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: kindIs('method') },
-  { group: GROUP_SETTINGS, order: 41, label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: kindIs('module') },
-  { group: GROUP_SETTINGS, order: 42, label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember },
-  { group: GROUP_SETTINGS, order: 43, label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember },
-  { group: GROUP_SETTINGS, order: 44, label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule },
+  { group: GROUP_SETTINGS, order: 0, icon: 'Settings', label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
+  { group: GROUP_SETTINGS, order: 10, icon: 'Settings', label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
+  { group: GROUP_SETTINGS, order: 20, icon: 'Settings', label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: kindIs('type'), action: (ctx) => ctx.onEditNode() },
+  { group: GROUP_SETTINGS, order: 30, icon: 'Settings', label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: kindIs('method'), action: (ctx) => ctx.onEditNode() },
+  { group: GROUP_SETTINGS, order: 40, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: kindIs('method') },
+  { group: GROUP_SETTINGS, order: 41, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: kindIs('module') },
+  { group: GROUP_SETTINGS, order: 42, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember },
+  { group: GROUP_SETTINGS, order: 43, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember },
+  { group: GROUP_SETTINGS, order: 44, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule },
   // dnSpy's merge runs its compiled-module importer over a picked DLL, merging every type it holds into
   // this module. That importer is the machinery behind the C# compile commands and the port has neither
   // it nor a dnlib merger to stand in for it, so the entry keeps its place and stays disabled rather than
   // offering a command that would corrupt the module it was run on.
-  { group: GROUP_SETTINGS, order: 49.999, label: (ctx) => ctx.t('Merge with Assembly...'), visible: inModule },
-  { group: GROUP_SETTINGS, order: 50, label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: kindIs('field'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 50, label: (ctx) => ctx.t('Edit Method Body...'), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodBody() },
+  { group: GROUP_SETTINGS, order: 49.999, icon: 'Assembly', label: (ctx) => ctx.t('Merge with Assembly...'), visible: inModule },
+  { group: GROUP_SETTINGS, order: 50, icon: 'Settings', label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: kindIs('field'), action: (ctx) => ctx.onEditNode() },
+  { group: GROUP_SETTINGS, order: 50, icon: 'Editor', label: (ctx) => ctx.t('Edit Method Body...'), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodBody() },
   { group: GROUP_SETTINGS, order: 51, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: kindIs('method'), action: (ctx) => ctx.onReplaceMethodBodyWithStub() },
   { group: GROUP_SETTINGS, order: 58.999, label: (ctx) => ctx.t('Load Dependencies'), visible: inModule, action: (ctx) => ctx.onLoadDependencies(false) },
   { group: GROUP_SETTINGS, order: 59.999, label: (ctx) => ctx.t('Load Dependencies Recursively'), visible: inModule, action: (ctx) => ctx.onLoadDependencies(true) },
-  { group: GROUP_SETTINGS, order: 60, label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: kindIs('property'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 70, label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: kindIs('event'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 90, label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resource'), action: (ctx) => ctx.onEditResource() },
-  { group: GROUP_SETTINGS, order: 100, label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resourceentry') },
+  { group: GROUP_SETTINGS, order: 60, icon: 'Settings', label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: kindIs('property'), action: (ctx) => ctx.onEditNode() },
+  { group: GROUP_SETTINGS, order: 70, icon: 'Settings', label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: kindIs('event'), action: (ctx) => ctx.onEditNode() },
+  { group: GROUP_SETTINGS, order: 90, icon: 'Settings', label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resource'), action: (ctx) => ctx.onEditResource() },
+  { group: GROUP_SETTINGS, order: 100, icon: 'Settings', label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resourceentry') },
 
   // 6000 — Hex editor. The entries live in hex-menu.ts, shared with the code viewer's context menu,
   // which shows the same group.
@@ -243,7 +249,7 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_HEX_MD, order: 0, label: (ctx) => ctx.t('Sort Table'), shortcut: 'Ctrl+Shift+T', visible: documentIs('module-info') },
   { group: GROUP_HEX_MD, order: 10, label: (ctx) => ctx.t('Sort Selection'), visible: documentIs('module-info') },
   { group: GROUP_HEX_MD, order: 20, label: (ctx) => ctx.t('Go to RID...'), shortcut: 'Ctrl+G', visible: documentIs('module-info') },
-  { group: GROUP_HEX_MD, order: 30, label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: documentIs('module-info') },
+  { group: GROUP_HEX_MD, order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: documentIs('module-info') },
 
   // 8000 — Go to metadata table row. dnSpy's second entry embeds the token under the caret in its
   // header (`Go to MD Table Row (06000001)`); with no token model here only the plain one is kept.
@@ -251,8 +257,8 @@ const EDIT_ENTRIES: EditEntry[] = [
 
   // 9000 — Metadata table copy/paste
   { group: GROUP_HEX_COPY, order: 0, label: (ctx) => ctx.t('Copy as Text'), shortcut: 'Ctrl+Shift+C', visible: documentIs('module-info') },
-  { group: GROUP_HEX_COPY, order: 10, label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: documentIs('module-info') },
-  { group: GROUP_HEX_COPY, order: 20, label: (ctx) => ctx.t('Paste'), shortcut: 'Ctrl+V', visible: documentIs('module-info') },
+  { group: GROUP_HEX_COPY, order: 10, icon: 'Copy', label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: documentIs('module-info') },
+  { group: GROUP_HEX_COPY, order: 20, icon: 'Paste', label: (ctx) => ctx.t('Paste'), shortcut: 'Ctrl+V', visible: documentIs('module-info') },
 ]
 
 /**
@@ -282,6 +288,7 @@ export const buildEditMenu = (ctx: EditMenuContext): MenuItem[] => {
       items.push({
         label: entry.label(ctx),
         shortcut: entry.shortcut,
+        icon: entry.icon,
         disabled: action ? entry.enabled?.(ctx) === false : true,
         action: action ? () => action(ctx) : undefined,
       })

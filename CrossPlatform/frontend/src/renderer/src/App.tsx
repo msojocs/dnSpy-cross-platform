@@ -1,16 +1,20 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import { AlertCircle, FolderOpen, X } from 'lucide-react'
 import type { AppCommandLine, DecompilerLanguage, SearchLocation, SearchType, TextSpan, TreeNode } from '../../shared/protocol'
+import { resolveCultureArgument } from '../../shared/ui-locales'
 import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
 import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
 import { normalizeZoom, zoomIn, zoomOut } from './zoom'
+import { CloseGlyph } from './components/DsGlyphs'
+import { DsIcon } from './components/DsIcon'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
 import { AssemblyExplorer, resolveAnalyzeTargets } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
-import { MenuBar, type ThemeName } from './components/MenuBar'
+import { MenuBar } from './components/MenuBar'
+import type { ThemeName } from './components/app-options'
+import { applyTheme, resolveTheme, themeKey, useThemes } from './theme-service'
 import { ToolBar } from './components/ToolBar'
 import { DebugPlaceholder, OutputPane } from './components/ToolWindows'
 import { SearchPane, type SearchPaneCommands } from './components/SearchPane'
@@ -290,7 +294,11 @@ export const App = (): React.JSX.Element => {
   // dnSpy's theme lives in its settings file with everything else, which is this port's option store: the
   // shell reads it from there and writes it back, so there is one copy of it rather than a state of its own
   // that the options would have to be kept in step with.
-  const theme = options.environmentGeneral.theme
+  // The theme service's ThemeService.Initialize: the theme the options name when the service has it, its
+  // dark theme otherwise, and the high-contrast theme whenever the system is in high contrast.
+  const { highContrast: systemHighContrast } = useThemes()
+  const activeTheme = resolveTheme(options.environmentGeneral.theme)
+  const theme = themeKey(activeTheme)
   const setTheme = (next: ThemeName): void => saveThemeOption(next)
   // Whether a background picture is up, which is what decides whether the editor goes without a background
   // of its own for the picture to be seen through.
@@ -535,9 +543,13 @@ export const App = (): React.JSX.Element => {
     syncDockTabStrips(model, DOCUMENT_COMPONENTS, [DOCUMENT_TABSET_ID])
   }, [model, layoutVersion])
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-  }, [theme])
+  // dnSpy writes the theme it settled on back to its settings (the Theme setter saves ThemeSettings.ThemeGuid),
+  // which is what makes a missing theme, or the switch high contrast forces, stick.
+  useLayoutEffect(() => {
+    applyTheme(activeTheme)
+    if (options.environmentGeneral.theme !== theme)
+      saveThemeOption(theme)
+  }, [activeTheme, options.environmentGeneral.theme, theme, systemHighContrast])
 
   // dnSpy's TabElementZoomer scales the tab's content: the whole editor area is scaled here, which is what
   // carries the code view, the hex dump and everything else a document tab shows at the same size.
@@ -1495,8 +1507,9 @@ export const App = (): React.JSX.Element => {
     const theme = resolveThemeName(commandLine.theme)
     if (theme)
       setTheme(theme)
-    if (commandLine.culture === 'en' || commandLine.culture === 'zh-CN')
-      setLanguage(commandLine.culture)
+    const culture = resolveCultureArgument(commandLine.culture)
+    if (culture)
+      setLanguage(culture)
     const language = resolveDecompilerLanguage(commandLine.language)
     if (language)
       useAppStore.getState().setDefaultLanguage(language)
@@ -1535,7 +1548,26 @@ export const App = (): React.JSX.Element => {
         useSearchStore.getState().setQuery(commandLine.searchText)
       showSearch()
     }
+    // The debugger's AppCommandLineArgsHandler: `-p` attaches to the process with that id, `-pn` to the first
+    // attachable one of that name — Process.GetProcessesByName's name, with no extension, in any case.
+    if (commandLine.debugAttachPid || commandLine.debugAttachProcess)
+      void attachFromCommandLine(commandLine.debugAttachPid, commandLine.debugAttachProcess)
     forceLayoutUpdate((value) => value + 1)
+  }
+
+  const attachFromCommandLine = async (pid: number | undefined, processName: string | undefined): Promise<void> => {
+    let processes: Awaited<ReturnType<typeof window.dnSpy.listDebugProcesses>>
+    try {
+      processes = await window.dnSpy.listDebugProcesses()
+    } catch {
+      return
+    }
+    const baseName = (value: string): string => (value.split(/[\\/]/).at(-1) ?? value).replace(/\.exe$/i, '').toLowerCase()
+    const target = pid
+      ? processes.find((process) => process.processId === pid)
+      : processes.find((process) => baseName(process.name) === baseName(processName!) || (process.executablePath !== undefined && baseName(process.executablePath) === baseName(processName!)))
+    if (target)
+      await useAppStore.getState().attachDebug(target.processId)
   }
 
   const openNodeId = async (nodeId: string): Promise<void> => {
@@ -2009,7 +2041,8 @@ export const App = (): React.JSX.Element => {
       case 'start': return (
         <div className="start-view">
           <button className="command-button" disabled={backendStatus.state !== 'ready'} onClick={() => void chooseAndOpen()}>
-            <FolderOpen size={16} /> {t('Open Assembly')}
+            {/* The command the toolbar's first button runs, with that button's image (DsImages.OpenFolder). */}
+            <DsIcon name="OpenFolder" /> {t('Open Assembly')}
           </button>
         </div>
       )
@@ -2195,9 +2228,10 @@ export const App = (): React.JSX.Element => {
       />
       {error && (
         <div className="error-banner" role="alert">
-          <AlertCircle size={15} />
+          {/* dnSpy reports these in a message box; the banner wears its StatusError image and its close cross. */}
+          <DsIcon name="StatusError" />
           <span>{error}</span>
-          <button className="icon-button" aria-label={t('Dismiss')} onClick={clearError}><X size={14} /></button>
+          <button className="icon-button" aria-label={t('Dismiss')} onClick={clearError}><CloseGlyph /></button>
         </div>
       )}
       <main className="workspace-host">
@@ -2261,7 +2295,7 @@ export const App = (): React.JSX.Element => {
           i18nTranslator={(key) => t(I18nLabelDefaults[key] ?? key)}
         />
       </main>
-      <footer className="status-bar">
+      <footer className={`status-bar${debugState !== 'inactive' ? ' status-bar-debugging' : ''}`}>
         <span className={`status-indicator status-${backendStatus.state}`} />
         <span>{backendStatus.state === 'ready' ? t('Ready') : backendStatus.message ?? t(backendStatus.state)}</span>
         <span className="status-spacer" />

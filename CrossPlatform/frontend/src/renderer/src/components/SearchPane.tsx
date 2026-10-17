@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { SearchLocation, SearchResult, TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
@@ -9,6 +8,7 @@ import { useAppOptions, type SearchSettings } from './app-options'
 import { NodeIcon } from './AssemblyExplorer'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { ColoredText } from './ColoredText'
+import { ExpanderGlyph } from './DsGlyphs'
 import { showSearchContextMenu } from './SearchContextMenu'
 import { SearchResultToolTip, SearchTypeBox, useHoverToolTip } from './SearchPaneParts'
 
@@ -301,7 +301,8 @@ export const SearchPane = ({ commands }: { commands: SearchPaneCommands }): Reac
           aria-controls="search-options"
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
+          {/* SearchControl's Options is a WPF Expander. */}
+          <ExpanderGlyph expanded={expanded} />
           {t('Options')}
         </button>
         <div className="search-for">

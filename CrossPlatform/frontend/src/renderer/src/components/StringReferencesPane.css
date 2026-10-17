@@ -41,8 +41,8 @@
 
 .strings-header {
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
 }
 
 /* A header sorts by its column — dnSpy's GridViewColumnSorter, which cycles up, down and unsorted — and is

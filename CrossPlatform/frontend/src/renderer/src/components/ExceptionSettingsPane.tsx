@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Filter, ListChecks, Pencil, Plus, Trash2, Undo2, X } from 'lucide-react'
 import type { DebugExceptionCategory, DebugExceptionCondition, DebugExceptionSettings } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { trapTabKey, useModalLayer } from './modal-stack'
+import { DsIcon } from './DsIcon'
+import { CloseGlyph } from './DsGlyphs'
 
 // dnSpy's Exception Settings window: every exception type the engine knows, a checkbox per row for
 // "Break When Thrown", the category and the conditions, and a toolbar carrying the same commands WPF
@@ -137,6 +138,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
 
   return (
     <div className="debug-tool-pane exception-settings-pane" onKeyDown={onKeyDown} tabIndex={-1}>
+      {/* ExceptionControl.xaml's tool bar, each button with the image dnSpy gives it. */}
       <div className="bookmarks-toolbar">
         <button
           className={`icon-button${showOnlyEnabled ? ' active' : ''}`}
@@ -144,7 +146,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           aria-label={t('Show only enabled exceptions')}
           aria-pressed={showOnlyEnabled}
           onClick={() => setShowOnlyEnabled((value) => !value)}
-        ><Filter size={14} /></button>
+        ><DsIcon name="Filter" /></button>
         <span className="bookmarks-separator" />
         <button
           className="icon-button"
@@ -153,34 +155,34 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           aria-pressed={adding}
           disabled={categories.length === 0}
           onClick={() => setAdding((value) => !value)}
-        ><Plus size={14} /></button>
+        ><DsIcon name="Add" /></button>
         <button
           className="icon-button"
           title={t('Remove an exception from the list')}
           aria-label={t('Remove an exception from the list')}
           disabled={selected.length === 0}
           onClick={() => void removeExceptionDefinitions(selected)}
-        ><Trash2 size={14} /></button>
+        ><DsIcon name="RemoveCommand" /></button>
         <button
           className="icon-button"
           title={t('Enable or disable all exceptions matching the current search criteria')}
           aria-label={t('Enable or disable all exceptions matching the current search criteria')}
           disabled={rows.length === 0}
           onClick={toggleMatching}
-        ><ListChecks size={14} /></button>
+        ><DsIcon name="ToggleAllBreakpoints" /></button>
         <button
           className="icon-button"
           title={t('Edit conditions')}
           aria-label={t('Edit conditions')}
           disabled={selected.length === 0}
           onClick={() => setEditingConditions(selected)}
-        ><Pencil size={14} /></button>
+        ><DsIcon name="Edit" /></button>
         <button
           className="icon-button"
           title={t('Restore the list to the default settings')}
           aria-label={t('Restore the list to the default settings')}
           onClick={() => void restoreDefaultExceptionSettings()}
-        ><Undo2 size={14} /></button>
+        ><DsIcon name="UndoCheckBoxList" /></button>
         <span className="bookmarks-separator" />
         <select
           className="exception-category-filter"
@@ -198,7 +200,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           aria-label={t('Reset all search criteria so that all exceptions are shown')}
           disabled={query === '' && categoryFilter === ALL_CATEGORIES && !showOnlyEnabled}
           onClick={() => { setQuery(''); setCategoryFilter(ALL_CATEGORIES); setShowOnlyEnabled(false) }}
-        ><X size={14} /></button>
+        ><DsIcon name="ClearWindowContent" /></button>
         <span className="bookmarks-separator" />
         <span className="exception-search-label">{t('Search')}</span>
         <input
@@ -366,7 +368,7 @@ const ExceptionConditionsDialog = ({ rows, onClose, onSave }: {
       >
         <div className="modal-title">
           <span id="exception-conditions-title">{t('Edit conditions')}</span>
-          <button className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="exception-conditions-body">
           {conditions.length === 0 && <span className="exception-conditions-empty">{t('No conditions')}</span>}
@@ -392,7 +394,7 @@ const ExceptionConditionsDialog = ({ rows, onClose, onSave }: {
                 aria-label={t('Remove')}
                 title={t('Remove')}
                 onClick={() => setConditions((current) => current.filter((_, position) => position !== index))}
-              ><Trash2 size={13} /></button>
+              ><DsIcon name="Cancel" /></button>
             </div>
           ))}
           <button
@@ -400,7 +402,7 @@ const ExceptionConditionsDialog = ({ rows, onClose, onSave }: {
             aria-label={t('Add')}
             title={t('Add')}
             onClick={() => setConditions((current) => [...current, { type: 'moduleNameEquals', value: '' }])}
-          ><Plus size={14} /></button>
+          ><DsIcon name="Add" /></button>
         </div>
         <div className="modal-actions">
           <span className="modal-action-spacer" />

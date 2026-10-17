@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react'
-import { X } from 'lucide-react'
 import type {
   BreakpointConditionKind,
   BreakpointHitCountKind,
   BreakpointSettings,
 } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 import { trapTabKey, useModalLayer } from './modal-stack'
 
 /**
@@ -82,7 +82,7 @@ export const BreakpointSettingsDialog = ({ title, settings, onClose, onSave }: {
       >
         <div className="modal-title">
           <span id="breakpoint-settings-title">{title}</span>
-          <button className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button>
+          <button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
 
         <div className="breakpoint-settings-body">

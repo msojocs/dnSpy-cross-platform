@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react'
 import Editor from './CodeEditor'
-import { Eraser, HelpCircle, RotateCcw } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { ScriptOutputEntry } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
 import { attachClassifier, type Classifier } from '../roslyn-classification'
-import { useAppOptions } from './app-options'
+import { useCategoryFont } from '../fonts'
 import { ClassifiedText } from './ColoredText'
+import { DsIcon } from './DsIcon'
 
 /**
  * The C# Interactive window: a log of everything submissions have printed, and a Monaco box that
@@ -16,7 +16,8 @@ import { ClassifiedText } from './ColoredText'
  * the bindings the upstream window documents in its `#help` text.
  */
 export const CSharpInteractive = ({ theme, transparentBackground }: { theme: string; transparentBackground: boolean }): React.JSX.Element => {
-  const font = useAppOptions().environmentFont
+  // dnSpy's REPL editor is in the Text Editor appearance category, so it takes that category's font.
+  const font = useCategoryFont('textEditor')
   const entries = useAppStore((state) => state.scriptEntries)
   const running = useAppStore((state) => state.scriptRunning)
   const startScript = useAppStore((state) => state.startScript)
@@ -84,17 +85,20 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
 
   return (
     <div className="script-pane" data-running={String(running)}>
+      {/* ScriptControl.xaml's tool bar: Reset wears DsImages.Restart and Clear Screen ClearWindowContent. Its
+          help is the #help command rather than a button, so this one wears the image dnSpy's other help
+          buttons do (StatusHelp, the search boxes' help). */}
       <div className="script-toolbar">
         {/* Deliberately live while a submission runs: rebuilding the session is how a script that
             never returns is stopped, which is what the upstream Reset command is for. */}
         <button className="icon-button" title={t('Reset the execution environment')} aria-label={t('Reset the execution environment')} onClick={() => void resetScript()}>
-          <RotateCcw size={15} />
+          <DsIcon name="Restart" />
         </button>
         <button className="icon-button" title={t('Clear the script editor')} aria-label={t('Clear the script editor')} onClick={clearScriptOutput}>
-          <Eraser size={15} />
+          <DsIcon name="ClearWindowContent" />
         </button>
         <button className="icon-button" title={t('Display the help')} aria-label={t('Display the help')} onClick={showScriptHelp}>
-          <HelpCircle size={15} />
+          <DsIcon name="StatusHelp" />
         </button>
         <span className="script-hint">{t('Enter runs the submission, Shift+Enter adds a line.')}</span>
       </div>
@@ -139,7 +143,7 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
             overviewRulerLanes: 0,
             hideCursorInOverviewRuler: true,
             wordWrap: 'on',
-            fontFamily: `'${font.fontFamily}', 'JetBrains Mono', monospace`,
+            fontFamily: font.fontFamily,
             fontSize: font.fontSize,
             lineHeight: Math.round(font.fontSize * 1.5),
             tabSize: 4,

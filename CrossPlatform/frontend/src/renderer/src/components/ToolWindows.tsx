@@ -1,45 +1,175 @@
-import { useEffect, useState } from 'react'
-import { useAppStore } from '../app-store'
+import { useEffect, useRef } from 'react'
+import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
+import { useAppStore, type OutputLine, type OutputPaneId } from '../app-store'
+import { useCategoryFont } from '../fonts'
 import { useLanguage } from '../localization'
-import { DsIcon } from './DsIcon'
-
-/** Where the Output window keeps its word wrap. dnSpy keeps it in the settings file with the rest of that
- *  window's options; the port keeps it beside its other per-window settings, in storage of its own. */
-const outputWordWrapKey = 'dnspy.output.wordWrap'
+import { saveAppOptions, useAppOptions, type AppOptions } from './app-options'
+import { DsIcon, MenuEntryIcon } from './DsIcon'
 
 /**
- * dnSpy's Output window. Its command bar carries Clear All, Save and the Word Wrap toggle, which are the
- * three its own toolbar has whose meaning does not need the loggers behind the source selector — this port
- * writes to one log, so there is nothing for "Show output from" to switch between.
+ * The panes "Show output from" lists, by name — OutputService orders its buffers by name — with the label each
+ * goes by. dnSpy's only pane is the debugger's Debug log (OutputLogger); the port also writes what it does
+ * itself, which dnSpy shows in message boxes or not at all, to a pane of its own.
+ */
+const PANES: readonly { id: OutputPaneId; labelKey: string }[] = [
+  { id: 'debug', labelKey: 'Debug' },
+  { id: 'dnSpy', labelKey: 'dnSpy' },
+]
+
+/** OutputBufferVM.GetText: the pane as it reads, a timestamp and a space in front of every line that has one. */
+export const outputText = (lines: readonly OutputLine[]): string =>
+  lines.map((line) => line.timestamp === undefined ? line.text : `${line.timestamp} ${line.text}`).join('\n')
+
+type OutputGeneral = AppOptions['output']['general']
+
+/** The Output window's view options are the Output page's (OutputWindowOptionsService.Default), saved at once. */
+const setOutputOption = (options: AppOptions, change: Partial<OutputGeneral>): void =>
+  saveAppOptions({ ...options, output: { ...options.output, general: { ...options.output.general, ...change } } })
+
+/**
+ * dnSpy's Output window (OutputControl): "Show output from" and the Clear All, Save and Word Wrap buttons over
+ * the selected pane's log, drawn in the Output Window font with the line numbers, timestamps and wrapping the
+ * Output options ask for. Its context menu and keys are OutputContent's: Copy, Clear All (Ctrl+L), the three
+ * view toggles, Save (Ctrl+S), Ctrl+E Ctrl+W, and Ctrl+1 to Ctrl+0 to pick a pane.
  */
 export const OutputPane = (): React.JSX.Element => {
-  const output = useAppStore((state) => state.output)
+  const pane = useAppStore((state) => state.outputPane)
+  const lines = useAppStore((state) => pane === 'debug' ? state.debugOutput : state.output)
   const clearOutput = useAppStore((state) => state.clearOutput)
-  const [wordWrap, setWordWrap] = useState(() => localStorage.getItem(outputWordWrapKey) === 'true')
+  const selectOutputPane = useAppStore((state) => state.selectOutputPane)
+  const options = useAppOptions()
+  const { wordWrap, showLineNumbers, showTimestamps } = options.output.general
+  const font = useCategoryFont('outputWindow')
   const { t } = useLanguage()
+  const log = useRef<HTMLDivElement>(null)
+  const waitingForSecondKey = useRef(false)
+  const paneName = t(PANES.find((entry) => entry.id === pane)!.labelKey)
 
+  // A log follows what is written to it, the way dnSpy's log editor scrolls to the end on every write.
   useEffect(() => {
-    localStorage.setItem(outputWordWrapKey, String(wordWrap))
-  }, [wordWrap])
+    const element = log.current
+    if (element)
+      element.scrollTop = element.scrollHeight
+  }, [lines])
 
-  // dnSpy's Save writes the buffer out as text. What is written is what the window shows, one line per row.
+  // OutputService.GetFilename: "Output-" and the pane's name without its spaces, as Visual Studio names it.
   const save = async (): Promise<void> => {
-    if (output.length === 0)
-      return
-    await window.dnSpy.saveCode('output.txt', output.join('\n'), t('Save Output As'))
+    await window.dnSpy.saveCode(`${t('Output')}-${paneName.replace(/ /g, '')}.txt`, outputText(lines), t('Save Output As'))
   }
 
+  const selectedText = (): string => {
+    const selection = window.getSelection()
+    return selection && log.current && !selection.isCollapsed && log.current.contains(selection.anchorNode) ? selection.toString() : ''
+  }
+
+  // OutputBufferVM.Copy: the selection, or the line the caret is on when there is none.
+  const copy = (line?: OutputLine): void => {
+    const text = selectedText() || (line ? outputText([line]) : '')
+    if (text)
+      void navigator.clipboard?.writeText(text)
+  }
+
+  const toggleWordWrap = (): void => setOutputOption(options, { wordWrap: !wordWrap })
+
+  const showContextMenu = (event: React.MouseEvent, line?: OutputLine): void => {
+    event.preventDefault()
+    const entry = (key: string, label: string, run: () => void, icon?: React.ReactNode, shortcut?: string): PopupMenuEntry => ({
+      key,
+      content: (
+        <>
+          <span className="document-tab-menu-icon">{icon}</span>
+          <span className="document-tab-menu-label">{label}</span>
+          <span className="document-tab-menu-shortcut">{shortcut}</span>
+        </>
+      ),
+      onSelect: run,
+    })
+    // dnSpy's Output context menu: the copy group, then the view settings (Output/Commands.cs).
+    const items: PopupMenuEntry[] = [
+      entry('copy', t('Copy'), () => copy(line), <MenuEntryIcon name="Copy" />, 'Ctrl+C'),
+      entry('clear-all', t('Clear All'), () => clearOutput(), <MenuEntryIcon name="ClearWindowContent" />, 'Ctrl+L'),
+      { type: 'divider', key: 'settings' },
+      entry('line-numbers', t('Show Line Numbers'), () => setOutputOption(options, { showLineNumbers: !showLineNumbers }), <MenuEntryIcon checked={showLineNumbers} />),
+      entry('timestamps', t('Show Timestamps'), () => setOutputOption(options, { showTimestamps: !showTimestamps }), <MenuEntryIcon checked={showTimestamps} />),
+      entry('word-wrap', t('Word Wrap'), toggleWordWrap, <MenuEntryIcon name="WordWrap" checked={wordWrap} />, 'Ctrl+E, Ctrl+W'),
+    ]
+    showPopupMenu({ anchor: { x: event.clientX, y: event.clientY }, returnFocusTo: log.current ?? undefined, title: t('Output'), items, onClose: () => undefined })
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent): void => {
+    const control = event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey
+    const key = event.key.toLowerCase()
+    // OutputControl_PreviewKeyDown: Ctrl+E arms the chord, W (with or without Ctrl) completes it.
+    if (waitingForSecondKey.current) {
+      waitingForSecondKey.current = false
+      if (key === 'w' && !event.altKey && !event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        toggleWordWrap()
+        return
+      }
+    }
+    if (!control)
+      return
+    const handled = (): void => { event.preventDefault(); event.stopPropagation() }
+    if (key === 'e') {
+      handled()
+      waitingForSecondKey.current = true
+    } else if (key === 'l') {
+      handled()
+      clearOutput()
+    } else if (key === 's') {
+      handled()
+      void save()
+    } else if (key === 'c' || key === 'insert') {
+      handled()
+      copy()
+    } else if (/^[0-9]$/.test(key)) {
+      // SelectLogWindowCommands: Ctrl+1 is the first pane, Ctrl+0 the tenth.
+      const index = key === '0' ? 9 : Number(key) - 1
+      if (index < PANES.length) {
+        handled()
+        selectOutputPane(PANES[index].id)
+      }
+    }
+  }
+
+  const numberWidth = `${Math.max(2, String(lines.length).length)}ch`
+
   return (
-    <div className="output-window">
+    <div className="output-window" onKeyDown={onKeyDown}>
       <div className="output-command-bar" role="toolbar" aria-label={t('Output')}>
-        {/* dnSpy's own three buttons, with the images its control draws them with (OutputControl.xaml). */}
-        <button type="button" className="icon-button" aria-label={t('Clear All')} title={t('Clear All')} disabled={output.length === 0} onClick={clearOutput}><DsIcon name="ClearWindowContent" /></button>
-        <button type="button" className="icon-button" aria-label={t('Save As')} title={t('Save As')} disabled={output.length === 0} onClick={() => void save()}><DsIcon name="Save" /></button>
+        <label className="output-source">
+          <span>{t('Show output from:')}</span>
+          <select value={pane} onChange={(event) => selectOutputPane(event.target.value as OutputPaneId)}>
+            {PANES.map((entry, index) => <option key={entry.id} value={entry.id}>{`${t(entry.labelKey)} Ctrl+${(index + 1) % 10}`}</option>)}
+          </select>
+        </label>
         <span className="toolbar-separator" />
-        <button type="button" className="icon-button" aria-label={t('Word Wrap')} title={t('Word Wrap')} aria-pressed={wordWrap} onClick={() => setWordWrap(!wordWrap)}><DsIcon name="WordWrap" /></button>
+        {/* dnSpy's own three buttons, with the images and tool tips its control gives them (OutputControl.xaml). */}
+        <button type="button" className="icon-button" aria-label={t('Clear All')} title={`${t('Clear All')} (Ctrl+L)`} onClick={() => clearOutput()}><DsIcon name="ClearWindowContent" /></button>
+        <button type="button" className="icon-button" aria-label={t('Save As')} title={`${t('Save')} (Ctrl+S)`} onClick={() => void save()}><DsIcon name="Save" /></button>
+        <span className="toolbar-separator" />
+        <button type="button" className="icon-button" aria-label={t('Word Wrap')} title={`${t('Toggle Word Wrap')} (Ctrl+E, Ctrl+W)`} aria-pressed={wordWrap} onClick={toggleWordWrap}><DsIcon name="WordWrap" /></button>
       </div>
-      <div className={`output-pane${wordWrap ? ' output-word-wrap' : ''}`} role="log" aria-label={t('Output')}>
-        {output.map((line, index) => <div key={`${index}:${line}`}>{line}</div>)}
+      <div
+        ref={log}
+        className={`output-pane${wordWrap ? ' output-word-wrap' : ''}${showLineNumbers ? ' output-line-numbers' : ''}`}
+        role="log"
+        aria-label={t('Output')}
+        tabIndex={0}
+        style={{ fontFamily: font.fontFamily, fontSize: font.fontSize, ['--output-number-width' as string]: numberWidth }}
+        onContextMenu={(event) => showContextMenu(event)}
+      >
+        {lines.map((line, index) => (
+          <div key={index} className="output-line" onContextMenu={(event) => { event.stopPropagation(); showContextMenu(event, line) }}>
+            {showLineNumbers && <span className="output-line-number tc-lineNumber" aria-hidden="true">{index + 1}</span>}
+            <span className="output-line-text">
+              {line.timestamp !== undefined && <span className="tc-debugLogTimestamp">{`${line.timestamp} `}</span>}
+              {line.text}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )

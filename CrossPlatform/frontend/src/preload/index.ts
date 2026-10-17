@@ -1,9 +1,29 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { BackendStatus, DecompilerLanguage, DnSpyApi, UiLocale } from '../shared/protocol'
 
+// dnSpy's settings file: with one in effect the main process hands over its renderer section before the page's
+// scripts run, and the page's storage — a session of its own, never written to disk — is filled from it; what is
+// in the storage when the page goes away is written back. Without one this is null and the profile's is used.
+const rendererSettings = ipcRenderer.sendSync('app:rendererSettings') as Record<string, string> | null
+if (rendererSettings) {
+  localStorage.clear()
+  for (const [key, value] of Object.entries(rendererSettings))
+    localStorage.setItem(key, value)
+  window.addEventListener('beforeunload', () => {
+    const entries: Record<string, string> = {}
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index)
+      if (key !== null)
+        entries[key] = localStorage.getItem(key) ?? ''
+    }
+    ipcRenderer.sendSync('app:saveRendererSettings', entries)
+  })
+}
+
 const api: DnSpyApi = {
   openAssemblies: () => ipcRenderer.invoke('dialog:openAssemblies'),
   getStartupOptions: () => ipcRenderer.invoke('app:startupOptions'),
+  themeFiles: ipcRenderer.sendSync('app:themeFiles'),
   filterExistingPaths: (paths) => ipcRenderer.invoke('app:filterExistingPaths', paths),
   openWorkspace: (paths) => ipcRenderer.invoke('workspace:open', paths),
   addModules: (workspaceId, paths) => ipcRenderer.invoke('workspace:addModules', workspaceId, paths),
@@ -130,6 +150,7 @@ const api: DnSpyApi = {
   getBackendStatus: () => ipcRenderer.invoke('backend:status:get'),
   getProcessId: () => ipcRenderer.invoke('app:processId'),
   setLocale: (locale: UiLocale) => ipcRenderer.invoke('app:setLocale', locale),
+  listSystemFonts: () => ipcRenderer.invoke('app:listSystemFonts'),
   updateMainSettings: (settings) => ipcRenderer.invoke('app:mainSettings', settings),
   onWindowMaximizedChange: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, isMaximized: boolean): void => callback(isMaximized)

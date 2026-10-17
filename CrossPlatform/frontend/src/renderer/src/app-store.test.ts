@@ -258,7 +258,7 @@ describe('class breakpoints', () => {
       { name: 'Ns.Type.Get', enabled: true },
     ])
     expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type..ctor' }, { name: 'Ns.Type.Get' }])
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 2, name: 'Console' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 2, name: 'Console' }))
   })
 
   it('breaks on the accessors the tree nests under a property, as type.Methods holds them too', async () => {
@@ -301,7 +301,7 @@ describe('class breakpoints', () => {
       { name: 'Ns.Type.Put', enabled: false },
       { name: 'Ns.Type.Get', enabled: true },
     ])
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 1, name: 'Console' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 1, name: 'Console' }))
   })
 
   it('says so when the type has no method left to break on', async () => {
@@ -312,7 +312,7 @@ describe('class breakpoints', () => {
 
     expect(useAppStore.getState().functionBreakpoints).toEqual([{ name: 'Ns.Type.Get', enabled: true }])
     expect(setFunctionBreakpoints).not.toHaveBeenCalled()
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
   })
 
   it('puts the tracepoint\'s settings on every breakpoint a class tracepoint adds', async () => {
@@ -1385,7 +1385,7 @@ describe('bookmarks', () => {
     await useAppStore.getState().goToBookmark('b1')
 
     expect(useAppStore.getState().caretReveal).toBeUndefined()
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('Bookmark "{name}" is in a module that is not loaded.', { name: 'Loop head' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Bookmark "{name}" is in a module that is not loaded.', { name: 'Loop head' }))
   })
 
   it('finds a restored bookmark by identity once its document is open', () => {
@@ -1536,7 +1536,7 @@ describe('followed references', () => {
     await useAppStore.getState().openReferenceTarget({ start: 0, length: 9, kind: 'method', targetModulePath: '/app/Missing.dll', targetMetadataToken: 0x06000001 })
 
     expect(openNodeById).not.toHaveBeenCalled()
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('Navigation failed: {message}', { message: '/app/Missing.dll' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Navigation failed: {message}', { message: '/app/Missing.dll' }))
   })
 
   it('reports a reference that could not be looked up at all', async () => {
@@ -1545,7 +1545,7 @@ describe('followed references', () => {
     await useAppStore.getState().openReferenceTarget({ start: 0, length: 9, kind: 'method', targetModulePath: consolePath, targetMetadataToken: 0x06000123 })
 
     expect(openNodeById).not.toHaveBeenCalled()
-    expect(useAppStore.getState().output.at(-1)).toContain('the backend is gone')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('the backend is gone')
   })
 
   it('does nothing for a span that names no target', async () => {
@@ -1746,7 +1746,7 @@ describe('a stop in a module the workspace does not hold', () => {
 
     expect(addModules).toHaveBeenCalledWith(workspaceId, [consolePath])
     expect(useAppStore.getState().roots).toEqual([moduleNode('n2', consolePath)])
-    expect(useAppStore.getState().output.at(-1)).toContain(translate('Loaded {name} for the stopped location.', { name: 'System.Console.dll' }))
+    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Loaded {name} for the stopped location.', { name: 'System.Console.dll' }))
     expect(useAppStore.getState().stoppedLocation).toMatchObject({ nodeId: 'method-5', line: 12 })
     expect(revealDocument).toHaveBeenCalledWith('method-5')
   })
@@ -2053,7 +2053,7 @@ describe('hex editor commands', () => {
     expect(patchHex).toHaveBeenCalledWith('w1', 't1', 'm1', 0x200, returnTrue)
     expect(commitEdit).toHaveBeenCalledWith('w1', 't1')
     expect(useAppStore.getState()).toMatchObject({ dirty: true, workspaceStateId: 'state-2', canUndo: true, busy: false })
-    expect(useAppStore.getState().output.at(-1)).toContain('Updated method body bytes for Run().')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Updated method body bytes for Run().')
   })
 
   it('does nothing when the backend resolved no such template', async () => {
@@ -2072,7 +2072,7 @@ describe('hex editor commands', () => {
 
     expect(rollbackEdit).toHaveBeenCalledWith('w1', 't1')
     expect(useAppStore.getState().error).toBe('The patch does not fit in the file.')
-    expect(useAppStore.getState().output.at(-1)).toContain('Hex edit failed: The patch does not fit in the file.')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Hex edit failed: The patch does not fit in the file.')
   })
 
   it('copies the method body to the clipboard as hexadecimal text', async () => {
@@ -2090,7 +2090,7 @@ describe('hex editor commands', () => {
     readHex.mockRejectedValue(new Error('gone'))
 
     expect(await useAppStore.getState().hexCopyMethodBody()).toBe(false)
-    expect(useAppStore.getState().output.at(-1)).toContain('Copy failed: gone')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Copy failed: gone')
   })
 
   it('pastes the clipboard over the method body', async () => {
@@ -2108,7 +2108,7 @@ describe('hex editor commands', () => {
 
     expect(await useAppStore.getState().hexPasteMethodBody()).toBe(false)
     expect(useAppStore.getState().error).toBe('The clipboard does not hold hexadecimal bytes.')
-    expect(useAppStore.getState().output.at(-1)).toContain('Paste failed: the clipboard does not hold hexadecimal bytes.')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Paste failed: the clipboard does not hold hexadecimal bytes.')
     expect(beginEdit).not.toHaveBeenCalled()
   })
 
@@ -2126,7 +2126,7 @@ describe('hex editor commands', () => {
     readText.mockRejectedValue(new Error('denied'))
 
     expect(await useAppStore.getState().hexPasteMethodBody()).toBe(false)
-    expect(useAppStore.getState().output.at(-1)).toContain('Paste failed: denied')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Paste failed: denied')
   })
 
   it('bumps the navigation token so the same range can be asked for twice', () => {
@@ -2251,7 +2251,7 @@ describe('openPaths', () => {
     await useAppStore.getState().openPaths(['/A.dll'])
 
     expect(useAppStore.getState().selectedNode).toBe(rootA)
-    expect(useAppStore.getState().output.at(-1)).toContain('already open')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('already open')
   })
 
   it('replaces the workspace when none is open yet', async () => {

@@ -76,7 +76,7 @@ const isRectangle = (value: unknown): value is Rectangle => {
     && (rect.width ?? 0) > 0 && (rect.height ?? 0) > 0
 }
 
-const toSavedWindowState = (value: unknown): SavedWindowState | undefined => {
+export const toSavedWindowState = (value: unknown): SavedWindowState | undefined => {
   if (typeof value !== 'object' || value === null)
     return undefined
   const parsed = value as Partial<SavedWindowState>

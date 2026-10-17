@@ -23,13 +23,18 @@ export const defaultAppMainSettings: AppMainSettings = {
  * dnSpy's own defaults rather than failing to start. */
 export const loadAppMainSettings = (filePath: string): AppMainSettings => {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<AppMainSettings> | null
-    if (typeof parsed !== 'object' || parsed === null)
-      return defaultAppMainSettings
-    return { allowMoreThanOneInstance: parsed.allowMoreThanOneInstance === true }
+    return toAppMainSettings(JSON.parse(readFileSync(filePath, 'utf8')))
   } catch {
     return defaultAppMainSettings
   }
+}
+
+/** The settings out of what was read back, a file's or a settings document's section. */
+export const toAppMainSettings = (value: unknown): AppMainSettings => {
+  const parsed = value as Partial<AppMainSettings> | null | undefined
+  if (typeof parsed !== 'object' || parsed === null)
+    return defaultAppMainSettings
+  return { allowMoreThanOneInstance: parsed.allowMoreThanOneInstance === true }
 }
 
 export const saveAppMainSettings = (filePath: string, settings: AppMainSettings): void => {

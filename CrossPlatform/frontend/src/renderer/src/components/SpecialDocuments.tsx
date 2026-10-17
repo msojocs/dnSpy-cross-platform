@@ -3,10 +3,12 @@ import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import type { ModuleInfoResponse } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { useCategoryFont } from '../fonts'
 
 const pageSize = 4096
 
 export const HexView = ({ moduleId }: { moduleId: string }): React.JSX.Element => {
+  const hexFont = useCategoryFont('hexEditor')
   const workspaceId = useAppStore((state) => state.workspaceId)
   // Every edit bumps the state id, and a byte patch is an edit like any other, so the page is read
   // again after one — which is what makes an undo show up here.
@@ -77,7 +79,8 @@ export const HexView = ({ moduleId }: { moduleId: string }): React.JSX.Element =
         <span>{offset.toLocaleString(locale)} / {length.toLocaleString(locale)}</span>
         {loading && <RefreshCw className="spin" size={14} />}
       </div>
-      <div className="hex-content">
+      {/* The Hex Editor category of Environment › Font, in the theme in use. */}
+      <div className="hex-content" style={{ fontFamily: hexFont.fontFamily, fontSize: hexFont.fontSize }}>
         {rows.map((row) => (
           <div className="hex-line" key={row.address}>
             <span className="hex-address">{row.address}</span>{'  '}

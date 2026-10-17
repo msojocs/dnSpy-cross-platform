@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { StringReference, TextPart } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
@@ -18,6 +17,7 @@ import { useStringReferencesStore } from '../string-references-store'
 import { loadAppOptions, saveAppOptions, useAppOptions } from './app-options'
 import { NodeIcon } from './AssemblyExplorer'
 import { ColoredText } from './ColoredText'
+import { ExpanderGlyph } from './DsGlyphs'
 import { DsIcon } from './DsIcon'
 import { showStringReferencesContextMenu } from './StringReferencesContextMenu'
 import './StringReferencesPane.css'
@@ -316,7 +316,8 @@ export const StringReferencesPane = ({ commands }: { commands: StringReferencesP
           aria-controls="strings-options"
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
+          {/* The same Expander the search window's Options is. */}
+          <ExpanderGlyph expanded={expanded} />
           {t('Options')}
         </button>
         <span className="strings-separator" aria-hidden />

@@ -9,17 +9,19 @@
  */
 
 import { useSyncExternalStore } from 'react'
+import { resolveTheme } from '../theme-service'
 import type { StringReferencesSettings } from '../string-references-model'
 import type { SearchLocation, SearchType } from '../../../shared/protocol'
 
-export type ThemeName = 'blue' | 'light' | 'dark' | 'hc'
+/** A theme by the key the theme service gives it: the `name` of its `.dntheme` file, or its GUID when it has none. */
+export type ThemeName = string
 /** Runtime kind hosted by the DAP backend (upstream `RuntimeDisplayName` is ".NET"). */
 export type DebugEngine = 'dotnet'
 /** Expression-evaluation language exposed by the .NET debug engine. */
 export type DebugLanguage = 'C#' | 'Visual Basic'
 
 export interface EnvironmentGeneralSettings {
-  /** Colour theme, upstream's `ThemesVM` combo box. */
+  /** Colour theme, upstream's `ThemesVM` combo box; dnSpy's ThemeSettings.ThemeGuid. */
   theme: ThemeName
   /**
    * The messages whose "Don't show again" box has been ticked, by the id dnSpy gives each one
@@ -35,10 +37,18 @@ export interface EnvironmentGeneralSettings {
   checkForUpdateOnStartup: boolean
 }
 
-export interface EnvironmentFontSettings {
-  /** Family name of the editor font. */
-  fontFamily: string
+/** One category's font on the Environment › Font page; see fonts.ts. */
+export interface FontOption {
+  /** Left out for dnSpy's default family for the category. */
+  fontFamily?: string
+  /** In device-independent pixels, as WPF keeps it. */
   fontSize: number
+}
+
+export interface EnvironmentFontSettings {
+  /** ThemeFontSettings: by theme GUID, each text appearance category's font in that theme. A category, or a
+   *  theme, that has none uses dnSpy's default. */
+  byTheme: Record<string, Partial<Record<'textEditor' | 'hexEditor' | 'outputWindow', FontOption>>>
 }
 
 /**
@@ -511,13 +521,10 @@ export const defaultAppOptions: AppOptions = {
     useMemoryMappedIO: false,
     checkForUpdateOnStartup: true,
   },
+  // dnSpy picks the first of a list of families that is installed and sizes it at FontUtilities'
+  // DEFAULT_FONT_SIZE, 10pt at 96 dpi; a theme the user has chosen no fonts for keeps those (fonts.ts).
   environmentFont: {
-    // dnSpy picks the first of a list of families that is installed and sizes it at FontUtilities'
-    // DEFAULT_FONT_SIZE, which is 10pt at 96 dpi — the 13 the editors were drawing at before this option was
-    // read. The family is looked up with JetBrains Mono and the generic monospaced family behind it, so a
-    // family the machine does not have leaves the editor as it was.
-    fontFamily: 'Cascadia Mono',
-    fontSize: 13,
+    byTheme: {},
   },
   decompiler: {
     cSharp: {
@@ -738,6 +745,25 @@ const deepMerge = <T>(target: T, source: Partial<T>): T => {
   return result as T
 }
 
+/**
+ * An older build kept one font for every editor and theme; it becomes the text editor's and the Output window's
+ * font in the theme that was in use, which is where it showed.
+ */
+const migrateLegacyFont = (options: AppOptions): AppOptions => {
+  const legacy = options.environmentFont as EnvironmentFontSettings & { fontFamily?: unknown; fontSize?: unknown }
+  if (legacy.fontFamily === undefined && legacy.fontSize === undefined)
+    return options
+  const fontFamily = typeof legacy.fontFamily === 'string' && legacy.fontFamily.trim() && legacy.fontFamily !== 'Cascadia Mono' ? legacy.fontFamily.trim() : undefined
+  const fontSize = typeof legacy.fontSize === 'number' && Number.isFinite(legacy.fontSize) ? legacy.fontSize : undefined
+  const byTheme = { ...legacy.byTheme }
+  if (fontFamily !== undefined || (fontSize !== undefined && fontSize !== 13)) {
+    const guid = resolveTheme(options.environmentGeneral.theme).guid
+    const font: FontOption = { fontFamily, fontSize: fontSize ?? 10 * 96 / 72 }
+    byTheme[guid] = { ...byTheme[guid], textEditor: font, outputWindow: font }
+  }
+  return { ...options, environmentFont: { byTheme } }
+}
+
 export const loadAppOptions = (): AppOptions => {
   if (typeof localStorage === 'undefined')
     return cloneDefault()
@@ -746,7 +772,7 @@ export const loadAppOptions = (): AppOptions => {
     return cloneDefault()
   try {
     const parsed = JSON.parse(raw) as Partial<AppOptions>
-    return deepMerge(cloneDefault(), parsed)
+    return migrateLegacyFont(deepMerge(cloneDefault(), parsed))
   }
   catch {
     return cloneDefault()

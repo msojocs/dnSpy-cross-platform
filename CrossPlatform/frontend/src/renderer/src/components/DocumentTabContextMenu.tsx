@@ -11,7 +11,7 @@ import {
   type IPopupMenuItem,
   type PopupMenuEntry,
 } from 'flexlayout-react'
-import { ArrowLeft, ArrowRight, Columns2, CopyMinus, CopyPlus, PanelsTopLeft, Rows2, Save, X } from 'lucide-react'
+import { MenuEntryIcon } from './DsIcon'
 
 export interface DocumentTabMenuState {
   tabSet: TabSetNode
@@ -266,20 +266,21 @@ export const buildDocumentTabMenuItems = (
   state: DocumentTabMenuState,
   options: DocumentTabMenuOptions,
 ): PopupMenuEntry[] => {
-  const iconProps = { size: 14, strokeWidth: 1.7, 'aria-hidden': true as const }
+  // Each entry wears the image its ExportMenuItem names in dnSpy's tab menu (GROUP_CTX_TABS_*, TabCommands
+  // and SaveCommands); the ones it gives no Icon to leave the column blank.
   const changed = (action: () => void): (() => void) => () => {
     action()
     options.onModelChanged()
   }
   const items: PopupMenuEntry[] = [
-    menuItem('save-code', options.t('Save Code...'), <Save {...iconProps} />, () => options.onSave(tab), !state.canSave, 'Ctrl+S'),
-    menuItem('close', options.t('Close'), <X {...iconProps} />, changed(() => closeDocumentTab(tab)), !state.canClose, 'Ctrl+F4'),
-    menuItem('close-all', options.t('Close All Tabs'), <PanelsTopLeft {...iconProps} />, changed(() => closeAllDocumentTabs(tab.getModel())), !state.canCloseAll),
-    menuItem('close-others', options.t('Close All But This'), <CopyMinus {...iconProps} />, changed(() => closeOtherDocumentTabs(tab)), !state.canCloseOthers),
+    menuItem('save-code', options.t('Save Code...'), <MenuEntryIcon name="Save" />, () => options.onSave(tab), !state.canSave, 'Ctrl+S'),
+    menuItem('close', options.t('Close'), null, changed(() => closeDocumentTab(tab)), !state.canClose, 'Ctrl+F4'),
+    menuItem('close-all', options.t('Close All Tabs'), <MenuEntryIcon name="CloseDocumentGroup" />, changed(() => closeAllDocumentTabs(tab.getModel())), !state.canCloseAll),
+    menuItem('close-others', options.t('Close All But This'), null, changed(() => closeOtherDocumentTabs(tab)), !state.canCloseOthers),
   ]
 
   if (state.canClone) {
-    items.push(menuItem('new-tab', options.t('New Tab'), <CopyPlus {...iconProps} />, changed(() => {
+    items.push(menuItem('new-tab', options.t('New Tab'), null, changed(() => {
       cloneDocumentTab(tab)
     })))
   }
@@ -287,12 +288,12 @@ export const buildDocumentTabMenuItems = (
   if (state.canCreateHorizontalGroup || state.canCreateVerticalGroup) {
     items.push({ type: 'divider', key: 'tab-groups' })
     if (state.canCreateHorizontalGroup) {
-      items.push(menuItem('new-horizontal-group', options.t('New Horizontal Tab Group'), <Rows2 {...iconProps} />, changed(() => {
+      items.push(menuItem('new-horizontal-group', options.t('New Horizontal Tab Group'), <MenuEntryIcon name="SplitScreenHorizontally" />, changed(() => {
         createDocumentTabGroup(tab, true)
       })))
     }
     if (state.canCreateVerticalGroup) {
-      items.push(menuItem('new-vertical-group', options.t('New Vertical Tab Group'), <Columns2 {...iconProps} />, changed(() => {
+      items.push(menuItem('new-vertical-group', options.t('New Vertical Tab Group'), <MenuEntryIcon name="SplitScreenVertically" />, changed(() => {
         createDocumentTabGroup(tab, false)
       })))
     }
@@ -303,13 +304,13 @@ export const buildDocumentTabMenuItems = (
   // out, so a group on its own shows only the entries that act on it, and a section with none is not there.
   const group = state.group
   const groupItems = [
-    group.canMoveToNextGroup && menuItem('move-next-group', options.t('Move to Next Tab Group'), <ArrowRight {...iconProps} />,
+    group.canMoveToNextGroup && menuItem('move-next-group', options.t('Move to Next Tab Group'), null,
       changed(() => options.moveTabToGroup(tab, 1, false))),
-    group.canMoveAllToNextGroup && menuItem('move-all-next-group', options.t('Move All Tabs to Next Tab Group'), <ArrowRight {...iconProps} />,
+    group.canMoveAllToNextGroup && menuItem('move-all-next-group', options.t('Move All Tabs to Next Tab Group'), null,
       changed(() => options.moveTabToGroup(tab, 1, true))),
-    group.canMoveToPreviousGroup && menuItem('move-previous-group', options.t('Move to Previous Tab Group'), <ArrowLeft {...iconProps} />,
+    group.canMoveToPreviousGroup && menuItem('move-previous-group', options.t('Move to Previous Tab Group'), null,
       changed(() => options.moveTabToGroup(tab, -1, false))),
-    group.canMoveAllToPreviousGroup && menuItem('move-all-previous-group', options.t('Move All Tabs to Previous Tab Group'), <ArrowLeft {...iconProps} />,
+    group.canMoveAllToPreviousGroup && menuItem('move-all-previous-group', options.t('Move All Tabs to Previous Tab Group'), null,
       changed(() => options.moveTabToGroup(tab, -1, true))),
   ].filter((item): item is IPopupMenuItem => item !== false)
   if (groupItems.length > 0) {
@@ -318,21 +319,21 @@ export const buildDocumentTabMenuItems = (
   }
 
   const closeItems = [
-    group.canCloseGroup && menuItem('close-group', options.t('Close Tab Group'), <CopyMinus {...iconProps} />,
+    group.canCloseGroup && menuItem('close-group', options.t('Close Tab Group'), null,
       changed(() => options.closeGroup(tab))),
-    group.canCloseOtherGroups && menuItem('close-other-groups', options.t('Close All Tab Groups But This'), <CopyMinus {...iconProps} />,
+    group.canCloseOtherGroups && menuItem('close-other-groups', options.t('Close All Tab Groups But This'), null,
       changed(() => options.closeOtherGroups(tab))),
-    group.canMoveGroupAfterNext && menuItem('move-group-after', options.t('Move Tab Group After Next Tab Group'), <ArrowRight {...iconProps} />,
+    group.canMoveGroupAfterNext && menuItem('move-group-after', options.t('Move Tab Group After Next Tab Group'), null,
       changed(() => options.moveGroup(tab, true))),
-    group.canMoveGroupBeforePrevious && menuItem('move-group-before', options.t('Move Tab Group Before Previous Tab Group'), <ArrowLeft {...iconProps} />,
+    group.canMoveGroupBeforePrevious && menuItem('move-group-before', options.t('Move Tab Group Before Previous Tab Group'), null,
       changed(() => options.moveGroup(tab, false))),
-    group.canMergeGroups && menuItem('merge-groups', options.t('Merge All Tab Groups'), <PanelsTopLeft {...iconProps} />,
+    group.canMergeGroups && menuItem('merge-groups', options.t('Merge All Tab Groups'), null,
       changed(() => options.mergeGroups())),
   ].filter((item): item is IPopupMenuItem => item !== false)
   const arrangeItems = [
-    group.canUseVerticalGroups && menuItem('use-vertical-groups', options.t('Use Vertical Tab Groups'), <Columns2 {...iconProps} />,
+    group.canUseVerticalGroups && menuItem('use-vertical-groups', options.t('Use Vertical Tab Groups'), <MenuEntryIcon name="SplitScreenVertically" />,
       changed(() => options.arrangeGroups(false))),
-    group.canUseHorizontalGroups && menuItem('use-horizontal-groups', options.t('Use Horizontal Tab Groups'), <Rows2 {...iconProps} />,
+    group.canUseHorizontalGroups && menuItem('use-horizontal-groups', options.t('Use Horizontal Tab Groups'), <MenuEntryIcon name="SplitScreenHorizontally" />,
       changed(() => options.arrangeGroups(true))),
   ].filter((item): item is IPopupMenuItem => item !== false)
   if (closeItems.length > 0 || arrangeItems.length > 0) {

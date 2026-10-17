@@ -1,17 +1,23 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-interface DialogPathSettings {
+export interface DialogPathSettings {
   lastOpenDirectory?: string
 }
 
 const isMissingFileError = (error: unknown): boolean =>
   error instanceof Error && 'code' in error && error.code === 'ENOENT'
 
+/** Where the directory is kept when it is not a file of its own: a section of the settings file. */
+export interface DialogPathStorage {
+  read(): unknown
+  write(settings: DialogPathSettings): void
+}
+
 export class DialogPathHistory {
   private lastOpenDirectory: string | undefined
 
-  constructor(private readonly settingsPath: string) {}
+  constructor(private readonly settingsPath: string, private readonly storage?: DialogPathStorage) {}
 
   get openDirectory(): string | undefined {
     return this.lastOpenDirectory
@@ -19,7 +25,7 @@ export class DialogPathHistory {
 
   async load(): Promise<void> {
     try {
-      const settings = JSON.parse(await readFile(this.settingsPath, 'utf8')) as DialogPathSettings
+      const settings = (this.storage ? this.storage.read() ?? {} : JSON.parse(await readFile(this.settingsPath, 'utf8'))) as DialogPathSettings
       if (typeof settings.lastOpenDirectory !== 'string' || !path.isAbsolute(settings.lastOpenDirectory))
         return
       if ((await stat(settings.lastOpenDirectory)).isDirectory())
@@ -36,6 +42,10 @@ export class DialogPathHistory {
 
     this.lastOpenDirectory = path.dirname(filePath)
     const settings: DialogPathSettings = { lastOpenDirectory: this.lastOpenDirectory }
+    if (this.storage) {
+      this.storage.write(settings)
+      return
+    }
     const temporaryPath = `${this.settingsPath}.tmp`
     try {
       await mkdir(path.dirname(this.settingsPath), { recursive: true })

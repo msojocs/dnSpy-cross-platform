@@ -6,8 +6,6 @@ import {
   Boxes,
   Braces,
   Brackets,
-  ChevronDown,
-  ChevronRight,
   CircleAlert,
   Code2,
   FileBox,
@@ -33,6 +31,7 @@ import { tokenParts } from '../analyzer-model'
 import { useAppStore } from '../app-store'
 import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
+import { TreeExpanderGlyph } from './DsGlyphs'
 import { loadAppOptions, useAppOptions, type MemberKind } from './app-options'
 import { ColoredText } from './ColoredText'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
@@ -517,7 +516,8 @@ const TreeRow = memo(({ node, depth, display, onActivate, onContextMenu }: Explo
           }}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
+          {/* SharpTreeView's ExpandCollapseToggleStyle; the spinner while children load is the port's own. */}
+          {loading ? <LoaderCircle className="spin" size={13} /> : node.hasChildren ? <TreeExpanderGlyph expanded={expanded} /> : null}
         </button>
         <span className={`tree-icon kind-${node.kind} icon-${iconFamily(node.icon)}`}><NodeIcon icon={node.icon} expanded={expanded && node.hasChildren} /></span>
         <span className="tree-label">{display.syntaxHighlight && node.labelParts ? <ColoredText parts={composeTreeRowParts(label, node, display)} /> : composeTreeRowText(label, node, display)}</span>

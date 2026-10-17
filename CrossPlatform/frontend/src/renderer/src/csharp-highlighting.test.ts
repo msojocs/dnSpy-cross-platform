@@ -3,8 +3,12 @@ import 'monaco-editor/languages/definitions/csharp/register'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { installCSharpHighlighting } from './csharp-highlighting'
 import { ilLanguage } from './il-language'
+import { monacoThemeData } from './monaco-theme'
+import { resolveTheme } from './theme-service'
 
 const monaco = { ...monacoApi, editor: { ...monacoApi.editor } }
+// dnSpy's four themes by the names their .dntheme files give them.
+const THEMES = ['light', 'dark', 'blue', 'hc']
 let highlighter: Awaited<ReturnType<typeof installCSharpHighlighting>>
 
 beforeAll(async () => {
@@ -13,6 +17,8 @@ beforeAll(async () => {
     value: () => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined }),
   })
   highlighter = await installCSharpHighlighting(monaco)
+  for (const name of THEMES)
+    monaco.editor.defineTheme(name, monacoThemeData(resolveTheme(name)))
 })
 afterAll(() => highlighter?.dispose())
 
@@ -24,7 +30,7 @@ const tokenAt = (line: string, needle: string): string => {
 }
 
 describe('C# TextMate highlighting', () => {
-  it.each(['dnspy-light', 'dnspy-dark', 'dnspy-high-contrast'])('distinguishes types, methods and keywords in %s', (theme) => {
+  it.each(THEMES)('distinguishes types, methods and keywords in %s', (theme) => {
     monaco.editor.setTheme(theme)
     const declaration = 'public class Example { public string Format(int value) => $"Value: {value}"; }'
     expect(tokenAt(declaration, 'Example')).not.toBe(tokenAt(declaration, 'class'))
@@ -34,7 +40,7 @@ describe('C# TextMate highlighting', () => {
   })
 
   it('keeps comment and verbatim string state across lines, then resumes code', () => {
-    monaco.editor.setTheme('dnspy-dark')
+    monaco.editor.setTheme('dark')
     const code = '/* comment\nclass Fake {}\n*/\nvar text = @"first\nsecond ""quoted""\nlast";\npublic class Real {}'
     const tokens = monaco.editor.tokenize(code, 'csharp')
     expect(tokens[1].every((token) => token.type === tokenAt('// comment', 'comment'))).toBe(true)
@@ -44,7 +50,7 @@ describe('C# TextMate highlighting', () => {
   })
 
   it('supports raw strings and recognizes code after their closing delimiter', () => {
-    monaco.editor.setTheme('dnspy-dark')
+    monaco.editor.setTheme('dark')
     const tokens = monaco.editor.tokenize('var json = """\n{"key": "value"}\n""";\npublic class Real {}', 'csharp')
     expect(tokens[1].every((token) => token.type === tokenAt('var s = "value";', 'value'))).toBe(true)
     expect(tokens[3][0].type).toBe(tokenAt('public class Real {}', 'public'))
@@ -54,7 +60,7 @@ describe('C# TextMate highlighting', () => {
     monaco.languages.register({ id: 'il' })
     const registration = monaco.languages.setMonarchTokensProvider('il', ilLanguage)
     try {
-      for (const theme of ['dnspy-light', 'dnspy-dark', 'dnspy-high-contrast']) {
+      for (const theme of THEMES) {
         monaco.editor.setTheme(theme)
         const [tokens] = monaco.editor.tokenize('IL_0000: ldarg.0', 'il')
         expect(tokens.map((token) => token.type)).toEqual(expect.arrayContaining(['constant.offset.il', 'keyword.opcode.il']))

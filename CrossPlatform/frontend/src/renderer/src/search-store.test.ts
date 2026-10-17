@@ -172,7 +172,7 @@ describe('search store', () => {
     state().restart()
     pending[0].reject(new Error('boom'))
     await vi.waitFor(() => expect(state().searching).toBe(false))
-    expect(useAppStore.getState().output.at(-1)).toContain('Search failed: boom')
+    expect(useAppStore.getState().output.at(-1)?.text).toContain('Search failed: boom')
   })
 
   it('empties the list for an empty query without asking', () => {

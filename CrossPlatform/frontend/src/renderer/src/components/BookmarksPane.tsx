@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { showPopupMenu, type IPopupMenuItem, type PopupMenuEntry } from 'flexlayout-react'
-import { Check, Download, Play, Tag, Trash2, Upload, X } from 'lucide-react'
 import type { BookmarkLocationText, TextPart } from '../../../shared/protocol'
 import { bookmarkEntryOfFile, bookmarkFileEntries, filterBookmarks, parseBookmarkEntries, useAppStore } from '../app-store'
 import type { Bookmark, BookmarkEntry } from '../app-store'
@@ -20,6 +19,7 @@ import {
 import { useLanguage } from '../localization'
 import { saveAppOptions, useAppOptions, type BookmarkSettings } from './app-options'
 import { ColoredText } from './ColoredText'
+import { DsIcon, MenuEntryIcon } from './DsIcon'
 
 // dnSpy's Bookmarks window: a four-column list of every bookmark in the session, with a search box, a
 // toolbar and a context menu carrying the same commands the View menu offers. The search box takes
@@ -31,7 +31,7 @@ const menuItem = (key: string, label: string, onSelect: () => void, options: { d
   key,
   content: (
     <>
-      {options.checked !== undefined && <span className="document-tab-menu-icon">{options.checked ? <Check size={14} strokeWidth={1.7} aria-hidden /> : null}</span>}
+      {options.checked !== undefined && <span className="document-tab-menu-icon"><MenuEntryIcon checked={options.checked} /></span>}
       <span className="document-tab-menu-label">{label}</span>
       {options.shortcut && <span className="document-tab-menu-shortcut">{options.shortcut}</span>}
     </>
@@ -331,21 +331,22 @@ export const BookmarksPane = (): React.JSX.Element => {
 
   return (
     <div className={`bookmarks-pane${settings.syntaxHighlight ? ' syntax-highlight' : ''}`} onKeyDown={onKeyDown} tabIndex={-1}>
+      {/* BookmarksControl.xaml's tool bar, each button with the image dnSpy gives it. */}
       <div className="bookmarks-toolbar">
-        <button className="icon-button" title={t('Toggle Bookmark')} aria-label={t('Toggle Bookmark')} onClick={toggleBookmarkAtCaret}><Tag size={14} /></button>
-        <button className="icon-button" title={t('Previous Bookmark')} aria-label={t('Previous Bookmark')} onClick={() => stepBookmark(-1)}>↑</button>
-        <button className="icon-button" title={t('Next Bookmark')} aria-label={t('Next Bookmark')} onClick={() => stepBookmark(1)}>↓</button>
-        <button className="icon-button" title={t('Previous Bookmark With Same Label')} aria-label={t('Previous Bookmark With Same Label')} onClick={() => stepBookmark(-1, 'label')}>↑<Tag size={9} /></button>
-        <button className="icon-button" title={t('Next Bookmark With Same Label')} aria-label={t('Next Bookmark With Same Label')} onClick={() => stepBookmark(1, 'label')}>↓<Tag size={9} /></button>
-        <button className="icon-button" title={t('Previous Bookmark In Document')} aria-label={t('Previous Bookmark In Document')} onClick={() => stepBookmark(-1, 'document')}>↑▤</button>
-        <button className="icon-button" title={t('Next Bookmark In Document')} aria-label={t('Next Bookmark In Document')} onClick={() => stepBookmark(1, 'document')}>↓▤</button>
+        <button className="icon-button" title={t('Toggle Bookmark')} aria-label={t('Toggle Bookmark')} onClick={toggleBookmarkAtCaret}><DsIcon name="Bookmark" /></button>
+        <button className="icon-button" title={t('Previous Bookmark')} aria-label={t('Previous Bookmark')} onClick={() => stepBookmark(-1)}><DsIcon name="PreviousBookmark" /></button>
+        <button className="icon-button" title={t('Next Bookmark')} aria-label={t('Next Bookmark')} onClick={() => stepBookmark(1)}><DsIcon name="NextBookmark" /></button>
+        <button className="icon-button" title={t('Previous Bookmark With Same Label')} aria-label={t('Previous Bookmark With Same Label')} onClick={() => stepBookmark(-1, 'label')}><DsIcon name="PreviousBookmarkInFolder" /></button>
+        <button className="icon-button" title={t('Next Bookmark With Same Label')} aria-label={t('Next Bookmark With Same Label')} onClick={() => stepBookmark(1, 'label')}><DsIcon name="NextBookmarkInFolder" /></button>
+        <button className="icon-button" title={t('Previous Bookmark In Document')} aria-label={t('Previous Bookmark In Document')} onClick={() => stepBookmark(-1, 'document')}><DsIcon name="PreviousBookmarkInFile" /></button>
+        <button className="icon-button" title={t('Next Bookmark In Document')} aria-label={t('Next Bookmark In Document')} onClick={() => stepBookmark(1, 'document')}><DsIcon name="NextBookmarkInFile" /></button>
         <span className="bookmarks-separator" />
-        <button className="icon-button" title={t('Go To')} aria-label={t('Go To')} disabled={selected.length !== 1} onClick={() => { if (selected.length === 1) void goToBookmark(selected[0]) }}><Play size={14} /></button>
-        <button className="icon-button" title={t('Remove')} aria-label={t('Remove')} disabled={selected.length === 0} onClick={() => removeBookmarks(selected)}><Trash2 size={14} /></button>
-        <button className="icon-button" title={t('Clear Bookmarks')} aria-label={t('Clear Bookmarks')} disabled={bookmarks.length === 0} onClick={clearBookmarks}><X size={14} /></button>
+        <button className="icon-button" title={t('Go To')} aria-label={t('Go To')} disabled={selected.length !== 1} onClick={() => { if (selected.length === 1) void goToBookmark(selected[0]) }}><DsIcon name="GoToSourceCode" /></button>
+        <button className="icon-button" title={t('Remove')} aria-label={t('Remove')} disabled={selected.length === 0} onClick={() => removeBookmarks(selected)}><DsIcon name="Cancel" /></button>
+        <button className="icon-button" title={t('Clear Bookmarks')} aria-label={t('Clear Bookmarks')} disabled={bookmarks.length === 0} onClick={clearBookmarks}><DsIcon name="ClearBookmark" /></button>
         <span className="bookmarks-separator" />
-        <button className="icon-button" title={t('Import Bookmarks')} aria-label={t('Import Bookmarks')} onClick={() => void runImport()}><Upload size={14} /></button>
-        <button className="icon-button" title={t('Export Bookmarks')} aria-label={t('Export Bookmarks')} disabled={rows.length === 0} onClick={() => void exportBookmarks(rows)}><Download size={14} /></button>
+        <button className="icon-button" title={t('Import Bookmarks')} aria-label={t('Import Bookmarks')} onClick={() => void runImport()}><DsIcon name="Import" /></button>
+        <button className="icon-button" title={t('Export Bookmarks')} aria-label={t('Export Bookmarks')} disabled={rows.length === 0} onClick={() => void exportBookmarks(rows)}><DsIcon name="Open" /></button>
       </div>
       <div className="bookmarks-search">
         <input
@@ -355,7 +356,7 @@ export const BookmarksPane = (): React.JSX.Element => {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <button className="icon-button" aria-label={t('Reset Search')} title={t('Reset Search')} disabled={query === ''} onClick={() => setQuery('')}><X size={13} /></button>
+        <button className="icon-button" aria-label={t('Reset Search')} title={t('Reset Search')} disabled={query === ''} onClick={() => setQuery('')}><DsIcon name="ClearWindowContent" /></button>
       </div>
       <div className="bookmarks-table" role="table" aria-label={t('Bookmarks')}>
         <div className="bookmarks-header" role="row">
@@ -437,7 +438,7 @@ export const BookmarksPane = (): React.JSX.Element => {
         <button className="icon-button" title={t('Enable/Disable Matching Bookmarks')} aria-label={t('Enable/Disable Matching Bookmarks')} disabled={rows.length === 0} onClick={toggleMatching}>
           {t(rows.some((bookmark) => bookmark.enabled) ? 'Disable Matching' : 'Enable Matching')}
         </button>
-        <button className="icon-button" title={t('Remove Matching Bookmarks')} aria-label={t('Remove Matching Bookmarks')} disabled={rows.length === 0} onClick={() => removeBookmarks(rows.map((bookmark) => bookmark.id))}><Trash2 size={13} /></button>
+        <button className="icon-button" title={t('Remove Matching Bookmarks')} aria-label={t('Remove Matching Bookmarks')} disabled={rows.length === 0} onClick={() => removeBookmarks(rows.map((bookmark) => bookmark.id))}><DsIcon name="ClearBookmark" /></button>
       </div>
     </div>
   )

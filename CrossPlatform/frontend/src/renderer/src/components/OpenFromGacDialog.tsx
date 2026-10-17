@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LoaderCircle, X } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import type { GacAssemblyDto, GacDetailsResponse } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
+import { CloseGlyph } from './DsGlyphs'
 
 /**
  * dnSpy's GACFileVM_EqualityComparer: two caches can hold the same assembly, and the one listed second is a
@@ -138,7 +139,7 @@ export const OpenFromGacDialog = ({ onClose, onOpen }: { onClose(): void; onOpen
           }
         }}
       >
-        <div className="modal-title"><span id="gac-title">{t('Open from GAC')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+        <div className="modal-title"><span id="gac-title">{t('Open from GAC')}</span><button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="gac-body">
           <div className="gac-list" role="listbox" aria-multiselectable="true" aria-label={t('Open from GAC')}>
             <div className="gac-row gac-header" aria-hidden="true"><span>{t('Name')}</span><span>{t('Version')}</span></div>

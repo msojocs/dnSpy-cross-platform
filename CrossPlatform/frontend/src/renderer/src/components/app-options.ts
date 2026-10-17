@@ -152,6 +152,27 @@ export interface DebuggerOptions {
   // "Language"
   debugEngine: DebugEngine
   debugLanguage: DebugLanguage
+  // DebuggerSettings toggled from the variables, Call Stack, Threads and Modules windows' context menus
+  useHexadecimal: boolean
+  useDigitSeparators: boolean
+  showOnlyPublicMembers: boolean
+  showNamespaces: boolean
+  showIntrinsicTypeKeywords: boolean
+  showTokens: boolean
+}
+
+/** The Call Stack window's display settings — dnSpy's CallStackDisplaySettingsBase, toggled from its context menu. */
+export interface CallStackSettings {
+  showReturnTypes: boolean
+  showParameterTypes: boolean
+  showParameterNames: boolean
+  showParameterValues: boolean
+  showFunctionOffset: boolean
+  showModuleNames: boolean
+  showDeclaringTypes: boolean
+  showNamespaces: boolean
+  showIntrinsicTypeKeywords: boolean
+  showTokens: boolean
 }
 
 export type X86Disassembler = 'masm' | 'nasm' | 'gas'
@@ -407,6 +428,7 @@ export interface AppOptions {
   environmentFont: EnvironmentFontSettings
   decompiler: DecompilerSettings
   debugger: DebuggerOptions
+  callStack: CallStackSettings
   disassembler: DisassemblerSettings
   disassemblerCodeStyle: Record<X86Disassembler, CodeStyleSettings>
   compiler: Record<EditorLanguageKey, CompilerLanguageSettings>
@@ -602,6 +624,24 @@ export const defaultAppOptions: AppOptions = {
     syntaxHighlight: true,
     debugEngine: 'dotnet',
     debugLanguage: 'C#',
+    useHexadecimal: true,
+    useDigitSeparators: false,
+    showOnlyPublicMembers: false,
+    showNamespaces: true,
+    showIntrinsicTypeKeywords: true,
+    showTokens: false,
+  },
+  callStack: {
+    showReturnTypes: false,
+    showParameterTypes: true,
+    showParameterNames: true,
+    showParameterValues: false,
+    showFunctionOffset: true,
+    showModuleNames: true,
+    showDeclaringTypes: true,
+    showNamespaces: true,
+    showIntrinsicTypeKeywords: true,
+    showTokens: false,
   },
   disassembler: {
     syntax: 'masm',

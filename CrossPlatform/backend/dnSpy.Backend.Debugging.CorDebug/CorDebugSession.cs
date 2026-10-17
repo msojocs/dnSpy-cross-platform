@@ -95,7 +95,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 
 	// ---------------------------------------------------------------- lifecycle
 
-	public static async Task<CorDebugSession> LaunchAsync(DebugLaunchRequest request, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, CancellationToken cancellationToken) {
+	public static async Task<CorDebugSession> LaunchAsync(DebugLaunchRequest request, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, DebuggerEngineOptions options, CancellationToken cancellationToken) {
 		var program = Path.GetFullPath(request.Program);
 		if (!File.Exists(program))
 			throw new RpcException(ErrorCodes.FileNotFound, $"Debug target does not exist: {request.Program}");
@@ -105,6 +105,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			WorkspaceId = request.WorkspaceId,
 			SymbolResolver = symbols,
 			ExceptionSettings = exceptionSettings,
+			Options = options,
 			LaunchProgram = program,
 			BreakKind = breakKind,
 			StopAtEntry = breakKind is not null,
@@ -133,6 +134,12 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				startInfo.ArgumentList.Add(argument);
 			// Suspends the runtime at startup so the debugger can attach before any user code runs.
 			startInfo.Environment["DOTNET_DefaultDiagnosticPortSuspend"] = "1";
+			// WPF's launch: with JIT optimization suppressed for system modules, precompiled framework code is
+			// not used either, so the framework is jitted the way the flags ask for.
+			if (options.SuppressJitOptimizationSystemModules) {
+				startInfo.Environment["DOTNET_ReadyToRun"] = "0";
+				startInfo.Environment["COMPlus_ReadyToRun"] = "0";
+			}
 			foreach (var (key, value) in request.Environment ?? new Dictionary<string, string>())
 				startInfo.Environment[key] = value;
 
@@ -204,7 +211,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		return (host, arguments);
 	}
 
-	public static async Task<CorDebugSession> AttachAsync(int processId, string? workspaceId, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, CancellationToken cancellationToken) {
+	public static async Task<CorDebugSession> AttachAsync(int processId, string? workspaceId, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, DebuggerEngineOptions options, CancellationToken cancellationToken) {
 		if (processId <= 0)
 			throw new RpcException(ErrorCodes.InvalidParams, "A positive process ID is required.");
 		// DebugActiveProcess resumes the target, so the CLR interfaces have to be obtained first.
@@ -213,6 +220,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			WorkspaceId = workspaceId,
 			SymbolResolver = symbols,
 			ExceptionSettings = exceptionSettings,
+			Options = options,
 			TargetProcessId = processId,
 		};
 		try {
@@ -252,7 +260,9 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			return;
 		await Dispatcher.RunAsync(() => {
 			try {
-				foreach (var thread in process.EnumerateThreads())
+				// The process's own list is in no particular order; the lowest id is the main thread, which
+				// is the one the Threads window lists first.
+				foreach (var thread in process.EnumerateThreads().OrderBy(thread => ThreadTable.TryGetId(thread) ?? int.MaxValue))
 					Threads.Add(thread);
 			}
 			catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
@@ -352,8 +362,13 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 	/// about fall through; <see cref="AfterEventProcessed"/> still resumes the process afterwards.
 	/// </summary>
 	public void HandleEvent(CorDebugManagedCallbackEventArgs e) {
+		// A running func-eval owns the process: its completion is the only stop it can produce, and anything
+		// else the call raises on the way is answered by AfterEventProcessed with another Continue.
+		if (HandleEvaluationEvent(e))
+			return;
 		switch (e) {
 			case CreateProcessCorDebugManagedCallbackEventArgs:
+				EnableLogMessages();
 				if (BreakKind == "CreateProcess") {
 					if (process is not null) {
 						try {
@@ -373,36 +388,59 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				break;
 			case CreateThreadCorDebugManagedCallbackEventArgs createThread:
 				Threads.Add(createThread.Thread);
+				Emit(DebugEventNames.Thread, new { reason = "started", threadId = ThreadTable.TryGetId(createThread.Thread) });
 				// If we're breaking at CreateProcess and didn't have a thread yet, emit the stopped event now.
 				if (BreakKind == "CreateProcess" && !IsStopped) {
 					Stop(StopReasons.CreateProcess, createThread.Thread);
 				}
 				break;
 			case ExitThreadCorDebugManagedCallbackEventArgs exitThread:
+				Emit(DebugEventNames.Thread, new { reason = "exited", threadId = ThreadTable.TryGetId(exitThread.Thread), exitCode = 0 });
 				Threads.Remove(exitThread.Thread);
 				break;
 			case LoadModuleCorDebugManagedCallbackEventArgs loadModule:
 				Modules.Add(loadModule.Module);
+				OnModuleLoadedCore(loadModule.Module);
 				OnModuleLoaded(loadModule.Module);
 				ArmEntryBreakpoint(loadModule.Module);
 				break;
 			case UnloadModuleCorDebugManagedCallbackEventArgs unloadModule:
+				OnModuleUnloading(unloadModule.Module);
 				Modules.Remove(unloadModule.Module);
 				break;
 			case BreakpointCorDebugManagedCallbackEventArgs hit:
-				OnBreakpointHit(hit.Breakpoint, hit.Thread);
+				if (!IsEvaluating)
+					OnBreakpointHit(hit.Breakpoint, hit.Thread);
 				break;
 			case StepCompleteCorDebugManagedCallbackEventArgs step:
-				Stop(StopReasons.Step, step.Thread);
+				if (!IsEvaluating)
+					OnStepComplete(step.Thread);
 				break;
 			case BreakCorDebugManagedCallbackEventArgs pause:
-				Stop(StopReasons.Pause, pause.Thread);
+				// Debugger.Break() and the IL break instruction. The options can tell the engine to run past
+				// them, which is what "Ignore Debugger.Break() and break instructions" means.
+				if (!IsEvaluating && !Options.IgnoreBreakInstructions)
+					Stop(StopReasons.UserBreak, pause.Thread);
+				break;
+			case LogMessageCorDebugManagedCallbackEventArgs log:
+				OnLogMessage(log);
+				break;
+			case NameChangeCorDebugManagedCallbackEventArgs nameChange:
+				OnNameChange(nameChange);
+				break;
+			case CreateAppDomainCorDebugManagedCallbackEventArgs createAppDomain:
+				try {
+					createAppDomain.AppDomain.Attach();
+				}
+				catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+				}
 				break;
 			case BreakpointSetErrorCorDebugManagedCallbackEventArgs error:
 				OnBreakpointSetError(error.Breakpoint, error.DwError);
 				break;
 			case Exception2CorDebugManagedCallbackEventArgs exception:
-				OnExceptionThrown(exception);
+				if (!IsEvaluating)
+					OnExceptionThrown(exception);
 				break;
 			case DebuggerErrorCorDebugManagedCallbackEventArgs debuggerError:
 				DebugLog.Error("debugger-error", new COMException($"The debugger reported error 0x{debuggerError.ErrorCode:X8}.", debuggerError.ErrorHR));
@@ -410,7 +448,8 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			case ExitProcessCorDebugManagedCallbackEventArgs:
 				HasExited = true;
 				IsStopped = false;
-				Emit(DebugEventNames.Exited, new { exitCode = TryGetExitCode() });
+				var exitCode = TryGetExitCode();
+				Emit(DebugEventNames.Exited, new { exitCode });
 				Emit(DebugEventNames.Terminated, new { restart = false });
 				break;
 		}
@@ -430,11 +469,14 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		// it to end — and the frames and values the previous stop handed out die with it: their COM
 		// objects belong to a suspension that no longer exists.
 		CancelStepping();
+		ClearRunToCursor();
 		frameTable.Clear();
 		variableTable.Clear();
 		IsStopped = true;
 		StopReason = reason;
+		stoppedOnUnhandledException = extra is not null && extra.TryGetValue("unhandled", out var unhandled) && unhandled is true;
 		StoppedThreadId = thread is null ? null : ThreadTable.TryGetId(thread);
+		OnStopped(thread);
 		var body = new Dictionary<string, object?>(StringComparer.Ordinal) {
 			["reason"] = reason,
 			["threadId"] = StoppedThreadId,
@@ -455,16 +497,22 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 	/// suspended, so anything not deliberately stopped must be resumed immediately.
 	/// </summary>
 	public void AfterEventProcessed() {
-		if (HasExited || IsStopped || awaitingConfiguration || process is null)
+		var hold = holdAfterEvent;
+		holdAfterEvent = false;
+		if (HasExited || process is null || hold)
 			return;
-		try {
-			if (!process.IsRunning)
-				process.Continue(false);
+		// A func-eval keeps running through every callback the call raises; only its completion stops it.
+		if (pendingEval is not null) {
+			ContinueProcess(forEvaluation: true);
+			return;
 		}
-		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
-			// The process went away between the event and the resume.
-		}
+		if (IsStopped || deciding || awaitingConfiguration)
+			return;
+		ContinueProcess();
 	}
+
+	/// <summary>True when the current stop is an exception nothing caught; the runtime refuses func-eval then.</summary>
+	bool stoppedOnUnhandledException;
 
 	// Implemented in CorDebugSession.Breakpoints.cs, which is where the breakpoint table lives.
 	partial void OnModuleLoaded(ICorDebugModule module);
@@ -492,8 +540,39 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			// has to happen off the dispatcher for the same reason breakpoint resolution does.
 			case "stackTrace":
 				return await StackTraceAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "frameLocation":
+				return await FrameLocationAsync(arguments, cancellationToken).ConfigureAwait(false);
 			case "variables":
 				return await VariablesAsync(arguments, cancellationToken).ConfigureAwait(false);
+			// Evaluation makes func-evals, which are continues: the event pump has to keep running under them.
+			case "evaluate":
+				return await EvaluateRequestAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "setExpression":
+				return await SetExpressionAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "staticFields":
+				return await StaticFieldsAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "makeObjectId":
+				return await MakeObjectIdAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "deleteObjectId":
+				return await DeleteObjectIdAsync(arguments).ConfigureAwait(false);
+			case "setNextStatement":
+				return await SetNextStatementAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "runToFrame":
+				return await RunToFrameAsync(arguments).ConfigureAwait(false);
+			case "setModuleBreakpoints":
+				return SetModuleBreakpoints(arguments);
+			case "runToCursor":
+				return await RunToCursorAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "autos":
+				return await AutosAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "disassemble":
+				return await DisassembleAsync(arguments, cancellationToken).ConfigureAwait(false);
+			case "readMemory":
+				return await ReadMemoryAsync(arguments).ConfigureAwait(false);
+			case "writeMemory":
+				return await WriteMemoryAsync(arguments).ConfigureAwait(false);
+			case "saveModule":
+				return await SaveModuleAsync(arguments).ConfigureAwait(false);
 			// A step picks its landing sites before it resumes, so it decompiles too.
 			case "next":
 			case "stepIn":
@@ -523,8 +602,12 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				return ThreadsResponse();
 			case "modules":
 				return ModulesResponse();
-			case "evaluate":
-				throw new RpcException(ErrorCodes.MethodNotFound, "Expression evaluation is not supported by the in-process debug engine.");
+			case "freezeThread":
+				return FreezeThread(arguments);
+			case "renameThread":
+				return RenameThread(arguments);
+			case "process":
+				return ProcessResponse();
 			case "scopes":
 				return Scopes(arguments);
 			// stackTrace, variables and the step commands are answered in ExecuteAsync: every one of
@@ -538,6 +621,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		if (process is null || HasExited)
 			return EmptyJson();
 		CancelStepping();
+		ClearReturnValues();
 		ResumeProcess();
 		return EmptyJson();
 	}
@@ -554,13 +638,7 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		frameTable.Clear();
 		variableTable.Clear();
 		Emit(DebugEventNames.Continued, new { threadId = (int?)null, allThreadsContinued = true });
-		try {
-			if (process is not null && !process.IsRunning)
-				process.Continue(false);
-		}
-		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
-			// Already running or already gone.
-		}
+		ContinueProcess();
 	}
 
 	JsonElement Pause() {
@@ -579,16 +657,15 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		return EmptyJson();
 	}
 
-	JsonElement ThreadsResponse() => JsonSerializer.SerializeToElement(new {
-		threads = Threads.Snapshot().Select(pair => new { id = pair.Id, name = ThreadTable.Describe(pair.Id) }).ToArray(),
-	});
+	JsonElement ModulesResponse() {
+		var entries = Modules.Entries();
+		return DebugJson.Serialize(new {
+			modules = entries.Select(DescribeModule).ToArray(),
+			totalModules = entries.Count,
+		});
+	}
 
-	JsonElement ModulesResponse() => JsonSerializer.SerializeToElement(new {
-		modules = Modules.Snapshot(),
-		totalModules = Modules.Snapshot().Count,
-	});
-
-	static JsonElement EmptyJson() => JsonSerializer.SerializeToElement(new { });
+	static JsonElement EmptyJson() => DebugJson.Serialize(new { });
 
 	// ---------------------------------------------------------------- shutdown
 

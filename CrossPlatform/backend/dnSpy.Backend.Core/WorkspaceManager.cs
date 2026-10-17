@@ -30,7 +30,7 @@ using DecompilerMetadataFile = ICSharpCode.Decompiler.Metadata.MetadataFile;
 
 namespace dnSpy.Backend.Core;
 
-public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver {
+public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver, IDebugSourceProvider {
 	const int MaxHexReadLength = 1024 * 1024;
 	readonly ConcurrentDictionary<string, Workspace> workspaces = new(StringComparer.Ordinal);
 	readonly SymbolResolver symbols = new();
@@ -239,6 +239,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 	public Task<bool> IsWorkspaceModuleAsync(string? workspaceId, string modulePath, CancellationToken cancellationToken) =>
 		WithSymbolsAsync(workspaceId, w => symbols.IsWorkspaceModule(w, modulePath), cancellationToken);
+
+	public Task<MethodSourceDto?> GetMethodSourceAsync(string? workspaceId, string modulePath, int metadataToken, CancellationToken cancellationToken) =>
+		WithSymbolsAsync(workspaceId, w => symbols.GetMethodSource(w, modulePath, metadataToken, cancellationToken), cancellationToken);
 
 	/// <summary>
 	/// Runs a symbol lookup. Without a workspace the lookup still answers — a debuggee attached
@@ -781,6 +784,64 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return Workspace.BuildCodeStatements(syntaxTree, decompiler, entry, cancellationToken)
 				.Where(statement => statement.SourceMethodToken == sourceToken)
 				.ToArray();
+		}
+
+		/// <summary>
+		/// A body's statements as the decompiler writes them and its IL, one instruction a line — what the
+		/// Disassembly view writes as comments over the native code, and what the Autos window reads names from.
+		/// </summary>
+		public MethodSourceDto? GetMethodSource(Workspace? workspace, string modulePath, int metadataToken, CancellationToken cancellationToken) {
+			var entry = FindModule(workspace, modulePath);
+			if (entry is null || entry.Module.ResolveToken(metadataToken) is not MethodDef method)
+				return null;
+			var instructions = method.Body?.Instructions.Select(instruction => new IlLineDto((int)instruction.Offset, instruction.ToString() ?? string.Empty)).ToArray() ?? [];
+			var source = FindSourceMethod(method);
+			var statements = new List<SourceStatementDto>();
+			try {
+				var settings = new DecompilerSettings();
+				using var session = Workspace.CreateCSharpDecompilerSession(entry, settings, cancellationToken);
+				var decompiler = session.Decompiler;
+				var syntaxTree = decompiler.Decompile([Workspace.ToEntityHandle(source)]);
+				var output = new Workspace.SpanTextOutput(_ => null);
+				Workspace.RenderWithLocations(syntaxTree, output, settings);
+				var lines = output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+				var sourceToken = unchecked((int)source.MDToken.Raw);
+				foreach (var statement in Workspace.BuildCodeStatements(syntaxTree, decompiler, entry, cancellationToken)) {
+					if (statement.SourceMethodToken != sourceToken || statement.MetadataToken != metadataToken)
+						continue;
+					statements.Add(new SourceStatementDto(statement.IlOffset, statement.IlEndOffset, statement.MetadataToken, TextOf(lines, statement), statement.IsHidden));
+				}
+			}
+			catch (OperationCanceledException) {
+				throw;
+			}
+			catch (Exception) {
+				// A body the decompiler cannot read still has its IL to show.
+			}
+			return new MethodSourceDto(method.FullName, statements.OrderBy(statement => statement.IlOffset).ToArray(), instructions);
+		}
+
+		/// <summary>The text between a statement's start and end, out of the document's lines.</summary>
+		static string TextOf(string[] lines, CodeStatementDto statement) {
+			if (statement.StartLine < 1 || statement.StartLine > lines.Length)
+				return string.Empty;
+			if (statement.StartLine == statement.EndLine) {
+				var line = lines[statement.StartLine - 1];
+				var start = Math.Clamp(statement.StartColumn - 1, 0, line.Length);
+				var end = Math.Clamp(statement.EndColumn - 1, start, line.Length);
+				return line[start..end];
+			}
+			var builder = new StringBuilder();
+			for (var number = statement.StartLine; number <= Math.Min(statement.EndLine, lines.Length); number++) {
+				var line = lines[number - 1];
+				if (number == statement.StartLine)
+					builder.Append(line[Math.Clamp(statement.StartColumn - 1, 0, line.Length)..]);
+				else if (number == statement.EndLine)
+					builder.Append('\n').Append(line[..Math.Clamp(statement.EndColumn - 1, 0, line.Length)]);
+				else
+					builder.Append('\n').Append(line);
+			}
+			return builder.ToString();
 		}
 
 		/// <summary>

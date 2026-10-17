@@ -1622,6 +1622,123 @@ select:focus-visible,
   align-items: center;
 }
 
+.debug-variable-name > .tree-expander {
+  flex: none;
+}
+
+.debug-variable-image {
+  flex: none;
+  margin-right: 4px;
+  vertical-align: text-bottom;
+}
+
+.debug-variable-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debug-table:focus {
+  outline: none;
+}
+
+.debug-table-row.selected > span {
+  background: var(--selection);
+}
+
+.debug-table-row.debug-row-error > span:nth-child(2) {
+  color: var(--danger);
+}
+
+.debug-value-editable {
+  cursor: text;
+}
+
+.debug-value-editor,
+.debug-cell-input {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+
+.debug-cell-input {
+  border-color: transparent;
+}
+
+.debug-cell-input:focus {
+  border-color: var(--accent);
+}
+
+.debug-new-watch {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: text;
+}
+
+.debug-table-empty,
+.debug-error-text {
+  color: var(--danger);
+}
+
+.debug-grid .debug-table-row > span {
+  display: flex;
+  align-items: center;
+}
+
+.stack-row-internal .result-name {
+  opacity: 0.7;
+}
+
+.memory-content {
+  overflow: auto;
+  white-space: pre;
+}
+
+.hex-byte-editor {
+  width: 2.4ch;
+  padding: 0;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+
+.disassembly-pane {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--tc-defaulttext-background, var(--surface));
+  color: var(--tc-defaulttext);
+  white-space: pre;
+}
+
+.disassembly-title {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.disassembly-line {
+  display: flex;
+  min-height: 1.35em;
+}
+
+.disassembly-glyph {
+  flex: none;
+  width: 16px;
+}
+
+.disassembly-current {
+  background: var(--tcbg-currentstatement, var(--accent-soft));
+  color: var(--tc-currentstatement);
+}
+
 /* The Call Stack's row is WPF's: a marker column the width of the icon column, then the name. The
    location the WPF grid has no column for lives in the row's tooltip. */
 .stack-row {
@@ -3724,4 +3841,41 @@ fieldset.options-group {
 .dock-caption-button .ds-glyph,
 .icon-button .ds-glyph {
   margin: auto;
+}
+
+/* The Breakpoints window's search box, and the labels and module columns its rows carry after the location. */
+.breakpoints-search {
+  flex: 1;
+  min-width: 80px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 6px;
+}
+
+.breakpoint-main-row > .breakpoint-state {
+  flex: 0 0 auto;
+}
+
+.breakpoint-main-row > .breakpoint-labels,
+.breakpoint-main-row > .breakpoint-module {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakpoint-main-row > .breakpoint-module {
+  margin-left: auto;
+}
+
+/* Highlight changed variables: the value is drawn in the theme's DebuggerValueChangedHighlight, over its own colours. */
+.debug-value-changed,
+.debug-value-changed [class^='tc-'] {
+  color: var(--tc-debuggervaluechangedhighlight, var(--danger));
+}
+
+/* Syntax highlight turned off: the variables windows draw every column in the plain text colour. */
+.debug-table-plain [class^='tc-'] {
+  color: inherit;
 }

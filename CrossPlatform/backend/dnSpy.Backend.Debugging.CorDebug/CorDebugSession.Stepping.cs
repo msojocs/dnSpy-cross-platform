@@ -35,15 +35,20 @@ internal sealed partial class CorDebugSession {
 		var args = arguments is { ValueKind: JsonValueKind.Object } value ? value : default;
 		var threadId = GetInt(args, "threadId") ?? StoppedThreadId ?? 0;
 		CancelStepping();
+		ClearReturnValues();
+		// The return values are read with the type system, which is built here, off the dispatcher: the
+		// breakpoints that read them are hit on it.
+		var returnValueTypes = Options.ShowReturnValues && kind != "stepIn" ? TryGetTypeSystem() : null;
 		// The targets are computed before the process is resumed: the resolver decompiles, and the
 		// frame it is asked about only exists while the process is stopped.
 		var location = await Dispatcher.RunAsync(() => ReadStepLocation(threadId)).ConfigureAwait(false);
 		SteppingTargetsResponse? targets = null;
 		if (kind != "stepOut" && location is { } where && SymbolResolver is not null)
 			targets = await SymbolResolver.GetSteppingTargetsAsync(WorkspaceId, where.ModulePath, where.MetadataToken, where.IlOffset, kind == "stepIn", cancellationToken).ConfigureAwait(false);
+		var stepTargets = location is { } origin && targets is not null ? FilterStepIntoTargets(origin.ModulePath, origin.MetadataToken, targets.Targets) : targets?.Targets ?? [];
 		await Dispatcher.RunAsync(() => {
 			var frame = CurrentFrame(threadId);
-			var armed = ArmStepTargets(targets?.Targets ?? []);
+			var armed = ArmStepTargets(stepTargets);
 			var stepInto = kind == "stepIn";
 			// Leaving a frame has one meaning, and the frame the thread returns to is exactly what the
 			// runtime knows how to find — the resolver says so when the body has nothing left to run.
@@ -55,11 +60,38 @@ internal sealed partial class CorDebugSession {
 			// stepper walks into rather than a frame to return from.
 			if (leaving || (armed == 0 && frame is not null))
 				ArmNativeStepper(frame, leaving && !stepInto, stepInto, threadId);
+			if (returnValueTypes is not null)
+				ArmStepReturnValues(returnValueTypes, threadId, frame, stepOver: kind == "next", leaving);
 			// The step is already armed, so this must not be Continue(): that would disarm it again.
 			ResumeProcess();
 			return true;
 		}).ConfigureAwait(false);
 		return EmptyJson();
+	}
+
+	/// <summary>
+	/// The callees a step into may not land in: dnSpy's Step over properties and operators, and Just My Code's
+	/// modules that are not the user's. Dropping a callee's targets turns the step into a step over that call;
+	/// the targets in the method the step started in stay.
+	/// </summary>
+	IReadOnlyList<SteppingTarget> FilterStepIntoTargets(string modulePath, int metadataToken, IReadOnlyList<SteppingTarget> targets) {
+		var options = Options;
+		if (!options.StepOverPropertiesAndOperators && !options.EnableJustMyCode)
+			return targets;
+		var types = TryGetTypeSystem();
+		return targets.Where(target => {
+			if (target.MetadataToken == metadataToken && BreakpointTable.PathsMatch(target.ModulePath, modulePath))
+				return true;
+			var entry = Modules.FindEntry(target.ModulePath);
+			if (options.EnableJustMyCode && entry is { IsJustMyCode: false })
+				return false;
+			if (options.StepOverPropertiesAndOperators && types is not null && entry is not null &&
+				types.GetMember(entry, target.MetadataToken) is Microsoft.CodeAnalysis.IMethodSymbol method &&
+				method.MethodKind is Microsoft.CodeAnalysis.MethodKind.PropertyGet or Microsoft.CodeAnalysis.MethodKind.PropertySet
+					or Microsoft.CodeAnalysis.MethodKind.UserDefinedOperator or Microsoft.CodeAnalysis.MethodKind.Conversion)
+				return false;
+			return true;
+		}).ToArray();
 	}
 
 	/// <summary>Where the thread is stopped, in the terms the resolver speaks.</summary>
@@ -116,7 +148,8 @@ internal sealed partial class CorDebugSession {
 			// makes the step pass through the unplaceable code and stop where the runtime can place it.
 			stepper.SetInterceptMask(CorDebugIntercept.INTERCEPT_NONE);
 			stepper.SetUnmappedStopMask(CorDebugUnmappedStop.STOP_NONE);
-			stepper.SetJMC(false);
+			// Just My Code: the runtime's stepper skips the modules OnModuleLoadedCore marked as not the user's.
+			stepper.SetJMC(Options.EnableJustMyCode);
 			if (stepOut)
 				stepper.StepOut();
 			else
@@ -186,6 +219,7 @@ internal sealed partial class CorDebugSession {
 			}
 		}
 		steppingBreakpoints.Clear();
+		DisarmReturnValueBreakpoints();
 		var stepper = nativeStepper;
 		nativeStepper = null;
 		nativeStepperOrigin = null;

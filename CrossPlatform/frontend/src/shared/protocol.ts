@@ -1056,9 +1056,28 @@ export interface DebugStartResponse {
   capabilities: Record<string, unknown>
 }
 
+/** A row of the Threads window — dnSpy's ThreadVM columns. */
 export interface DebugThread {
   id: number
   name: string
+  managedId?: number | null
+  managedName?: string | null
+  osName?: string | null
+  /** Main, Finalizer, GC, ThreadPool, Worker or Terminated. */
+  category?: string
+  /** The thread's top frame, written the way the Call Stack window writes it. */
+  location?: string | null
+  priority?: number | null
+  nice?: number | null
+  affinityMask?: string | null
+  suspendedCount?: number
+  isFrozen?: boolean
+  processId?: number
+  processName?: string | null
+  appDomainId?: number | null
+  appDomainName?: string | null
+  state?: string[]
+  isMain?: boolean
 }
 
 export interface DebugSource {
@@ -1075,6 +1094,47 @@ export interface DebugStackFrame {
   source?: DebugSource
   /** The tree node the frame's location decompiles to, when the module is in the workspace. */
   nodeId?: string
+  /** The name in the colours dnSpy's CSharpStackFrameFormatter writes it in. */
+  nameParts?: TextPart[]
+  description?: string | null
+  metadataToken?: number
+  ilOffset?: number
+  nativeAddress?: number
+  /** A native-to-managed transition or another frame without code of its own. */
+  isInternal?: boolean
+  /** False for a deep frame whose line is only looked up when the user switches to it. */
+  locationResolved?: boolean
+}
+
+/** What a frame's row shows — dnSpy's CallStackDisplaySettings, plus the hex options it shares with the
+ * variables windows. */
+export interface DebugStackFrameFormat {
+  showModuleNames: boolean
+  showParameterTypes: boolean
+  showParameterNames: boolean
+  showParameterValues: boolean
+  showFunctionOffset: boolean
+  showReturnTypes: boolean
+  showNamespaces: boolean
+  showIntrinsicTypeKeywords: boolean
+  showDeclaringTypes: boolean
+  showTokens: boolean
+  useHexadecimal: boolean
+  useDigitSeparators: boolean
+}
+
+/** Where a frame decompiles to, read when the user switches to a frame the stack left unresolved. */
+export interface DebugFrameLocation {
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
+  nodeId?: string | null
+  description?: string | null
+  modulePath: string
+  metadataToken: number
+  ilOffset: number
+  isExternalModule: boolean
 }
 
 /** How a condition decides: the expression is true, or its value differs from the last hit's. */
@@ -1209,20 +1269,103 @@ export interface DebugScope {
   expensive: boolean
 }
 
+/**
+ * A row of a variables window (Locals, Autos, Watch): dnSpy's DbgValueNode, with its three columns in the
+ * colours the value formatter writes them in. A non-zero `variablesReference` is a row that expands.
+ */
 export interface DebugVariable {
   name: string
   value: string
   type?: string
   variablesReference: number
   evaluateName?: string
+  nameParts?: TextPart[]
+  valueParts?: TextPart[]
+  typeParts?: TextPart[]
+  /** The row's PredefinedDbgValueNodeImageNames image, e.g. `Local`, `Field`, `Property`. */
+  image?: string | null
+  kind?: string | null
+  isError?: boolean
+  /** Whether the value column can be edited (a local, a field, an element, a settable property). */
+  canEdit?: boolean
+  /** A row that was not evaluated (side effects, a func-eval the options forbid) and offers a refresh. */
+  needsRefresh?: boolean
+  /** The `$N` object id the value has been given, if any. */
+  objectId?: string | null
+  /** The value as an expression that reads back to it, which an edit starts from. */
+  editText?: string | null
 }
 
+/** The rows under an expanded row, a page at a time. */
+export interface DebugVariablesPage {
+  variables: DebugVariable[]
+  totalCount?: number | null
+}
+
+/** A row of the Modules window — dnSpy's ModuleVM columns. */
 export interface DebugModule {
   id: number | string
   name: string
   path?: string
-  version?: string
+  version?: string | null
   symbolStatus?: string
+  isOptimized?: boolean | null
+  isDynamic?: boolean
+  isInMemory?: boolean
+  isExe?: boolean
+  order?: number
+  timestamp?: string | null
+  address?: number
+  size?: number
+  appDomainId?: number | null
+  appDomainName?: string | null
+  isJustMyCode?: boolean
+  isProgramModule?: boolean
+  processId?: number
+}
+
+/** The Processes window's row for a session's process. */
+export interface DebugProcessInfo {
+  id: number
+  name?: string | null
+  path?: string | null
+  state: 'Running' | 'Paused' | 'Terminated'
+  debugging: string
+  architecture: string
+  /** False for a process the debugger attached to: Stop detaches from it rather than killing it. */
+  ownsDebuggee: boolean
+}
+
+/** Bytes of the debuggee: a readable flag per 4 KiB page, so an unmapped page shows as `??`. */
+export interface DebugMemory {
+  address: string
+  /** Base64. */
+  data: string
+  readable: boolean[]
+  pageSize: number
+}
+
+/** The Disassembly view's options: dnSpy's DisassemblyContentSettings and the dialect's code style. */
+export interface DebugDisassemblyOptions {
+  syntax: 'masm' | 'nasm' | 'gas' | 'intel'
+  showInstructionAddress: boolean
+  showInstructionBytes: boolean
+  showILCode: boolean
+  showCode: boolean
+  emptyLineBetweenBasicBlocks: boolean
+  addLabels: boolean
+  codeStyle?: Record<string, unknown>
+}
+
+/** A method's native code as the JIT compiled it, one coloured line per row; `currentLine` is the frame's. */
+export interface DebugDisassembly {
+  title: string
+  moduleName?: string | null
+  methodName?: string | null
+  address: number
+  size: number
+  lines: TextPart[][]
+  currentLine: number
 }
 
 export interface DebugEvent {
@@ -1527,11 +1670,15 @@ export interface DnSpyApi {
   chooseDebugDirectory(): Promise<string | undefined>
   /** Picks the host executable for the Debug Program dialog's "Use host executable" field. */
   chooseDebugHost(): Promise<string | undefined>
+  /** Where Save Module in the Modules window writes a module's image. */
+  chooseDebugModuleSavePath(suggestedName: string): Promise<string | undefined>
   /** Whether a path names a file that is really on disk — the Debug Program dialog's live check on the
    * executable field, the port's `File.Exists`. */
   pathExists(path: string): Promise<boolean>
   listDebugProcesses(): Promise<DebugProcess[]>
   launchDebug(options: DebugLaunchOptions): Promise<DebugStartResponse>
+  /** dnSpy's Start Without Debugging: the program runs on its own, and its process id comes back. */
+  startWithoutDebugging(options: DebugLaunchOptions): Promise<number>
   attachDebug(processId: number, workspaceId?: string): Promise<DebugStartResponse>
   setBreakpoints(sessionId: string, breakpoints: DebugBreakpointRequest[]): Promise<DebugBreakpoint[]>
   setFunctionBreakpoints(sessionId: string, breakpoints: DebugFunctionBreakpointRequest[]): Promise<Record<string, unknown>>
@@ -1543,7 +1690,7 @@ export interface DnSpyApi {
   debugStepIn(sessionId: string, threadId: number): Promise<Record<string, unknown>>
   debugStepOut(sessionId: string, threadId: number): Promise<Record<string, unknown>>
   getDebugThreads(sessionId: string): Promise<DebugThread[]>
-  getDebugStackTrace(sessionId: string, threadId: number): Promise<DebugStackFrame[]>
+  getDebugStackTrace(sessionId: string, threadId: number, format?: DebugStackFrameFormat): Promise<DebugStackFrame[]>
   getDebugScopes(sessionId: string, frameId: number): Promise<DebugScope[]>
   getDebugVariables(sessionId: string, variablesReference: number): Promise<DebugVariable[]>
   getDebugModules(sessionId: string): Promise<DebugModule[]>
@@ -1553,13 +1700,40 @@ export interface DnSpyApi {
   applyExceptionSettings(diff: DebugExceptionDiff): Promise<DebugExceptionSettingsList>
   /** Drops every change and answers with the default list. */
   resetExceptionSettings(): Promise<DebugExceptionSettingsList>
-  evaluateDebugExpression(sessionId: string, frameId: number, expression: string): Promise<DebugVariable>
+  evaluateDebugExpression(sessionId: string, frameId: number, expression: string, options?: { allowSideEffects?: boolean; noFuncEval?: boolean }): Promise<DebugVariable>
+  /** The engine's share of the debugger options: what it does on a stop and how it writes values. */
+  setDebuggerOptions(options: Record<string, unknown>): Promise<void>
+  getDebugFrameLocation(sessionId: string, frameId: number): Promise<DebugFrameLocation>
+  getDebugChildren(sessionId: string, variablesReference: number, start?: number, count?: number): Promise<DebugVariablesPage>
+  /** Writes a value: `expression` is the row's, `value` an expression in the debugger's language. */
+  setDebugExpression(sessionId: string, frameId: number, expression: string, value: string): Promise<{ node: DebugVariable; error?: string | null }>
+  getDebugAutos(sessionId: string, frameId: number): Promise<DebugVariable[]>
+  getDebugStaticFields(sessionId: string, frameId: number): Promise<DebugVariable[]>
+  makeDebugObjectId(sessionId: string, frameId: number, expression: string): Promise<string>
+  deleteDebugObjectId(sessionId: string, id: string): Promise<void>
+  /** Moves the stopped thread to another statement of its method: an editor location or a known IL offset. */
+  setNextStatement(sessionId: string, threadId: number, location: { nodeId?: string; line?: number; column?: number; modulePath?: string; metadataToken?: number; ilOffset?: number }): Promise<void>
+  runToDebugFrame(sessionId: string, frameId: number): Promise<void>
+  /** The enabled rows of the Module Breakpoints window; a null field matches any module. */
+  setDebugModuleBreakpoints(sessionId: string, breakpoints: { moduleName?: string; isDynamic?: boolean; isInMemory?: boolean; isLoaded?: boolean; order?: number; appDomainName?: string; processName?: string }[]): Promise<void>
+  /** Continues to the statement under the caret: a temporary breakpoint there, on any thread. */
+  runToDebugCursor(sessionId: string, location: { nodeId?: string; line?: number; column?: number; modulePath?: string; metadataToken?: number; ilOffset?: number }): Promise<void>
+  freezeDebugThreads(sessionId: string, threadIds: number[], freeze: boolean): Promise<void>
+  renameDebugThread(sessionId: string, threadId: number, name: string | null): Promise<void>
+  getDebugProcess(sessionId: string): Promise<DebugProcessInfo>
+  readDebugMemory(sessionId: string, address: string, count: number): Promise<DebugMemory>
+  writeDebugMemory(sessionId: string, address: string, data: string): Promise<void>
+  disassembleDebugFrame(sessionId: string, target: { frameId: number } | { modulePath: string; metadataToken: number }, options: DebugDisassemblyOptions): Promise<DebugDisassembly>
+  /** Writes a loaded module's image to `path`, or to a temporary file when there is none, and answers with it. */
+  saveDebugModule(sessionId: string, moduleId: number, path?: string): Promise<string>
   disconnectDebug(sessionId: string, terminateDebuggee: boolean): Promise<void>
   /** Runs one submission in the C# Interactive session and returns the lines it produced. */
   evaluateScript(code: string): Promise<ScriptEvaluateResponse>
   /** Drops the C# Interactive session and builds a fresh one, reporting the engine banner. */
   resetScript(): Promise<ScriptEvaluateResponse>
   minimizeWindow(): Promise<void>
+  /** Restores and focuses the window, as the debugger does when the process breaks. */
+  bringWindowToFront(): Promise<void>
   toggleMaximizeWindow(): Promise<boolean>
   closeWindow(): Promise<void>
   isWindowMaximized(): Promise<boolean>

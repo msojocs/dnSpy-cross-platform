@@ -18,7 +18,9 @@ import type {
   DebugExceptionSettings,
   DebugLaunchOptions,
   DebugModule,
+  DebugProcessInfo,
   DebugStackFrame,
+  DebugStackFrameFormat,
   DebugThread,
   DebugVariable,
   DropFilter,
@@ -274,6 +276,17 @@ interface AppState {
   stoppedLocation?: StoppedLocation
   watches: string[]
   watchValues: DebugVariable[]
+  /** The expressions of Watch 2, 3 and 4 — dnSpy has four Watch windows, each a list of its own. */
+  otherWatches: Record<number, string[]>
+  otherWatchValues: Record<number, DebugVariable[]>
+  /** Bumped on every stop, frame switch and edit: the windows that read the stopped process read it again. */
+  debugGeneration: number
+  /** The session's process, for the Processes window. */
+  debugProcess?: DebugProcessInfo
+  /** Where the caret of a code editor is, which Set Next Statement and Run to Cursor act on. */
+  codeCaret?: CaretPosition
+  /** The Module Breakpoints window's rows. */
+  moduleBreakpoints: ModuleBreakpoint[]
   functionBreakpoints: FunctionBreakpoint[]
   lineBreakpoints: LineBreakpoint[]
   bookmarks: Bookmark[]
@@ -521,8 +534,36 @@ interface AppState {
    * a step only scrolls, so it does not take the focus away from what the user was doing.
    */
   revealStoppedLocation(options?: { caret?: boolean }): Promise<void>
-  addWatch(expression: string): Promise<void>
-  removeWatch(expression: string): void
+  /** Adds an expression to a Watch window: Watch 1 unless another is named. */
+  addWatch(expression: string, window?: number): Promise<void>
+  removeWatch(expression: string, window?: number): void
+  /** Replaces a watch's expression in place — the Watch window's edit of its Name column. */
+  editWatch(expression: string, replacement: string, window?: number): Promise<void>
+  /** Every watch gone — the Watch window's Clear All. */
+  clearWatches(window?: number): void
+  /** Hands the engine the debugger options — what it does on a stop and how it writes values — and, when
+   *  stopped, reads the windows again in the new format. */
+  applyDebuggerOptions(): Promise<void>
+  /** Writes a value through an expression in the debugger's language; answers the error, if any. */
+  setDebugValue(expression: string, value: string): Promise<string | undefined>
+  /** dnSpy's Make Object ID: the value gets a `$N` name that outlives the stop. */
+  makeDebugObjectId(expression: string): Promise<void>
+  deleteDebugObjectId(id: string): Promise<void>
+  /** dnSpy's Set Next Statement: the stopped thread continues from the statement under the caret. */
+  setNextStatement(): Promise<void>
+  /** dnSpy's Run to Cursor: from the editor, a one-shot breakpoint at the caret; from the Call Stack, the frame's return. */
+  runToCursor(frameId?: number): Promise<void>
+  freezeDebugThreads(threadIds: number[], freeze: boolean): Promise<void>
+  renameDebugThread(threadId: number, name: string | null): Promise<void>
+  addModuleBreakpoint(breakpoint?: Partial<ModuleBreakpoint>): Promise<void>
+  updateModuleBreakpoint(id: string, change: Partial<ModuleBreakpoint>): Promise<void>
+  removeModuleBreakpoints(ids: string[]): Promise<void>
+  /** dnSpy's Restart: the launched program is stopped and started again the way it was the last time. */
+  restartDebug(): Promise<void>
+  /** Detaches from the debuggee without killing it — dnSpy's Detach All. */
+  detachDebug(): Promise<void>
+  /** Kills the debuggee — dnSpy's Terminate All, the Stop Debugging of a launched process. */
+  terminateDebug(): Promise<void>
   addFunctionBreakpoint(name: string): Promise<void>
   removeFunctionBreakpoint(name: string): Promise<void>
   toggleFunctionBreakpoint(name: string): Promise<void>
@@ -612,6 +653,8 @@ interface AppState {
   importBookmarks(entries: BookmarkEntry[]): number
   /** Shows the bookmark's place — in a tab of its own with `newTab`, dnSpy's Ctrl/Shift+double-click. */
   goToBookmark(id: string, newTab?: boolean): Promise<void>
+  /** The Breakpoints window's Go To Source Code: the breakpoint's method opened, the caret on its line. */
+  goToLineBreakpoint(id: string, newTab?: boolean): Promise<void>
   selectNextBookmark(position?: CaretPosition): Promise<void>
   selectPreviousBookmark(position?: CaretPosition): Promise<void>
   selectNextBookmarkInDocument(documentId: string, line?: number): Promise<void>
@@ -762,7 +805,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   debugVariables: [],
   debugModules: [],
   watches: [],
+  otherWatches: {},
+  otherWatchValues: {},
   watchValues: [],
+  debugGeneration: 0,
+  moduleBreakpoints: [],
   functionBreakpoints: [],
   lineBreakpoints: [],
   bookmarks: [],
@@ -1426,6 +1473,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setCodeCaret: async (position) => {
+    set({ codeCaret: position })
     const workspaceId = get().workspaceId
     if (!workspaceId || !position) {
       set({ hexStatement: undefined })
@@ -2123,10 +2171,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   launchDebug: async (options) => {
     if (!options.program) return
+    lastLaunchOptions = options
     // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
     set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
     let sessionId: string | undefined
     try {
+      await pushDebuggerOptions()
       // The workspace id travels with the launch: it is how the engine turns a decompiled line into an IL offset.
       const started = await window.dnSpy.launchDebug({ ...options, workspaceId: get().workspaceId })
       sessionId = started.sessionId
@@ -2136,6 +2186,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         await window.dnSpy.setFunctionBreakpoints(sessionId, breakpointRequests)
       if (get().lineBreakpoints.length > 0)
         await syncLineBreakpoints(get, set)
+      await syncModuleBreakpoints(get)
       // The exception list lives in the engine rather than in the session, and it outlives every
       // session, so the stored diff goes back in before the debuggee is released: a run started
       // without the Exception Settings window ever being opened still honors what it holds.
@@ -2158,10 +2209,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
     set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
     try {
+      await pushDebuggerOptions()
       const started = await window.dnSpy.attachDebug(processId, get().workspaceId)
       set({ debugSessionId: started.sessionId, debugCapabilities: started.capabilities })
       if (get().lineBreakpoints.length > 0)
         await syncLineBreakpoints(get, set)
+      await syncModuleBreakpoints(get)
       await get().loadExceptionSettings()
       get().appendOutput(t('Attached to process {processId}.', { processId }), 'debug')
     } catch (error) {
@@ -2190,6 +2243,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? t('Exception thrown: {name} in {module}.', { name: exceptionName, module: exceptionModule })
           : t('Exception thrown: {name}.', { name: exceptionName }), 'debug')
       get().appendOutput(t('Debugger stopped: {reason}.', { reason: t(reason) }), 'debug')
+      // DebuggerSettings.FocusDebuggerWhenProcessBreaks: the window comes to the front on a break.
+      if (loadAppOptions().debugger.focusDebuggerWhenProcessBreaks)
+        void window.dnSpy.bringWindowToFront?.().catch(() => undefined)
       await refreshDebugState(get, set, threadId)
       set({ debugState: 'stopped' })
       await get().revealStoppedLocation()
@@ -2202,11 +2258,48 @@ export const useAppStore = create<AppState>((set, get) => ({
           lineBreakpoints: state.lineBreakpoints.map((breakpoint) => breakpoint.id === body.id ? applyBreakpointResult(breakpoint, body) : breakpoint),
         }))
     } else if (event.event === 'continued') {
-      set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+      set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
     } else if (event.event === 'output') {
       const output = typeof event.body?.output === 'string' ? event.body.output.trimEnd() : ''
       if (output) get().appendOutput(output, 'debug')
+    } else if (event.event === 'exception') {
+      // OutputLogger's exception messages: every first chance the engine reports, and the unhandled one.
+      const body = event.body ?? {}
+      const name = typeof body.name === 'string' ? body.name : '?'
+      const module = typeof body.module === 'string' ? body.module : '?'
+      const message = typeof body.message === 'string' ? body.message : undefined
+      if (body.unhandled === true)
+        get().appendOutput(t('An unhandled exception of type \'{name}\' occurred in {module}', { name, module }), 'debug')
+      else
+        get().appendOutput(t('Exception thrown: \'{name}\' in {module}', { name, module }), 'debug')
+      if (message)
+        get().appendOutput(t('Additional information: {message}', { message }), 'debug')
+    } else if (event.event === 'module') {
+      const module = event.body?.module as DebugModule | undefined
+      if (!module) return
+      const process = get().debugProcess?.name ?? ''
+      const domain = module.appDomainName ?? 'clrhost'
+      const prefix = `'${process}' (CoreCLR: ${domain}): `
+      if (event.body?.reason === 'removed') {
+        set((state) => ({ debugModules: state.debugModules.filter((candidate) => candidate.id !== module.id) }))
+        get().appendOutput(prefix + t('Unloaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
+      } else {
+        set((state) => ({ debugModules: [...state.debugModules.filter((candidate) => candidate.id !== module.id), module].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) }))
+        get().appendOutput(prefix + t('Loaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
+      }
+    } else if (event.event === 'thread') {
+      // OutputLogger's DebugLogExitThread.
+      if (event.body?.reason === 'exited' && typeof event.body.threadId === 'number') {
+        const code = typeof event.body.exitCode === 'number' ? event.body.exitCode : 0
+        get().appendOutput(t('The thread 0x{id} has exited with code {code} (0x{hex}).', { id: event.body.threadId.toString(16), code, hex: (code >>> 0).toString(16) }), 'debug')
+      }
+      if (get().debugState === 'stopped' && get().debugSessionId)
+        set({ debugThreads: await window.dnSpy.getDebugThreads(get().debugSessionId!).catch(() => get().debugThreads) })
+    } else if (event.event === 'process') {
+      if (get().debugSessionId)
+        set({ debugProcess: await window.dnSpy.getDebugProcess?.(get().debugSessionId!).catch(() => get().debugProcess) })
     } else if (event.event === 'terminated' || event.event === 'exited') {
+      const processName = get().debugProcess?.name
       set({
         debugState: 'inactive',
         debugSessionId: undefined,
@@ -2215,12 +2308,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         debugVariables: [],
         debugModules: [],
         watchValues: [],
+        otherWatchValues: {},
+        debugProcess: undefined,
         stoppedLocation: undefined,
         selectedDebugFrameId: undefined,
         activeDebugFrameId: undefined,
       })
+      // OutputLogger's DebugLogExitProcess: "The program '[pid] name' has exited with code N (0xN)."
+      const code = typeof event.body?.exitCode === 'number' ? event.body.exitCode : undefined
       get().appendOutput(event.event === 'exited'
-        ? t('Debug target exited with code {code}.', { code: String(event.body?.exitCode ?? '') })
+        ? code !== undefined && processName
+          ? t('The program \'{name}\' has exited with code {code} (0x{hex}).', { name: processName, code, hex: (code >>> 0).toString(16) })
+          : t('Debug target exited with code {code}.', { code: String(event.body?.exitCode ?? '') })
         : t('Debug session terminated.'), 'debug')
     }
   },
@@ -2229,7 +2328,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { debugSessionId, selectedDebugThreadId } = get()
     if (!debugSessionId || selectedDebugThreadId === undefined) return
     await window.dnSpy.debugContinue(debugSessionId, selectedDebugThreadId)
-    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
   },
 
   pauseDebug: async () => {
@@ -2243,14 +2342,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!debugSessionId || selectedDebugThreadId === undefined) return
     const command = kind === 'next' ? window.dnSpy.debugNext : kind === 'stepIn' ? window.dnSpy.debugStepIn : window.dnSpy.debugStepOut
     await command(debugSessionId, selectedDebugThreadId)
-    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
   },
 
+  // dnSpy's Stop Debugging is DbgManager.StopDebuggingAll: a process the debugger started is terminated, one it
+  // attached to is detached from, and keeps running.
   stopDebug: async () => {
-    const sessionId = get().debugSessionId
-    if (!sessionId) return
-    try { await window.dnSpy.disconnectDebug(sessionId, true) } catch { /* adapter may exit before replying */ }
-    set({ debugState: 'inactive', debugSessionId: undefined, debugThreads: [], debugFrames: [], debugVariables: [], debugModules: [], watchValues: [], stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    await endDebugSession(get, set, get().debugProcess?.ownsDebuggee !== false)
+  },
+
+  restartDebug: async () => {
+    const options = lastLaunchOptions
+    if (!options || get().debugProcess?.ownsDebuggee === false) return
+    await endDebugSession(get, set, true)
+    await get().launchDebug(options)
+  },
+
+  detachDebug: async () => {
+    await endDebugSession(get, set, false)
+  },
+
+  terminateDebug: async () => {
+    await endDebugSession(get, set, true)
   },
 
   // Highlighting a row costs nothing else: the frame the debugger reads only changes when the user
@@ -2263,6 +2376,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     // dnSpy's SwitchToFrame: the frame becomes the active one, so Locals and Watch read it and the
     // editor follows the statement it is stopped at.
     set({ selectedDebugFrameId: frameId, activeDebugFrameId: frameId })
+    // A deep frame comes without its line — the stack only resolves the frames near the top — so the engine is
+    // asked for it now, when the user goes there.
+    const frame = get().debugFrames.find((candidate) => candidate.id === frameId)
+    const sessionId = get().debugSessionId
+    if (frame && frame.locationResolved === false && sessionId) {
+      try {
+        const location = await window.dnSpy.getDebugFrameLocation(sessionId, frameId)
+        set((state) => ({
+          debugFrames: state.debugFrames.map((candidate) => candidate.id === frameId
+            ? { ...candidate, line: location.line, column: location.column, nodeId: location.nodeId ?? undefined, description: location.description, locationResolved: true }
+            : candidate),
+        }))
+      } catch {
+        // The frame keeps no line; the switch still happens.
+      }
+    }
     await refreshDebugVariables(get, set, frameId)
     await get().revealStoppedLocation({ caret: true })
   },
@@ -2311,17 +2440,136 @@ export const useAppStore = create<AppState>((set, get) => ({
     await refreshDebugState(get, set, threadId)
   },
 
-  addWatch: async (expression) => {
+  addWatch: async (expression, window = 1) => {
     const trimmed = expression.trim()
-    if (!trimmed || get().watches.includes(trimmed)) return
-    set((state) => ({ watches: [...state.watches, trimmed] }))
+    if (!trimmed || watchList(get(), window).includes(trimmed)) return
+    set((state) => withWatchList(state, window, [...watchList(state, window), trimmed]))
     await refreshWatches(get, set)
   },
 
-  removeWatch: (expression) => set((state) => ({
-    watches: state.watches.filter((watch) => watch !== expression),
-    watchValues: state.watchValues.filter((watch) => watch.name !== expression),
+  removeWatch: (expression, window = 1) => set((state) => ({
+    ...withWatchList(state, window, watchList(state, window).filter((watch) => watch !== expression)),
+    ...withWatchValues(state, window, watchValueList(state, window).filter((watch) => watch.name !== expression)),
   })),
+
+  editWatch: async (expression, replacement, window = 1) => {
+    const trimmed = replacement.trim()
+    if (!trimmed) {
+      get().removeWatch(expression, window)
+      return
+    }
+    set((state) => withWatchList(state, window, watchList(state, window).map((watch) => watch === expression ? trimmed : watch).filter((watch, index, all) => all.indexOf(watch) === index)))
+    await refreshWatches(get, set)
+  },
+
+  clearWatches: (window = 1) => set((state) => ({ ...withWatchList(state, window, []), ...withWatchValues(state, window, []) })),
+
+  applyDebuggerOptions: async () => {
+    await pushDebuggerOptions()
+    if (get().debugState === 'stopped' && get().debugSessionId) {
+      const { selectedDebugThreadId, activeDebugFrameId } = get()
+      await refreshDebugState(get, set, selectedDebugThreadId, { keepFrame: activeDebugFrameId })
+    }
+  },
+
+  setDebugValue: async (expression, value) => {
+    const { debugSessionId, activeDebugFrameId } = get()
+    if (!debugSessionId || activeDebugFrameId === undefined) return t('The process is not paused.')
+    try {
+      const result = await window.dnSpy.setDebugExpression(debugSessionId, activeDebugFrameId, expression, value)
+      // Writing one value can change any other — a field two rows share, a property computed from it — so the
+      // windows read the frame again, as dnSpy's value nodes all refresh after an edit.
+      await refreshDebugVariables(get, set, activeDebugFrameId)
+      return result?.error ?? undefined
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  },
+
+  makeDebugObjectId: async (expression) => {
+    const { debugSessionId, activeDebugFrameId } = get()
+    if (!debugSessionId || activeDebugFrameId === undefined) return
+    try {
+      await window.dnSpy.makeDebugObjectId(debugSessionId, activeDebugFrameId, expression)
+      await refreshDebugVariables(get, set, activeDebugFrameId)
+    } catch (error) {
+      get().appendOutput(error instanceof Error ? error.message : String(error), 'debug')
+    }
+  },
+
+  deleteDebugObjectId: async (id) => {
+    const { debugSessionId, activeDebugFrameId } = get()
+    if (!debugSessionId) return
+    await window.dnSpy.deleteDebugObjectId(debugSessionId, id).catch(() => undefined)
+    if (activeDebugFrameId !== undefined)
+      await refreshDebugVariables(get, set, activeDebugFrameId)
+  },
+
+  setNextStatement: async () => {
+    const { debugSessionId, selectedDebugThreadId, codeCaret, documents } = get()
+    if (!debugSessionId || selectedDebugThreadId === undefined || !codeCaret || get().debugState !== 'stopped') return
+    const statement = codeStatementAt(documents[codeCaret.documentId]?.codeStatements, codeCaret.line, codeCaret.column)
+    try {
+      // The statement the editor already resolved names its IL; the engine snaps a bare line itself.
+      await window.dnSpy.setNextStatement(debugSessionId, selectedDebugThreadId, statement
+        ? { modulePath: statement.modulePath, metadataToken: statement.metadataToken, ilOffset: statement.ilOffset }
+        : { nodeId: codeCaret.documentId, line: codeCaret.line, column: codeCaret.column })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      get().appendOutput(t('Could not set the next statement: {message}', { message }), 'debug')
+      await window.dnSpy.showMessage?.(message)
+    }
+  },
+
+  runToCursor: async (frameId) => {
+    const { debugSessionId, codeCaret, documents } = get()
+    if (!debugSessionId || get().debugState !== 'stopped') return
+    try {
+      if (frameId !== undefined) {
+        await window.dnSpy.runToDebugFrame(debugSessionId, frameId)
+      } else {
+        if (!codeCaret) return
+        // dnSpy's Run to Cursor from the editor: a temporary breakpoint at the caret's statement, then Continue.
+        const statement = codeStatementAt(documents[codeCaret.documentId]?.codeStatements, codeCaret.line, codeCaret.column)
+        await window.dnSpy.runToDebugCursor(debugSessionId, statement
+          ? { modulePath: statement.modulePath, metadataToken: statement.metadataToken, ilOffset: statement.ilOffset }
+          : { nodeId: codeCaret.documentId, line: codeCaret.line, column: codeCaret.column })
+      }
+      set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    } catch (error) {
+      get().appendOutput(error instanceof Error ? error.message : String(error), 'debug')
+    }
+  },
+
+  addModuleBreakpoint: async (breakpoint) => {
+    const row: ModuleBreakpoint = { id: `module-bp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, enabled: true, moduleName: '', ...breakpoint }
+    set((state) => ({ moduleBreakpoints: [...state.moduleBreakpoints, row] }))
+    await syncModuleBreakpoints(get)
+  },
+
+  updateModuleBreakpoint: async (id, change) => {
+    set((state) => ({ moduleBreakpoints: state.moduleBreakpoints.map((row) => row.id === id ? { ...row, ...change, id } : row) }))
+    await syncModuleBreakpoints(get)
+  },
+
+  removeModuleBreakpoints: async (ids) => {
+    set((state) => ({ moduleBreakpoints: state.moduleBreakpoints.filter((row) => !ids.includes(row.id)) }))
+    await syncModuleBreakpoints(get)
+  },
+
+  freezeDebugThreads: async (threadIds, freeze) => {
+    const sessionId = get().debugSessionId
+    if (!sessionId) return
+    await window.dnSpy.freezeDebugThreads(sessionId, threadIds, freeze)
+    set({ debugThreads: await window.dnSpy.getDebugThreads(sessionId) })
+  },
+
+  renameDebugThread: async (threadId, name) => {
+    const sessionId = get().debugSessionId
+    if (!sessionId) return
+    await window.dnSpy.renameDebugThread(sessionId, threadId, name)
+    set({ debugThreads: await window.dnSpy.getDebugThreads(sessionId) })
+  },
 
   addFunctionBreakpoint: async (name) => {
     const trimmed = name.trim()
@@ -2688,6 +2936,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const document = get().documents[documentId]
     const position = bookmarkPositionInDocument(documentId, document, bookmark) ?? { line: bookmark.line, column: 1 }
     get().revealCaret(documentId, position.line, position.column)
+  },
+
+  goToLineBreakpoint: async (id, newTab = false) => {
+    const breakpoint = get().lineBreakpoints.find((candidate) => candidate.id === id)
+    if (!breakpoint) return
+    const open = newTab ? get().openNodeInNewTabById : get().openNodeById
+    if (!open) return
+    let nodeId = breakpoint.nodeId
+    // A breakpoint read back from storage names its method by token: the node is found again first.
+    const workspaceId = get().workspaceId
+    if (!nodeId && workspaceId && breakpoint.modulePath && (breakpoint.sourceMethodToken ?? breakpoint.metadataToken) !== undefined) {
+      const found = await window.dnSpy.findMember(workspaceId, breakpoint.modulePath, breakpoint.sourceMethodToken ?? breakpoint.metadataToken!)
+      nodeId = found.nodeId ?? ''
+    }
+    if (!nodeId) {
+      get().appendOutput(t('The breakpoint is in a module that is not loaded.'))
+      return
+    }
+    const documentId = await open(nodeId)
+    if (documentId)
+      get().revealCaret(documentId, breakpoint.line, 1)
   },
 
   revealCaret: (documentId, line, column, viewId) => {
@@ -4454,24 +4723,98 @@ const openDebugModule = async (get: StoreGet, set: StoreSet, path: string, name:
     // module and a token — and nothing else changes.
     return false
   }
-  await refreshDebugState(get, set, get().selectedDebugThreadId)
+  // The frame the user switched to stays the active one: the module was opened for it.
+  await refreshDebugState(get, set, get().selectedDebugThreadId, { keepFrame: get().activeDebugFrameId })
   return true
 }
 
-const refreshDebugState = async (get: StoreGet, set: StoreSet, preferredThreadId?: number): Promise<void> => {
+/** dnSpy's DbgModuleBreakpointSettings: a row of the Module Breakpoints window. Empty text matches anything. */
+export interface ModuleBreakpoint {
+  id: string
+  enabled: boolean
+  moduleName: string
+  isDynamic?: boolean
+  isInMemory?: boolean
+  isLoaded?: boolean
+  order?: number
+  appDomainName?: string
+  processName?: string
+}
+
+/** What the last launch was started with, for Restart. */
+let lastLaunchOptions: DebugLaunchOptions | undefined
+
+const moduleBreakpointsStorageKey = 'dnspy.moduleBreakpoints.v1'
+
+const syncModuleBreakpoints = async (get: StoreGet): Promise<void> => {
+  const { debugSessionId, moduleBreakpoints } = get()
+  if (!debugSessionId) return
+  try {
+    await window.dnSpy.setDebugModuleBreakpoints?.(debugSessionId, moduleBreakpoints.filter((row) => row.enabled).map(({ id: _id, enabled: _enabled, ...settings }) => settings))
+  } catch {
+    // An engine without module breakpoints just never stops on a load.
+  }
+}
+
+const loadModuleBreakpoints = (): ModuleBreakpoint[] => {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const stored = JSON.parse(localStorage.getItem(moduleBreakpointsStorageKey) ?? '[]') as unknown
+    return Array.isArray(stored)
+      ? stored.filter((row): row is ModuleBreakpoint => typeof row === 'object' && row !== null && typeof (row as ModuleBreakpoint).id === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
+// Read back after the module has finished evaluating, for the same reason the breakpoints are.
+queueMicrotask(() => {
+  useAppStore.setState({ moduleBreakpoints: loadModuleBreakpoints() })
+  useAppStore.subscribe((state, previous) => {
+    if (state.moduleBreakpoints !== previous.moduleBreakpoints && typeof localStorage !== 'undefined')
+      localStorage.setItem(moduleBreakpointsStorageKey, JSON.stringify(state.moduleBreakpoints))
+  })
+})
+
+/** The engine's share of the Options dialog's Debugger page, and the variables windows' display toggles. */
+const pushDebuggerOptions = async (): Promise<void> => {
+  try {
+    await window.dnSpy.setDebuggerOptions?.({ ...loadAppOptions().debugger })
+  } catch {
+    // An engine that cannot take options keeps its defaults, which are dnSpy's.
+  }
+}
+
+/** What the Call Stack window asks the engine to write: its own display settings and the shared hex toggles. */
+const stackFrameFormat = (): DebugStackFrameFormat => {
+  const options = loadAppOptions()
+  return { ...options.callStack, useHexadecimal: options.debugger.useHexadecimal, useDigitSeparators: options.debugger.useDigitSeparators }
+}
+
+const endDebugSession = async (get: StoreGet, set: StoreSet, terminateDebuggee: boolean): Promise<void> => {
+  const sessionId = get().debugSessionId
+  if (!sessionId) return
+  try { await window.dnSpy.disconnectDebug(sessionId, terminateDebuggee) } catch { /* adapter may exit before replying */ }
+  set({ debugState: 'inactive', debugSessionId: undefined, debugThreads: [], debugFrames: [], debugVariables: [], debugModules: [], watchValues: [], otherWatchValues: {}, debugProcess: undefined, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+}
+
+const refreshDebugState = async (get: StoreGet, set: StoreSet, preferredThreadId?: number, options?: { keepFrame?: number }): Promise<void> => {
   const sessionId = get().debugSessionId
   if (!sessionId) return
   try {
     const threads = await window.dnSpy.getDebugThreads(sessionId)
     const threadId = preferredThreadId ?? threads[0]?.id
-    const [frames, modules] = await Promise.all([
-      threadId === undefined ? Promise.resolve([]) : window.dnSpy.getDebugStackTrace(sessionId, threadId),
+    const [frames, modules, process] = await Promise.all([
+      threadId === undefined ? Promise.resolve([]) : window.dnSpy.getDebugStackTrace(sessionId, threadId, stackFrameFormat()),
       window.dnSpy.getDebugModules(sessionId).catch(() => []),
+      window.dnSpy.getDebugProcess?.(sessionId).catch(() => undefined),
     ])
-    const frameId = frames[0]?.id
     // Every stop starts on the frame the runtime is in, which is the one the user has to switch away from
-    // to read a caller — WPF's ActiveFrameIndex is reset the same way.
-    set({ debugThreads: threads, selectedDebugThreadId: threadId, debugFrames: frames, selectedDebugFrameId: frameId, activeDebugFrameId: frameId, debugModules: modules })
+    // to read a caller — WPF's ActiveFrameIndex is reset the same way. Re-reading the same stop in a new
+    // format keeps the frame the user switched to: the ids of a stop are stable until the process runs.
+    const frameId = options?.keepFrame !== undefined && frames.some((frame) => frame.id === options.keepFrame) ? options.keepFrame : frames[0]?.id
+    set({ debugThreads: threads, selectedDebugThreadId: threadId, debugFrames: frames, selectedDebugFrameId: frameId, activeDebugFrameId: frameId, debugModules: modules, debugProcess: process ?? get().debugProcess })
     if (frameId !== undefined)
       await refreshDebugVariables(get, set, frameId)
   } catch (error) {
@@ -4485,21 +4828,42 @@ const refreshDebugVariables = async (get: StoreGet, set: StoreSet, frameId: numb
   const scopes = await window.dnSpy.getDebugScopes(sessionId, frameId)
   const localScope = scopes.find((scope) => scope.name === 'Locals') ?? scopes.find((scope) => !scope.expensive)
   const variables = localScope ? await window.dnSpy.getDebugVariables(sessionId, localScope.variablesReference) : []
-  set({ debugVariables: variables })
+  set((state) => ({ debugVariables: variables, debugGeneration: state.debugGeneration + 1 }))
   await refreshWatches(get, set)
 }
 
+// One empty list for every window that has none, so a selector reading it answers the same array each time.
+const NO_WATCHES: string[] = []
+const NO_WATCH_VALUES: DebugVariable[] = []
+
+/** The expressions of one Watch window. */
+export const watchList = (state: Pick<AppState, 'watches' | 'otherWatches'>, window: number): string[] =>
+  window === 1 ? state.watches : state.otherWatches[window] ?? NO_WATCHES
+
+/** The values of one Watch window, as the last stop read them. */
+export const watchValueList = (state: Pick<AppState, 'watchValues' | 'otherWatchValues'>, window: number): DebugVariable[] =>
+  window === 1 ? state.watchValues : state.otherWatchValues[window] ?? NO_WATCH_VALUES
+
+const withWatchList = (state: AppState, window: number, list: string[]): Partial<AppState> =>
+  window === 1 ? { watches: list } : { otherWatches: { ...state.otherWatches, [window]: list } }
+
+const withWatchValues = (state: AppState, window: number, list: DebugVariable[]): Partial<AppState> =>
+  window === 1 ? { watchValues: list } : { otherWatchValues: { ...state.otherWatchValues, [window]: list } }
+
 const refreshWatches = async (get: StoreGet, set: StoreSet): Promise<void> => {
-  const { debugSessionId, activeDebugFrameId, watches } = get()
+  const { debugSessionId, activeDebugFrameId, watches, otherWatches } = get()
   if (!debugSessionId || activeDebugFrameId === undefined || get().debugState !== 'stopped') return
-  const values = await Promise.all(watches.map(async (expression) => {
+  // The Watch window's name column is the expression as the user typed it, whatever the engine names the row.
+  const evaluate = (expressions: string[]): Promise<DebugVariable[]> => Promise.all(expressions.map(async (expression): Promise<DebugVariable> => {
     try {
-      return await window.dnSpy.evaluateDebugExpression(debugSessionId, activeDebugFrameId, expression)
+      const value = await window.dnSpy.evaluateDebugExpression(debugSessionId, activeDebugFrameId, expression)
+      return { ...value, name: expression, nameParts: undefined, evaluateName: value.evaluateName ?? expression }
     } catch (error) {
-      return { name: expression, value: error instanceof Error ? error.message : String(error), variablesReference: 0 }
+      return { name: expression, value: error instanceof Error ? error.message : String(error), variablesReference: 0, isError: true }
     }
   }))
-  set({ watchValues: values })
+  const others = await Promise.all(Object.entries(otherWatches).map(async ([key, list]) => [Number(key), await evaluate(list)] as const))
+  set({ watchValues: await evaluate(watches), otherWatchValues: Object.fromEntries(others) })
 }
 
 // Disabled breakpoints are deliberately left out of what we send: the debug adapter only knows

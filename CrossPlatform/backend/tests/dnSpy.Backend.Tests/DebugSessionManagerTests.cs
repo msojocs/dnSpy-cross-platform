@@ -114,7 +114,10 @@ public sealed class DebugSessionManagerTests {
 			new DebugAdapterRequest(started.SessionId, "stackTrace", JsonSerializer.SerializeToElement(new { threadId, startFrame = 0, levels = 20 })),
 			TestContext.Current.CancellationToken);
 		var frames = stack.Body?.GetProperty("stackFrames").EnumerateArray().ToArray() ?? [];
-		Assert.Contains(frames, frame => frame.GetProperty("name").GetString()?.Contains(".cctor", StringComparison.Ordinal) == true);
+		// The Call Stack window writes a constructor — the module's static one included — by its type's name,
+		// the way WPF's CSharpStackFrameFormatter does; the frame's description names the .cctor itself.
+		Assert.Contains(frames, frame => frame.GetProperty("name").GetString()?.Contains("<Module>.<Module>()", StringComparison.Ordinal) == true
+			&& frame.GetProperty("description").GetString()?.Contains(".cctor", StringComparison.Ordinal) == true);
 
 		await manager.DisconnectAsync(
 			new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true),
@@ -168,6 +171,8 @@ public sealed class DebugSessionManagerTests {
 		try {
 			var ready = await target.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken);
 			Assert.Equal("READY", ready);
+			// Attach to Process offers the processes running CoreCLR, and this one is.
+			Assert.Contains(manager.ListProcesses(), process => process.ProcessId == target.Id);
 			var stopped = new TaskCompletionSource<DebugEventNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
 			manager.EventReceived += (_, notification) => {
 				if (notification.Event == "stopped") stopped.TrySetResult(notification);

@@ -93,6 +93,18 @@ interface MenuBarProps {
   onStepOver(): void
   onStepOut(): void
   onStopDebug(): void
+  /** dnSpy's Start Without Debugging: the Debug Program dialog, to run the program on its own. */
+  onStartWithoutDebugging?(): void
+  /** dnSpy's Detach All: the debugger lets go of the process, which keeps running. */
+  onDetachDebug?(): void
+  /** dnSpy's Terminate All: the process is killed, whether the debugger started it or attached to it. */
+  onTerminateDebug?(): void
+  /** dnSpy's Restart: the launched program is stopped and started again. */
+  onRestartDebug?(): void
+  /** dnSpy's Show Next Statement. */
+  onShowNextStatement?(): void
+  /** Whether the session's process is one the debugger started, which is what Restart needs. */
+  canRestartDebug?: boolean
   canToggleBreakpoint: boolean
   hasFunctionBreakpoints: boolean
   canEnableAllBreakpoints: boolean
@@ -129,6 +141,8 @@ interface MenuBarProps {
   onShowDisassembly(): void
   onShowLocals(): void
   onShowWatch(): void
+  /** Opens one of the numbered debugger windows — Watch 2–4, Memory 1–4 — by its tab id. */
+  onShowToolWindow?(id: string): void
   onShowCallStack(): void
   onShowBreakpoints(): void
   onShowThreads(): void
@@ -245,6 +259,12 @@ export const MenuBar = ({
   onStepOver,
   onStepOut,
   onStopDebug,
+  onStartWithoutDebugging,
+  onDetachDebug,
+  onTerminateDebug,
+  onRestartDebug,
+  onShowNextStatement,
+  canRestartDebug = false,
   canToggleBreakpoint,
   hasFunctionBreakpoints,
   canEnableAllBreakpoints,
@@ -282,6 +302,7 @@ export const MenuBar = ({
   onShowDisassembly,
   onShowLocals,
   onShowWatch,
+  onShowToolWindow,
   onShowCallStack,
   onShowBreakpoints,
   onShowThreads,
@@ -518,7 +539,15 @@ export const MenuBar = ({
           { label: t('Output'), icon: 'Output', shortcut: 'Alt+2', checked: visibleToolWindows.has('output'), action: onShowOutput },
           ...(isDebugging ? [
             { separator: true },
-            { label: t('Watch 1'), icon: 'FileSystemWatcher', checked: visibleToolWindows.has('watch'), action: onShowWatch },
+            // dnSpy's Watch and Memory entries are submenus of their four numbered windows.
+            {
+              label: t('Watch'),
+              icon: 'Watch',
+              submenu: [1, 2, 3, 4].map((number) => {
+                const id = number === 1 ? 'watch' : `watch-${number}`
+                return { label: t('Watch {number}', { number }), icon: 'Watch', shortcut: `Ctrl+Alt+W, ${number}`, checked: visibleToolWindows.has(id), action: number === 1 ? onShowWatch : () => onShowToolWindow?.(id) }
+              }),
+            },
             { label: t('Autos'), icon: 'AutosWindow', shortcut: 'Ctrl+Alt+V, A', checked: visibleToolWindows.has('autos'), action: onShowAutos },
             { label: t('Locals'), icon: 'LocalsWindow', shortcut: 'Alt+4', checked: visibleToolWindows.has('locals'), action: onShowLocals },
             { label: t('Static Fields'), icon: 'FieldShortcut', checked: visibleToolWindows.has('static-fields'), action: onShowStaticFields },
@@ -528,21 +557,34 @@ export const MenuBar = ({
             { label: t('Modules'), icon: 'ModulesWindow', shortcut: 'Ctrl+Alt+U', checked: visibleToolWindows.has('modules'), action: onShowModules },
             { label: t('Processes'), icon: 'Process', shortcut: 'Ctrl+Alt+Z', checked: visibleToolWindows.has('processes'), action: onShowProcesses },
             { separator: true },
-            { label: t('Memory'), icon: 'MemoryWindow', checked: visibleToolWindows.has('memory'), action: onShowMemory },
+            {
+              label: t('Memory'),
+              icon: 'MemoryWindow',
+              submenu: [1, 2, 3, 4].map((number) => {
+                const id = number === 1 ? 'memory' : `memory-${number}`
+                return { label: t('Memory {number}', { number }), icon: 'MemoryWindow', shortcut: number === 1 ? 'Alt+6' : `Ctrl+Alt+M, ${number}`, checked: visibleToolWindows.has(id), action: number === 1 ? onShowMemory : () => onShowToolWindow?.(id) }
+              }),
+            },
             { label: t('Disassembly'), icon: 'DisassemblyWindow', shortcut: 'Alt+8', checked: visibleToolWindows.has('disassembly'), action: onShowDisassembly },
           ] : []),
         ],
       },
       { separator: true },
       { label: debugState === 'stopped' ? t('Continue') : t('Start Debugging...'), icon: 'Run', shortcut: 'F5', disabled: !debugAvailable || (debugState !== 'inactive' && debugState !== 'stopped'), action: debugState === 'stopped' ? onContinueDebug : onStartDebug },
-      { label: t('Attach to Process...'), icon: 'Process', disabled: !debugAvailable || debugState !== 'inactive', action: onAttachDebug },
+      ...(onStartWithoutDebugging ? [{ label: t('Start Without Debugging...'), icon: 'RunOutline', shortcut: 'Ctrl+F5', disabled: false, action: onStartWithoutDebugging }] : []),
+      { label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', disabled: !debugAvailable || debugState !== 'inactive', action: onAttachDebug },
+      // DebuggerMenuCommands' continue group: the commands that act on the session as a whole, shown while one runs.
       ...(isDebugging ? [
+        { label: t('Break All'), icon: 'Pause', shortcut: 'Ctrl+Alt+Break', disabled: debugState !== 'running', action: onPauseDebug },
+        { label: t('Stop Debugging'), icon: 'Stop', shortcut: 'Shift+F5', disabled: false, action: onStopDebug },
+        ...(onDetachDebug ? [{ label: t('Detach All'), disabled: false, action: onDetachDebug }] : []),
+        ...(onTerminateDebug ? [{ label: t('Terminate All'), icon: 'TerminateProcess', disabled: false, action: onTerminateDebug }] : []),
+        ...(onRestartDebug ? [{ label: t('Restart'), icon: 'Restart', shortcut: 'Ctrl+Shift+F5', disabled: !canRestartDebug, action: onRestartDebug }] : []),
         { separator: true },
-        { label: t('Pause'), icon: 'Pause', disabled: debugState !== 'running', action: onPauseDebug },
+        ...(onShowNextStatement ? [{ label: t('Show Next Statement'), icon: 'GoToNext', shortcut: 'Alt+Num *', disabled: debugState !== 'stopped', action: onShowNextStatement }] : []),
         { label: t('Step Into'), icon: 'StepInto', shortcut: 'F11', disabled: debugState !== 'stopped', action: onStepIn },
         { label: t('Step Over'), icon: 'StepOver', shortcut: 'F10', disabled: debugState !== 'stopped', action: onStepOver },
         { label: t('Step Out'), icon: 'StepOut', shortcut: 'Shift+F11', disabled: debugState !== 'stopped', action: onStepOut },
-        { label: t('Stop Debugging'), icon: 'Stop', shortcut: 'Shift+F5', disabled: false, action: onStopDebug },
       ] : []),
       { separator: true },
       { label: t('Toggle Breakpoint'), shortcut: 'F9', disabled: !canToggleBreakpoint, action: onToggleBreakpoint },

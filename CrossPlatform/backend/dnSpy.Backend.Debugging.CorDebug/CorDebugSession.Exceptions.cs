@@ -1,5 +1,7 @@
+using dnSpy.Backend.Debugging.CorDebug.Evaluation;
 using ICorDebugSharp;
 using ICorDebugSharp.Extensions;
+using Microsoft.CodeAnalysis;
 
 namespace dnSpy.Backend.Debugging.CorDebug;
 
@@ -21,7 +23,9 @@ internal sealed partial class CorDebugSession {
 		var unhandled = exception.DwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_UNHANDLED;
 		if (!unhandled && exception.DwEventType is not (CorDebugExceptionCallbackType.DEBUG_EXCEPTION_FIRST_CHANCE or CorDebugExceptionCallbackType.DEBUG_EXCEPTION_USER_FIRST_CHANCE))
 			return;
-		if (ExceptionSettings is null)
+		// The runtime reports a first chance twice — once for the throw, once more when it reaches user code —
+		// and WPF's engine (and its OutputLogger) only acts on the first.
+		if (exception.DwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_USER_FIRST_CHANCE)
 			return;
 		var thread = exception.Thread;
 		if (thread is null)
@@ -30,12 +34,20 @@ internal sealed partial class CorDebugSession {
 		var (typeName, moduleName) = ResolveExceptionType(thread);
 		if (typeName is null)
 			return;
+		var message = ReadExceptionMessage(thread);
+		Emit(DebugEventNames.Exception, new { name = typeName, module = moduleName, message, firstChance = !unhandled, unhandled, threadId = ThreadTable.TryGetId(thread) });
+		if (ExceptionSettings is null)
+			return;
+		// "Ignore unhandled exceptions": the process dies the way it would with no debugger attached.
+		if (unhandled && Options.IgnoreUnhandledExceptions)
+			return;
 		// Every CoreCLR exception belongs to the DotNet category; the engine raises nothing for MDA.
 		if (!ExceptionSettings.ShouldStop(ExceptionSettingsService.DotNetCategory, typeName, unhandled, moduleName))
 			return;
 		Stop(StopReasons.Exception, thread, null, new Dictionary<string, object?>(StringComparer.Ordinal) {
 			["exceptionName"] = typeName,
 			["exceptionModule"] = moduleName,
+			["exceptionMessage"] = message,
 			["unhandled"] = unhandled,
 		});
 	}
@@ -64,6 +76,29 @@ internal sealed partial class CorDebugSession {
 		catch (Exception ex) when (ModuleTable.IsComFailure(ex) || ex is ArgumentException) {
 			// A value the runtime has already collected, or a module with no metadata to read.
 			return (null, null);
+		}
+	}
+
+	/// <summary>
+	/// The exception's message, read from <c>System.Exception._message</c> rather than through the
+	/// <c>Message</c> property: an exception callback is no place for a func-eval, and the field is what the
+	/// property returns for every exception that does not override it.
+	/// </summary>
+	string? ReadExceptionMessage(ICorDebugThread thread) {
+		try {
+			var types = TypeSystem;
+			var exceptionType = types.Compilation.GetTypeByMetadataName("System.Exception");
+			var field = exceptionType?.GetMembers("_message").OfType<IFieldSymbol>().FirstOrDefault();
+			if (exceptionType is null || field is null)
+				return null;
+			var cls = types.GetClass(exceptionType);
+			if (cls is null || ValueReader.Dereference(thread.CurrentException) is not ICorDebugObjectValue exception)
+				return null;
+			var message = exception.GetFieldValue(cls, field.MetadataToken);
+			return ValueReader.Dereference(message) is ICorDebugStringValue text ? ValueReader.ReadString(text) : null;
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex) || ex is ArgumentException or IOException or BadImageFormatException or EvaluationException) {
+			return null;
 		}
 	}
 

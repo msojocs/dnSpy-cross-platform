@@ -90,6 +90,8 @@ public static class RpcMethods {
 	public const string DebugRequest = "debug/request";
 	public const string DebugDisconnect = "debug/disconnect";
 	public const string DebugEvent = "debug/event";
+	/// <summary>The debugger options the engine acts on, which apply to every session, running or not.</summary>
+	public const string DebugSetOptions = "debug/setOptions";
 	public const string ScriptEvaluate = "script/evaluate";
 	public const string ScriptReset = "script/reset";
 	/// <summary>The exception types the debug engine can break on, with their default and current settings.</summary>
@@ -1889,3 +1891,24 @@ public sealed record CodeSelectionRangesRequest(string DocumentId, IReadOnlyList
 
 /// <summary>For each position, the spans of the token and of every node around it, innermost first.</summary>
 public sealed record CodeSelectionRangesResponse(IReadOnlyList<IReadOnlyList<CodeSpanDto>> Ranges);
+
+/// <summary>One statement of a method body as the decompiler writes it, with the IL it covers.</summary>
+public sealed record SourceStatementDto(int IlOffset, int IlEndOffset, int MetadataToken, string Text, bool IsHidden);
+
+/// <summary>One IL instruction of a method body, written the way the IL view writes it.</summary>
+public sealed record IlLineDto(int Offset, string Text);
+
+/// <summary>
+/// A method body's source and IL, for what the debugger shows beside native code — the Disassembly view's
+/// comments — and for the Autos window, which reads the names the current statements use.
+/// </summary>
+public sealed record MethodSourceDto(string Name, IReadOnlyList<SourceStatementDto> Statements, IReadOnlyList<IlLineDto> Instructions);
+
+/// <summary>
+/// The decompiler services the debugger needs beyond <see cref="IDebugSymbolResolver"/>: a body's statements
+/// as text. Kept apart so a resolver without a decompiler can still implement the engine's core contract.
+/// </summary>
+public interface IDebugSourceProvider {
+	/// <summary>The statements and IL of a method body, or null when the module or method cannot be read.</summary>
+	Task<MethodSourceDto?> GetMethodSourceAsync(string? workspaceId, string modulePath, int metadataToken, CancellationToken cancellationToken);
+}

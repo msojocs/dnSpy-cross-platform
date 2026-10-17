@@ -86,7 +86,14 @@ const showOutput = async (): Promise<void> => {
  * menu — so a test that reads the breakpoint list opens the window from there first, the way a user would. */
 const showBreakpoints = async (): Promise<void> => {
   await page.getByRole('menuitem', { name: 'Debug', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Window', exact: true }).hover()
+  // The submenu opens on the pointer entering its row; a pointer that is already there when the row is drawn
+  // never enters it, so the hover is taken away and given again until the submenu says it is open.
+  const windowMenuItem = page.getByRole('menuitem', { name: 'Window', exact: true })
+  await expect(async () => {
+    await page.getByRole('menuitem', { name: /^Options\.\.\./ }).hover()
+    await windowMenuItem.hover()
+    await expect(windowMenuItem).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 })
+  }).toPass()
   const breakpointsMenuItem = page.getByRole('menuitem', { name: /^Breakpoints/ })
   if ((await breakpointsMenuItem.getAttribute('aria-checked')) === 'true') {
     await page.keyboard.press('Escape')
@@ -1677,10 +1684,11 @@ test.describe('the in-process debug engine', () => {
     await expect(page.locator('.breakpoint-state-bound')).toHaveCount(1)
 
     // The frame's arguments and locals, named through the module's portable PDB and matched to ICorDebug slots by
-    // index: the accumulator is 2 * 21 by the time the return statement is reached.
+    // index: the accumulator is 2 * 21 by the time the return statement is reached — written in hexadecimal,
+    // which is how dnSpy's variables windows show a number until Hexadecimal Display is turned off.
     await page.getByRole('tab', { name: 'Locals' }).click()
     await expect(page.locator('.debug-variable-name')).toContainText(['left', 'right', 'sum', 'i'])
-    await expect(page.locator('.debug-table-row').filter({ hasText: 'sum' })).toContainText('42')
+    await expect(page.locator('.debug-table-row').filter({ hasText: 'sum' })).toContainText('0x0000002A')
 
     // The stopped line is marked in the editor, on the document the frame decompiled to.
     await expect(page.locator('.debug-stopped-glyph')).toHaveCount(1)
@@ -1794,20 +1802,20 @@ test.describe('the in-process debug engine', () => {
     await expect(frameRow).toHaveAttribute('title', 'DebugTarget.dll:9')
     await page.getByRole('tab', { name: 'Locals' }).click()
     const sumRow = page.locator('.debug-table-row').filter({ hasText: 'sum' })
-    await expect(sumRow).toContainText('0')
+    await expect(sumRow).toContainText('0x00000000')
 
     // A step over the body runs the add and stops on the loop header — where the next pass is decided —
     // and the accumulator has grown by the left operand.
     await toolbar.getByRole('button', { name: 'Step Over' }).click()
     await expect(page.getByText('Stopped: step', { exact: true })).toBeVisible()
     await expect(frameRow).toHaveAttribute('title', 'DebugTarget.dll:7')
-    await expect(sumRow).toContainText('2')
+    await expect(sumRow).toContainText('0x00000002')
 
     // The step after that is the body again: a loop runs its statements more than once, so a step that
     // only ever moved forwards would have left it.
     await toolbar.getByRole('button', { name: 'Step Over' }).click()
     await expect(frameRow).toHaveAttribute('title', 'DebugTarget.dll:9')
-    await expect(sumRow).toContainText('2')
+    await expect(sumRow).toContainText('0x00000002')
 
     // Stepping out of the body leaves the method rather than running the loop to its end: the stop is
     // reported in the caller, which is the frame the runtime steps back to.
@@ -2017,6 +2025,80 @@ test.describe('the in-process debug engine', () => {
 
     await toolbar.getByRole('button', { name: 'Stop' }).click()
     await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
+  })
+
+  /** Opens one of the debugger's windows from Debug → Window, which lists them only while a session runs. */
+  const showDebugWindow = async (name: RegExp): Promise<void> => {
+    await page.getByRole('menuitem', { name: 'Debug', exact: true }).click()
+    const windows = page.getByRole('menuitem', { name: 'Window', exact: true })
+    await windows.hover()
+    await expect(windows).toHaveAttribute('aria-expanded', 'true')
+    await page.getByRole('menuitem', { name }).click()
+  }
+
+  // The fixture's --evaluate run stops on a Debugger.Break() with one value of each kind in scope: the variables
+  // windows read them through the expression evaluator, and the native windows read the frame's code.
+  test('evaluates the stopped frame in the variables windows and shows its native views', async () => {
+    await openDebugTarget()
+    await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Debug a Program' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Debug Program' })
+    await dialog.getByLabel('Arguments', { exact: true }).fill('--evaluate')
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(page.getByText('Stopped: user-break', { exact: true })).toBeVisible()
+
+    // The frame the break was called from, written the way dnSpy's stack frame formatter writes it.
+    await page.getByRole('tab', { name: 'Call Stack' }).click()
+    const frame = page.locator('.result-list[aria-label="Call Stack"] .stack-row').filter({ hasText: 'DebugTarget.Program.Evaluate(int factor)' })
+    await expect(frame).toHaveCount(1)
+    await frame.dblclick()
+    await expect(frame).toHaveAttribute('aria-current', 'true')
+
+    // An object reads as its DebuggerDisplay — whose holes are formatted like any other value, in hexadecimal —
+    // and expands into its members.
+    await page.getByRole('tab', { name: 'Locals' }).click()
+    const locals = page.getByRole('treegrid', { name: 'Locals' })
+    const shapeRow = locals.getByRole('row').filter({ hasText: /^shape/ })
+    await expect(shapeRow).toContainText('Shape "square" with 0x00000004 sides')
+    await shapeRow.getByRole('button', { name: 'Expand shape' }).click()
+    await expect(locals.getByRole('row').filter({ hasText: /^Sides/ })).toContainText('0x00000004')
+
+    // A value is edited in place and written into the process.
+    const factorRow = locals.getByRole('row').filter({ hasText: /^factor/ })
+    await expect(factorRow).toContainText('0x00000002')
+    await factorRow.getByText('0x00000002').dblclick()
+    const editor = locals.getByRole('textbox', { name: 'Value' })
+    await editor.fill('5')
+    await editor.press('Enter')
+    await expect(factorRow).toContainText('0x00000005')
+
+    // A watch runs a property getter in the debuggee.
+    await page.getByRole('tab', { name: 'Watch 1' }).click()
+    const watch = page.getByRole('treegrid', { name: 'Watch' })
+    await watch.getByRole('button', { name: 'Add watch' }).click()
+    const expression = watch.getByRole('textbox', { name: 'Watch expression' })
+    await expression.fill('shape.Area')
+    await expression.press('Enter')
+    await expect(watch.getByRole('row').filter({ hasText: /^shape\.Area/ })).toContainText('0x00000010')
+
+    // Autos lists what the statements around the break wrote.
+    await showDebugWindow(/^Autos/)
+    await expect(page.getByRole('treegrid', { name: 'Autos' }).getByRole('row').filter({ hasText: /^grid/ })).toBeVisible()
+
+    // The jitted method, with the instruction the frame returns to marked.
+    await showDebugWindow(/^Disassembly/)
+    await expect(page.locator('.disassembly-current')).toHaveCount(1)
+    await expect(page.locator('.disassembly-line').first()).toBeVisible()
+
+    // The thread that hit the break is the program's main thread.
+    await showDebugWindow(/^Threads/)
+    await expect(page.getByRole('grid', { name: 'Threads' }).getByRole('row').filter({ hasText: 'Main' }).first()).toBeVisible()
+
+    // The watch was the user's own; it goes with the session the test leaves.
+    await page.getByRole('tab', { name: 'Watch 1' }).click()
+    await watch.getByRole('row').filter({ hasText: /^shape\.Area/ }).click({ button: 'right' })
+    await page.getByRole('menuitem', { name: /^Clear All/ }).click()
+    await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Stop' }).click()
+    await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
   })
 })
 

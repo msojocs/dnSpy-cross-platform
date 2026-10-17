@@ -6,17 +6,22 @@ namespace dnSpy.Backend.Debugging.CorDebug;
 /// One frame of a stopped thread, kept alive for as long as the client can still ask about it.
 /// </summary>
 internal sealed class FrameEntry {
-	public FrameEntry(int id, ICorDebugFrame frame, int threadId) {
+	public FrameEntry(int id, ICorDebugFrame frame, int threadId, int index) {
 		Id = id;
 		Frame = frame;
 		ThreadId = threadId;
+		Index = index;
 	}
 
 	public int Id { get; }
 
+	/// <summary>The frame as it was read; neutered by the next continue, func-evals included.</summary>
 	public ICorDebugFrame Frame { get; }
 
 	public int ThreadId { get; }
+
+	/// <summary>The frame's position on its thread's stack, innermost first, which is how it is read again.</summary>
+	public int Index { get; }
 
 	/// <summary>
 	/// The handle the client was given for this frame's locals, handed out once so that asking for
@@ -39,9 +44,14 @@ internal sealed class FrameTable {
 	readonly Dictionary<int, FrameEntry> frames = new();
 	int sequence;
 
-	public FrameEntry Add(ICorDebugFrame frame, int threadId) {
+	/// <summary>
+	/// Registers a frame. Reading the same stop's stack again — in another format, say — hands each frame the id it
+	/// already had, so the frame the user switched to is still the one the client names.
+	/// </summary>
+	public FrameEntry Add(ICorDebugFrame frame, int threadId, int index) {
 		lock (gate) {
-			var entry = new FrameEntry(++sequence, frame, threadId);
+			var existing = frames.Values.FirstOrDefault(candidate => candidate.ThreadId == threadId && candidate.Index == index);
+			var entry = new FrameEntry(existing?.Id ?? ++sequence, frame, threadId, index) { LocalsReference = existing?.LocalsReference ?? 0 };
 			frames[entry.Id] = entry;
 			return entry;
 		}

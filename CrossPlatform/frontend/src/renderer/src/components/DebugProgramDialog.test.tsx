@@ -7,6 +7,8 @@ const launchDebug = vi.fn(async () => undefined)
 
 beforeEach(() => {
   launchDebug.mockClear()
+  // The dialog remembers what each program was started with; every test starts from a dialog with no memory.
+  localStorage.removeItem('dnspy.debugProgramMru.v1')
   useAppStore.setState({ launchDebug, defaultDebugTarget: () => '/tmp/DebugTarget.dll' })
 })
 
@@ -210,5 +212,17 @@ describe('DebugProgramDialog', () => {
 
     expect(onClose).toHaveBeenCalled()
     expect(launchDebug).not.toHaveBeenCalled()
+  })
+})
+
+describe('the launch memory', () => {
+  it('opens on the arguments a program was last started with', () => {
+    render(<DebugProgramDialog onClose={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Arguments'), { target: { value: '--evaluate --wait' } })
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    cleanup()
+
+    render(<DebugProgramDialog onClose={vi.fn()} />)
+    expect(screen.getByLabelText('Arguments')).toHaveValue('--evaluate --wait')
   })
 })

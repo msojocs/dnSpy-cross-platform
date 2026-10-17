@@ -47,6 +47,8 @@ const commands = () => ({
   onToggleBreakpoint: vi.fn(),
   onSetBreakpointEnabled: vi.fn(),
   onShowNextStatement: vi.fn(),
+  onSetNextStatement: vi.fn(),
+  onRunToCursor: vi.fn(),
   onAddMethodBreakpoints: vi.fn(),
   onAddClassBreakpoint: vi.fn(),
   onAddClassTracepoint: vi.fn(),
@@ -127,7 +129,6 @@ const methodReferenceContext = (overrides: Partial<CodeEditorMenuContext> = {}):
 // The commands this port has no equivalent for. dnSpy puts them in the menu; here they must never show,
 // which is asserted against a context rich enough to make everything else appear.
 const UNIMPLEMENTED = [
-  'set-next-statement',
   'break-when-exception-thrown',
   'edit-il-instructions',
   'go-to-entry-point',
@@ -299,6 +300,8 @@ describe('buildCodeEditorMenuItems', () => {
     expect(menuKeys(context({ statement: statement(), stopped: true, debugState: 'stopped' }))).toEqual([
       'toggle-breakpoint',
       'show-next-statement',
+      'set-next-statement',
+      'run-to-cursor',
       'go-to-disassembly',
       'hex-0',
       'find',

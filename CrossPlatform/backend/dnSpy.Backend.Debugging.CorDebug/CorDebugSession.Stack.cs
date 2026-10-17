@@ -1,25 +1,28 @@
 using System.Globalization;
 using System.Text.Json;
 using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Debugging.CorDebug.Evaluation;
 using ICorDebugSharp;
 using ICorDebugSharp.Extensions;
+using Microsoft.CodeAnalysis;
 
 namespace dnSpy.Backend.Debugging.CorDebug;
 
 /// <summary>
-/// The stack and value half of a session: the frames of a stopped thread, the scopes of a frame, and
-/// the arguments and locals inside it.
+/// The stack half of a session: the frames of a stopped thread, written the way dnSpy's Call Stack window
+/// writes them, and the decompiled location each one is stopped at.
 /// </summary>
 /// <remarks>
-/// Frames are addressed by an id the engine hands out, because an ICorDebug frame has no identity of
-/// its own and stops being valid as soon as the process runs again. Everything that has to be
-/// decompiled — a frame's line, a local's name — happens off the dispatcher: the debuggee stays
-/// suspended while it runs, but holding the COM thread through a decompilation would stall the pump.
+/// Frames are addressed by an id the engine hands out, because an ICorDebug frame has no identity of its own
+/// and stops being valid as soon as the process runs again — a func-eval included. A frame is therefore also
+/// remembered by its thread and its position on the stack, which is how it is read again after an evaluation
+/// (<see cref="GetFrame"/>). Names come from metadata; only the line a frame is on needs the decompiler, and
+/// that happens off the dispatcher.
 /// </remarks>
 internal sealed partial class CorDebugSession {
 	/// <summary>
-	/// How many frames of one stack get their decompiled line looked up. The frames nearest the stop
-	/// are the ones a user navigates; resolving a hundred of them would decompile a hundred methods.
+	/// How many frames of one stack get their decompiled line looked up up front. The frames nearest the
+	/// stop are the ones a user navigates; the rest are resolved when the user switches to them.
 	/// </summary>
 	const int MaxResolvedFrames = 24;
 
@@ -27,18 +30,37 @@ internal sealed partial class CorDebugSession {
 
 	readonly FrameTable frameTable = new();
 	readonly VariableTable variableTable = new();
+	readonly Dictionary<(int ThreadId, int Index), (int Generation, ICorDebugFrame Frame)> frameCache = new();
 	ManagedValueFormatter? valueFormatter;
 
 	ManagedValueFormatter Formatter => valueFormatter ??= new ManagedValueFormatter(variableTable);
 
 	/// <summary>An identity the client can address: the frame id, and where the frame is.</summary>
-	sealed record RawFrame(int Id, string ModulePath, int MetadataToken, int IlOffset);
+	internal sealed record RawFrame(int Id, string ModulePath, int MetadataToken, int IlOffset, bool IsInternal, string? InternalName, ulong NativeAddress, int NativeOffset);
 
-	/// <summary>One value read off a frame, before the decompiler has had a say about its name.</summary>
-	sealed record RawVariable(bool IsArgument, int Index, string Text, string? TypeName, int VariablesReference);
-
-	/// <summary>The values of one frame, and the body they belong to, so names can be looked up.</summary>
-	sealed record VariableSnapshot(string ModulePath, int MetadataToken, IReadOnlyList<RawVariable> Variables);
+	/// <summary>
+	/// The managed frame at <paramref name="index"/> on a thread, read again once a continue has neutered the
+	/// one read before. Runs on the dispatcher.
+	/// </summary>
+	internal ICorDebugFrame? GetFrame(int threadId, int index) {
+		if (frameCache.TryGetValue((threadId, index), out var cached) && cached.Generation == Generation)
+			return cached.Frame;
+		var thread = Threads.Find(threadId);
+		if (thread is null)
+			return null;
+		var position = 0;
+		try {
+			foreach (var frame in WalkFrames(thread, index + 1)) {
+				if (position++ == index) {
+					frameCache[(threadId, index)] = (Generation, frame);
+					return frame;
+				}
+			}
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+		}
+		return null;
+	}
 
 	// ---------------------------------------------------------------- stack trace
 
@@ -47,10 +69,12 @@ internal sealed partial class CorDebugSession {
 		var threadId = GetInt(args, "threadId") ?? 0;
 		var startFrame = Math.Max(GetInt(args, "startFrame") ?? 0, 0);
 		var levels = GetInt(args, "levels") ?? 0;
+		var format = StackFrameFormat.Parse(args);
 
 		var snapshot = await Dispatcher.RunAsync(() => SnapshotFrames(threadId, startFrame, levels)).ConfigureAwait(false);
-		var resolved = await ResolveFramesAsync(snapshot, cancellationToken).ConfigureAwait(false);
-		return JsonSerializer.SerializeToElement(new {
+		var names = await FormatFrameNamesAsync(threadId, snapshot, format, cancellationToken).ConfigureAwait(false);
+		var resolved = await ResolveFramesAsync(snapshot, names, cancellationToken).ConfigureAwait(false);
+		return DebugJson.Serialize(new {
 			stackFrames = resolved,
 			totalFrames = resolved.Length,
 		});
@@ -62,10 +86,18 @@ internal sealed partial class CorDebugSession {
 			throw new RpcException(ErrorCodes.InvalidParams, RunningReason);
 		var thread = Threads.Find(threadId) ?? throw new RpcException(ErrorCodes.InvalidParams, $"There is no thread with id {threadId}.");
 		var frames = new List<RawFrame>();
-		foreach (var frame in WalkFrames(thread, int.MaxValue)) {
-			var entry = frameTable.Add(frame, threadId);
+		var index = 0;
+		foreach (var (frame, internalName) in WalkFramesWithTransitions(thread)) {
+			if (frame is null) {
+				frames.Add(new RawFrame(0, string.Empty, 0, -1, true, internalName, 0, 0));
+				continue;
+			}
+			var entry = frameTable.Add(frame, threadId, index);
+			frameCache[(threadId, index)] = (Generation, frame);
+			index++;
 			var (modulePath, token) = FrameIdentity(frame);
-			frames.Add(new RawFrame(entry.Id, modulePath, token, ReadIlOffset(frame)));
+			var (nativeAddress, nativeOffset) = ReadNativeLocation(frame);
+			frames.Add(new RawFrame(entry.Id, modulePath, token, ReadIlOffset(frame), false, null, nativeAddress, nativeOffset));
 		}
 		return startFrame >= frames.Count
 			? Array.Empty<RawFrame>()
@@ -98,45 +130,195 @@ internal sealed partial class CorDebugSession {
 	}
 
 	/// <summary>
-	/// Names the frames the decompiler knows, and gives the rest the identity their metadata carries.
-	/// Only the workspace's own modules are looked up: a frame in the framework has no source to show,
-	/// and loading one to name it would cost more than the name is worth.
+	/// The frames as the Call Stack window lists them: managed frames, with a transition row where native code
+	/// sits between two runs of them — the "[Native to Managed Transition]" rows WPF shows.
 	/// </summary>
-	async Task<object[]> ResolveFramesAsync(IReadOnlyList<RawFrame> frames, CancellationToken cancellationToken) {
+	static IEnumerable<(ICorDebugFrame? Frame, string? InternalName)> WalkFramesWithTransitions(ICorDebugThread thread) {
+		var chain = thread.ActiveChain;
+		var sawManaged = false;
+		var pendingTransition = false;
+		for (var depth = 0; chain is not null && depth < 64; depth++) {
+			if (chain.IsManaged) {
+				var frames = chain.Frames;
+				if (frames.Length > 0 && pendingTransition && sawManaged)
+					yield return (null, "[Native to Managed Transition]");
+				pendingTransition = false;
+				foreach (var frame in frames) {
+					sawManaged = true;
+					yield return (frame, null);
+				}
+			}
+			else
+				pendingTransition = true;
+			chain = chain.Caller;
+		}
+	}
+
+	/// <summary>The native code address a frame is at and its offset in the method's code.</summary>
+	static (ulong Address, int Offset) ReadNativeLocation(ICorDebugFrame frame) {
+		try {
+			if (frame is not ICorDebugNativeFrame native)
+				return (0, 0);
+			if (native.TryGetIP(out var offset) < 0)
+				return (0, 0);
+			if (frame.Function.TryGetNativeCode(out var code) < 0 || code is null)
+				return (0, 0);
+			return (code.Address.Value + offset, (int)offset);
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+			return (0, 0);
+		}
+	}
+
+	/// <summary>The Call Stack window's display options (dnSpy's <c>CallStackDisplaySettings</c>).</summary>
+	internal sealed record StackFrameFormat(bool ModuleNames, bool ParameterTypes, bool ParameterNames, bool ParameterValues, bool InstructionPointer, bool ReturnTypes, bool Namespaces, bool IntrinsicTypeKeywords, bool DeclaringTypes, bool Tokens, bool Hexadecimal, bool DigitSeparators) {
+		public static StackFrameFormat Parse(JsonElement args) {
+			if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("format", out var format) || format.ValueKind != JsonValueKind.Object)
+				return new StackFrameFormat(true, true, true, false, true, false, true, true, true, false, true, false);
+			bool Read(string name, bool fallback) => format.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : fallback;
+			return new StackFrameFormat(
+				Read("showModuleNames", true),
+				Read("showParameterTypes", true),
+				Read("showParameterNames", true),
+				Read("showParameterValues", false),
+				Read("showFunctionOffset", true),
+				Read("showReturnTypes", false),
+				Read("showNamespaces", true),
+				Read("showIntrinsicTypeKeywords", true),
+				Read("showDeclaringTypes", true),
+				Read("showTokens", false),
+				Read("useHexadecimal", true),
+				Read("useDigitSeparators", false));
+		}
+	}
+
+	/// <summary>
+	/// Writes each frame the way dnSpy's <c>CSharpStackFrameFormatter</c> does:
+	/// <c>module!Namespace.Type.Method(int a, string b) (IL=0x0005, Native=0x...+0x1A)</c>. Names come from
+	/// metadata, so no frame has to be decompiled to be named.
+	/// </summary>
+	async Task<IReadOnlyList<(string Text, IReadOnlyList<TextPartDto> Parts)>> FormatFrameNamesAsync(int threadId, IReadOnlyList<RawFrame> frames, StackFrameFormat format, CancellationToken cancellationToken) {
+		var result = new (string, IReadOnlyList<TextPartDto>)[frames.Count];
+		DebuggeeTypeSystem? types = null;
+		try {
+			types = TypeSystem;
+			_ = types.BuiltVersion;
+		}
+		catch (Exception ex) when (ex is IOException or InvalidOperationException or BadImageFormatException) {
+			types = null;
+		}
+		var language = Options.Language;
+		for (var index = 0; index < frames.Count; index++) {
+			var frame = frames[index];
+			if (frame.IsInternal) {
+				result[index] = (frame.InternalName ?? "[External Code]", [new TextPartDto(frame.InternalName ?? "[External Code]", TextColors.Text)]);
+				continue;
+			}
+			var output = new ColorTextWriter();
+			if (format.ModuleNames) {
+				output.Write(TextColors.Module, string.IsNullOrEmpty(frame.ModulePath) ? "???" : Path.GetFileName(frame.ModulePath));
+				output.Write(TextColors.Operator, "!");
+			}
+			var entry = string.IsNullOrEmpty(frame.ModulePath) ? null : Modules.FindEntry(frame.ModulePath);
+			var method = types is not null && entry is not null ? types.GetMember(entry, frame.MetadataToken) as IMethodSymbol : null;
+			if (method is null)
+				output.Write(TextColors.Error, $"0x{frame.MetadataToken:X8}");
+			else {
+				var runtime = new EvalRuntime(this, types!, threadId, frameTable.Find(frame.Id)?.Index ?? 0, allowFuncEval: false, cancellationToken);
+				var options = new ValueFormatOptions {
+					Language = language,
+					Hexadecimal = format.Hexadecimal,
+					DigitSeparators = format.DigitSeparators,
+					ShowNamespaces = format.Namespaces,
+					IntrinsicTypeKeywords = format.IntrinsicTypeKeywords,
+					ShowTokens = format.Tokens,
+					FuncEval = false,
+				};
+				await StackFrameFormatter.WriteAsync(output, new ValueFormatter(runtime, options, null), runtime, method, frame, format, language).ConfigureAwait(false);
+			}
+			result[index] = (output.ToString(), output.ToList());
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// Adds the decompiled line to the frames the decompiler knows. Only the workspace's own modules are
+	/// looked up: a frame in the framework has no document the user opened, and decompiling one to number
+	/// its line would cost more than it is worth until the user actually switches to it.
+	/// </summary>
+	async Task<object[]> ResolveFramesAsync(IReadOnlyList<RawFrame> frames, IReadOnlyList<(string Text, IReadOnlyList<TextPartDto> Parts)> names, CancellationToken cancellationToken) {
 		var workspaceModules = new Dictionary<string, bool>(StringComparer.Ordinal);
 		var resolved = new object[frames.Count];
 		var budget = MaxResolvedFrames;
 		for (var index = 0; index < frames.Count; index++) {
 			var frame = frames[index];
-			var name = Describe(frame);
 			var line = 0;
 			var column = 0;
 			string? nodeId = null;
-			if (budget > 0 && SymbolResolver is not null && !string.IsNullOrEmpty(frame.ModulePath) &&
+			string? description = null;
+			var resolvedLocation = false;
+			if (!frame.IsInternal && budget > 0 && SymbolResolver is not null && !string.IsNullOrEmpty(frame.ModulePath) &&
 				await IsWorkspaceModuleAsync(frame.ModulePath, workspaceModules, cancellationToken).ConfigureAwait(false)) {
 				budget--;
+				resolvedLocation = true;
 				var location = await SymbolResolver.ResolveIlLocationAsync(WorkspaceId, frame.ModulePath, frame.MetadataToken, frame.IlOffset, cancellationToken).ConfigureAwait(false);
 				if (location is not null) {
-					// The Call Stack window names a frame "module!Type.Method(params)", the way the WPF
-					// formatter does; the module is the one the frame's own metadata came from.
-					name = $"{Path.GetFileName(frame.ModulePath)}!{location.StackFrameName}";
 					line = location.StartLine;
 					column = location.StartColumn;
 					nodeId = location.NodeId;
+					description = location.Description;
 				}
 			}
 			resolved[index] = new {
 				id = frame.Id,
-				name,
+				name = names[index].Text,
+				nameParts = names[index].Parts,
 				line,
 				column,
 				source = string.IsNullOrEmpty(frame.ModulePath)
 					? null
 					: new { name = Path.GetFileName(frame.ModulePath), path = frame.ModulePath },
 				nodeId,
+				description,
+				metadataToken = frame.MetadataToken,
+				ilOffset = frame.IlOffset,
+				nativeAddress = frame.NativeAddress,
+				isInternal = frame.IsInternal,
+				// A frame whose location was not looked up up front is resolved when the user switches to it.
+				locationResolved = resolvedLocation || frame.IsInternal,
 			};
 		}
 		return resolved;
+	}
+
+	/// <summary>
+	/// The decompiled location of one frame, for a frame whose line was not resolved with the stack — a deep
+	/// frame, or one in a module the workspace does not hold. The client asks when the user switches to it.
+	/// </summary>
+	internal async Task<JsonElement> FrameLocationAsync(JsonElement? arguments, CancellationToken cancellationToken) {
+		var args = arguments is { ValueKind: JsonValueKind.Object } value ? value : default;
+		var frameId = GetInt(args, "frameId") ?? 0;
+		var entry = frameTable.Find(frameId) ?? throw new RpcException(ErrorCodes.InvalidParams, $"There is no frame with id {frameId}; it belongs to an earlier stop.");
+		var identity = await Dispatcher.RunAsync(() => {
+			var frame = GetFrame(entry.ThreadId, entry.Index) ?? entry.Frame;
+			var (modulePath, token) = FrameIdentity(frame);
+			return (modulePath, token, ReadIlOffset(frame));
+		}).ConfigureAwait(false);
+		ResolvedIlLocation? location = null;
+		if (SymbolResolver is not null && !string.IsNullOrEmpty(identity.modulePath))
+			location = await SymbolResolver.ResolveIlLocationAsync(WorkspaceId, identity.modulePath, identity.token, identity.Item3, cancellationToken).ConfigureAwait(false);
+		return DebugJson.Serialize(new {
+			line = location?.StartLine ?? 0,
+			column = location?.StartColumn ?? 0,
+			endLine = location?.EndLine ?? 0,
+			endColumn = location?.EndColumn ?? 0,
+			nodeId = location?.NodeId,
+			description = location?.Description,
+			modulePath = identity.modulePath,
+			metadataToken = identity.token,
+			ilOffset = identity.Item3,
+			isExternalModule = location?.IsExternalModule ?? true,
+		});
 	}
 
 	async Task<bool> IsWorkspaceModuleAsync(string modulePath, Dictionary<string, bool> cache, CancellationToken cancellationToken) {
@@ -146,11 +328,6 @@ internal sealed partial class CorDebugSession {
 		cache[modulePath] = isWorkspace;
 		return isWorkspace;
 	}
-
-	/// <summary>What a frame is called when no decompiled name is available for it.</summary>
-	static string Describe(RawFrame frame) => string.IsNullOrEmpty(frame.ModulePath)
-		? $"0x{frame.MetadataToken:X8}"
-		: $"{Path.GetFileName(frame.ModulePath)}!0x{frame.MetadataToken:X8}";
 
 	/// <summary>The module and method a frame runs, read the way the resolver spells them.</summary>
 	static (string ModulePath, int MetadataToken) FrameIdentity(ICorDebugFrame frame) {
@@ -182,88 +359,234 @@ internal sealed partial class CorDebugSession {
 		}
 	}
 
+	/// <summary>How an IL offset maps onto the native code — exact, approximate, prolog, epilog.</summary>
+	static CorDebugMappingResult ReadIlMapping(ICorDebugFrame frame) {
+		if (frame is not ICorDebugILFrame ilFrame)
+			return CorDebugMappingResult.MAPPING_NO_INFO;
+		try {
+			var (_, mapping) = ilFrame.IP;
+			return mapping;
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+			return CorDebugMappingResult.MAPPING_NO_INFO;
+		}
+	}
+
 	// ---------------------------------------------------------------- scopes
 
 	internal JsonElement Scopes(JsonElement? arguments) {
 		var args = arguments is { ValueKind: JsonValueKind.Object } value ? value : default;
 		var frameId = GetInt(args, "frameId") ?? 0;
 		var entry = frameTable.Find(frameId) ?? throw new RpcException(ErrorCodes.InvalidParams, $"There is no frame with id {frameId}; it belongs to an earlier stop.");
-		if (entry.Frame is not ICorDebugILFrame ilFrame)
-			return JsonSerializer.SerializeToElement(new { scopes = Array.Empty<object>() });
+		if (entry.Frame is not ICorDebugILFrame)
+			return DebugJson.Serialize(new { scopes = Array.Empty<object>() });
 		if (entry.LocalsReference == 0)
-			entry.LocalsReference = variableTable.Add(new FrameScopeEntry(ilFrame));
-		return JsonSerializer.SerializeToElement(new {
+			entry.LocalsReference = variableTable.Add(new FrameScopeEntry(entry.ThreadId, entry.Index));
+		return DebugJson.Serialize(new {
 			scopes = new object[] {
-				// Arguments come first because that is how the Locals window reads in dnSpy: what the
-				// method was called with, then what it has computed so far.
 				new { name = "Locals", variablesReference = entry.LocalsReference, expensive = false },
 			},
 		});
 	}
+}
 
-	// ---------------------------------------------------------------- variables
+/// <summary>dnSpy's <c>CSharpStackFrameFormatter</c> and its Visual Basic twin, over Roslyn symbols.</summary>
+internal static class StackFrameFormatter {
+	static readonly Dictionary<string, string[]> CSharpOperators = new(StringComparer.Ordinal) {
+		["op_Addition"] = ["operator", "+"],
+		["op_Subtraction"] = ["operator", "-"],
+		["op_Multiply"] = ["operator", "*"],
+		["op_Division"] = ["operator", "/"],
+		["op_Modulus"] = ["operator", "%"],
+		["op_Equality"] = ["operator", "=="],
+		["op_Inequality"] = ["operator", "!="],
+		["op_LessThan"] = ["operator", "<"],
+		["op_GreaterThan"] = ["operator", ">"],
+		["op_LessThanOrEqual"] = ["operator", "<="],
+		["op_GreaterThanOrEqual"] = ["operator", ">="],
+		["op_Implicit"] = ["implicit", "operator"],
+		["op_Explicit"] = ["explicit", "operator"],
+		["op_UnaryNegation"] = ["operator", "-"],
+		["op_UnaryPlus"] = ["operator", "+"],
+		["op_LogicalNot"] = ["operator", "!"],
+		["op_OnesComplement"] = ["operator", "~"],
+		["op_Increment"] = ["operator", "++"],
+		["op_Decrement"] = ["operator", "--"],
+		["op_BitwiseAnd"] = ["operator", "&"],
+		["op_BitwiseOr"] = ["operator", "|"],
+		["op_ExclusiveOr"] = ["operator", "^"],
+		["op_LeftShift"] = ["operator", "<<"],
+		["op_RightShift"] = ["operator", ">>"],
+		["op_True"] = ["operator", "true"],
+		["op_False"] = ["operator", "false"],
+	};
 
-	internal async Task<JsonElement> VariablesAsync(JsonElement? arguments, CancellationToken cancellationToken) {
-		var args = arguments is { ValueKind: JsonValueKind.Object } value ? value : default;
-		var reference = GetInt(args, "variablesReference") ?? 0;
-		if (!IsStopped)
-			throw new RpcException(ErrorCodes.InvalidParams, RunningReason);
-		var entry = variableTable.Find(reference) ?? throw new RpcException(ErrorCodes.InvalidParams, $"There is no variable set with reference {reference}; it belongs to an earlier stop.");
-
-		if (entry is not FrameScopeEntry scope) {
-			var children = await Dispatcher.RunAsync(() => Formatter.Children(entry).Select(child => {
-				var formatted = Formatter.Format(child.Value);
-				return (child.Name, formatted.Text, formatted.TypeName, formatted.VariablesReference);
-			}).ToArray()).ConfigureAwait(false);
-			return JsonSerializer.SerializeToElement(new {
-				variables = children.Select(child => new {
-					name = child.Name,
-					value = child.Text,
-					type = child.TypeName,
-					variablesReference = child.VariablesReference,
-				}).ToArray(),
-			});
+	internal static async Task WriteAsync(ColorTextWriter output, ValueFormatter formatter, EvalRuntime runtime, IMethodSymbol method, CorDebugSession.RawFrame frame, CorDebugSession.StackFrameFormat format, EvalLanguage language) {
+		var isCSharp = language == EvalLanguage.CSharp;
+		// An async or iterator body runs in a generated MoveNext: the frame is named after the method the user wrote.
+		var shown = KickoffMethod(method) ?? method;
+		if (shown.AssociatedSymbol is IPropertySymbol property) {
+			if (format.ReturnTypes) {
+				output.Write(formatter.FormatTypeName(property.Type));
+				output.Write(TextColors.Text, " ");
+			}
+			if (format.DeclaringTypes) {
+				output.Write(formatter.FormatTypeName(property.ContainingType));
+				output.Write(TextColors.Operator, ".");
+			}
+			if (property.IsIndexer)
+				output.Write(TextColors.Keyword, isCSharp ? "this" : "Item");
+			else
+				output.Write(ValueFormatter.ColorOf(property), formatter.EscapeIdentifier(property.Name));
+			output.Write(TextColors.Operator, ".");
+			output.Write(TextColors.Keyword, shown.MethodKind == MethodKind.PropertyGet ? (isCSharp ? "get" : "Get") : (isCSharp ? "set" : "Set"));
 		}
-
-		// The values are read on the dispatcher, where the COM objects live; the names come from the
-		// decompiler afterwards, because decompiling on the dispatcher would stall the event pump.
-		var snapshot = await Dispatcher.RunAsync(() => ReadFrameVariables(scope)).ConfigureAwait(false);
-		var names = SymbolResolver is null || string.IsNullOrEmpty(snapshot.ModulePath)
-			? Array.Empty<DebugVariableNameDto>()
-			: await SymbolResolver.GetVariableNamesAsync(WorkspaceId, snapshot.ModulePath, snapshot.MetadataToken, cancellationToken).ConfigureAwait(false);
-		var argumentsByName = names.Where(name => name.IsArgument).ToDictionary(name => name.Index);
-		var localsByName = names.Where(name => !name.IsArgument).ToDictionary(name => name.Index);
-		return JsonSerializer.SerializeToElement(new {
-			variables = snapshot.Variables.Select(variable => {
-				var known = (variable.IsArgument ? argumentsByName : localsByName).GetValueOrDefault(variable.Index);
-				return new {
-					name = known?.Name ?? (variable.IsArgument ? $"arg{variable.Index.ToString(CultureInfo.InvariantCulture)}" : $"local{variable.Index.ToString(CultureInfo.InvariantCulture)}"),
-					value = variable.Text,
-					// The decompiler knows the declared type; the runtime only the one it was handed.
-					type = known is null || string.IsNullOrEmpty(known.TypeName) ? variable.TypeName : known.TypeName,
-					variablesReference = variable.VariablesReference,
-				};
-			}).ToArray(),
-		});
+		else if (shown.AssociatedSymbol is IEventSymbol @event) {
+			if (format.DeclaringTypes) {
+				output.Write(formatter.FormatTypeName(@event.ContainingType));
+				output.Write(TextColors.Operator, ".");
+			}
+			output.Write(ValueFormatter.ColorOf(@event), formatter.EscapeIdentifier(@event.Name));
+			output.Write(TextColors.Operator, ".");
+			output.Write(TextColors.Keyword, shown.MethodKind == MethodKind.EventAdd ? (isCSharp ? "add" : "AddHandler") : (isCSharp ? "remove" : "RemoveHandler"));
+		}
+		else {
+			var operatorInfo = isCSharp && shown.MethodKind is MethodKind.UserDefinedOperator or MethodKind.Conversion && CSharpOperators.TryGetValue(shown.Name, out var info) ? info : null;
+			var isConversion = operatorInfo is not null && (operatorInfo[0] == "implicit" || operatorInfo[0] == "explicit");
+			if (format.ReturnTypes && !isConversion && shown.MethodKind is not (MethodKind.Constructor or MethodKind.StaticConstructor)) {
+				output.Write(formatter.FormatTypeName(shown.ReturnType));
+				output.Write(TextColors.Text, " ");
+			}
+			if (format.DeclaringTypes) {
+				output.Write(formatter.FormatTypeName(shown.ContainingType));
+				output.Write(TextColors.Operator, ".");
+			}
+			if (shown.MethodKind is MethodKind.Constructor or MethodKind.StaticConstructor) {
+				var typeName = shown.ContainingType.MetadataName;
+				var tick = typeName.IndexOf('`');
+				output.Write(ValueFormatter.ColorOf(shown.ContainingType), formatter.EscapeIdentifier(tick < 0 ? typeName : typeName[..tick]));
+			}
+			else if (operatorInfo is not null) {
+				for (var index = 0; index < operatorInfo.Length; index++) {
+					if (index > 0)
+						output.Write(TextColors.Text, " ");
+					output.Write(char.IsLower(operatorInfo[index][0]) ? TextColors.Keyword : TextColors.Operator, operatorInfo[index]);
+				}
+				if (isConversion) {
+					output.Write(TextColors.Text, " ");
+					output.Write(formatter.FormatTypeName(shown.ReturnType));
+				}
+			}
+			else if (TryGetLocalFunctionName(shown.Name, out var containing, out var local)) {
+				output.Write(ValueFormatter.ColorOf(shown), formatter.EscapeIdentifier(containing));
+				output.Write(TextColors.Operator, ".");
+				output.Write(ValueFormatter.ColorOf(shown), formatter.EscapeIdentifier(local));
+			}
+			else
+				output.Write(ValueFormatter.ColorOf(shown), formatter.EscapeIdentifier(shown.Name));
+		}
+		if (format.Tokens)
+			output.Write(TextColors.Comment, "/*0x" + shown.MetadataToken.ToString("X8", CultureInfo.InvariantCulture) + "*/");
+		if (shown.TypeArguments.Length > 0) {
+			output.Write(TextColors.Punctuation, isCSharp ? "<" : "(");
+			if (!isCSharp)
+				output.Write(TextColors.Keyword, "Of").Write(TextColors.Text, " ");
+			for (var index = 0; index < shown.TypeArguments.Length; index++) {
+				if (index > 0)
+					output.Write(TextColors.Punctuation, ",").Write(TextColors.Text, " ");
+				output.Write(formatter.FormatTypeName(shown.TypeArguments[index]));
+			}
+			output.Write(TextColors.Punctuation, isCSharp ? ">" : ")");
+		}
+		if (format.ParameterTypes || format.ParameterNames || format.ParameterValues) {
+			output.Write(TextColors.Punctuation, "(");
+			var parameters = shown.Parameters;
+			for (var index = 0; index < parameters.Length; index++) {
+				if (index > 0)
+					output.Write(TextColors.Punctuation, ",").Write(TextColors.Text, " ");
+				var parameter = parameters[index];
+				var needSpace = false;
+				if (format.ParameterTypes) {
+					if (parameter.IsParams) {
+						output.Write(TextColors.Keyword, isCSharp ? "params" : "ParamArray").Write(TextColors.Text, " ");
+					}
+					if (parameter.RefKind != RefKind.None)
+						output.Write(TextColors.Keyword, (isCSharp ? parameter.RefKind switch { RefKind.Out => "out", RefKind.In => "in", _ => "ref" } : "ByRef")).Write(TextColors.Text, " ");
+					output.Write(formatter.FormatTypeName(parameter.Type));
+					needSpace = true;
+				}
+				if (format.ParameterNames) {
+					if (needSpace)
+						output.Write(TextColors.Text, " ");
+					output.Write(TextColors.Parameter, formatter.EscapeIdentifier(string.IsNullOrEmpty(parameter.Name) ? "A_" + (index + (shown.IsStatic ? 0 : 1)).ToString(CultureInfo.InvariantCulture) : parameter.Name));
+					needSpace = true;
+				}
+				if (format.ParameterValues && ReferenceEquals(shown, method)) {
+					if (needSpace)
+						output.Write(TextColors.Text, " ");
+					output.Write(TextColors.Operator, "=").Write(TextColors.Text, " ");
+					try {
+						var value = await runtime.ReadArgumentAsync(index + (method.IsStatic ? 0 : 1), parameter.Type).ConfigureAwait(false);
+						await formatter.FormatAsync(output, value).ConfigureAwait(false);
+					}
+					catch (EvaluationException) {
+						output.Write(TextColors.Error, "???");
+					}
+				}
+			}
+			output.Write(TextColors.Punctuation, ")");
+		}
+		if (format.InstructionPointer) {
+			var ilOffset = frame.IlOffset;
+			var nativeAddress = frame.NativeAddress;
+			var nativeOffset = frame.NativeOffset;
+			output.Write(TextColors.Text, " ").Write(TextColors.Punctuation, "(").Write(TextColors.Text, "IL").Write(TextColors.Operator, "=");
+			if (ilOffset < 0)
+				output.Write(TextColors.Error, "???");
+			else
+				output.Write(TextColors.Number, (isCSharp ? "0x" : "&H") + (ilOffset <= ushort.MaxValue ? ilOffset.ToString("X4", CultureInfo.InvariantCulture) : ilOffset.ToString("X8", CultureInfo.InvariantCulture)));
+			if (nativeAddress != 0) {
+				output.Write(TextColors.Punctuation, ",").Write(TextColors.Text, " ").Write(TextColors.Text, "Native").Write(TextColors.Operator, "=");
+				var start = nativeAddress - (ulong)nativeOffset;
+				output.Write(TextColors.Number, (isCSharp ? "0x" : "&H") + (IntPtr.Size == 4 ? ((uint)start).ToString("X8", CultureInfo.InvariantCulture) : start.ToString("X16", CultureInfo.InvariantCulture)));
+				output.Write(TextColors.Operator, "+").Write(TextColors.Number, (isCSharp ? "0x" : "&H") + nativeOffset.ToString("X", CultureInfo.InvariantCulture));
+			}
+			output.Write(TextColors.Punctuation, ")");
+		}
 	}
 
-	/// <summary>Reads a frame's arguments and locals, in the order the client lists them.</summary>
-	VariableSnapshot ReadFrameVariables(FrameScopeEntry scope) {
-		var frame = scope.Frame;
-		var (modulePath, token) = FrameIdentity(frame);
-		var variables = new List<RawVariable>();
-		var index = 0;
-		foreach (var argument in frame.Arguments) {
-			var formatted = Formatter.Format(argument);
-			// A slot the runtime cannot describe is still listed: its position is what the client
-			// matches a name against, and hiding it would silently shift every name after it.
-			variables.Add(new RawVariable(true, index++, formatted.Text, formatted.TypeName, formatted.VariablesReference));
+	/// <summary>The async or iterator method a state machine's MoveNext implements: <c>&lt;AddAsync&gt;d__2</c> is AddAsync.</summary>
+	internal static IMethodSymbol? KickoffMethod(IMethodSymbol method) {
+		if (method.Name != "MoveNext" || method.ContainingType is not { Name: var typeName, ContainingType: { } outer } || !typeName.StartsWith('<'))
+			return null;
+		var close = typeName.IndexOf('>', StringComparison.Ordinal);
+		if (close <= 1)
+			return null;
+		var name = typeName[1..close];
+		foreach (var candidate in outer.GetMembers(name).OfType<IMethodSymbol>()) {
+			foreach (var attribute in candidate.GetAttributes()) {
+				if (attribute.AttributeClass?.Name is "AsyncStateMachineAttribute" or "IteratorStateMachineAttribute" or "AsyncIteratorStateMachineAttribute"
+					&& attribute.ConstructorArguments.FirstOrDefault().Value is INamedTypeSymbol stateMachine
+					&& SymbolEqualityComparer.Default.Equals(stateMachine.OriginalDefinition, method.ContainingType.OriginalDefinition))
+					return candidate;
+			}
 		}
-		index = 0;
-		foreach (var local in frame.LocalVariables) {
-			var formatted = Formatter.Format(local);
-			variables.Add(new RawVariable(false, index++, formatted.Text, formatted.TypeName, formatted.VariablesReference));
-		}
-		return new VariableSnapshot(modulePath, token, variables);
+		return outer.GetMembers(name).OfType<IMethodSymbol>().FirstOrDefault();
+	}
+
+	/// <summary>A local function's generated name, <c>&lt;Main&gt;g__Local|0_0</c>, as <c>Main.Local</c>.</summary>
+	static bool TryGetLocalFunctionName(string name, out string containing, out string local) {
+		containing = local = string.Empty;
+		if (name.Length < 5 || name[0] != '<')
+			return false;
+		var close = name.IndexOf('>', StringComparison.Ordinal);
+		if (close <= 1 || close + 3 >= name.Length || name[close + 1] != 'g' || name[close + 2] != '_' || name[close + 3] != '_')
+			return false;
+		var bar = name.IndexOf('|', close);
+		if (bar < 0)
+			return false;
+		containing = name[1..close];
+		local = name[(close + 4)..bar];
+		return local.Length > 0;
 	}
 }

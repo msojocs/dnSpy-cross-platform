@@ -14,6 +14,12 @@ internal sealed class CorDebugDispatcher : IDisposable {
 
 	public CorDebugDispatcher() => factory = new TaskFactory(pair.ExclusiveScheduler);
 
+	/// <summary>True on the dispatcher itself, where queuing work and waiting for it would deadlock.</summary>
+	public bool IsCurrent => TaskScheduler.Current == pair.ExclusiveScheduler;
+
+	/// <summary>Runs <paramref name="action"/> on the dispatcher and waits for it — inline when already there.</summary>
+	public T Invoke<T>(Func<T> action) => IsCurrent ? action() : RunAsync(action).GetAwaiter().GetResult();
+
 	/// <summary>Queues <paramref name="action"/> to run alone. Never canceled once queued.</summary>
 	public Task<T> RunAsync<T>(Func<T> action) =>
 		factory.StartNew(action, CancellationToken.None, TaskCreationOptions.DenyChildAttach, pair.ExclusiveScheduler);

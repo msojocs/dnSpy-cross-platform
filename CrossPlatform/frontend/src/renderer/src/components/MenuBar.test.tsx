@@ -240,7 +240,7 @@ describe('MenuBar', () => {
     renderMenu(true)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Debug' }))
     expect(screen.getByRole('menuitem', { name: /^Start Debugging/ })).toBeEnabled()
-    expect(screen.getByRole('menuitem', { name: 'Attach to Process...' })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: /^Attach to Process\.\.\./ })).toBeEnabled()
   })
 
   it('hides Window commands whose WPF CanExecute value is false', () => {
@@ -494,7 +494,7 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Disassembly/ })).toBeNull()
     // Stepping / pause / stop controls only show while a debug session is active.
     fireEvent.pointerLeave(windows)
-    expect(screen.queryByRole('menuitem', { name: /^Pause/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /^Break All/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Step Into/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Step Over/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Stop Debugging/ })).not.toBeInTheDocument()
@@ -522,7 +522,7 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: /^Disassembly/ })).toBeInTheDocument()
     // Pause / Step / Stop controls become available during a debug session.
     fireEvent.pointerLeave(windows)
-    expect(screen.getByRole('menuitem', { name: /^Pause/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /^Break All/ })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: /^Step Into/ })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: /^Step Over/ })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: /^Stop Debugging/ })).toBeInTheDocument()
@@ -688,7 +688,12 @@ describe('MenuBar', () => {
       onShowDisassembly,
     ]
     labels.forEach((label, index) => {
-      const item = screen.getByRole('menuitem', { name: new RegExp('^' + label) })
+      let item = screen.getByRole('menuitem', { name: new RegExp('^' + label) })
+      // Watch and Memory are submenus of their four numbered windows, as dnSpy's are; the first is the callback's.
+      if (label === 'Watch' || label === 'Memory') {
+        fireEvent.pointerEnter(item)
+        item = screen.getByRole('menuitem', { name: new RegExp(`^${label} 1`) })
+      }
       expect(item.getAttribute('aria-checked')).not.toBe('true')
       fireEvent.click(item)
       expect(callbacks[index]).toHaveBeenCalledOnce()

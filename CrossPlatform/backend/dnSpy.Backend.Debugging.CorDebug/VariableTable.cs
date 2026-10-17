@@ -6,7 +6,10 @@ namespace dnSpy.Backend.Debugging.CorDebug;
 internal abstract record VariableEntry;
 
 /// <summary>The arguments and locals of a frame, read at the moment the client asks.</summary>
-internal sealed record FrameScopeEntry(ICorDebugILFrame Frame) : VariableEntry;
+internal sealed record FrameScopeEntry(int ThreadId, int FrameIndex) : VariableEntry;
+
+/// <summary>A row of a variables window whose children the client can ask for.</summary>
+internal sealed record NodeEntry(Evaluation.ValueNode Node, int ThreadId, int FrameIndex) : VariableEntry;
 
 /// <summary>One array, whose elements are read one by one as the client expands them.</summary>
 internal sealed record ArrayEntry(ICorDebugArrayValue Value, int Count) : VariableEntry;

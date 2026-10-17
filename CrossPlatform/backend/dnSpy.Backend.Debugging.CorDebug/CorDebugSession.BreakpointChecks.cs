@@ -1,3 +1,4 @@
+using dnSpy.Backend.Debugging.CorDebug.Evaluation;
 using ICorDebugSharp;
 using ICorDebugSharp.Extensions;
 
@@ -159,10 +160,46 @@ internal sealed partial class CorDebugSession {
 		}
 
 		public string? Evaluate(string expression) {
+			if (precomputed is not null && precomputed.TryGetValue(expression, out var known))
+				return known;
 			// A failure here is the user's expression being wrong, so it travels up as an error rather
 			// than printing "???" — that is how a mistyped tracepoint gets noticed.
 			var value = BreakpointExpression.ParseCached(expression).Evaluate(this);
 			return value.Describe();
+		}
+
+		/// <summary>The tracepoint's expressions, evaluated before the message is rendered on the dispatcher.</summary>
+		Dictionary<string, string?>? precomputed;
+
+		/// <summary>
+		/// True when the hit is being decided off the dispatcher, where the expression evaluator can make calls;
+		/// the synchronous path keeps to the subset <see cref="BreakpointExpression"/> reads.
+		/// </summary>
+		public bool UseEvaluator { get; init; }
+
+		Task<BreakpointValue>? IBreakpointHitRuntime.EvaluateConditionAsync(string expression) =>
+			UseEvaluator ? session.EvaluateBreakpointExpressionAsync(thread, expression) : null;
+
+		Task<string>? IBreakpointHitRuntime.RenderTraceAsync(TracepointMessage message) =>
+			UseEvaluator ? RenderWithEvaluatorAsync(message) : null;
+
+		async Task<string> RenderWithEvaluatorAsync(TracepointMessage message) {
+			var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+			foreach (var part in message.Parts) {
+				if (part.Kind != TracepointMessageKind.EvaluatedExpression || part.Text is null || values.ContainsKey(part.Text))
+					continue;
+				var value = await session.EvaluateBreakpointExpressionAsync(thread, part.Text).ConfigureAwait(false);
+				values[part.Text] = value.Describe();
+			}
+			return await session.Dispatcher.RunAsync(() => {
+				precomputed = values;
+				try {
+					return message.Render(this);
+				}
+				finally {
+					precomputed = null;
+				}
+			}).ConfigureAwait(false);
 		}
 
 		/// <summary>
@@ -220,12 +257,81 @@ internal sealed partial class CorDebugSession {
 		if (entry.Settings.IsDefault)
 			return entry.Enabled;
 		var decision = BreakpointBreakDecision.Evaluate(entry.Enabled, entry.Settings, entry.HitState, new HitRuntime(this, entry, thread));
+		ReportDecision(entry, decision);
+		return decision.ShouldBreak;
+	}
+
+	void ReportDecision(BreakpointEntry entry, BreakpointDecision decision) {
 		if (decision.TraceMessage is not null)
-			Emit(DebugEventNames.Output, new { category = "console", output = decision.TraceMessage + "\n" });
+			Emit(DebugEventNames.Output, new { category = "trace", output = decision.TraceMessage + "\n" });
 		if (decision.ErrorMessage is not null)
 			Emit(DebugEventNames.Output, new { category = "stderr", output = decision.ErrorMessage + "\n" });
 		if (decision.HitCountChanged)
 			EmitBreakpointChanged(entry);
-		return decision.ShouldBreak;
+	}
+
+	/// <summary>
+	/// True when a hit's settings need the expression evaluator: a condition, or a tracepoint message with an
+	/// <c>{expression}</c>. Such a hit is decided off the dispatcher while the process is held.
+	/// </summary>
+	static bool NeedsEvaluator(BreakpointSettings settings) =>
+		settings.Condition is not null || (settings.Trace is not null && TracepointMessage.Parse(settings.Trace.Message).Evaluates);
+
+	/// <summary>
+	/// Decides a hit whose condition or message has to be evaluated. The process stays stopped meanwhile —
+	/// <see cref="deciding"/> keeps the event loop from resuming it — and the evaluation may make calls into the
+	/// debuggee, which a callback on the dispatcher could not wait for. The outcome is the same as the
+	/// synchronous decision: a stop, a step's landing, or a silent continue.
+	/// </summary>
+	async Task DecideBreakpointHitAsync(BreakpointEntry entry, ICorDebugThread thread, bool isSteppingTarget) {
+		BreakpointDecision decision;
+		try {
+			using var gate = await EnterEvaluationAsync(CancellationToken.None).ConfigureAwait(false);
+			decision = await BreakpointBreakDecision.EvaluateAsync(entry.Enabled, entry.Settings, entry.HitState, new HitRuntime(this, entry, thread) { UseEvaluator = true }).ConfigureAwait(false);
+		}
+		catch (Exception ex) when (ex is EvaluationException or InvalidOperationException or ObjectDisposedException) {
+			decision = new BreakpointDecision(true, ErrorMessage: ex.Message);
+		}
+		await Dispatcher.RunAsync(() => {
+			deciding = false;
+			if (HasExited || process is null)
+				return;
+			ReportDecision(entry, decision);
+			if (decision.ShouldBreak)
+				Stop(StopReasons.Breakpoint, thread, entry.Id);
+			else if (isSteppingTarget)
+				Stop(StopReasons.Step, thread);
+			else
+				ContinueProcess();
+		}).ConfigureAwait(false);
+	}
+
+	/// <summary>
+	/// Evaluates a condition or a tracepoint expression in the frame a breakpoint stopped in, with the full
+	/// evaluator, and reduces the value to what a condition compares.
+	/// </summary>
+	internal async Task<BreakpointValue> EvaluateBreakpointExpressionAsync(ICorDebugThread thread, string expression) {
+		var threadId = await Dispatcher.RunAsync(() => ThreadTable.TryGetId(thread)).ConfigureAwait(false)
+			?? throw new BreakpointEvaluationException("The thread is gone.");
+		try {
+			var scope = await OpenScopeAsync(threadId, 0, allowFuncEval: true, CancellationToken.None).ConfigureAwait(false);
+			var (value, compiled) = await EvaluateAsync(scope, expression).ConfigureAwait(false);
+			return value switch {
+				ScalarValue { Value: null } => BreakpointValue.Null,
+				ScalarValue { Value: bool b } => BreakpointValue.FromBool(b),
+				ScalarValue { Value: string text } => BreakpointValue.FromString(text),
+				ScalarValue { Value: ulong u } => BreakpointValue.FromUnsigned(u),
+				ScalarValue { Value: float or double or decimal } scalar => BreakpointValue.FromFloating(Convert.ToDouble(scalar.Value, System.Globalization.CultureInfo.InvariantCulture)),
+				ScalarValue scalar when scalar.Type.TypeKind != Microsoft.CodeAnalysis.TypeKind.Enum && Arithmetic.IsIntegral(scalar.Value!)
+					=> BreakpointValue.FromInteger((long)Arithmetic.Convert(scalar.Value!, Microsoft.CodeAnalysis.SpecialType.System_Int64, false)),
+				_ => BreakpointValue.FromObject(ColorTextWriter.ToText(await scope.Factory.Formatter(scope.FormatOptions.WithSpecifiers(compiled.FormatSpecifiers) with { Hexadecimal = false }).FormatValueAsync(value).ConfigureAwait(false))),
+			};
+		}
+		catch (EvaluationException ex) {
+			throw new BreakpointEvaluationException(ex.Message);
+		}
+		catch (EvaluationThrownException thrown) {
+			throw new BreakpointEvaluationException(ValueFormatter.DescribeThrown(thrown));
+		}
 	}
 }

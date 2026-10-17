@@ -106,7 +106,7 @@ internal sealed partial class CorDebugSession {
 				breakpoints.BindModule(module);
 			return true;
 		}).ConfigureAwait(false);
-		return JsonSerializer.SerializeToElement(new { breakpoints = entries.Select(Describe).ToArray() });
+		return DebugJson.Serialize(new { breakpoints = entries.Select(Describe).ToArray() });
 	}
 
 	async Task<IReadOnlyDictionary<string, ResolvedBreakpoint>> ResolveAsync(IReadOnlyList<BreakpointRequest> requests, CancellationToken cancellationToken) {
@@ -365,10 +365,17 @@ internal sealed partial class CorDebugSession {
 
 	/// <summary>Reports a hit as a normal stop, naming the breakpoint so the client can highlight it.</summary>
 	partial void OnBreakpointHit(ICorDebugBreakpoint breakpoint, ICorDebugThread thread) {
+		// A call the step went over has returned: its value is kept, and the step goes on.
+		if (TryCaptureReturnValue(breakpoint, thread))
+			return;
 		// A step in flight owns the location it started from: the runtime re-announces the breakpoint
 		// under the thread when the step resumes it, and that report is not a stop the user asked for.
 		if (IsNativeStepOrigin(breakpoint, thread))
 			return;
+		if (IsRunToCursorHit(breakpoint, thread)) {
+			Stop(StopReasons.RunToCursor, thread);
+			return;
+		}
 		// The entry-point breakpoint is the session's own, so it has no entry in the table to name it.
 		if (IsEntryBreakpoint(breakpoint)) {
 			DisarmEntryBreakpoint();
@@ -380,9 +387,18 @@ internal sealed partial class CorDebugSession {
 		// A breakpoint the user set wins over a step's temporary one at the same location, so the
 		// stop is reported as the breakpoint it is. Stop() clears the step either way.
 		if (entry is not null) {
-			// A condition, a hit count or a filter can decide this hit is not one the user wants, and
-			// a tracepoint prints and keeps going. Not calling Stop() is all that takes: the process
-			// stays unstopped, and AfterEventProcessed() resumes it.
+			// A condition or a tracepoint expression is evaluated with the full evaluator, which may call into
+			// the debuggee: the process is held where it is and the hit decided off the dispatcher.
+			if (entry.Enabled && NeedsEvaluator(entry.Settings)) {
+				deciding = true;
+				holdAfterEvent = true;
+				var isSteppingTarget = IsSteppingBreakpoint(breakpoint);
+				_ = Task.Run(() => DecideBreakpointHitAsync(entry, thread, isSteppingTarget));
+				return;
+			}
+			// A filter or a hit count can decide this hit is not one the user wants, and a tracepoint
+			// prints and keeps going. Not calling Stop() is all that takes: the process stays unstopped,
+			// and AfterEventProcessed() resumes it.
 			if (!ShouldBreakOnHit(entry, thread)) {
 				// The location may still be where a step was waiting to land, and a breakpoint
 				// declining to stop must not swallow the step the user asked for.

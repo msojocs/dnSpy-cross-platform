@@ -35,6 +35,14 @@
     <!-- ICorDebugSharp wraps ICorDebug/IMetaDataImport and the DbgShim bootstrap API on top of
          source generated COM, so no native interop assembly of our own is needed. -->
     <PackageReference Include="ICorDebugSharp" Version="0.1.8" />
+    <!-- The expression evaluator binds what the user typed with Roslyn against the debuggee's own
+         modules and then interprets the bound tree (IOperation) with func-eval, so both languages the
+         variables windows speak — C# and Visual Basic — get the compiler's own semantics. The versions
+         are the ones the decompiler side already ships, so the host loads a single Roslyn. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" Version="4.14.0" />
+    <!-- The Disassembly window: x86/x64 native code of a jitted method, the disassembler WPF uses. -->
+    <PackageReference Include="Iced" Version="1.21.0" />
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.745401" />
     <!-- Supplies the shim (libdbgshim.so, dbgshim.dll, libdbgshim.dylib). The .NET runtime ships
          mscordbi but not dbgshim, so this package is the only source of it; a RID-specific publish

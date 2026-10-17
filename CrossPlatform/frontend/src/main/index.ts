@@ -692,6 +692,18 @@ const registerIpc = (): void => {
     await dialogPathHistory?.rememberOpenedFile(result.filePaths[0])
     return result.filePaths[0]
   })
+  // Save Module in the Modules window: where the image read out of the process goes.
+  ipcMain.handle('debug:chooseModuleSavePath', async (_event, suggestedName: string) => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: nativeText().saveModuleAs,
+      defaultPath: path.basename(String(suggestedName ?? '')) || 'module.dll',
+      filters: [
+        { name: nativeText().dotNetAssemblies, extensions: ['dll', 'exe', 'netmodule'] },
+        { name: nativeText().allFiles, extensions: ['*'] },
+      ],
+    })
+    return result.canceled || !result.filePath ? undefined : result.filePath
+  })
   ipcMain.handle('debug:chooseHost', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: nativeText().selectDebugHost,
@@ -729,6 +741,26 @@ const registerIpc = (): void => {
   // The workspace id is what lets the engine resolve decompiled-source breakpoints to IL offsets,
   // so it travels with launch/attach rather than being inferred later from the session.
   ipcMain.handle('debug:launch', (_event, options: DebugLaunchOptions) => requireBackend().invoke('debug/launch', options))
+  // Start Without Debugging: the program is started the way the engine would start it — through the host for
+  // a framework-dependent .dll — but on its own, detached from this process.
+  ipcMain.handle('debug:startWithoutDebugging', async (_event, options: DebugLaunchOptions) => {
+    const useHost = options.useHost ?? options.program.toLowerCase().endsWith('.dll')
+    const command = useHost ? options.host || 'dotnet' : options.program
+    const commandArguments = useHost ? [...(options.hostArguments ?? []), options.program, ...(options.arguments ?? [])] : [...(options.arguments ?? [])]
+    return await new Promise<number>((resolve, reject) => {
+      const child = spawn(command, commandArguments, {
+        cwd: options.workingDirectory || path.dirname(options.program),
+        env: { ...process.env, ...options.environment },
+        detached: true,
+        stdio: 'ignore',
+      })
+      child.once('error', reject)
+      child.once('spawn', () => {
+        child.unref()
+        resolve(child.pid ?? 0)
+      })
+    })
+  })
   ipcMain.handle('debug:attach', (_event, processId: number, workspaceId?: string) => requireBackend().invoke('debug/attach', { processId, workspaceId }))
   const debugRequest = (channel: string, command: string): void => {
     ipcMain.handle(channel, (_event, sessionId: string, args: unknown) => requireBackend().invoke('debug/request', { sessionId, command, arguments: args }))
@@ -747,6 +779,24 @@ const registerIpc = (): void => {
   debugRequest('debug:variables', 'variables')
   debugRequest('debug:modules', 'modules')
   debugRequest('debug:evaluate', 'evaluate')
+  debugRequest('debug:frameLocation', 'frameLocation')
+  debugRequest('debug:setExpression', 'setExpression')
+  debugRequest('debug:autos', 'autos')
+  debugRequest('debug:staticFields', 'staticFields')
+  debugRequest('debug:makeObjectId', 'makeObjectId')
+  debugRequest('debug:deleteObjectId', 'deleteObjectId')
+  debugRequest('debug:setNextStatement', 'setNextStatement')
+  debugRequest('debug:runToFrame', 'runToFrame')
+  debugRequest('debug:runToCursor', 'runToCursor')
+  debugRequest('debug:setModuleBreakpoints', 'setModuleBreakpoints')
+  debugRequest('debug:freezeThread', 'freezeThread')
+  debugRequest('debug:renameThread', 'renameThread')
+  debugRequest('debug:process', 'process')
+  debugRequest('debug:readMemory', 'readMemory')
+  debugRequest('debug:writeMemory', 'writeMemory')
+  debugRequest('debug:disassemble', 'disassemble')
+  debugRequest('debug:saveModule', 'saveModule')
+  ipcMain.handle('debug:setOptions', (_event, options: unknown) => requireBackend().invoke('debug/setOptions', options))
   // The exception list is engine-wide rather than per session, so these three go straight to the
   // manager the way listProcesses does.
   ipcMain.handle('debug:exceptionSettings:get', () => requireBackend().invoke('exceptions/get', {}))
@@ -784,6 +834,14 @@ const registerIpc = (): void => {
   ipcMain.handle('languageService:selectionRanges', (_event, documentId: string, positions: number[]) =>
     requireBackend().invoke('languageService/selectionRanges', { documentId, positions }))
   ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
+  // The debugger's "Bring dnSpy to the foreground when breaking": the window comes back up and takes the focus.
+  ipcMain.handle('window:bringToFront', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.focus()
+  })
   ipcMain.handle('window:toggleMaximize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window)

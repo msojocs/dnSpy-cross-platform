@@ -2935,3 +2935,134 @@ describe('changeLanguage', () => {
     localStorage.removeItem('dnspy.decompilerLanguage')
   })
 })
+
+// The debugger's own commands beyond stepping: they act on the stopped process through the engine and read
+// the windows again afterwards.
+describe('debugger commands', () => {
+  const disconnectDebug = vi.fn(async () => undefined)
+  const setDebugExpression = vi.fn()
+  const setNextStatement = vi.fn(async () => undefined)
+  const runToDebugFrame = vi.fn(async () => undefined)
+  const runToDebugCursor = vi.fn(async () => undefined)
+  const setDebugModuleBreakpoints = vi.fn(async () => undefined)
+  const getDebugVariables = vi.fn(async () => [])
+
+  beforeEach(() => {
+    for (const mock of [disconnectDebug, setDebugExpression, setNextStatement, runToDebugFrame, runToDebugCursor, setDebugModuleBreakpoints, getDebugVariables])
+      mock.mockClear()
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: {
+        ...window.dnSpy,
+        disconnectDebug,
+        setDebugExpression,
+        setNextStatement,
+        runToDebugFrame,
+        runToDebugCursor,
+        setDebugModuleBreakpoints,
+        getDebugScopes: vi.fn(async () => [{ name: 'Locals', variablesReference: 5, expensive: false }]),
+        getDebugVariables,
+        evaluateDebugExpression: vi.fn(async (_session: string, _frame: number, expression: string) => ({ name: 'engine name', value: `<${expression}>`, variablesReference: 0, evaluateName: expression })),
+        showMessage: vi.fn(async () => undefined),
+      },
+    })
+    useAppStore.setState({
+      debugSessionId: 'session',
+      debugState: 'stopped',
+      selectedDebugThreadId: 1,
+      activeDebugFrameId: 7,
+      debugProcess: undefined,
+      watches: [],
+      watchValues: [],
+      moduleBreakpoints: [],
+      debugOutput: [],
+      codeCaret: undefined,
+      documents: {},
+    })
+  })
+
+  it('detaches from a process it attached to and kills one it started', async () => {
+    useAppStore.setState({ debugProcess: { id: 1, state: 'Paused', debugging: 'CoreCLR', architecture: 'X64', ownsDebuggee: false } })
+    await useAppStore.getState().stopDebug()
+    expect(disconnectDebug).toHaveBeenLastCalledWith('session', false)
+
+    useAppStore.setState({ debugSessionId: 'session', debugProcess: { id: 1, state: 'Paused', debugging: 'CoreCLR', architecture: 'X64', ownsDebuggee: true } })
+    await useAppStore.getState().stopDebug()
+    expect(disconnectDebug).toHaveBeenLastCalledWith('session', true)
+
+    useAppStore.setState({ debugSessionId: 'session' })
+    await useAppStore.getState().terminateDebug()
+    expect(disconnectDebug).toHaveBeenLastCalledWith('session', true)
+    expect(useAppStore.getState().debugState).toBe('inactive')
+  })
+
+  it('writes a value in the active frame and reads the frame again', async () => {
+    setDebugExpression.mockResolvedValue({ node: { name: 'x', value: '5', variablesReference: 0 }, error: null })
+    const generation = useAppStore.getState().debugGeneration
+
+    const error = await useAppStore.getState().setDebugValue('shape.Sides', '5')
+
+    expect(error).toBeUndefined()
+    expect(setDebugExpression).toHaveBeenCalledWith('session', 7, 'shape.Sides', '5')
+    expect(getDebugVariables).toHaveBeenCalledWith('session', 5)
+    expect(useAppStore.getState().debugGeneration).toBe(generation + 1)
+  })
+
+  it('answers the engine\'s complaint about a value it could not write', async () => {
+    setDebugExpression.mockRejectedValue(new Error('Cannot convert'))
+    expect(await useAppStore.getState().setDebugValue('factor', '"text"')).toBe('Cannot convert')
+  })
+
+  it('names a watch by its expression, whatever the engine calls the row', async () => {
+    await useAppStore.getState().addWatch('numbers.Length')
+    expect(useAppStore.getState().watchValues).toEqual([expect.objectContaining({ name: 'numbers.Length', value: '<numbers.Length>' })])
+
+    await useAppStore.getState().editWatch('numbers.Length', 'numbers[0]')
+    expect(useAppStore.getState().watches).toEqual(['numbers[0]'])
+    useAppStore.getState().clearWatches()
+    expect(useAppStore.getState().watches).toEqual([])
+  })
+
+  it('moves the instruction pointer to the statement under the caret', async () => {
+    useAppStore.setState({
+      codeCaret: { documentId: 'method-1', line: 4, column: 5 },
+      documents: { 'method-1': { codeStatements: [{ startLine: 4, startColumn: 1, endLine: 4, endColumn: 20, modulePath: '/app/a.dll', metadataToken: 0x06000002, ilOffset: 12, ilEndOffset: 20 }] } as unknown as DocumentState },
+    })
+
+    await useAppStore.getState().setNextStatement()
+    expect(setNextStatement).toHaveBeenCalledWith('session', 1, { modulePath: '/app/a.dll', metadataToken: 0x06000002, ilOffset: 12 })
+
+    await useAppStore.getState().runToCursor()
+    expect(runToDebugCursor).toHaveBeenCalledWith('session', { modulePath: '/app/a.dll', metadataToken: 0x06000002, ilOffset: 12 })
+    // The process runs until the cursor is reached.
+    expect(useAppStore.getState().debugState).toBe('running')
+
+    useAppStore.setState({ debugState: 'stopped' })
+    await useAppStore.getState().runToCursor(9)
+    expect(runToDebugFrame).toHaveBeenCalledWith('session', 9)
+  })
+
+  it('sends only the enabled module breakpoints, without the window\'s own fields', async () => {
+    await useAppStore.getState().addModuleBreakpoint({ moduleName: 'System.*' })
+    const [row] = useAppStore.getState().moduleBreakpoints
+    expect(setDebugModuleBreakpoints).toHaveBeenLastCalledWith('session', [{ moduleName: 'System.*' }])
+
+    await useAppStore.getState().updateModuleBreakpoint(row.id, { enabled: false })
+    expect(setDebugModuleBreakpoints).toHaveBeenLastCalledWith('session', [])
+
+    await useAppStore.getState().removeModuleBreakpoints([row.id])
+    expect(useAppStore.getState().moduleBreakpoints).toEqual([])
+  })
+
+  it('logs exceptions and module loads to the Debug output the way OutputLogger does', async () => {
+    useAppStore.setState({ debugProcess: { id: 1, name: 'DebugTarget', state: 'Running', debugging: 'CoreCLR', architecture: 'X64', ownsDebuggee: true }, debugModules: [] })
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'session', event: 'exception', body: { name: 'System.InvalidOperationException', module: 'DebugTarget.dll', message: 'boom', firstChance: true } })
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'session', event: 'module', body: { reason: 'new', module: { id: 3, name: 'a.dll', path: '/app/a.dll', order: 3 } } })
+
+    const lines = useAppStore.getState().debugOutput.map((line) => line.text)
+    expect(lines).toContain(translate('Exception thrown: \'{name}\' in {module}', { name: 'System.InvalidOperationException', module: 'DebugTarget.dll' }))
+    expect(lines).toContain(translate('Additional information: {message}', { message: 'boom' }))
+    expect(lines.at(-1)).toContain('/app/a.dll')
+    expect(useAppStore.getState().debugModules.map((module) => module.id)).toEqual([3])
+  })
+})

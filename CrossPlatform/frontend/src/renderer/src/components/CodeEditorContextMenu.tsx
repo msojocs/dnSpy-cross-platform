@@ -44,6 +44,10 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   /** Enables or disables `breakpoint`, which is what Ctrl+F9 does. */
   onSetBreakpointEnabled?(enabled: boolean): void
   onShowNextStatement?(): void
+  /** dnSpy's Set Next Statement: the stopped thread continues from the statement under the caret. */
+  onSetNextStatement?(): void
+  /** dnSpy's Run to Cursor: continues to the statement under the caret. */
+  onRunToCursor?(): void
   onShowDisassembly?(): void
   /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
   onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
@@ -110,7 +114,7 @@ const image = (name: string): CodeMenuIcon => () => <MenuEntryIcon name={name} /
 /** An entry whose ExportMenuItem has no Icon: its icon column stays blank, as dnSpy's does. */
 const noImage: CodeMenuIcon = () => null
 
-// Commands dnSpy shows only where this port has nothing to run: setting the instruction pointer, class
+// Commands dnSpy shows only where this port has nothing to run: class
 // breakpoints and tracepoints, exception-break settings, entering an assembly the workspace does not
 // hold, metadata tokens, restructuring the assembly, incremental search and copying IL bytes. They stay
 // in the table so the menu keeps WPF's shape, but never show.
@@ -268,7 +272,8 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_DEBUG, order: 10, key: 'toggle-breakpoint', icon: image('CheckDot'), label: toggleBreakpointLabel, shortcut: 'F9', visible: (ctx) => ctx.statement !== undefined && ctx.onToggleBreakpoint !== undefined, run: (ctx) => ctx.onToggleBreakpoint?.() },
   { group: GROUP_DEBUG, order: 20, key: 'enable-breakpoint', icon: image('ToggleAllBreakpoints'), label: enableBreakpointLabel, shortcut: 'Ctrl+F9', visible: (ctx) => ctx.breakpoint !== undefined && ctx.onSetBreakpointEnabled !== undefined, run: (ctx) => ctx.onSetBreakpointEnabled?.(ctx.breakpoint?.enabled !== true) },
   { group: GROUP_DEBUG, order: 30, key: 'show-next-statement', icon: image('GoToNext'), label: (ctx) => ctx.t('Show Next Statement'), shortcut: 'Alt + Numpad *', visible: (ctx) => ctx.stopped && ctx.onShowNextStatement !== undefined, run: (ctx) => ctx.onShowNextStatement?.() },
-  { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: image('GoToNextInList'), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: never },
+  { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: image('GoToNextInList'), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: (ctx) => ctx.stopped && ctx.statement !== undefined && ctx.onSetNextStatement !== undefined, run: (ctx) => ctx.onSetNextStatement?.() },
+  { group: GROUP_DEBUG, order: 45, key: 'run-to-cursor', icon: image('Cursor'), label: (ctx) => ctx.t('Run To Cursor'), shortcut: 'Ctrl+F10', visible: (ctx) => ctx.stopped && ctx.statement !== undefined && ctx.onRunToCursor !== undefined, run: (ctx) => ctx.onRunToCursor?.() },
   { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: image('DisassemblyWindow'), label: (ctx) => ctx.t('Go to Disassembly'), visible: (ctx) => ctx.stopped && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
   { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassBreakpoint?.(node) } },
   { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassTracepoint?.(node) } },

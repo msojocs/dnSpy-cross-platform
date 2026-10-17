@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace DebugTarget;
 internal static class Program {
-	[ModuleInitializer] internal static void InitializeModule() { }
+	[ModuleInitializer] internal static void InitializeModule() { if (Environment.GetCommandLineArgs().Contains("--evaluate", StringComparer.Ordinal)) Evaluate(2); }
 	static void Main(string[] args) {
 		if (args.Contains("--wait", StringComparer.Ordinal)) {
 			Console.WriteLine("READY");
@@ -84,5 +84,73 @@ internal static class Program {
 		catch (InvalidOperationException) {
 			// Swallowed on purpose: the engine still sees the first chance, and the program keeps going.
 		}
+	}
+
+	// The expression evaluator's fixture: one value of each kind the variables windows have to show — an
+	// object with a DebuggerDisplay and private state, an array, a list, an enum, a tuple, a decimal, a boxed
+	// value, a nullable — and a Debugger.Break() to stop on with all of them in scope. It runs from the module
+	// initializer, on its one line, so nothing above it in this file moves: the debugger tests pin lines.
+	[MethodImpl(MethodImplOptions.NoInlining)]
+	static void Evaluate(int factor) {
+		var shape = new Shape("square", 4);
+		var numbers = new[] { 1, 2, 3 };
+		var list = new List<string> { "x", "y" };
+		string? nothing = null;
+		var colors = Colors.Red | Colors.Blue;
+		var pair = (Count: 2, Name: "two");
+		var money = 12.5m;
+		object boxed = 42;
+		int? maybe = 7;
+		var grid = new int[2, 3];
+		grid[1, 2] = 9;
+		System.Diagnostics.Debugger.Break();
+		GC.KeepAlive(shape);
+		GC.KeepAlive(numbers);
+		GC.KeepAlive(list);
+		GC.KeepAlive(nothing);
+		GC.KeepAlive(colors);
+		GC.KeepAlive(pair);
+		GC.KeepAlive(money);
+		GC.KeepAlive(boxed);
+		GC.KeepAlive(maybe);
+		GC.KeepAlive(grid);
+		GC.KeepAlive(factor);
+		// A call whose value is thrown away, for the Locals window's "returned" row after a step over it.
+		GC.KeepAlive(shape.Scale(3));
+	}
+
+	[Flags]
+	enum Colors {
+		None = 0,
+		Red = 1,
+		Green = 2,
+		Blue = 4,
+	}
+
+	[System.Diagnostics.DebuggerDisplay("Shape {Name} with {Sides} sides")]
+	sealed class Shape {
+		static int created;
+		readonly int secret;
+
+		public Shape(string name, int sides) {
+			Name = name;
+			Sides = sides;
+			secret = sides * 10;
+			created++;
+		}
+
+		public string Name { get; }
+
+		public int Sides { get; set; }
+
+		public int Area => Sides * Sides;
+
+		public static int Created => created;
+
+		public int Scale(int by) => Sides * by;
+
+		public int Hidden() => secret;
+
+		public override string ToString() => $"{Name}:{Sides}";
 	}
 }

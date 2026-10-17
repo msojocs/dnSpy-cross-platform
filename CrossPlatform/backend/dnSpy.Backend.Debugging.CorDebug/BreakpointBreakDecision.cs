@@ -18,7 +18,20 @@ public interface IBreakpointHitRuntime {
 	IBreakpointScope ConditionScope { get; }
 
 	string RenderTrace(TracepointMessage message);
+
+	/// <summary>
+	/// The debugger's own expression evaluator, when the runtime has one: a condition is then any expression
+	/// the language allows — member access, calls — rather than the subset <see cref="ConditionScope"/> reads.
+	/// Null means the subset is all there is.
+	/// </summary>
+	Task<BreakpointValue>? EvaluateConditionAsync(string expression) => null;
+
+	/// <summary>A tracepoint message whose <c>{expressions}</c> go through the expression evaluator.</summary>
+	Task<string>? RenderTraceAsync(TracepointMessage message) => null;
 }
+
+/// <summary>A condition or a tracepoint expression the evaluator could not run.</summary>
+public sealed class BreakpointEvaluationException(string message) : Exception(message);
 
 /// <summary>
 /// Decides whether a hit stops the debuggee, which is the port of WPF's
@@ -92,12 +105,82 @@ public static class BreakpointBreakDecision {
 			return expression.EvaluateAsBoolean(runtime.ConditionScope);
 
 		var value = expression.Evaluate(runtime.ConditionScope).Describe();
-		// The first hit has nothing to compare against, so it records the value and lets the program
-		// run on — the same answer WPF gives when its saved value is still null.
+		return RecordChange(state, value);
+	}
+
+	/// <summary>
+	/// "When changed": the first hit has nothing to compare against, so it records the value and lets the
+	/// program run on — the same answer WPF gives when its saved value is still null.
+	/// </summary>
+	static bool RecordChange(BreakpointHitState state, string value) {
 		var changed = state.HasConditionValue && !string.Equals(state.LastConditionValue, value, StringComparison.Ordinal);
 		state.LastConditionValue = value;
 		state.HasConditionValue = true;
 		return changed;
+	}
+
+	/// <summary>
+	/// The same decision with the condition and the tracepoint's expressions run by the debugger's expression
+	/// evaluator, which may call into the debuggee and so has to wait for it. The order and the error rules are
+	/// <see cref="Evaluate"/>'s.
+	/// </summary>
+	public static async Task<BreakpointDecision> EvaluateAsync(bool enabled, BreakpointSettings settings, BreakpointHitState state, IBreakpointHitRuntime runtime) {
+		if (!enabled)
+			return new BreakpointDecision(false);
+
+		if (settings.Filter is { Length: > 0 } filter) {
+			try {
+				if (!BreakpointExpression.ParseCached(filter).EvaluateAsBoolean(runtime.FilterScope))
+					return new BreakpointDecision(false);
+			}
+			catch (BreakpointExpressionException ex) {
+				return new BreakpointDecision(true, ErrorMessage: $"Breakpoint filter '{filter}': {ex.Message}");
+			}
+		}
+
+		if (settings.Condition is { } condition) {
+			try {
+				var evaluation = runtime.EvaluateConditionAsync(condition.Expression);
+				bool pass;
+				if (evaluation is null)
+					pass = CheckCondition(condition, state, runtime);
+				else {
+					var value = await evaluation.ConfigureAwait(false);
+					pass = condition.Kind == BreakpointConditionKind.IsTrue
+						? value.Kind == BreakpointValueKind.Bool ? value.Bool : throw new BreakpointEvaluationException("The condition is not a boolean expression.")
+						: RecordChange(state, value.Describe());
+				}
+				if (!pass)
+					return new BreakpointDecision(false);
+			}
+			catch (Exception ex) when (ex is BreakpointExpressionException or BreakpointEvaluationException) {
+				return new BreakpointDecision(true, ErrorMessage: $"Breakpoint condition '{condition.Expression}': {ex.Message}");
+			}
+		}
+
+		state.HitCount++;
+
+		if (settings.HitCount is { } hitCount) {
+			var (matches, error) = CheckHitCount(hitCount, state.HitCount);
+			if (error is not null)
+				return new BreakpointDecision(true, ErrorMessage: error, HitCountChanged: true);
+			if (!matches)
+				return new BreakpointDecision(false, HitCountChanged: true);
+		}
+
+		if (settings.Trace is { } trace) {
+			string message;
+			try {
+				var parsed = TracepointMessage.Parse(trace.Message);
+				message = runtime.RenderTraceAsync(parsed) is { } rendering ? await rendering.ConfigureAwait(false) : runtime.RenderTrace(parsed);
+			}
+			catch (Exception ex) when (ex is BreakpointExpressionException or BreakpointEvaluationException) {
+				return new BreakpointDecision(true, ErrorMessage: $"Tracepoint message: {ex.Message}", HitCountChanged: true);
+			}
+			return new BreakpointDecision(!trace.Continue, TraceMessage: message, HitCountChanged: true);
+		}
+
+		return new BreakpointDecision(true, HitCountChanged: true);
 	}
 
 	static (bool Matches, string? Error) CheckHitCount(BreakpointHitCount hitCount, int current) => hitCount.Kind switch {

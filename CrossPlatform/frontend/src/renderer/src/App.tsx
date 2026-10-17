@@ -16,7 +16,7 @@ import { MenuBar } from './components/MenuBar'
 import type { ThemeName } from './components/app-options'
 import { applyTheme, resolveTheme, themeKey, useThemes } from './theme-service'
 import { ToolBar } from './components/ToolBar'
-import { DebugPlaceholder, OutputPane } from './components/ToolWindows'
+import { OutputPane } from './components/ToolWindows'
 import { SearchPane, type SearchPaneCommands } from './components/SearchPane'
 import { AnalyzerPane, type AnalyzerPaneCommands } from './components/AnalyzerPane'
 import { isAnalyzableNode } from './components/CodeEditorContextMenu'
@@ -27,7 +27,8 @@ import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
-import { BreakpointsPane, CallStackPane, LocalsPane, ModulesPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
+import { AutosPane, BreakpointsPane, CallStackPane, LocalsPane, ModuleBreakpointsPane, ModulesPane, ProcessesPane, StaticFieldsPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
+import { DisassemblyPane, MemoryPane } from './components/DebugNativeWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
 import { StringReferencesPane, type StringReferencesPaneCommands } from './components/StringReferencesPane'
 import { BookmarksPane } from './components/BookmarksPane'
@@ -84,6 +85,9 @@ const restorableTabs: Record<string, { name: string; component: string }> = {
   locals: { name: 'Locals', component: 'locals' },
   'exception-settings': { name: 'Exception Settings', component: 'exception-settings' },
   watch: { name: 'Watch 1', component: 'watch' },
+  'watch-2': { name: 'Watch 2', component: 'watch' },
+  'watch-3': { name: 'Watch 3', component: 'watch' },
+  'watch-4': { name: 'Watch 4', component: 'watch' },
   callstack: { name: 'Call Stack', component: 'callstack' },
   breakpoints: { name: 'Breakpoints', component: 'breakpoints' },
   bookmarks: { name: 'Bookmarks', component: 'bookmarks' },
@@ -93,7 +97,10 @@ const restorableTabs: Record<string, { name: string; component: string }> = {
   autos: { name: 'Autos', component: 'autos' },
   'static-fields': { name: 'Static Fields', component: 'static-fields' },
   processes: { name: 'Processes', component: 'processes' },
-  memory: { name: 'Memory', component: 'memory' },
+  memory: { name: 'Memory 1', component: 'memory' },
+  'memory-2': { name: 'Memory 2', component: 'memory' },
+  'memory-3': { name: 'Memory 3', component: 'memory' },
+  'memory-4': { name: 'Memory 4', component: 'memory' },
   disassembly: { name: 'Disassembly', component: 'disassembly' },
 }
 
@@ -291,6 +298,12 @@ export const App = (): React.JSX.Element => {
   // The saved options, subscribed to so a save in the Options dialog reaches the parts of the shell that
   // read them — the theme, the main process's few settings, and the tool windows' widths among others.
   const options = useAppOptions()
+  // The debugger's settings reach the engine when they change — in the Options dialog or from a debugger
+  // window's context menu — and a stopped process is read again in the new format, as dnSpy's windows redraw.
+  const debuggerOptionsKey = JSON.stringify([options.debugger, options.callStack])
+  useEffect(() => {
+    void useAppStore.getState().applyDebuggerOptions()
+  }, [debuggerOptionsKey])
   // dnSpy's theme lives in its settings file with everything else, which is this port's option store: the
   // shell reads it from there and writes it back, so there is one copy of it rather than a state of its own
   // that the options would have to be kept in step with.
@@ -316,6 +329,8 @@ export const App = (): React.JSX.Element => {
   const [editNode, setEditNode] = useState<{ kind: CreatedKind, nodeId?: string, ownerNodeId?: string, nested?: boolean }>()
   const [attachDialogOpen, setAttachDialogOpen] = useState(false)
   const [debugProgramDialogOpen, setDebugProgramDialogOpen] = useState(false)
+  // Start Without Debugging opens the same dialog, to run the program rather than debug it.
+  const [runProgramDialogOpen, setRunProgramDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [gacDialogOpen, setGacDialogOpen] = useState(false)
   const [openListDialogOpen, setOpenListDialogOpen] = useState(false)
@@ -348,6 +363,9 @@ export const App = (): React.JSX.Element => {
   // The bookmark chord waiting for its second key — Ctrl+K or Ctrl+B — and, as a timestamp so it needs no
   // timer, when it stops waiting.
   const bookmarkChord = useRef<{ prefix: string; until: number } | undefined>(undefined)
+  // The debugger windows' chords: Ctrl+Alt+W then 1–4 for a Watch window, Ctrl+Alt+M then 1–4 for a Memory
+  // window, Ctrl+Alt+V then A or L for Autos and Locals — dnSpy's gestures for the numbered windows.
+  const debugWindowChord = useRef<{ prefix: string; until: number } | undefined>(undefined)
   const workspaceId = useAppStore((state) => state.workspaceId)
   const backendStatus = useAppStore((state) => state.backendStatus)
   const busy = useAppStore((state) => state.busy)
@@ -418,6 +436,7 @@ export const App = (): React.JSX.Element => {
   const setBackendStatus = useAppStore((state) => state.setBackendStatus)
   const clearError = useAppStore((state) => state.clearError)
   const debugState = useAppStore((state) => state.debugState)
+  const debugProcess = useAppStore((state) => state.debugProcess)
   const debugSessionId = useAppStore((state) => state.debugSessionId)
   const stoppedReason = useAppStore((state) => state.stoppedReason)
   const handleDebugEvent = useAppStore((state) => state.handleDebugEvent)
@@ -610,6 +629,9 @@ export const App = (): React.JSX.Element => {
       locals: t('Locals'),
       'exception-settings': t('Exception Settings'),
       watch: t('Watch 1'),
+      'watch-2': t('Watch {number}', { number: 2 }),
+      'watch-3': t('Watch {number}', { number: 3 }),
+      'watch-4': t('Watch {number}', { number: 4 }),
       callstack: t('Call Stack'),
       breakpoints: t('Breakpoints'),
       bookmarks: t('Bookmarks'),
@@ -619,7 +641,10 @@ export const App = (): React.JSX.Element => {
       autos: t('Autos'),
       'static-fields': t('Static Fields'),
       processes: t('Processes'),
-      memory: t('Memory'),
+      memory: t('Memory {number}', { number: 1 }),
+      'memory-2': t('Memory {number}', { number: 2 }),
+      'memory-3': t('Memory {number}', { number: 3 }),
+      'memory-4': t('Memory {number}', { number: 4 }),
       disassembly: t('Disassembly'),
       start: t('Start'),
     }
@@ -991,6 +1016,32 @@ export const App = (): React.JSX.Element => {
       // armed chord is read first, so Ctrl+K Ctrl+K toggles rather than arming again; a modifier pressed on
       // its own between the two keys leaves the chord waiting.
       const key = event.key.toLowerCase()
+      const debugArmed = debugWindowChord.current
+      if (!editingText && debugArmed && debugArmed.until > Date.now() && !['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
+        debugWindowChord.current = undefined
+        const digit = /^(?:Digit|Numpad)([1-4])$/.exec(event.code)?.[1]
+        const target = debugArmed.prefix === 'v'
+          ? event.code === 'KeyA' ? 'autos' : event.code === 'KeyL' ? 'locals' : undefined
+          : digit === undefined ? undefined : debugArmed.prefix === 'w'
+            ? digit === '1' ? 'watch' : `watch-${digit}`
+            : digit === '1' ? 'memory' : `memory-${digit}`
+        if (target) {
+          event.preventDefault()
+          showToolWindow(target)
+          return
+        }
+      }
+      if (!editingText && event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'KeyW' || event.code === 'KeyM' || event.code === 'KeyV')) {
+        event.preventDefault()
+        debugWindowChord.current = { prefix: event.code.slice(3).toLowerCase(), until: Date.now() + 2000 }
+        return
+      }
+      if (!editingText && event.altKey && !event.ctrlKey && !event.shiftKey && (event.code === 'Digit6' || event.code === 'Numpad6')) {
+        // dnSpy's Memory 1, Alt+6.
+        event.preventDefault()
+        showToolWindow('memory')
+        return
+      }
       const armed = bookmarkChord.current
       if (!editingText && armed && armed.until > Date.now() && !event.shiftKey && !event.altKey) {
         const chord = [...bookmarkChords, ...viewChords].find((candidate) => candidate.prefix === armed.prefix && candidate.key === key && (event.ctrlKey || candidate.plain))
@@ -1118,7 +1169,7 @@ export const App = (): React.JSX.Element => {
       } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyZ') {
         event.preventDefault()
         showToolWindow('processes')
-      } else if (event.ctrlKey && event.altKey && event.code === 'Break' && debugState === 'stopped') {
+      } else if (event.ctrlKey && event.altKey && event.code === 'Break' && debugState === 'running') {
         // dnSpy's Break, which is what its Debug menu shows against Ctrl+Alt+Break.
         event.preventDefault()
         void pauseDebug()
@@ -1162,6 +1213,18 @@ export const App = (): React.JSX.Element => {
       } else if (event.key === 'F9' && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && !editingText) {
         event.preventDefault()
         toggleBreakpointHere()
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !editingText) {
+        // dnSpy's Restart: the program goes and comes back the way it was started.
+        event.preventDefault()
+        void useAppStore.getState().restartDebug()
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !editingText) {
+        // dnSpy's Set Next Statement, from the statement under the caret.
+        event.preventDefault()
+        void useAppStore.getState().setNextStatement()
+      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !editingText) {
+        // dnSpy's Run to Cursor.
+        event.preventDefault()
+        void useAppStore.getState().runToCursor()
       } else if (event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !editingText) {
         event.preventDefault()
         void stopDebug()
@@ -1169,6 +1232,10 @@ export const App = (): React.JSX.Element => {
         // dnSpy's Show Next Statement, which its Debug menu shows with Alt+Numpad* against it.
         event.preventDefault()
         void revealStoppedLocation()
+      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F5' && !editingText) {
+        // dnSpy's Start Without Debugging.
+        event.preventDefault()
+        setRunProgramDialogOpen(true)
       } else if (event.key === 'F5' && !editingText) {
         event.preventDefault()
         if (debugState === 'stopped') void continueDebug()
@@ -2022,7 +2089,7 @@ export const App = (): React.JSX.Element => {
       case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
       case 'locals': return <LocalsPane />
       case 'exception-settings': return <ExceptionSettingsPane />
-      case 'watch': return <WatchPane />
+      case 'watch': return <WatchPane window={node.getId().startsWith('watch-') ? Number(node.getId().slice('watch-'.length)) : 1} />
       case 'callstack': return <CallStackPane />
       case 'breakpoints': return <BreakpointsPane />
       case 'bookmarks': return <BookmarksPane />
@@ -2032,12 +2099,12 @@ export const App = (): React.JSX.Element => {
       // real dockable windows: opening them from Debug > Window adds a closable pane and preserves
       // the layout. The placeholder keeps the command useful until the corresponding data providers
       // are implemented.
-      case 'module-breakpoints': return <DebugPlaceholder label={t('Module Breakpoints')} />
-      case 'autos': return <DebugPlaceholder label={t('Autos')} />
-      case 'static-fields': return <DebugPlaceholder label={t('Static Fields')} />
-      case 'processes': return <DebugPlaceholder label={t('Processes')} />
-      case 'memory': return <DebugPlaceholder label={t('Memory')} />
-      case 'disassembly': return <DebugPlaceholder label={t('Disassembly')} />
+      case 'module-breakpoints': return <ModuleBreakpointsPane />
+      case 'autos': return <AutosPane />
+      case 'static-fields': return <StaticFieldsPane />
+      case 'processes': return <ProcessesPane />
+      case 'memory': return <MemoryPane />
+      case 'disassembly': return <DisassemblyPane />
       case 'start': return (
         <div className="start-view">
           <button className="command-button" disabled={backendStatus.state !== 'ready'} onClick={() => void chooseAndOpen()}>
@@ -2118,6 +2185,12 @@ export const App = (): React.JSX.Element => {
         onStepOver={() => void stepDebug('next')}
         onStepOut={() => void stepDebug('stepOut')}
         onStopDebug={() => void stopDebug()}
+        onStartWithoutDebugging={() => setRunProgramDialogOpen(true)}
+        onDetachDebug={() => void useAppStore.getState().detachDebug()}
+        onTerminateDebug={() => void useAppStore.getState().terminateDebug()}
+        onRestartDebug={() => void useAppStore.getState().restartDebug()}
+        onShowNextStatement={() => void revealStoppedLocation({ caret: true })}
+        canRestartDebug={debugProcess?.ownsDebuggee !== false}
         canToggleBreakpoint={Boolean(breakpointTarget)}
         hasFunctionBreakpoints={lineBreakpoints.length > 0 || functionBreakpoints.length > 0}
         canEnableAllBreakpoints={anyBreakpointDisabled}
@@ -2147,6 +2220,7 @@ export const App = (): React.JSX.Element => {
         onShowCSharpInteractive={() => showToolWindow('csharp-interactive')}
         onShowLocals={() => showToolWindow('locals')}
         onShowWatch={() => showToolWindow('watch')}
+        onShowToolWindow={(id) => showToolWindow(id)}
         onShowCallStack={() => showToolWindow('callstack')}
         onShowBreakpoints={() => showToolWindow('breakpoints')}
         onShowThreads={() => showToolWindow('threads')}
@@ -2335,6 +2409,7 @@ export const App = (): React.JSX.Element => {
       )}
       {attachDialogOpen && <AttachDialog onClose={() => setAttachDialogOpen(false)} />}
       {debugProgramDialogOpen && <DebugProgramDialog onClose={() => setDebugProgramDialogOpen(false)} />}
+      {runProgramDialogOpen && <DebugProgramDialog mode="run" onClose={() => setRunProgramDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
       {gacDialogOpen && (
         <OpenFromGacDialog

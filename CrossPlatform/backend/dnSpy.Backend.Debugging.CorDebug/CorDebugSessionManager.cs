@@ -25,18 +25,49 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 		"stepOut",
 		"threads",
 		"stackTrace",
+		"frameLocation",
 		"scopes",
 		"variables",
 		"evaluate",
+		"setExpression",
+		"staticFields",
+		"makeObjectId",
+		"deleteObjectId",
+		"setNextStatement",
+		"runToFrame",
+		"runToCursor",
+		"setModuleBreakpoints",
+		"freezeThread",
+		"renameThread",
+		"process",
+		"autos",
+		"disassemble",
+		"readMemory",
+		"writeMemory",
+		"saveModule",
 		"modules",
 	};
 
-	static readonly JsonElement Capabilities = JsonSerializer.SerializeToElement(new {
+	static readonly JsonElement Capabilities = DebugJson.Serialize(new {
 		supportsLineBreakpoints = true,
 		supportsFunctionBreakpoints = true,
 		supportsExceptionBreakpoints = true,
-		supportsEvaluate = false,
+		supportsEvaluate = true,
+		supportsSetExpression = true,
+		supportsObjectIds = true,
 	});
+
+	/// <summary>The options every session reads; the client replaces them whenever the Options dialog changes.</summary>
+	DebuggerEngineOptions options = DebuggerEngineOptions.Default;
+
+	public DebuggerEngineOptions Options => options;
+
+	/// <summary><c>debug/setOptions</c>: the debugger options the engine acts on, applied to every session.</summary>
+	public void SetOptions(JsonElement element) {
+		options = DebuggerEngineOptions.Parse(element);
+		foreach (var session in sessions.Values)
+			session.Options = options;
+	}
 
 	readonly ConcurrentDictionary<string, CorDebugSession> sessions = new(StringComparer.Ordinal);
 
@@ -79,7 +110,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 		foreach (var process in Process.GetProcesses()) {
 			using (process) {
 				try {
-					if (process.Id == Environment.ProcessId || process.HasExited)
+					if (process.Id == Environment.ProcessId || process.HasExited || !HasCoreClr(process.Id))
 						continue;
 					processes.Add(new DebugProcessDto(process.Id, process.ProcessName, TryGetExecutablePath(process)));
 				}
@@ -88,6 +119,26 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 			}
 		}
 		return processes.OrderBy(process => process.Name, StringComparer.OrdinalIgnoreCase).ThenBy(process => process.ProcessId).ToArray();
+	}
+
+	/// <summary>
+	/// dnSpy's Attach to Process lists the processes it has an engine for: here, those with CoreCLR loaded. On Linux
+	/// the process's mappings say so; a process whose mappings cannot be read is listed, since attaching is what
+	/// tells whether it can be debugged.
+	/// </summary>
+	static bool HasCoreClr(int processId) {
+		if (!OperatingSystem.IsLinux())
+			return true;
+		try {
+			foreach (var line in File.ReadLines($"/proc/{processId}/maps")) {
+				if (line.EndsWith("/libcoreclr.so", StringComparison.Ordinal))
+					return true;
+			}
+			return false;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+			return true;
+		}
 	}
 
 	static string? TryGetExecutablePath(Process process) {
@@ -110,13 +161,13 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 	}
 
 	public async Task<DebugStartResponse> LaunchAsync(DebugLaunchRequest request, CancellationToken cancellationToken) {
-		var session = await CorDebugSession.LaunchAsync(request, symbols, exceptionSettings, cancellationToken).ConfigureAwait(false);
+		var session = await CorDebugSession.LaunchAsync(request, symbols, exceptionSettings, options, cancellationToken).ConfigureAwait(false);
 		Register(session);
 		return new DebugStartResponse(session.Id, Capabilities);
 	}
 
 	public async Task<DebugStartResponse> AttachAsync(DebugAttachRequest request, CancellationToken cancellationToken) {
-		var session = await CorDebugSession.AttachAsync(request.ProcessId, request.WorkspaceId, symbols, exceptionSettings, cancellationToken).ConfigureAwait(false);
+		var session = await CorDebugSession.AttachAsync(request.ProcessId, request.WorkspaceId, symbols, exceptionSettings, options, cancellationToken).ConfigureAwait(false);
 		Register(session);
 		return new DebugStartResponse(session.Id, Capabilities);
 	}
@@ -137,6 +188,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 	}
 
 	void Register(CorDebugSession session) {
+		session.Options = options;
 		session.EventReceived += Session_EventReceived;
 		if (!sessions.TryAdd(session.Id, session)) {
 			session.EventReceived -= Session_EventReceived;
@@ -153,7 +205,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 	}
 
 	static JsonElement? ToJson(object? body) =>
-		body is null ? null : JsonSerializer.SerializeToElement(body);
+		body is null ? null : DebugJson.Serialize(body);
 
 	CorDebugSession GetSession(string id) => sessions.TryGetValue(id, out var session)
 		? session

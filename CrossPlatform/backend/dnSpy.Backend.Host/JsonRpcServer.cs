@@ -353,6 +353,9 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.DebugDisconnect:
 				await GetDebugSessions().DisconnectAsync(DeserializeParams<DebugDisconnectRequest>(request), cancellationToken).ConfigureAwait(false);
 				return new { disconnected = true };
+			case RpcMethods.DebugSetOptions:
+				GetDebugSessions().SetOptions(ReadParamsElement(request));
+				return new { };
 			case RpcMethods.ExceptionGet:
 				return GetDebugSessions().GetExceptionSettings();
 			case RpcMethods.ExceptionApply:

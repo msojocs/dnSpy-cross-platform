@@ -59,29 +59,79 @@ export const parseEnvironment = (input: string): Record<string, string> | undefi
  */
 export const defaultsToHost = (program: string): boolean => program.trim().toLowerCase().endsWith('.dll')
 
-export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.Element => {
+/** What the dialog remembers of a program it started — dnSpy's StartDebuggingOptionsMru, by file. */
+interface RememberedLaunch {
+  argumentsText: string
+  workingDirectory: string
+  environmentText: string
+  useHost: boolean
+  host: string
+  hostArgumentsText: string
+  breakAt: 'dont-break' | 'create-process' | 'entry-point' | 'module-cctor-or-entry-point'
+}
+
+const launchMruStorageKey = 'dnspy.debugProgramMru.v1'
+const LAUNCH_MRU_SIZE = 20
+
+const loadLaunchMru = (): Record<string, RememberedLaunch> => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(launchMruStorageKey) ?? '{}') as unknown
+    return typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? stored as Record<string, RememberedLaunch> : {}
+  } catch {
+    return {}
+  }
+}
+
+const rememberLaunch = (program: string, launch: RememberedLaunch): void => {
+  const entries = Object.entries(loadLaunchMru()).filter(([path]) => path !== program)
+  const kept = [[program, launch] as const, ...entries].slice(0, LAUNCH_MRU_SIZE)
+  localStorage.setItem(launchMruStorageKey, JSON.stringify(Object.fromEntries(kept)))
+}
+
+/**
+ * The Debug Program dialog, and with `mode="run"` the one Start Without Debugging opens: the same fields,
+ * and the program runs on its own instead of under the debugger.
+ */
+export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): void; mode?: 'debug' | 'run' }): React.JSX.Element => {
   const dialog = useRef<HTMLDivElement>(null)
   const defaultDebugTarget = useAppStore((state) => state.defaultDebugTarget)
   const launchDebug = useAppStore((state) => state.launchDebug)
+  const appendOutput = useAppStore((state) => state.appendOutput)
   const { t } = useLanguage()
   const [program, setProgram] = useState(() => defaultDebugTarget() ?? '')
+  // The options the program was last started with, which the fields open on.
+  const [remembered] = useState(() => loadLaunchMru()[program.trim()])
   // The upstream .NET Framework page validates the executable against the file system on every keystroke
   // (ValidatesOnDataErrors + UpdateSourceTrigger=PropertyChanged): a path that is not a file draws the red
   // error border and keeps OK disabled. The renderer cannot reach the disk, so the answer comes from the
   // main process. A blank field is left unflagged — the dialog opens on it before the user has typed
   // anything — but it still keeps OK disabled, exactly like upstream's MissingFilename.
   const [programMissing, setProgramMissing] = useState(false)
-  const [argumentsText, setArgumentsText] = useState('')
-  const [workingDirectory, setWorkingDirectory] = useState('')
-  const [environmentText, setEnvironmentText] = useState('')
+  const [argumentsText, setArgumentsText] = useState(remembered?.argumentsText ?? '')
+  const [workingDirectory, setWorkingDirectory] = useState(remembered?.workingDirectory ?? '')
+  const [environmentText, setEnvironmentText] = useState(remembered?.environmentText ?? '')
   // The "use host executable" choice and the host it names, mirroring the upstream CoreCLR page. The
   // default follows the target kind; a blank host path means "find the dotnet CLI", and its default
   // argument is `exec`, exactly what upstream fills in.
-  const [useHost, setUseHost] = useState(() => defaultsToHost(program))
-  const [host, setHost] = useState('')
+  const [useHost, setUseHost] = useState(() => remembered?.useHost ?? defaultsToHost(program))
+  const [host, setHost] = useState(remembered?.host ?? '')
   const [hostMissing, setHostMissing] = useState(false)
-  const [hostArgumentsText, setHostArgumentsText] = useState('exec')
-  const [breakAt, setBreakAt] = useState<'dont-break' | 'create-process' | 'entry-point' | 'module-cctor-or-entry-point'>('dont-break')
+  const [hostArgumentsText, setHostArgumentsText] = useState(remembered?.hostArgumentsText ?? 'exec')
+  const [breakAt, setBreakAt] = useState<RememberedLaunch['breakAt']>(remembered?.breakAt ?? 'dont-break')
+
+  // A program picked with Browse... brings back what it was last started with, as dnSpy's MRU does.
+  const chooseProgram = (path: string): void => {
+    setProgram(path)
+    const launch = loadLaunchMru()[path]
+    if (!launch) return
+    setArgumentsText(launch.argumentsText)
+    setWorkingDirectory(launch.workingDirectory)
+    setEnvironmentText(launch.environmentText)
+    setUseHost(launch.useHost)
+    setHost(launch.host)
+    setHostArgumentsText(launch.hostArgumentsText)
+    setBreakAt(launch.breakAt)
+  }
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
@@ -149,7 +199,8 @@ export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.
     if (!canConfirm) return
     // The dialog closes before the launch, like upstream: the stop lands in the debugger, not in a modal.
     onClose()
-    void launchDebug({
+    rememberLaunch(program.trim(), { argumentsText, workingDirectory, environmentText, useHost, host, hostArgumentsText, breakAt })
+    const options = {
       program: program.trim(),
       arguments: splitArguments(argumentsText),
       workingDirectory: workingDirectory.trim() || undefined,
@@ -165,14 +216,21 @@ export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.
       useHost,
       host: useHost ? host.trim() || undefined : undefined,
       hostArguments: useHost ? splitArguments(hostArgumentsText) : undefined,
-    })
+    }
+    if (mode === 'debug') {
+      void launchDebug(options)
+      return
+    }
+    void window.dnSpy.startWithoutDebugging(options).then(
+      (processId) => appendOutput(t('Started {target} without debugging (process {processId}).', { target: options.program, processId }), 'debug'),
+      (error: unknown) => appendOutput(t('Could not start {target}: {message}', { target: options.program, message: error instanceof Error ? error.message : String(error) }), 'debug'))
   }
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <div ref={dialog} className="modal debug-program-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-program-title" onKeyDown={keepFocusInDialog}>
         <div className="modal-title">
-          <span id="debug-program-title">{t('Debug Program')}</span>
+          <span id="debug-program-title">{mode === 'debug' ? t('Debug Program') : t('Start Without Debugging')}</span>
           <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="debug-program-fields">
@@ -182,7 +240,7 @@ export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.
 
           <label htmlFor="debug-program-exe">{t('Executable')}</label>
           <input id="debug-program-exe" aria-invalid={programMissing} value={program} onChange={(event) => setProgram(event.target.value)} />
-          <button type="button" onClick={() => void window.dnSpy.chooseDebugTarget().then((path) => { if (path) setProgram(path) })}>{t('Browse...')}</button>
+          <button type="button" onClick={() => void window.dnSpy.chooseDebugTarget().then((path) => { if (path) chooseProgram(path) })}>{t('Browse...')}</button>
 
           <label htmlFor="debug-program-args">{t('Arguments')}</label>
           <input id="debug-program-args" className="debug-program-wide" value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} />

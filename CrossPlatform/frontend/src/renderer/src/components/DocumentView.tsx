@@ -266,6 +266,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
           void useAppStore.getState().setLineBreakpointEnabled(breakpoint.id, enabled)
       },
       onShowNextStatement: () => void useAppStore.getState().revealStoppedLocation(),
+      onSetNextStatement: () => void useAppStore.getState().setNextStatement(),
+      onRunToCursor: () => void useAppStore.getState().runToCursor(),
       onAddMethodBreakpoints: (targets) => void useAppStore.getState().addMethodBreakpoints(targets),
       onAddClassBreakpoint: (node) => commandsRef.current.onAddClassBreakpoint(node),
       onAddClassTracepoint: (node) => commandsRef.current.onAddClassTracepoint(node),

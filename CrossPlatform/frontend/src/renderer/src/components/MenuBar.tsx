@@ -3,7 +3,7 @@ import { languageChoices, useLanguage, type LanguagePreference } from '../locali
 import { buildEditMenu, type ActiveDocument, type CreatedKind, type HexShowKind, type MenuItem } from './edit-menu'
 import { buildFileMenu } from './file-menu'
 import type { HexBodyKind } from '../app-store'
-import type { HexRange, HexTargetResponse } from '../../../shared/protocol'
+import type { HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
 import { WindowControls } from './WindowControls'
 import { MenuEntryIcon } from './DsIcon'
 import { SubmenuArrowGlyph } from './DsGlyphs'
@@ -25,6 +25,9 @@ interface MenuBarProps {
   /** `selectedNode.kind` / `selectedNode.label` from the assembly explorer, feeding the Edit menu. */
   selectionKind?: string
   selectionLabel?: string
+  /** `selectedNode.icon`, which tells a .resources file from any other resource. */
+  selectionIcon?: string
+  selectionParentKind?: string
   /** Whether the selected namespace's module already has an empty namespace to move its types into. */
   hasEmptyNamespaceSibling: boolean
   /** Which document the Edit menu's hex groups key off. */
@@ -64,11 +67,21 @@ interface MenuBarProps {
   onRedo(): void
   onEditMethodBody(): void
   onEditResource(): void
+  onEditAssembly(): void
+  onEditModule(): void
+  onEditMethodCode(): void
+  onEditClassCode(): void
+  onAddClassMembersCode(): void
+  onAddClassCode(): void
+  onEditAssemblyAttributesCode(): void
+  onMergeAssembly(): void
+  onCreateResource(kind: ResourceCreateKind): void
+  onCreateResourceElement(): void
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
   /** Converts the selected module into a net module — dnSpy's Convert Assembly to NetModule. */
-  onConvertModule(): void
+  onConvertModule(toAssembly?: boolean): void
   /** Opens the assemblies the selected module's references name — dnSpy's two Load Dependencies
    *  commands, which it registers on this menu as well as on the assembly explorer's. */
   onLoadDependencies(recursive: boolean): void
@@ -201,6 +214,8 @@ export const MenuBar = ({
   hasModule,
   selectionKind,
   selectionLabel,
+  selectionIcon,
+  selectionParentKind,
   hasEmptyNamespaceSibling,
   activeDocument,
   canShowCode,
@@ -234,6 +249,16 @@ export const MenuBar = ({
   onRedo,
   onEditMethodBody,
   onEditResource,
+  onEditAssembly,
+  onEditModule,
+  onEditMethodCode,
+  onEditClassCode,
+  onAddClassMembersCode,
+  onAddClassCode,
+  onEditAssemblyAttributesCode,
+  onMergeAssembly,
+  onCreateResource,
+  onCreateResourceElement,
   onDelete,
   onRenameNamespace,
   onMoveTypesToEmptyNamespace,
@@ -442,6 +467,8 @@ export const MenuBar = ({
       hasWorkspace,
       selectionKind,
       selectionLabel,
+      selectionIcon,
+      selectionParentKind,
       hasEmptyNamespaceSibling,
       activeDocument,
       documentAvailable: activeDocument === 'code',
@@ -454,6 +481,16 @@ export const MenuBar = ({
       onFindStringReferences,
       onEditMethodBody,
       onEditResource,
+      onEditAssembly,
+      onEditModule,
+      onEditMethodCode,
+      onEditClassCode,
+      onAddClassMembersCode,
+      onAddClassCode,
+      onEditAssemblyAttributesCode,
+      onMergeAssembly,
+      onCreateResource,
+      onCreateResourceElement,
       onDelete,
       onRenameNamespace,
       onMoveTypesToEmptyNamespace,

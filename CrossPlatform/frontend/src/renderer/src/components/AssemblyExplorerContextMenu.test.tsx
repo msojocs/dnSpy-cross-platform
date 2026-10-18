@@ -249,6 +249,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
     expect(menuKeys(without)).not.toContain('open-containing-folder')
 
     const withCommands = richContext(moduleNode, {
+      parentKind: 'assembly',
       onRemoveAssembly: vi.fn(),
       onConvertModule: vi.fn(),
       onLoadDependencies: vi.fn(),
@@ -278,7 +279,7 @@ describe('buildAssemblyExplorerMenuItems', () => {
     // Supplying the callback is what puts the entry on the menu *and* what it runs: the command is handed
     // the row it was opened on, whichever row inside the module that is.
     runEntry(withCommands, 'convert-assembly-to-netmodule')
-    expect(withCommands.onConvertModule).toHaveBeenCalledWith(moduleNode)
+    expect(withCommands.onConvertModule).toHaveBeenCalledWith(moduleNode, false)
   })
 
   it('removes the selected roots, naming one document or counting several', () => {

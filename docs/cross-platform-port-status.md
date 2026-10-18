@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.7（Hex 编辑器浏览）、4.13（调试器）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.7（Hex 编辑器浏览）、4.12（程序集编辑）、4.13（调试器）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -45,20 +45,20 @@
 | 应用壳与通用 UI | 100% | 37 | 0 | 0 | 3 | 全部功能点对齐 WPF：读 `.dntheme` 的主题服务（界面与代码视图都按主题资源着色，支持用户主题）、15 种界面语言、按类别与主题的字体页、带 Debug 窗格的 Output 窗口、dnSpy 图标集覆盖菜单与工具窗口、`--settings-file` 与便携模式、`-p`/`-pn` 附加 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~83% | 63 | 16 | 7 | 4 | Roslyn 表达式求值与 func-eval，Locals/Autos/Watch 1–4 可展开、改值、DebuggerDisplay；Set Next Statement、Run to Cursor、模块断点、返回值；Threads/Modules/Processes/Memory/Disassembly 窗口；缺 Mono/Unity 与多进程 |
-| 程序集编辑（AsmEditor） | ~53% | 31 | 11 | 27 | 2 | 元数据对话框完整；Hex 视图可直接改写；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
+| 程序集编辑（AsmEditor） | ~82% | 52 | 11 | 7 | 2 | C# 源码编辑（方法、类、类成员、程序集特性、合并）与方法体三页编辑器齐备；资源可新建与编辑；保存有写出选项（含保留 RID、混合模式、PDB）；缺 NetModule 管理、镜像/ImageListStreamer 资源与指令列表剪贴板 |
 | C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
 | 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
 | Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
-| Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 属 4.12 未移植 |
+| Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
 | 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 313 / 🟡 75 / ❌ 94 / ⛔ 30，完成度约 **73%**（2026-10-18 Hex 编辑器浏览补齐前为 ✅ 293 / 🟡 79 / ❌ 110 / ⛔ 30）（2026-10-17 调试器补齐前为 ✅ 260 / 🟡 84 / ❌ 138 / ⛔ 30；2026-10-17 应用壳补齐前为 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30；2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，完成度约 **77%**（2026-10-18 程序集编辑补齐前为 ✅ 313 / 🟡 75 / ❌ 94 / ⛔ 30；Hex 编辑器浏览补齐前为 ✅ 293 / 🟡 79 / ❌ 110 / ⛔ 30）（2026-10-17 调试器补齐前为 ✅ 260 / 🟡 84 / ❌ 138 / ⛔ 30；2026-10-17 应用壳补齐前为 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30；2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -68,8 +68,8 @@
 | 看 IL / VB | 能看，不好用 | IL 是简化格式，指令的操作数可以跳转，但不能下断点；VB 不能跳转 |
 | 搜索、分析引用 | 日常可用 | 两块是移植最完整的部分 |
 | 改名、改元数据、增删成员 | 日常可用 | 五类成员的选项对话框与 WPF 逐页对齐 |
-| 改方法体 | 风险大 | 无 C# 编辑；IL 编辑器不能编辑局部变量和异常处理器，带 try/catch 的方法会丢 EH |
-| 保存 | 基本可用，有缺陷 | 多模块时保存目标错误；无写出选项，不保留 RID，混合模式程序集无法正确保存 |
+| 改方法体 | 日常可用 | C# 源码编辑（方法、类、类成员、程序集特性、合并）与方法体三页编辑器都在；IL 编辑器可增删局部变量与异常处理器，撤销覆盖导入 |
+| 保存 | 日常可用 | 保存选中行所属的模块；写出选项含保留 RID/堆偏移、校验和、MVID 节、PDB、混合模式；Save All 仍无进度与取消 |
 | 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件）、单步、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；内存与反汇编窗口；只能调一个 CoreCLR 进程 |
 | 元数据表、Hex 修改 | 浏览可用，改写局部可用 | Hex 可滚动浏览、查找、复制、直接改字节并撤销；PE 头仍是只读文本，元数据表视图未实现 |
 | 脚本、批处理导出 | 很有限 | REPL 不能操作已打开的程序集，没有 CLI，也没有导出项目 |
@@ -104,10 +104,10 @@
 
 | # | 问题 | 位置 | 依据 |
 |---|---|---|---|
-| 1 | 打开多个程序集时，File→Save / Save Module… 总是保存第一个模块。`currentModule` 要求选中节点是 `module` 且 id 等于 `OpenedModule.id`，但 `OpenedModule.id` 是 `assembly` 根节点的 id，二者永远对不上，总是退回 `modules[0]`。单测夹具把模块行当成了根节点，所以没暴露 | `FE/app-store.ts` 的 `currentModule`；`BE/WorkspaceManager.cs` 中 `module.Id = root.Id` | 已核实 |
+| 1 | ~~打开多个程序集时，File→Save / Save Module… 总是保存第一个模块~~ 已修复（2026-10-18）：`currentModule` 沿选中行的父链走到根行，并用模块行的路径匹配 `OpenedModule`；单测覆盖了「选中 B 程序集里的方法时保存 B」 | `FE/app-store.ts` 的 `currentModule` | 已核实 |
 | 2 | ~~停止调试会杀掉附加的进程~~ 已修复（2026-10-17）：`stopDebug` 对附加的进程分离、对启动的进程终止，Debug 菜单另有 Detach All / Terminate All | `FE/app-store.ts` 的 `stopDebug` | 已核实 |
 | 3 | 保存单个模块会清掉全局 `dirty`，即使其他模块仍有修改 | `FE/app-store.ts` 保存逻辑 | 代码推断 |
-| 4 | IL 编辑器从不重算 MaxStack。前端总是回传 `maxStack`，后端因此设 `KeepOldMaxStack = true`，加指令后栈深可能不够 | `BE/WorkspaceManager.cs` 方法体替换 | 代码推断 |
+| 4 | ~~IL 编辑器从不重算 MaxStack~~ 已修复（2026-10-18）：方法体编辑器把 `KeepOldMaxStack` 原样传给 dnlib，不勾选时由 writer 重算栈深 | `BE/WorkspaceManager.MethodBody.cs` | 已核实 |
 | 5 | ~~Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数~~ 已修复（2026-10-13）：改走 `resource/getItems`，`raw` 一路传到后端 | `MAIN/index.ts` 的 `edit:saveResource` | 已核实 |
 | 6 | ~~PE-only、ELF、未知文件的 Open Hex Editor 读不出数据~~ 已修复（2026-10-18）：`GetHexLength` / `ReadHexAsync` 改走 `GetHexEntry`，按模块、树节点、PE-only、ELF、未知文件依次解析；只有托管模块会叠加 hex 补丁 | `BE/WorkspaceManager.cs` | 已核实 |
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
@@ -537,37 +537,43 @@
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 
-整体完成度约 53%（✅ 31 / 🟡 11 / ❌ 27 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
+整体完成度约 82%（✅ 52 / 🟡 11 / ❌ 7 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
 
-元数据编辑最完整：五类成员的编辑、新建、删除对话框与 WPF 逐页对齐，命名空间操作和事务式撤销也很扎实。差距集中在 Roslyn 源码编辑、方法体编辑器、资源新建与元素编辑、程序集/模块对话框、保存选项。
+2026-10-18 按 WPF 补齐后按实现与测试复核（此前约 53%：✅ 31 / 🟡 11 / ❌ 27 / ⛔ 2）。这一轮补上的主体：
+
+- **方法体编辑器**（`FE/components/MethodBodyDialog.tsx`、`BE/WorkspaceManager.MethodBody.cs`）：三页签、局部变量、异常处理器、指令表与指令宏全部接通，走 `edit/getIlBody`、`edit/replaceIlBody`、`edit/transformIlBody`；CIL 头的 `KeepOldMaxStack` 现在真正交给 writer（缺陷 #4 已修）。
+- **资源编辑**（`FE/components/ResourceDialogs.tsx`、`BE/WorkspaceManager.ResourceEditing.cs`）：Edit Resource、Edit Resource Element、Create File / Multi File / Assembly Linked / File Linked、向 `.resources` 新增与删除元素；`.resources` 由 `System.Resources.Extensions.PreserializedResourceWriter` 重写，用户类型的序列化字节原样保留。
+- **Edit Assembly / Edit Module**（`FE/components/AssemblyModuleDialogs.tsx`、`BE/WorkspaceManager.AssemblyModule.cs`）：程序集页签（Main / 特性 / 安全声明）与模块的五页（Main / Metadata / Cor20 / PE / 特性）。
+- **保存选项**（`FE/components/SaveModuleOptionsDialog.tsx`、`BE/WorkspaceManager.SaveOptions.cs`）：保留 RID / #US / #Strings / #Blob 偏移、校验和、MVID 节、共享方法体、Win32 资源、模块类型、PDB 与混合模式（`NativeModuleWriterOptions`）。多模块保存目标错误（缺陷 #1）一并修好。
+- **C# 源码编辑**（`FE/components/EditCodeDialog.tsx`、`BE/WorkspaceManager.Compiler.cs`、`BE/Editing/Compiler/`）：Edit Method (C#)、Edit Class (C#)、Add Class Members、Add Class、Edit Assembly Attributes 与 Merge with Assembly。Roslyn 编译后交给移植过来的 dnSpy `ModuleImporter`，可新增成员、类型与编译器生成的状态机；每次导入在事务里保存快照，撤销恢复成员列表、方法体与各定义选项。窗口只有一份 `main.cs`，没有 WPF 的引用列表与生成的隐藏代码页；引用由后端取目标模块、它的 AssemblyRef 与当前运行时的参考包，Windows 专属的 .NET Framework 引用在 Linux 上解析不到时编译会失败。
 
 | 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
 |---|---|---|---|---|---|
+| Assembly | ~50% | 2 | 0 | 2 | 1 |
+| Module | ~100% | 3 | 0 | 0 | 0 |
 | Namespace | ~100% | 3 | 0 | 0 | 0 |
 | Types / Method / Field / Property / Event | ~100% | 5 | 0 | 0 | 0 |
-| 通用对话框（DnlibDialogs、ViewHelpers） | ~79% | 5 | 1 | 1 | 0 |
-| Commands（菜单落位与杂项命令） | ~75% | 4 | 1 | 1 | 1 |
-| UndoRedo | ~83% | 4 | 2 | 0 | 0 |
+| MethodBody | ~89% | 7 | 2 | 0 | 0 |
+| Compiler（C# 编辑） | ~83% | 5 | 0 | 1 | 0 |
+| Resources | ~86% | 5 | 2 | 0 | 0 |
 | Hex（修改能力） | ~63% | 5 | 0 | 3 | 0 |
-| Module | ~38% | 1 | 1 | 2 | 0 |
-| SaveModule | ~33% | 1 | 2 | 3 | 0 |
-| MethodBody | ~28% | 1 | 3 | 5 | 0 |
-| Resources | ~21% | 1 | 1 | 5 | 0 |
-| Assembly | ~33% | 1 | 0 | 2 | 1 |
-| Compiler（C# 编辑） | 0% | 0 | 0 | 5 | 0 |
+| SaveModule | ~83% | 4 | 2 | 0 | 0 |
+| UndoRedo | ~83% | 4 | 2 | 0 | 0 |
+| 通用对话框（DnlibDialogs、ViewHelpers） | ~86% | 5 | 2 | 0 | 0 |
+| Commands（菜单落位与杂项命令） | ~75% | 4 | 1 | 1 | 1 |
 
 #### Assembly、Module、Namespace
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Edit Assembly… | `AE/Assembly/AssemblyCommands.cs`、`AssemblyOptionsVM.cs` | `edit-menu.ts`（灰显） | ❌ | 后端选项模型不含 assembly |
-| Create Assembly… | 同上 | 灰显 | ❌ | |
+| Edit Assembly… | `AE/Assembly/AssemblyCommands.cs`、`AssemblyOptionsVM.cs` | `AssemblyOptionsDialog.tsx`，RPC `assembly/getOptions`、`assembly/setOptions` | ✅ | 名称、区域、公钥（可从文件读）、哈希算法、处理器架构、内容类型、四段版本、五个标志位、自定义特性与安全声明；改名后行标签随之刷新 |
+| Create Assembly… | 同上 | 灰显 | ❌ | 工作区没有内存模块；新建程序集要先落盘才能进入树 |
 | Remove Assembly | 同上 | RPC `workspace/removeModules` | ✅ | 作用于选中的全部根行；撤销历史涉及的文档，移除记为可撤销的一步，见 4.3 |
 | Disable Memory Mapped I/O | 同上 | 隐藏 | ⛔ | 后端没有内存映射 |
-| Edit Module… | `AE/Module/ModuleCommands.cs`、`ModuleOptionsVM.cs` | 灰显 | ❌ | |
-| NetModule 新建、添加、移除 | 同上、`NetModuleOptionsVM.cs` | 隐藏 | ❌ | 树分不清 netmodule 与程序集模块 |
+| Edit Module… | `AE/Module/ModuleCommands.cs`、`ModuleOptionsVM.cs` | `ModuleOptionsDialog.tsx`，RPC `module/getOptions`、`module/setOptions` | ✅ | Main / Metadata / Cor20 / PE / 自定义特性五页；模块名、MVID、入口点、版本串、标头版本、Cor20 标志与运行时版本、Machine、Characteristics 与 DllCharacteristics |
+| NetModule 新建、添加、移除 | 同上、`NetModuleOptionsVM.cs` | 隐藏 | ❌ | 树分不清 netmodule 与程序集模块，且没有把另一个模块挂进程序集的模型 |
 | 程序集转 NetModule | 同上 | RPC `edit/convertModule` | ✅ | 可撤销 |
-| NetModule 转程序集 | 同上 | 后端已实现，前端无入口 | 🟡 | |
+| NetModule 转程序集 | 同上 | 同一 RPC；菜单按父行判断方向 | ✅ | 没有程序集根（模块自成一棵树）时显示「Convert NetModule to Assembly」 |
 | Delete Namespace | `AE/Namespace/NamespaceCommands.cs` | RPC `edit/delete` | ✅ | |
 | Rename Namespace | 同上 | `EditDialogs.tsx`，RPC `edit/setNamespace` | ✅ | 还会改写其他模块里的 TypeRef |
 | Move Types to Empty Namespace | 同上 | 同上 | ✅ | |
@@ -586,37 +592,43 @@
 
 #### 方法体（MethodBody）
 
-「Edit Method Body…」打开的是 `FE/components/EditDialogs.tsx` 的 `MethodBodyEditor`：四列文本网格，通过 RPC `edit/replaceMethodBody` 整体替换。
+「Edit Method Body…」打开 `MethodBodyDialog.tsx`，三页签与 WPF 的 `MethodBodyDlg` 对应；读取与写回走 `edit/getIlBody`、`edit/replaceIlBody`，指令命令走 `edit/transformIlBody`。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| 方法体类型（None/CIL/Native）、给无体方法加 body | `AE/MethodBody/MethodBodyVM.cs` | 无体时直接报错 | ❌ | 只能先 Replace with stub 再编辑 |
-| CIL 头选项 | `CilBodyVM.cs` | MaxStack、InitLocals | 🟡 | 实际恒保留旧 MaxStack（缺陷 #4） |
-| 指令表编辑 | `InstructionsListHelper.cs` | 文本网格 | 🟡 | 只能追加或删除行；没有插入、移动、剪贴板 |
-| 操作数编辑 | `InstructionOperandVM.cs`、`SwitchOperandDlg` | 十六进制 token、标签、索引 | 🟡 | 没有选择器；不能新建 MemberRef；不支持 calli 的 `InlineSig` |
-| 局部变量页 | `LocalVM.cs` | 无 | ❌ | 不能增删局部变量 |
-| 异常处理器页 | `ExceptionHandlerVM.cs` | 只有「清空异常处理器」 | ❌ | 编辑带 try/catch 的方法必然丢掉全部 EH |
-| 指令宏（Simplify/Optimize、NOP、反转分支等） | `InstructionsListHelper.cs` | 无 | ❌ | |
-| Edit IL Instructions（按选中语句） | `MethodBodyCommands.cs` | 隐藏 | ❌ | |
+| 方法体类型（None/CIL/Native）、给无体方法加 body | `AE/MethodBody/MethodBodyVM.cs` | 下拉框切换；无体方法可以从 CIL 开始编辑 | ✅ | `CodeType` 与 body 类型都写回 `MethodImplAttributes` |
+| CIL 头选项 | `CilBodyVM.cs` | MaxStack、InitLocals、KeepOldMaxStack、LocalVarSigTok（只读）、Header RVA/Offset | ✅ | `KeepOldMaxStack` 原样传给 dnlib；不勾选时由 dnlib 重算栈深 |
+| 指令表编辑 | `InstructionsListHelper.cs` | 可编辑的标签/操作码/操作数网格；追加、在选区前后插入、删除、多选与上下移动 | 🟡 | 没有 WPF 列表的 Cut/Copy/Paste 剪贴板 |
+| 操作数编辑 | `InstructionOperandVM.cs`、`SwitchOperandDlg` | 数字/字符串/分支/switch 文本、局部变量与参数下拉、成员/类型选择器（可新建 MemberRef） | 🟡 | `MethodSpec` 的泛型实参与 `calli` 的调用签名能原样往返，但无法在界面上新建 |
+| 局部变量页 | `LocalVM.cs` | 增删、名称、Pinned、编译器生成、类型编辑器 | ✅ | 类型用 `TypeSigEditor`，与局部变量类型创建对话框一致 |
+| 异常处理器页 | `ExceptionHandlerVM.cs` | 增删、四个处理器类型、五个位置、捕获类型 | ✅ | 编辑带 try/catch 的方法不再丢 EH |
+| 指令宏（Simplify/Optimize、NOP、反转分支等） | `InstructionsListHelper.cs` | 后端 `edit/transformIlBody` 的七个命令 | ✅ | 栈指令（Convert to Unconditional Branch、Remove and Add Pops）按操作数签名计算栈效应 |
+| Edit IL Instructions（按选中语句） | `MethodBodyCommands.cs` | 代码视图右键「Edit IL Instructions…」 | ✅ | 以语句的 IL 范围预选指令 |
 | Replace Method Body with stub | `MethodBodyCommands.cs` | RPC `edit/replaceMethodBodyWithStub`、`BE/MethodBodyStub.cs` | ✅ | |
 
 #### Compiler（Roslyn 源码编辑）
 
-以下 5 项全部未实现，菜单只有灰显占位：Edit Method (C#)、Edit Class / Add Class Members / Add Class (C#)、Edit Assembly Attributes (C#)、Merge with Assembly、编译器选项页。WPF 实现在 `AE/Compiler/`（`EditMethodCodeVM.cs`、`ModuleImporter.cs`、`ModulePatcher.cs` 等）。
-
-文档里没有「不做」的决定，后端也已引用 `Microsoft.CodeAnalysis.CSharp.Scripting`，Roslyn 在 Linux 上可用，所以记为 ❌ 而不是 ⛔。这是 dnSpy 最常用的编辑方式之一，也是本模块最大的缺口。编辑器要用的语言服务（补全、Quick Info、签名帮助、诊断、智能缩进、选区）已在 4.15 做成后端服务与 `attachRoslynDocument` 绑定，移植这个编辑器时可以直接接上。
+| 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
+|---|---|---|---|---|
+| Edit Method (C#) | `AE/Compiler/EditMethodCodeVM.cs` | `EditCodeDialog.tsx`，RPC `compiler/compile`；`BE/WorkspaceManager.Compiler.cs`、`BE/Editing/Compiler/ModuleImporter.cs` | ✅ | 反编译外层类型、编辑后编译并只导入该方法；源可用新局部变量、新增成员引用 |
+| Edit Class (C#) | `AE/Compiler/EditClassVM.cs` | 同上，模式 `editClass` | ✅ | 整个类型合并，可增删成员 |
+| Add Class Members (C#) | `AE/Compiler/AddClassMembersCommands.cs` | 同上，模式 `addMembers` | ✅ | 只加入源里新出现的成员，不改已有成员 |
+| Add Class (C#) | `AE/Compiler/AddClassCommands.cs` | 同上，模式 `addClass` | ✅ | 从空类模板开始；新类型加入模块 |
+| Edit Assembly Attributes (C#) | `AE/Compiler/EditAssemblyVM.cs` | 同上，模式 `editAssembly` | ✅ | 程序集与模块特性、安全声明、版本写回 |
+| Merge with Assembly | `AE/Compiler/MergeWithAssemblyCommand.cs` | 主进程选文件，RPC `compiler/merge` | ✅ | 与 WPF 一样不合并依赖程序集 |
+| 编译器选项页（Compiler settings） | `AE/Compiler/CompilerAppSettingsPageContainer.cs` | 无 | ❌ | 忽略访问修饰、引用列表、生成代码页等选项没有 UI；命令本身按默认选项运行 |
 
 #### 资源、Hex 修改、保存、撤销
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | Delete Resource | `AE/Resources/ResourceCommands.cs` | RPC `edit/delete` | ✅ | |
-| Delete Resource Element | 同上 | 灰显 | ❌ | |
-| Edit Resource（名称、可见性、链接属性） | `ResourceVM.cs` | 同名菜单实为「用文件替换字节」，RPC `edit/replaceResource` | 🟡 | 属性改不了；字节替换是新增能力 |
-| Edit Resource Element（字符串、图片、序列化对象等） | `ResourceElementVM.cs` 等 | 灰显 | ❌ | |
-| Create File / Multi File Resource | `ResourceCommands.cs` | 灰显 | ❌ | |
-| Create Assembly / File Linked Resource | 同上 | 灰显 | ❌ | |
-| 新建资源元素 | 同上 | 灰显 | ❌ | |
+| Delete Resource Element | 同上 | 同一 RPC，重写 `.resources` 后删去条目 | ✅ | 撤销恢复整份文件 |
+| Edit Resource（名称、可见性、链接属性） | `ResourceVM.cs` | `ResourceOptionsDialog.tsx`，RPC `resource/getOptions`、`resource/setOptions` | ✅ | 名称、Public/Private、程序集链接、文件链接（名称/哈希/无元数据）、自定义特性 |
+| Edit Resource Element（字符串、图片、序列化对象等） | `ResourceElementVM.cs` 等 | `ResourceElementDialog.tsx`，RPC `resource/getElementOptions`、`resource/setElementOptions` | 🟡 | 内置类型、字节与流的值可编辑，用户类型的序列化字节可替换；WPF 的图片/ImageListStreamer 专用对话框没有移植 |
+| Create File / Multi File Resource | `ResourceCommands.cs` | `CreateResourceDialog.tsx`，RPC `resource/create` | ✅ | 多文件资源写成一个 `.resources`，每个文件一个 `byte[]` |
+| Create Assembly / File Linked Resource | 同上 | 同上 | ✅ | 程序集名或文件名可直接输入 |
+| 新建资源元素 | 同上 | `CreateResourceElementDialog.tsx`，RPC `resource/createElement` | 🟡 | 字符串、布尔/数值、字节数组、流、null 可建；WPF 的图片与 ImageListStreamer 元素新建没有移植 |
 | Hex Write return true/false/空方法体 | `AE/Hex/Commands.cs` | `hex-menu.ts` → RPC `edit/hexPatch` | ✅ | |
 | Hex Copy / Paste Method Body | 同上 | 剪贴板传十六进制文本 | ✅ | |
 | Hex 修改接入撤销与保存 | `AE/Hex/HexBufferUndoRedo.cs` | 补丁作为事务操作，保存时重定位 | ✅ | 见缺陷 #7 |
@@ -625,13 +637,13 @@
 | 单独保存 Hex 文档、改非 .NET 文件 | `AE/Hex/HexTabSaver.cs` | 后端拒绝 PE-only 文件 | ❌ | |
 | 编辑 PE 头与元数据表字段 | `AE/Hex/Nodes/*`、`AE/Hex/PE/*VM.cs` | 无 | ❌ | |
 | MD 表命令与 Go to MD Table Row | `AE/Hex/MDTableContextMenuCommands.cs` | 灰显 | ❌ | |
-| Save Module… | `AE/SaveModule/SaveModuleCommand.cs` | 原生另存为对话框，RPC `module/saveAs` | 🟡 | 没有选项；多模块时目标错误（缺陷 #1） |
-| Save All | 同上、`SaveMultiModuleVM.cs` | RPC `module/saveAll` | 🟡 | 不列出模块、无进度、不能取消 |
-| 原地覆盖原文件 | `AE/SaveModule/DocumentSaver.cs` | RPC `module/save` | ✅ | 写临时文件、重新加载校验后原子替换 |
-| Mixed-mode 保存 | `SaveModuleOptionsVM.cs` | 只调 `Module.Write` | ❌ | C++/CLI 程序集无法正确保存 |
-| 写 PDB | 同上 | 无 | ❌ | |
-| 写出选项（保留 RID/堆、校验和、Win32 资源等） | 同上 | 无，全用 dnlib 默认值 | ❌ | 保存后 token 会被重排 |
-| Undo / Redo | `AE/UndoRedo/*` | RPC `edit/undo`、`edit/redo` | ✅ | |
+| Save Module… | `AE/SaveModule/SaveModuleCommand.cs` | `SaveModuleOptionsDialog.tsx` + 原生另存为，RPC `module/saveAsWithOptions` | ✅ | 写出选项见下；保存的是选中行所属的模块（缺陷 #1 已修） |
+| Save All | 同上、`SaveMultiModuleVM.cs` | RPC `module/saveAllWithOptions` | 🟡 | 使用当前写出选项；仍不列出模块、无进度、不能取消 |
+| 原地覆盖原文件 | `AE/SaveModule/DocumentSaver.cs` | RPC `module/saveWithOptions` | ✅ | 写临时文件、重新加载校验后原子替换 |
+| Mixed-mode 保存 | `SaveModuleOptionsVM.cs` | `NativeModuleWriterOptions` | ✅ | 勾选「Use the native writer」后按原 PE 布局写出并保留额外 PE 数据 |
+| 写 PDB | 同上 | `ModuleWriterOptions.WritePdb`（portable PDB） | ✅ | 仅当模块读到了 `PdbState` 时可用；PDB 写在目标文件旁 |
+| 写出选项（保留 RID/堆、校验和、Win32 资源等） | 同上 | `SaveModuleOptionsDto` | 🟡 | 保留 RID/#US/#Strings/#Blob 偏移、校验和、MVID 节、共享方法体、Win32 资源、模块类型；WPF 的 PE 头/元数据堆大小/Cor20 覆盖页没有移植 |
+| Undo / Redo | `AE/UndoRedo/*` | RPC `edit/undo`、`edit/redo` | ✅ | 编译器导入也在事务里保存快照，撤销恢复成员与类型 |
 | 编辑命令统一进撤销栈并刷新界面 | `UndoCommandService.cs` | `refreshAfterEdit` | ✅ | 后端有版本冲突检测 |
 | 修改标记 | 同上 | 前端只有一个工作区级 `dirty` | 🟡 | 见缺陷 #3；撤销回保存点后不复位 |
 | 退出时询问保存 | `AE/UndoRedo/Commands.cs` | `beforeunload` | 🟡 | 没有「保存后退出」 |
@@ -647,7 +659,7 @@
 | 自定义特性、命名参数、常量 | `CustomAttributeVM.cs`、`ConstantVM.cs` | `widgets/CustomAttributeDialog.tsx` 等 | ✅ | |
 | 泛型参数、DeclSecurity、TypeDefOrRefAndCA | `GenericParamVM.cs`、`DeclSecurityVM.cs` | 对应的 Dialog 与 Codec | ✅ | |
 | ParamDef、P/Invoke、Marshal、MethodOverride | `ParamDefVM.cs`、`ImplMapVM.cs`、`MarshalTypeVM.cs` | 对应的 Dialog 与 Editor | ✅ | |
-| 手工构造 MemberRef / MethodSpec | `MemberRefVM.cs`、`MethodSpecVM.cs` | 无 | ❌ | |
+| 手工构造 MemberRef / MethodSpec | `MemberRefVM.cs`、`MethodSpecVM.cs` | 指令操作数可经选择器构造 MemberRef | 🟡 | `MethodSpec` 的泛型实参没有编辑界面 |
 | 列表编辑控件 | `ListVM.cs` | `ListEditor.tsx` | ✅ | |
 | 命令在三处菜单里的落位 | `AE/Commands/*MenuHandler.cs` | `edit-menu.ts`、两个右键菜单 | ✅ | |
 | 多选批量操作 | `AE/Commands/DeletableNodes.cs` | 树支持多选 | 🟡 | Remove Assembly 作用于整个选区；删除类型/成员仍只删一个 |
@@ -657,7 +669,7 @@
 | Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | File 菜单 | ✅ | 与 4.3 重复计入 |
 | Close Old In-Memory Modules | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 灰显 | ⛔ | 不建模内存模块 |
 
-测试：后端 `WorkspaceEditCreateTests.cs`、`WorkspaceEditOptionsTests.cs`、`Editing/NodeOptionsRoundTripTests.cs`、`Editing/SignatureRoundTripTests.cs`，以及 `WorkspaceManagerTests.cs` 中的方法体、资源、hex、保存用例；前端 `*OptionsDialog.test.tsx` 与 `widgets/*.test.ts(x)` 约 430 条；e2e 覆盖新建类型并保存、IL 与元数据编辑、hex 写入并撤销、模块转换。`MethodBodyEditor` 没有组件测试，退出提示和修改标记粒度没有测试。
+测试：后端 `WorkspaceEditCreateTests.cs`、`WorkspaceEditOptionsTests.cs`、`Editing/NodeOptionsRoundTripTests.cs`、`Editing/SignatureRoundTripTests.cs`、`WorkspaceIlBodyTests.cs`（方法体三页与七个指令命令）、`WorkspaceResourceEditingTests.cs`（资源新建/改名/元素增删改）、`WorkspaceAssemblyModuleOptionsTests.cs`、`WorkspaceSaveOptionsTests.cs`（保留 RID 与压缩的 token 对比、原地保存）、`WorkspaceCompilerTests.cs`（改方法体、增成员、编译错误与撤销），以及 `WorkspaceManagerTests.cs` 中的方法体、资源、hex、保存用例；前端 `*OptionsDialog.test.tsx`、`MethodBodyDialog.test.tsx`、`il-body-model.test.ts`、`ResourceDialogs.test.tsx`、`AssemblyModuleDialogs.test.tsx`、`SaveModuleOptionsDialog.test.tsx`、`EditCodeDialog.test.tsx` 与 `widgets/*.test.ts(x)` 约 480 条；e2e 覆盖新建类型并保存、IL 与元数据编辑、hex 写入并撤销、模块转换。
 
 ### 4.13 调试器
 
@@ -946,7 +958,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 2. ~~停止调试时区分启动的进程与附加的进程，后者走 Detach，并在菜单里加 Detach All（缺陷 #2）~~ 已完成（2026-10-17）。
 3. ~~关闭窗口前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框~~ 已完成（2026-10-14）。
 4. ~~修 PE-only/ELF 文件的 hex 读取（缺陷 #6）~~ 已完成（2026-10-18）。Raw Save Resource（缺陷 #5）已修。
-5. IL 编辑器默认重算 MaxStack（缺陷 #4）。
+5. ~~IL 编辑器默认重算 MaxStack（缺陷 #4）~~ 已完成（2026-10-18）。
 
 **P1：让已有界面生效**（UI 已经做好，只差接线）
 
@@ -960,29 +972,29 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 **P2：补齐核心能力**
 
 1. IL 输出改用 `ReflectionDisassembler` 并生成 span 与语句表，一次解决 IL 视图的跳转、断点、书签持久化。
-2. 方法体编辑器支持局部变量与异常处理器，以及指令插入、移动和操作数选择器。
+2. ~~方法体编辑器支持局部变量与异常处理器，以及指令插入、移动和操作数选择器~~ 已完成（2026-10-18，见 4.12）。
 3. ~~调试器的表达式求值与 func-eval、对象字段展开（Watch、Autos、DebuggerDisplay、完整断点条件都依赖它）~~ 已完成（2026-10-17）。
-4. Roslyn 源码编辑（Edit Method / Class (C#)），连带 ModuleImporter 与 Merge with Assembly。
+4. ~~Roslyn 源码编辑（Edit Method / Class (C#)），连带 ModuleImporter 与 Merge with Assembly~~ 已完成（2026-10-18）；编译设置页仍未移植。
 5. 元数据表子树与表格视图；Hex 视图的结构信息与 F12 跳转（光标、选区与直接改写已于 2026-10-18 完成，见 4.7）。
 6. Export to Project 与 CLI（共用 `WholeProjectDecompiler`）。
-7. 保存选项：保留 RID/堆、写 PDB、混合模式模块。
+7. ~~保存选项：保留 RID/堆、写 PDB、混合模式模块~~ 已完成（2026-10-18）；PE/Metadata/Cor20 覆盖页与 Save All 的进度/取消未做。
 
 **P3：扩展范围**
 
-字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；~~Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor~~（2026-10-17 已完成）；~~脚本 `Resolve<T>` API~~（2026-10-18 已完成）；Mono/Unity 调试；扩展系统；更新检查。
+~~字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑~~（2026-10-18 前两项与元素编辑的主体已完成，图片与 ImageListStreamer 专用对话框未移植）；~~Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor~~（2026-10-17 已完成）；~~脚本 `Resolve<T>` API~~（2026-10-18 已完成）；Mono/Unity 调试；扩展系统；更新检查。
 
 ## 6. 测试基线
 
-2026-10-18 Hex 编辑器浏览补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
+2026-10-18 程序集编辑补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 462 通过（Hex 编辑器浏览补齐后；此前为 459、438、425、406、403、359） |
+| 后端 `dotnet test` | 484 通过（程序集编辑补齐后；此前为 462、459、438、425、406、403、359） |
 | 前端 `tsc --noEmit`（`tsconfig.json`、`tsconfig.node.json`） | 0 错误 |
-| 前端 vitest | 1243 通过（Hex 编辑器浏览补齐后；此前为 1225、1214、1201、1103、1095、1041） |
-| e2e（Playwright Electron） | 96 通过、3 跳过、0 失败 |
+| 前端 vitest | 1279 通过（程序集编辑补齐后；此前为 1243、1225、1214、1201、1103、1095、1041） |
+| e2e（Playwright Electron） | 96 通过、3 跳过、0 失败（程序集编辑补齐后重跑） |
 
-Hex 编辑器这一轮改了 `Protocol.cs`（三个请求/响应记录：位置解析、元数据定位、查找），e2e 里钉死的标记随之变为 `RpcException @02000088`、`get_Code @06000A56`（此前为 `@02000082`/`@060009EC`）。调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等。C# 交互窗口那一轮改了 `Protocol.cs` 的脚本记录（输出加颜色、评估响应加 generation、Reset 请求/响应、完整性请求、反向请求）。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
+程序集编辑这一轮新增的 `Protocol.cs` 记录全部追加在文件末尾（方法体、资源、程序集/模块、保存选项、编译器），因此 e2e 钉死的 `RpcException @02000088`、`get_Code @06000A56` 没有移动。Hex 编辑器这一轮改了 `Protocol.cs`（三个请求/响应记录：位置解析、元数据定位、查找），e2e 里钉死的标记随之变为 `RpcException @02000088`、`get_Code @06000A56`（此前为 `@02000082`/`@060009EC`）。调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等。C# 交互窗口那一轮改了 `Protocol.cs` 的脚本记录（输出加颜色、评估响应加 generation、Reset 请求/响应、完整性请求、反向请求）。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
 
 复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.10、4.11、4.14、4.15 各节末尾；分析器这次改 `Protocol.cs`（两个请求加语言参数、`TextColors.ILModule`）没有挪动这两个标记。
 
@@ -1000,8 +1012,8 @@ Hex 编辑器这一轮改了 `Protocol.cs`（三个请求/响应记录：位置�
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 两者都已实现（4.13，表达式求值于 2026-10-17 补上） |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 459 / 1225 / 95（见第 6 节） |
-| `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 482 / 1277 / 96（见第 6 节） |
+| `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 均属实；方法体现在可编辑局部变量、异常处理器与指令宏（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
 | `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 窗口尺寸与位置自 2026-10-14 起会恢复（4.1）；监视表达式仍未实现 |
 | `docs/linux-support-plan.md` §8.2 | DTO 由 schema 生成 C# 与 TypeScript，CI 检查漂移 | 两边手写，没有生成与漂移检查（4.2） |

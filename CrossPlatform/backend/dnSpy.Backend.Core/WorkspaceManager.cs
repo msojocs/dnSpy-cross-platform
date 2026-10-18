@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
+using dnlib.DotNet.Writer;
 using dnlib.PE;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core.Editing;
@@ -2450,7 +2451,13 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 			var snapshotStream = new MemoryStream();
 			try {
-				module.Module.Write(snapshotStream);
+				// The snapshot is addressed by the tokens the workspace's own module carries — the node ids,
+				// the statement maps and the client's tab all name members by them — so the writer must keep
+				// every row where it was. Without this, dnlib compacts the tables and a handle that named one
+				// method decompiles whichever row took its place.
+				var writerOptions = new ModuleWriterOptions(module.Module);
+				writerOptions.MetadataOptions.Flags |= MetadataFlags.PreserveRids;
+				module.Module.Write(snapshotStream, writerOptions);
 				// The decompiler reads this snapshot, so the hex patches have to be in it, or a body the
 				// user rewrote byte-wise would still decompile as it was. The snapshot's layout is the
 				// serializer's and not the file's, so the patches are resolved against a copy of it.
@@ -3207,7 +3214,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// Works out how to remove <paramref name="node"/> without mutating anything yet. Each step both
 		/// performs the removal when handed the undo list and records how to put the item back.
 		/// </summary>
-		static void PlanDelete(NodeEntry node, ModuleEntry module, out IReadOnlyList<Action<List<Action>>> remove) {
+		void PlanDelete(NodeEntry node, ModuleEntry module, out IReadOnlyList<Action<List<Action>>> remove) {
 			switch (node.Value) {
 			case TypeDef type: {
 				var owner = type.DeclaringType is null ? module.Module.Types : type.DeclaringType.NestedTypes;
@@ -3297,6 +3304,39 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					undo => {
 						owner.RemoveAt(index);
 						undo.Add(() => owner.Insert(index, resource));
+					},
+				};
+				break;
+			}
+			case ResourceEntryValue entry: {
+				var owner = module.Module.Resources.FirstOrDefault(candidate => candidate.Name == entry.Owner.Name || ReferenceEquals(candidate, entry.Owner)) as EmbeddedResource
+					?? throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer belongs to the module.");
+				var elements = dnlib.DotNet.Resources.ResourceReader.Read(module.Module, owner.CreateReader()).ResourceElements.ToList();
+				var index = elements.FindIndex(element => element.Name == entry.Name);
+				if (index < 0)
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer holds this entry.");
+				var fileIndex = module.Module.Resources.IndexOf(owner);
+				var remaining = elements.Where((_, at) => at != index).ToArray();
+				// The resource row above the entries keeps the file the tree lists them from, so it is
+				// updated with the rewrite or the deleted entry would still be listed from the old bytes.
+				var resourceNode = nodes.Values.FirstOrDefault(candidate =>
+					ReferenceEquals(candidate.Module, module) && candidate.Value is EmbeddedResource embedded && ReferenceEquals(embedded, owner));
+				remove = new List<Action<List<Action>>> {
+					undo => {
+						var replacement = new EmbeddedResource(owner.Name, WriteResourceFile(remaining), owner.Attributes);
+						module.Module.UpdateRowId(replacement);
+						module.Module.Resources[fileIndex] = replacement;
+						var oldValue = node.Value;
+						var oldResourceValue = resourceNode?.Value;
+						node.Value = new ResourceEntryValue(replacement, entry.Element);
+						if (resourceNode is not null)
+							resourceNode.Value = replacement;
+						undo.Add(() => {
+							module.Module.Resources[fileIndex] = owner;
+							node.Value = oldValue;
+							if (resourceNode is not null)
+								resourceNode.Value = oldResourceValue!;
+						});
 					},
 				};
 				break;
@@ -3745,7 +3785,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			redoHistory.Count > 0,
 			operations.Any(operation => operation.ChangesRoots) ? CreateOpenResponse().Modules : null);
 
-		public async Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, CancellationToken cancellationToken) {
+		public Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, CancellationToken cancellationToken) =>
+			SaveModuleAsync(request, null, cancellationToken);
+
+		public async Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
 			var module = GetModule(request.ModuleId);
 			var destination = Path.GetFullPath(request.DestinationPath);
 			var directory = Path.GetDirectoryName(destination);
@@ -3756,7 +3799,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 			var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
 			try {
-				await Task.Run(() => module.Module.Write(temporaryPath), cancellationToken).ConfigureAwait(false);
+				await Task.Run(() => WriteModule(module.Module, temporaryPath, options), cancellationToken).ConfigureAwait(false);
 				cancellationToken.ThrowIfCancellationRequested();
 				// The reload is what the patches are resolved against: the file dnlib just wrote has a
 				// layout of its own, so where a patch belongs is found through the member it aimed at.
@@ -3797,10 +3840,14 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// <see cref="SaveModuleAsync"/>. The file is replaced in place, so the path the tree node holds
 		/// still names it and no dialog is involved.
 		/// </summary>
-		public async Task<SaveModuleResponse> SaveModuleInPlaceAsync(SaveModuleInPlaceRequest request, CancellationToken cancellationToken) {
+		public Task<SaveModuleResponse> SaveModuleInPlaceAsync(SaveModuleInPlaceRequest request, CancellationToken cancellationToken) =>
+			SaveModuleInPlaceAsync(request, null, cancellationToken);
+
+		public async Task<SaveModuleResponse> SaveModuleInPlaceAsync(SaveModuleInPlaceRequest request, SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
 			var module = GetModule(request.ModuleId);
 			var saved = await SaveModuleAsync(
 				new SaveModuleRequest(request.WorkspaceId, request.ModuleId, module.Path, Overwrite: true),
+				options,
 				cancellationToken).ConfigureAwait(false);
 			module.IsModified = false;
 			return saved;
@@ -3811,13 +3858,16 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// Nothing modified means nothing written, and that is not an error. A module that fails to save
 		/// stops the run: the ones already written stay written, and the error names what went wrong.
 		/// </summary>
-		public async Task<SaveAllResponse> SaveAllModulesAsync(CancellationToken cancellationToken) {
+		public Task<SaveAllResponse> SaveAllModulesAsync(CancellationToken cancellationToken) =>
+			SaveAllModulesAsync(null, cancellationToken);
+
+		public async Task<SaveAllResponse> SaveAllModulesAsync(SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
 			var saved = new List<SaveModuleResponse>();
 			foreach (var module in OrderedModules()) {
 				if (!module.IsModified)
 					continue;
 				saved.Add(await SaveModuleInPlaceAsync(
-					new SaveModuleInPlaceRequest(Id, module.Id), cancellationToken).ConfigureAwait(false));
+					new SaveModuleInPlaceRequest(Id, module.Id), options, cancellationToken).ConfigureAwait(false));
 			}
 			return new SaveAllResponse(saved);
 		}
@@ -4839,7 +4889,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		readonly record struct ILSourceStatement(int Offset, int EndOffset, string Text);
 		sealed class NodeEntry(string id, string key, NodeKind kind, object value, object module) {
 			public string Id { get; } = id;
-			public string Key { get; } = key;
+			/// <summary>
+			/// What the client may call the node by when it cannot hold its id — a module path and a token.
+			/// A row that is renamed keeps its id; only the key follows the name, so the two are updated
+			/// together when a resource is renamed.
+			/// </summary>
+			public string Key { get; set; } = key;
 			public NodeKind Kind { get; } = kind;
 			public object Value { get; set; } = value;
 			/// <summary>The module this node belongs to — a ModuleEntry, or one of the entries for the files

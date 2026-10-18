@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import type { TextPart, TreeNode } from '../../../shared/protocol'
 import { tokenParts } from '../analyzer-model'
-import { useAppStore } from '../app-store'
+import { findNode, useAppStore } from '../app-store'
 import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
 import { TreeExpanderGlyph } from './DsGlyphs'
@@ -642,6 +642,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         t,
         node,
         selection: keepsSelection ? state.selectedNodes : [node],
+        parentKind: state.parents[node.id] ? findNode(state, state.parents[node.id])?.kind : undefined,
         readsResource,
         resourceNames,
         hexTarget: state.hexTarget,

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import type { TreeNode } from '../../../shared/protocol'
+import type { ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import type { MethodBreakpointTarget } from '../app-store'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import type { CreatedKind } from './edit-menu'
@@ -30,10 +30,23 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   /** Replaces a resource's bytes with a file the user picks — dnSpy's resource editor, which this port
    *  reaches through the same "Edit Resource" command. */
   onEditResource?(node: TreeNode): void
+  /** dnSpy's Edit Assembly / Edit Module windows. */
+  onEditAssembly?(node: TreeNode): void
+  onEditModule?(node: TreeNode): void
+  /** The C# compiler commands — dnSpy's Edit Code windows. */
+  onEditMethodCode?(node: TreeNode): void
+  onEditClassCode?(node: TreeNode): void
+  onAddClassMembersCode?(node: TreeNode): void
+  onAddClassCode?(node: TreeNode): void
+  onEditAssemblyAttributesCode?(node: TreeNode): void
+  /** Opens one of dnSpy's Create ... Resource commands on the node's module. */
+  onCreateResource?(kind: ResourceCreateKind, node: TreeNode): void
+  /** The New Resource command of a .resources file. */
+  onCreateResourceElement?(node: TreeNode): void
   onRenameNamespace?(node: TreeNode): void
   onMoveTypesToEmptyNamespace?(node: TreeNode): void
   /** Flips a module between a netmodule and an assembly. */
-  onConvertModule?(node: TreeNode): void
+  onConvertModule?(node: TreeNode, toAssembly?: boolean): void
   /**
    * Merges another assembly into this node's module. No callback is ever supplied: dnSpy's merge is its
    * compiled-module importer — the same machinery that recompiles edited C# — and the port has neither
@@ -79,6 +92,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
 export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, HexMenuContext {
   /** The row that was right-clicked. */
   node: TreeNode
+  /** The kind of the row above it, which tells a net module (no assembly above) from a module. */
+  parentKind?: string
   /**
    * The rows the command acts on: every selected row when the right-clicked one is among them, else that
    * row alone — dnSpy's tree right-clicks into the selection rather than replacing it.
@@ -154,6 +169,12 @@ const noImage: AsmMenuIcon = () => null
 // shape, but never show. Commands that this port *can* run but has no plumbing for yet are not listed
 // here: their entries gate on the callback instead, so they appear the moment the shell supplies one.
 const never = (): boolean => false
+
+const inResourcesFile = (ctx: AssemblyExplorerMenuContext): boolean =>
+  ctx.node.kind === 'resourceentry' || (ctx.node.kind === 'resource' && ctx.node.icon === 'SourceFileGroup')
+
+const canCreateResource = (ctx: AssemblyExplorerMenuContext): boolean =>
+  ctx.node.kind === 'resource' || ctx.node.kind === 'resourceentry' || ctx.node.kind === 'resourcesgroup'
 
 const kindIs = (...kinds: string[]) => (ctx: AssemblyExplorerMenuContext): boolean => kinds.includes(ctx.node.kind)
 
@@ -350,8 +371,8 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // the second. This tree cannot tell a netmodule from an assembly module — both are a `module` row — so
   // the first stays out rather than turning up on images it would not act on, and the second is what a
   // module row offers.
-  { group: GROUP_MISC, order: 20, key: 'convert-netmodule-to-assembly', icon: noImage, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: never },
-  { group: GROUP_MISC, order: 30, key: 'convert-assembly-to-netmodule', icon: noImage, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => kindIs('module')(ctx) && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node) },
+  { group: GROUP_MISC, order: 20, key: 'convert-netmodule-to-assembly', icon: noImage, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: (ctx) => kindIs('module')(ctx) && ctx.parentKind !== 'assembly' && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, true) },
+  { group: GROUP_MISC, order: 30, key: 'convert-assembly-to-netmodule', icon: noImage, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => kindIs('module')(ctx) && ctx.parentKind === 'assembly' && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, false) },
 
   // 4000 — AsmEditor: New (GROUP_CTX_DOCUMENTS_ASMED_NEW). The four assembly/netmodule commands and the
   // resource creates have no backend here; the six that do are the same ones the Edit menu offers.
@@ -365,37 +386,37 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   { group: GROUP_NEW, order: 70, key: 'create-field', icon: image('NewField'), label: (ctx) => ctx.t('Create Field...'), visible: (ctx) => isMember(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'field') },
   { group: GROUP_NEW, order: 80, key: 'create-property', icon: image('NewProperty'), label: (ctx) => ctx.t('Create Property...'), visible: (ctx) => isMember(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'property') },
   { group: GROUP_NEW, order: 90, key: 'create-event', icon: image('NewEvent'), label: (ctx) => ctx.t('Create Event...'), visible: (ctx) => isMember(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'event') },
-  { group: GROUP_NEW, order: 100, key: 'create-file-resource', icon: noImage, label: (ctx) => ctx.t('Create File Resource...'), visible: never },
-  { group: GROUP_NEW, order: 110, key: 'create-multi-file-resource', icon: noImage, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: never },
-  { group: GROUP_NEW, order: 120, key: 'create-assembly-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: never },
-  { group: GROUP_NEW, order: 130, key: 'create-file-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: never },
+  { group: GROUP_NEW, order: 100, key: 'create-file-resource', icon: noImage, label: (ctx) => ctx.t('Create File Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('file', ctx.node) },
+  { group: GROUP_NEW, order: 110, key: 'create-multi-file-resource', icon: noImage, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('multiFile', ctx.node) },
+  { group: GROUP_NEW, order: 120, key: 'create-assembly-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('assemblyLinked', ctx.node) },
+  { group: GROUP_NEW, order: 130, key: 'create-file-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('fileLinked', ctx.node) },
   { group: GROUP_NEW, order: 140, key: 'create-bitmap-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: never },
   { group: GROUP_NEW, order: 150, key: 'create-imagelist-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: never },
-  { group: GROUP_NEW, order: 170, key: 'create-byte-array-resource', icon: noImage, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: never },
-  { group: GROUP_NEW, order: 180, key: 'create-stream-resource', icon: noImage, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: never },
-  { group: GROUP_NEW, order: 190, key: 'create-resource', icon: noImage, label: (ctx) => ctx.t('Create Resource...'), visible: never },
+  { group: GROUP_NEW, order: 170, key: 'create-byte-array-resource', icon: noImage, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('byteArray', ctx.node) },
+  { group: GROUP_NEW, order: 180, key: 'create-stream-resource', icon: noImage, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('stream', ctx.node) },
+  { group: GROUP_NEW, order: 190, key: 'create-resource', icon: noImage, label: (ctx) => ctx.t('Create Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResourceElement !== undefined, run: (ctx) => ctx.onCreateResourceElement?.(ctx.node) },
 
   // 5000 — AsmEditor: Settings (GROUP_CTX_DOCUMENTS_ASMED_SETTINGS): the Edit X... dialogs, the same ones
   // Alt+Enter opens in the assembly explorer.
-  { group: GROUP_SETTINGS, order: 0, key: 'edit-assembly', icon: image('Settings'), label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: never },
-  { group: GROUP_SETTINGS, order: 10, key: 'edit-module', icon: image('Settings'), label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: never },
+  { group: GROUP_SETTINGS, order: 0, key: 'edit-assembly', icon: image('Settings'), label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('module')(ctx) && ctx.onEditAssembly !== undefined, run: (ctx) => ctx.onEditAssembly?.(ctx.node) },
+  { group: GROUP_SETTINGS, order: 10, key: 'edit-module', icon: image('Settings'), label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('module')(ctx) && ctx.onEditModule !== undefined, run: (ctx) => ctx.onEditModule?.(ctx.node) },
   { group: GROUP_SETTINGS, order: 20, key: 'edit-type', icon: image('Settings'), label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('type')(ctx) && ctx.onEditNode !== undefined, run: editNode },
   { group: GROUP_SETTINGS, order: 30, key: 'edit-method', icon: image('Settings'), label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('method')(ctx) && ctx.onEditNode !== undefined, run: editNode },
   { group: GROUP_SETTINGS, order: 50, key: 'edit-field', icon: image('Settings'), label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('field')(ctx) && ctx.onEditNode !== undefined, run: editNode },
   { group: GROUP_SETTINGS, order: 60, key: 'edit-property', icon: image('Settings'), label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('property')(ctx) && ctx.onEditNode !== undefined, run: editNode },
   { group: GROUP_SETTINGS, order: 70, key: 'edit-event', icon: image('Settings'), label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('event')(ctx) && ctx.onEditNode !== undefined, run: editNode },
   { group: GROUP_SETTINGS, order: 90, key: 'edit-resource', icon: image('Settings'), label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('resource')(ctx) && ctx.onEditResource !== undefined, run: (ctx) => ctx.onEditResource?.(ctx.node) },
-  { group: GROUP_SETTINGS, order: 100, key: 'edit-resource-entry', icon: image('Settings'), label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: never },
+  { group: GROUP_SETTINGS, order: 100, key: 'edit-resource-entry', icon: image('Settings'), label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: (ctx) => kindIs('resourceentry')(ctx) && ctx.onEditResource !== undefined, run: (ctx) => ctx.onEditResource?.(ctx.node) },
 
   // 6000 — IL edits (GROUP_CTX_DOCUMENTS_ASMED_ILED). dnSpy's C# compile commands have no equivalent
   // here; the rest act on the module or the method the row names. Merge and the two Load Dependencies
   // commands sit in this group in the tree where the Edit menu files them under Settings — upstream
   // registers them once per menu, with a different group each time.
-  { group: GROUP_ILED, order: 10, key: 'edit-method-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: never },
-  { group: GROUP_ILED, order: 11, key: 'edit-assembly-attributes-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: never },
-  { group: GROUP_ILED, order: 12, key: 'edit-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: never },
-  { group: GROUP_ILED, order: 13, key: 'add-class-members-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: never },
-  { group: GROUP_ILED, order: 14, key: 'add-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: never },
+  { group: GROUP_ILED, order: 10, key: 'edit-method-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('method')(ctx) && ctx.onEditMethodCode !== undefined, run: (ctx) => ctx.onEditMethodCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 11, key: 'edit-assembly-attributes-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('module')(ctx) && ctx.onEditAssemblyAttributesCode !== undefined, run: (ctx) => ctx.onEditAssemblyAttributesCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 12, key: 'edit-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: (ctx) => isMember(ctx) && ctx.onEditClassCode !== undefined, run: (ctx) => ctx.onEditClassCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 13, key: 'add-class-members-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: (ctx) => isMember(ctx) && ctx.onAddClassMembersCode !== undefined, run: (ctx) => ctx.onAddClassMembersCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 14, key: 'add-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('assembly', 'module', 'namespace', 'type')(ctx) && ctx.onAddClassCode !== undefined, run: (ctx) => ctx.onAddClassCode?.(ctx.node) },
   // The entry is in the table so the group keeps its WPF shape, but no shell supplies its callback: see
   // `onMergeAssembly`. The Edit menu files the same command under Settings, where it renders disabled for
   // the same reason; both are gated on the import this port has no way to run.

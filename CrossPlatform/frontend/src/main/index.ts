@@ -510,6 +510,32 @@ const registerIpc = (): void => {
   ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw }))
   ipcMain.handle('resource:find', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/find', { workspaceId, nodeId }))
   ipcMain.handle('resource:getItemNames', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('resource/getItemNames', { workspaceId, nodeIds, raw: false }))
+  ipcMain.handle('compiler:getAssemblyAttributesSource', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('compiler/getAssemblyAttributesSource', { workspaceId, nodeId }))
+  ipcMain.handle('compiler:merge', async (_event, workspaceId: string, transactionId: string, nodeId: string) => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: nativeText().mergeWithAssembly,
+      filters: [
+        { name: nativeText().dotNetAssemblies, extensions: ['dll', 'exe', 'netmodule'] },
+        { name: nativeText().allFiles, extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0)
+      return false
+    const data = await readFile(result.filePaths[0])
+    await requireBackend().invoke('compiler/merge', { workspaceId, transactionId, nodeId, base64Data: data.toString('base64') })
+    return true
+  })
+  ipcMain.handle('compiler:compile', (_event, workspaceId: string, nodeId: string, mode: string, source: string, transactionId?: string) => requireBackend().invoke('compiler/compile', { workspaceId, nodeId, mode, source, transactionId }))
+  ipcMain.handle('assembly:getOptions', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('assembly/getOptions', { workspaceId, nodeId }))
+  ipcMain.handle('assembly:setOptions', (_event, workspaceId: string, transactionId: string, nodeId: string, options: Record<string, unknown>) => requireBackend().invoke('assembly/setOptions', { workspaceId, transactionId, nodeId, options }))
+  ipcMain.handle('module:getOptions', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('module/getOptions', { workspaceId, nodeId }))
+  ipcMain.handle('module:setOptions', (_event, workspaceId: string, transactionId: string, nodeId: string, options: Record<string, unknown>) => requireBackend().invoke('module/setOptions', { workspaceId, transactionId, nodeId, options }))
+  ipcMain.handle('resource:getOptions', (_event, workspaceId: string, resourceNodeId: string) => requireBackend().invoke('resource/getOptions', { workspaceId, resourceNodeId }))
+  ipcMain.handle('resource:setOptions', (_event, workspaceId: string, transactionId: string, resourceNodeId: string, options: Record<string, unknown>) => requireBackend().invoke('resource/setOptions', { workspaceId, transactionId, resourceNodeId, options }))
+  ipcMain.handle('resource:create', (_event, workspaceId: string, transactionId: string, ownerNodeId: string, options: Record<string, unknown>) => requireBackend().invoke('resource/create', { workspaceId, transactionId, ownerNodeId, ...options }))
+  ipcMain.handle('resource:getElementOptions', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/getElementOptions', { workspaceId, nodeId }))
+  ipcMain.handle('resource:setElementOptions', (_event, workspaceId: string, transactionId: string, nodeId: string, options: Record<string, unknown>) => requireBackend().invoke('resource/setElementOptions', { workspaceId, transactionId, nodeId, options }))
+  ipcMain.handle('resource:createElement', (_event, workspaceId: string, transactionId: string, resourceNodeId: string, options: Record<string, unknown>) => requireBackend().invoke('resource/createElement', { workspaceId, transactionId, resourceNodeId, ...options }))
   ipcMain.handle('tree:selectMember', (_event, workspaceId: string, paths: string[], member: string) => requireBackend().invoke('tree/selectMember', { workspaceId, paths, member }))
   ipcMain.handle('module:specialNode', (_event, workspaceId: string, nodeId: string, kind: string) => requireBackend().invoke('module/getSpecialNode', { workspaceId, nodeId, kind }))
   ipcMain.handle('tree:findByToken', (_event, workspaceId: string, nodeId: string, token: string) => requireBackend().invoke('tree/findByToken', { workspaceId, nodeId, token }))
@@ -623,6 +649,11 @@ const registerIpc = (): void => {
   ipcMain.handle('module:info', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('module/getInfo', { workspaceId, moduleId }))
   ipcMain.handle('edit:begin', (_event, workspaceId: string) => requireBackend().invoke('edit/begin', { workspaceId }))
   ipcMain.handle('edit:getMethodBody', (_event, workspaceId: string, methodNodeId: string) => requireBackend().invoke('edit/getMethodBody', { workspaceId, methodNodeId }))
+  ipcMain.handle('edit:getIlBody', (_event, workspaceId: string, methodNodeId: string) => requireBackend().invoke('edit/getIlBody', { workspaceId, methodNodeId }))
+  ipcMain.handle('edit:replaceIlBody', (_event, workspaceId: string, transactionId: string, methodNodeId: string, body: Record<string, unknown>) =>
+    requireBackend().invoke('edit/replaceIlBody', { workspaceId, transactionId, methodNodeId, ...body }))
+  ipcMain.handle('edit:transformIlBody', (_event, workspaceId: string, methodNodeId: string, operation: string, locals: unknown[], instructions: unknown[], selectedIndexes: number[], parameterNames: string[]) =>
+    requireBackend().invoke('edit/transformIlBody', { workspaceId, methodNodeId, operation, locals, instructions, selectedIndexes, parameterNames }))
   ipcMain.handle('edit:getOptions', (_event, workspaceId: string, kind: string, request: { nodeId?: string, ownerNodeId?: string, isNew?: boolean }) => requireBackend().invoke('edit/getOptions', { workspaceId, kind, ...request }))
   ipcMain.handle('edit:create', (_event, workspaceId: string, transactionId: string, ownerNodeId: string, options: unknown, nested = false) => requireBackend().invoke('edit/create', { workspaceId, transactionId, ownerNodeId, options, nested }))
   ipcMain.handle('edit:setOptions', (_event, workspaceId: string, transactionId: string, nodeId: string, options: unknown) => requireBackend().invoke('edit/setOptions', { workspaceId, transactionId, nodeId, options }))
@@ -665,13 +696,14 @@ const registerIpc = (): void => {
   ipcMain.handle('edit:rollback', (_event, workspaceId: string, transactionId: string) => requireBackend().invoke('edit/rollback', { workspaceId, transactionId }))
   ipcMain.handle('edit:undo', (_event, workspaceId: string) => requireBackend().invoke('edit/undo', { workspaceId }))
   ipcMain.handle('edit:redo', (_event, workspaceId: string) => requireBackend().invoke('edit/redo', { workspaceId }))
-  ipcMain.handle('module:saveAs', async (_event, workspaceId: string, moduleId: string, suggestedName: string) => {
+  ipcMain.handle('module:saveAs', async (_event, workspaceId: string, moduleId: string, suggestedName: string, options?: Record<string, unknown>) => {
     if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_PATH) {
-      return requireBackend().invoke('module/saveAs', {
+      return requireBackend().invoke('module/saveAsWithOptions', {
         workspaceId,
         moduleId,
         destinationPath: process.env.DNSPY_E2E_SAVE_PATH,
         overwrite: true,
+        options,
       })
     }
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -684,19 +716,20 @@ const registerIpc = (): void => {
     })
     if (result.canceled || !result.filePath)
       return undefined
-    return requireBackend().invoke('module/saveAs', {
+    return requireBackend().invoke('module/saveAsWithOptions', {
       workspaceId,
       moduleId,
       destinationPath: result.filePath,
       overwrite: true,
+      options,
     })
   })
   // Save and Save All write back over the files the assemblies came from, so neither has a dialog to
   // go through — unlike Save As, which is the one that needs a destination.
   ipcMain.handle('module:save', (_event, workspaceId: string, moduleId: string) =>
     requireBackend().invoke('module/save', { workspaceId, moduleId }))
-  ipcMain.handle('module:saveAll', (_event, workspaceId: string) =>
-    requireBackend().invoke('module/saveAll', { workspaceId }))
+  ipcMain.handle('module:saveAll', (_event, workspaceId: string, options?: Record<string, unknown>) =>
+    requireBackend().invoke('module/saveAllWithOptions', { workspaceId, options }))
   ipcMain.handle('document:saveCode', async (_event, suggestedName: string, text: string, title?: string) => {
     if (typeof suggestedName !== 'string' || typeof text !== 'string')
       throw new TypeError('Invalid save-code request.')

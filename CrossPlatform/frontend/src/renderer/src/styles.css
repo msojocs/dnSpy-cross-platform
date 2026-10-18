@@ -1763,6 +1763,346 @@ select:focus-visible,
   background: var(--surface);
 }
 
+.il-body-dialog {
+  width: min(96vw, 1180px);
+  height: min(90vh, 820px);
+}
+
+.il-body-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 4px;
+}
+
+.il-body-tab .il-editor-options {
+  flex-wrap: wrap;
+}
+
+.il-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 2px;
+}
+
+.il-editor-actions button,
+.il-type-button {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+}
+
+.il-editor-actions button:not(:disabled):hover,
+.il-type-button:hover {
+  background: var(--surface-3, var(--surface));
+}
+
+.il-editor-actions button:disabled {
+  opacity: 0.45;
+}
+
+.il-body-grid {
+  display: grid;
+  grid-template-columns: 52px 76px 150px minmax(240px, 1fr) 32px;
+  align-content: start;
+  gap: 1px;
+  min-height: 0;
+  padding: 1px;
+  overflow: auto;
+  background: var(--border);
+}
+
+.il-locals-grid {
+  grid-template-columns: 52px 60px 110px minmax(120px, 220px) minmax(220px, 1fr) 32px;
+}
+
+.il-handlers-grid {
+  grid-template-columns: 52px 110px repeat(5, minmax(110px, 1fr)) minmax(180px, 1.2fr) 32px;
+}
+
+.il-body-grid-header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  height: 25px;
+  padding: 5px 7px;
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.il-body-grid-row {
+  display: contents;
+}
+
+.il-body-grid-row > input,
+.il-body-grid-row > select,
+.il-body-grid-row > .il-index-cell,
+.il-body-grid-row > .il-offset-cell,
+.il-body-grid-row > span,
+.il-body-grid-row > button {
+  min-width: 0;
+  height: 25px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.il-body-grid-row > input,
+.il-body-grid-row > select {
+  width: 100%;
+  padding: 2px 5px;
+}
+
+.il-body-grid-row > .il-operand-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 25px;
+  min-width: 0;
+  padding: 0 4px;
+  background: var(--surface);
+}
+
+.il-body-grid-row > .il-operand-cell > input,
+.il-body-grid-row > .il-operand-cell > select {
+  width: 100%;
+  height: 23px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.il-operand-reference {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.il-operand-reference > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.il-operand-reference > button {
+  width: 22px;
+  height: 21px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: inherit;
+}
+
+.il-operand-none {
+  color: var(--text-muted);
+}
+
+.il-index-cell,
+.il-offset-cell {
+  padding: 4px 7px;
+  color: var(--text-muted);
+  font-family: "Cascadia Mono", "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+
+.il-body-grid-row.selected > .il-index-cell,
+.il-body-grid-row.selected > .il-offset-cell,
+.il-body-grid-row.selected > .il-operand-cell,
+.il-body-grid-row.selected > input {
+  background: var(--wpf-SelectedItem, color-mix(in srgb, var(--accent, #3b82f6) 28%, var(--surface)));
+}
+
+.il-body-grid-row > .il-type-button {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.il-loading {
+  padding: 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.resource-dialog {
+  width: min(92vw, 720px);
+  max-height: min(88vh, 760px);
+}
+
+.resource-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 2px;
+  overflow: auto;
+}
+
+.resource-dialog-body > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-dialog-body > label > input:not([type="checkbox"]):not([type="file"]),
+.resource-dialog-body > label > select {
+  flex: 1;
+  min-width: 0;
+}
+
+.resource-value {
+  min-height: 140px;
+  font-family: "Cascadia Mono", "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+
+.options-dialog {
+  width: min(94vw, 900px);
+  height: min(90vh, 780px);
+}
+
+.options-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 2px;
+  overflow: auto;
+}
+
+.options-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.options-row > label {
+  flex: 1;
+  min-width: 140px;
+}
+
+.options-form > label,
+.options-row > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.options-form > label > input:not([type="checkbox"]):not([type="file"]),
+.options-form > label > select,
+.options-row > label > input,
+.options-row > label > select {
+  flex: 1;
+  min-width: 0;
+}
+
+.options-inline {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+}
+
+.options-inline > input:first-child {
+  flex: 1;
+}
+
+.il-flags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 2px 18px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.il-flags > legend {
+  padding: 0 4px;
+  color: var(--text-muted);
+}
+
+.il-flags > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.save-options-dialog {
+  width: min(92vw, 760px);
+}
+
+.edit-code-dialog {
+  display: grid;
+  grid-template-rows: 33px 36px minmax(220px, 1fr) minmax(60px, 180px) auto 43px;
+  width: min(96vw, 1100px);
+  height: min(92vh, 860px);
+}
+
+.edit-code-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-code-summary {
+  color: var(--text-muted);
+}
+
+.edit-code-summary.error {
+  color: var(--danger);
+}
+
+.edit-code-editor {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.edit-code-diagnostics {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.edit-code-diagnostic {
+  display: grid;
+  grid-template-columns: 64px 70px minmax(200px, 1fr) auto;
+  gap: 8px;
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.edit-code-diagnostic:hover {
+  background: var(--surface);
+}
+
+.edit-code-diagnostic.error .edit-code-severity {
+  color: var(--danger);
+}
+
+.edit-code-diagnostic.warning .edit-code-severity {
+  color: var(--warning);
+}
+
+.edit-code-position {
+  color: var(--text-muted);
+}
+
 .modal-error {
   max-height: 58px;
   padding: 7px 10px;

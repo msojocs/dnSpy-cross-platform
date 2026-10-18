@@ -45,6 +45,16 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   onRedo: vi.fn(),
   onEditMethodBody: vi.fn(),
   onEditResource: vi.fn(),
+  onEditAssembly: vi.fn(),
+  onEditModule: vi.fn(),
+  onEditMethodCode: vi.fn(),
+  onEditClassCode: vi.fn(),
+  onAddClassMembersCode: vi.fn(),
+  onAddClassCode: vi.fn(),
+  onEditAssemblyAttributesCode: vi.fn(),
+  onMergeAssembly: vi.fn(),
+  onCreateResource: vi.fn(),
+  onCreateResourceElement: vi.fn(),
   onDelete: vi.fn(),
   onRenameNamespace: vi.fn(),
   onMoveTypesToEmptyNamespace: vi.fn(),
@@ -593,6 +603,16 @@ describe('MenuBar', () => {
       onRedo={vi.fn()}
       onEditMethodBody={vi.fn()}
       onEditResource={vi.fn()}
+      onEditAssembly={vi.fn()}
+      onEditModule={vi.fn()}
+      onEditMethodCode={vi.fn()}
+      onEditClassCode={vi.fn()}
+      onAddClassMembersCode={vi.fn()}
+      onAddClassCode={vi.fn()}
+      onEditAssemblyAttributesCode={vi.fn()}
+      onMergeAssembly={vi.fn()}
+      onCreateResource={vi.fn()}
+      onCreateResourceElement={vi.fn()}
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
@@ -741,6 +761,16 @@ describe('MenuBar', () => {
       onRedo={vi.fn()}
       onEditMethodBody={vi.fn()}
       onEditResource={vi.fn()}
+      onEditAssembly={vi.fn()}
+      onEditModule={vi.fn()}
+      onEditMethodCode={vi.fn()}
+      onEditClassCode={vi.fn()}
+      onAddClassMembersCode={vi.fn()}
+      onAddClassCode={vi.fn()}
+      onEditAssemblyAttributesCode={vi.fn()}
+      onMergeAssembly={vi.fn()}
+      onCreateResource={vi.fn()}
+      onCreateResourceElement={vi.fn()}
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
@@ -973,13 +1003,14 @@ describe('MenuBar', () => {
   it('lists the Edit commands the port has not implemented yet as disabled', () => {
     renderMenuWith({ selectionKind: 'type', selectionLabel: 'HelloRequest' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-    // Delete, the type's two create commands, its own editor and the four member dialogs are wired up;
-    // what is left of the group is the C#-scripting commands.
+    // Delete, the type's two create commands, its own editor, the four member dialogs and the C#
+    // compiler commands are all wired up now; only Merge with Assembly is still a placeholder, and it
+    // is not offered for a type at all.
     expect(screen.getByRole('menuitem', { name: /^Delete HelloRequest/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Create Type\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Create Nested Type\.\.\./ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Edit Type\.\.\./ })).toBeEnabled()
-    expect(screen.getByRole('menuitem', { name: /^Edit Class \(C#\)\.\.\./ })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: /^Edit Class \(C#\)\.\.\./ })).toBeEnabled()
     expect(screen.queryByRole('menuitem', { name: /^Edit Method Body/ })).not.toBeInTheDocument()
   })
 
@@ -1075,17 +1106,29 @@ describe('MenuBar', () => {
     expect(onMoveTypesToEmptyNamespace).toHaveBeenCalledTimes(1)
   })
 
-  it('runs the conversion the Edit menu offers on a module', () => {
+  it('converts a module under an assembly into a net module', () => {
     const onConvertModule = vi.fn()
-    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', onConvertModule })
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', selectionParentKind: 'assembly', onConvertModule })
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert Assembly to NetModule' }))
-    expect(onConvertModule).toHaveBeenCalledTimes(1)
+    expect(onConvertModule).toHaveBeenCalledWith(false)
 
-    // The other direction is dnSpy's, but this tree never puts a module on its own, so it never shows.
+    // A module that still belongs to an assembly has nothing to convert back.
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.queryByRole('menuitem', { name: /^Convert NetModule to Assembly/ })).not.toBeInTheDocument()
+  })
+
+  it('converts a net module that has no assembly above it back into one', () => {
+    const onConvertModule = vi.fn()
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.netmodule', selectionParentKind: undefined, onConvertModule })
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert NetModule to Assembly' }))
+    expect(onConvertModule).toHaveBeenCalledWith(true)
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Convert Assembly to NetModule/ })).not.toBeInTheDocument()
   })
 
   it('runs the two Load Dependencies commands on whatever the tree has selected, the assembly root included', () => {

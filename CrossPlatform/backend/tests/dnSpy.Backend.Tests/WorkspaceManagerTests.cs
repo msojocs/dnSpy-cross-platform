@@ -844,16 +844,21 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			TestContext.Current.CancellationToken);
 		Assert.Equal(0, first.Offset);
 
-		// Find next starts after the match it was given, so the next "MZ" is the one to look for.
-		var next = await manager.FindHexAsync(
-			new HexFindRequest(opened.WorkspaceId, moduleId, dosHeader, 1, false, false),
+		// Find next starts after the match it was given. The assembly's own name appears more than once,
+		// which is what makes a second match something the test can rely on; "MZ" need not recur.
+		var nameBytes = Convert.ToBase64String("dnSpy.Backend.Contracts"u8);
+		var firstRepeat = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, nameBytes, 0, false, false),
 			TestContext.Current.CancellationToken);
-		Assert.True(next.Offset > 0, "A PE image spells MZ again inside its metadata or a string.");
+		var next = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, nameBytes, firstRepeat.Offset + 1, false, false),
+			TestContext.Current.CancellationToken);
+		Assert.True(next.Offset > firstRepeat.Offset, "The assembly name should occur more than once in the file.");
 
 		var previous = await manager.FindHexAsync(
-			new HexFindRequest(opened.WorkspaceId, moduleId, dosHeader, next.Offset, true, false),
+			new HexFindRequest(opened.WorkspaceId, moduleId, nameBytes, next.Offset, true, false),
 			TestContext.Current.CancellationToken);
-		Assert.Equal(0, previous.Offset);
+		Assert.Equal(firstRepeat.Offset, previous.Offset);
 
 		// A pattern nothing holds answers -1, and wrapping does not invent one.
 		var missing = await manager.FindHexAsync(

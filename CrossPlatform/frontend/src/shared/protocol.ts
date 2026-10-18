@@ -704,6 +704,203 @@ export interface MethodBodyResponse {
   hasExceptionHandlers: boolean
 }
 
+export interface IlLocal {
+  name?: string | null
+  type: TypeSigDto | null
+  isPinned: boolean
+  attributes: number
+  display: string
+}
+
+export interface IlExceptionHandler {
+  handlerType: 'catch' | 'filter' | 'finally' | 'fault'
+  tryStart?: string | null
+  tryEnd?: string | null
+  filterStart?: string | null
+  handlerStart?: string | null
+  handlerEnd?: string | null
+  catchType: TypeSigDto | null
+  display: string
+}
+
+/**
+ * One instruction of the IL editor. `operandKind` says which editor the operand needs; the value
+ * travels as `operand` (a number, a string literal, a label or list of labels, or an index), or as one
+ * of the references the editor may build — `methodRef`, `typeSignature`, or a `nodeId`/`token` naming
+ * a row the module already holds.
+ */
+export interface IlBodyInstruction {
+  label: string
+  opCode: string
+  operandKind?: string | null
+  operand?: string | null
+  operandDisplay?: string | null
+  nodeId?: string | null
+  token?: string | null
+  methodRef?: MethodRefDto | null
+  methodSpecArguments?: TypeSigDto[] | null
+  typeSignature?: TypeSigDto | null
+  callSiteSignature?: MethodSigDto | null
+}
+
+/** A method body as dnSpy's Edit Method Body window models it — the three lists and the header. */
+export interface IlMethodBody {
+  bodyType: 'none' | 'cil' | 'native'
+  codeType: number
+  maxStack: number
+  keepOldMaxStack: boolean
+  initLocals: boolean
+  localVarSigTok: number
+  headerRva: number
+  headerFileOffset: number
+  rva: number
+  fileOffset: number
+  nativeRva: number
+  locals: IlLocal[]
+  instructions: IlBodyInstruction[]
+  exceptionHandlers: IlExceptionHandler[]
+  parameterNames: string[]
+}
+
+/** How a manifest resource is stored — the backend's ManifestResourceKinds. */
+export type ResourceKind = 'embedded' | 'assemblyLinked' | 'linked'
+
+/** The modes dnSpy's compiler commands run in — the backend's CompilerModes. */
+export type CompilerMode = 'editMethod' | 'editClass' | 'addMembers' | 'addClass' | 'editAssembly'
+
+export interface CompilerDiagnostic {
+  severity: 'error' | 'warning' | 'info' | 'hidden'
+  text: string
+  id: string
+  fileName?: string | null
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+}
+
+export interface CompileSourceResponse {
+  success: boolean
+  diagnostics: CompilerDiagnostic[]
+}
+
+/** The writer options dnSpy's Save Module window offers. */
+export interface SaveModuleOptions {
+  preserveRids: boolean
+  preserveUsOffsets: boolean
+  preserveStringsOffsets: boolean
+  preserveBlobOffsets: boolean
+  keepWin32Resources: boolean
+  shareMethodBodies: boolean
+  addCheckSum: boolean
+  addMvidSection: boolean
+  writePdb: boolean
+  keepExtraPeData: boolean
+  mixedMode: boolean
+  /** Overrides the module kind the file is written as; undefined keeps the module's own. */
+  moduleKind?: number
+}
+
+/** An assembly as dnSpy's Edit Assembly window models it. */
+export interface AssemblyOptions {
+  name: string
+  culture?: string | null
+  hashAlgorithm: number
+  attributes: number
+  /** The public key as hexadecimal text, as dnSpy's HexStringVM holds it. */
+  publicKey: string
+  versionMajor: number
+  versionMinor: number
+  versionBuild: number
+  versionRevision: number
+  customAttributes: CustomAttributeDto[]
+  declSecurities: DeclSecurityDto[]
+  fullName: string
+}
+
+/** A module as dnSpy's Edit Module window models it. */
+export interface ModuleOptions {
+  name: string
+  kind: number
+  mvid: string
+  encId: string
+  encBaseId: string
+  runtimeVersion?: string | null
+  tablesHeaderVersion: number
+  cor20HeaderRuntimeVersion?: string | null
+  cor20HeaderFlags: number
+  machine: number
+  characteristics: number
+  dllCharacteristics: number
+  managedEntryPoint?: string | null
+  nativeEntryPoint: number
+  customAttributes: CustomAttributeDto[]
+  display: string
+}
+
+export interface ResourceOptions {
+  kind: ResourceKind
+  name: string
+  /** dnlib's ManifestResourceAttributes; the low two bits are the visibility. */
+  attributes: number
+  assemblyFullName?: string | null
+  linkedFileName?: string | null
+  fileContainsNoMetadata: boolean
+  fileHash?: string | null
+  customAttributes: CustomAttributeDto[]
+  display: string
+}
+
+/** What one of dnSpy's Create Resource commands creates. */
+export type ResourceCreateKind = 'file' | 'multiFile' | 'assemblyLinked' | 'fileLinked' | 'byteArray' | 'stream' | 'string'
+
+/** The kinds the .resources element editor understands. */
+export type ResourceElementKind =
+  | 'null' | 'string' | 'boolean' | 'char' | 'byte' | 'sbyte' | 'int16' | 'uint16' | 'int32' | 'uint32'
+  | 'int64' | 'uint64' | 'single' | 'double' | 'decimal' | 'dateTime' | 'timeSpan' | 'byteArray' | 'stream' | 'binary'
+
+export interface ResourceElementOptions {
+  kind: ResourceElementKind
+  name: string
+  text?: string | null
+  base64Data?: string | null
+  typeCode: number
+  typeName?: string | null
+  display: string
+}
+
+export interface CreateResourceEntry {
+  name: string
+  base64Data?: string | null
+  text?: string | null
+}
+
+/** The model one of the Create ... Resource commands writes. */
+export interface CreateResourceOptions {
+  kind: ResourceCreateKind
+  name: string
+  attributes: number
+  base64Data?: string
+  text?: string
+  assemblyFullName?: string
+  linkedFileName?: string
+  fileContainsNoMetadata?: boolean
+  entries?: CreateResourceEntry[]
+}
+
+/** A new entry of a .resources file. */
+export interface CreateResourceElementOptions {
+  kind: ResourceElementKind
+  name: string
+  text?: string
+  base64Data?: string
+}
+
+export interface TransformIlBodyResponse {
+  locals: IlLocal[]
+  instructions: IlBodyInstruction[]
+}
+
 export interface EditCommitResponse {
   version: number
   stateId: string
@@ -1687,6 +1884,13 @@ export interface DnSpyApi {
   getModuleInfo(workspaceId: string, moduleId: string): Promise<ModuleInfoResponse>
   beginEdit(workspaceId: string): Promise<BeginEditResponse>
   getMethodBody(workspaceId: string, methodNodeId: string): Promise<MethodBodyResponse>
+  /** The full method-body model the Edit Method Body window works on. */
+  getIlBody(workspaceId: string, methodNodeId: string): Promise<IlMethodBody>
+  /** Writes an edited body back through the transaction; nothing changes until it is committed. */
+  queueIlBody(workspaceId: string, transactionId: string, methodNodeId: string, body: IlMethodBody): Promise<void>
+  /** Runs one of dnSpy's IL editor commands over a body that is still being edited. `operation` is one
+   *  of the backend's IlTransformOperations names. */
+  transformIlBody(workspaceId: string, methodNodeId: string, operation: string, locals: IlLocal[], instructions: IlBodyInstruction[], selectedIndexes: number[], parameterNames: string[]): Promise<TransformIlBodyResponse>
   /** The dialog model behind a node, which is what an Edit dialog opens with, or the defaults a create
    * dialog starts from when `isNew` is set. Read-only: nothing about it is queued until the dialog is
    * accepted. `ownerNodeId` is what tells the backend where a new member would go — which type it
@@ -1706,6 +1910,25 @@ export interface DnSpyApi {
   /** Replaces a method body with the stub the backend derives from the method's signature. */
   queueMethodBodyStub(workspaceId: string, transactionId: string, methodNodeId: string): Promise<void>
   replaceResourceFromFile(workspaceId: string, transactionId: string, resourceNodeId: string): Promise<boolean>
+  /** The manifest-resource model the Edit Resource dialog opens with. */
+  /** Compiles C# source for an Edit Code window; with a transactionId and no errors, queues the import. */
+  compileSource(workspaceId: string, nodeId: string, mode: CompilerMode, source: string, transactionId?: string): Promise<CompileSourceResponse>
+  /** The assembly's attributes as C# source, which is what Edit Assembly Attributes opens with. */
+  getAssemblyAttributesSource(workspaceId: string, nodeId: string): Promise<{ source: string }>
+  /** Picks an assembly to merge into the module — dnSpy's Merge with Assembly. */
+  mergeAssembly(workspaceId: string, transactionId: string, nodeId: string): Promise<boolean>
+  getAssemblyOptions(workspaceId: string, nodeId: string): Promise<AssemblyOptions>
+  setAssemblyOptions(workspaceId: string, transactionId: string, nodeId: string, options: AssemblyOptions): Promise<void>
+  getModuleOptions(workspaceId: string, nodeId: string): Promise<ModuleOptions>
+  setModuleOptions(workspaceId: string, transactionId: string, nodeId: string, options: ModuleOptions): Promise<void>
+  getResourceOptions(workspaceId: string, resourceNodeId: string): Promise<ResourceOptions>
+  setResourceOptions(workspaceId: string, transactionId: string, resourceNodeId: string, options: ResourceOptions): Promise<void>
+  /** Creates a resource — one of dnSpy's Create ... Resource commands. */
+  createResource(workspaceId: string, transactionId: string, ownerNodeId: string, options: { kind: ResourceCreateKind, name: string, attributes: number, base64Data?: string, text?: string, assemblyFullName?: string, linkedFileName?: string, fileContainsNoMetadata?: boolean, entries?: CreateResourceEntry[] }): Promise<{ nodeId: string, label: string }>
+  /** The model of one .resources entry, and its write-back. */
+  getResourceElementOptions(workspaceId: string, nodeId: string): Promise<ResourceElementOptions>
+  setResourceElementOptions(workspaceId: string, transactionId: string, nodeId: string, options: ResourceElementOptions): Promise<void>
+  createResourceElement(workspaceId: string, transactionId: string, resourceNodeId: string, options: { kind: ResourceElementKind, name: string, text?: string, base64Data?: string }): Promise<void>
   /** Turns the module into an assembly or back — dnSpy's two Convert commands. `toAssembly` picks the
    * direction; nothing is written until the transaction is committed. */
   convertModule(workspaceId: string, transactionId: string, nodeId: string, toAssembly: boolean): Promise<void>
@@ -1713,11 +1936,11 @@ export interface DnSpyApi {
   rollbackEdit(workspaceId: string, transactionId: string): Promise<void>
   undoEdit(workspaceId: string): Promise<EditCommitResponse>
   redoEdit(workspaceId: string): Promise<EditCommitResponse>
-  saveModuleAs(workspaceId: string, moduleId: string, suggestedName: string): Promise<SaveModuleResponse | undefined>
+  saveModuleAs(workspaceId: string, moduleId: string, suggestedName: string, options?: SaveModuleOptions): Promise<SaveModuleResponse | undefined>
   /** Writes a module back over the file it was loaded from — dnSpy's Save. */
-  saveModule(workspaceId: string, moduleId: string): Promise<SaveModuleResponse>
+  saveModule(workspaceId: string, moduleId: string, options?: SaveModuleOptions): Promise<SaveModuleResponse>
   /** Writes every modified module back over its own file — dnSpy's Save All. */
-  saveAllModules(workspaceId: string): Promise<SaveAllResponse>
+  saveAllModules(workspaceId: string, options?: SaveModuleOptions): Promise<SaveAllResponse>
   /** Writes text the user picks a file for — a decompiled document's code, or the Output window's log.
    *  `title` names the save box; without one it is the port's "Save Code". */
   saveCode(suggestedName: string, text: string, title?: string): Promise<string | undefined>

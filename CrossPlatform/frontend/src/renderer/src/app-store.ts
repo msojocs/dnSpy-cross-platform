@@ -34,8 +34,7 @@ import type {
   ScriptOutputNotification,
   SpecialNodeKind,
   TextSpan,
-  TreeNode,
-} from '../../shared/protocol'
+  AssemblyOptions, CompilerDiagnostic, CompilerMode, ModuleOptions, SaveModuleOptions, TreeNode, CreateResourceEntry, CreateResourceOptions, CreateResourceElementOptions, ResourceElementOptions, ResourceOptions} from '../../shared/protocol'
 import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
 import { getActiveLocale, translate as t } from './localization'
 import { formatDateTime } from './dotnet-date-format'
@@ -409,11 +408,28 @@ interface AppState {
    * refuses it. */
   hexWriteBytes(moduleId: string, offset: number, data: Uint8Array, message?: string): Promise<boolean>
   replaceResource(node: TreeNode): Promise<boolean>
-  saveModuleAs(): Promise<boolean>
+  /** Compiles C# source and, when it is free of errors, imports it into the module as one undoable edit.
+   *  Answers the diagnostics either way, so the editor can show why it failed. */
+  compileCode(node: TreeNode, mode: CompilerMode, source: string): Promise<{ ok: boolean, diagnostics: CompilerDiagnostic[] }>
+  /** Merges an assembly the user picks into the module, as one undoable edit. */
+  mergeAssembly(node: TreeNode): Promise<boolean>
+  /** Writes the Edit Assembly model over the assembly the node belongs to. */
+  applyAssemblyOptions(node: TreeNode, options: AssemblyOptions): Promise<boolean>
+  /** Writes the Edit Module model over the module the node stands for. */
+  applyModuleOptions(node: TreeNode, options: ModuleOptions): Promise<boolean>
+  /** Writes the Edit Resource model over the resource the node stands for. */
+  applyResourceOptions(node: TreeNode, options: ResourceOptions): Promise<boolean>
+  /** Creates a resource through one of dnSpy's Create ... Resource commands. */
+  createResource(owner: TreeNode, options: CreateResourceOptions): Promise<boolean>
+  /** Writes the element editor's model over a .resources entry. */
+  applyResourceElementOptions(node: TreeNode, options: ResourceElementOptions): Promise<boolean>
+  /** Adds an entry to a .resources file. */
+  createResourceElement(resourceNode: TreeNode, options: CreateResourceElementOptions): Promise<boolean>
+  saveModuleAs(options?: SaveModuleOptions): Promise<boolean>
   /** Writes the selected module back over its own file — dnSpy's Save. */
-  saveModule(): Promise<boolean>
+  saveModule(options?: SaveModuleOptions): Promise<boolean>
   /** Writes every modified module back over its own file — dnSpy's Save All. */
-  saveAllModules(): Promise<boolean>
+  saveAllModules(options?: SaveModuleOptions): Promise<boolean>
   /**
    * Writes the modules at `paths` back over their own files — dnSpy's DocumentSaver.Save for the documents a
    * command is about to let go of. The workspace stays modified while any other module still is. Answers whether
@@ -507,7 +523,7 @@ interface AppState {
    * detached and the module row's own label is all that is left above it. A queued edit, so Undo is the way
    * back and nothing is written until the module is saved.
    */
-  convertModule(node: TreeNode): Promise<boolean>
+  convertModule(node: TreeNode, toAssembly?: boolean): Promise<boolean>
   /**
    * Reads the tree's roots again. Following a reference into a module the workspace did not hold opens
    * that module, so the backend's root list grows without the client having asked it to.
@@ -728,11 +744,30 @@ const OUTPUT_LIMIT = 10000
  * The module a File-menu save acts on: the one the tree has selected, or the first the workspace holds
  * when the selection is not a module. dnSpy saves the active document, which is this selection here.
  */
-const currentModule = (state: Pick<AppState, 'modules' | 'selectedNode'>): OpenedModule | undefined => {
-  if (state.selectedNode?.kind === 'module') {
-    const selected = state.modules.find((module) => module.id === state.selectedNode?.id)
-    if (selected)
-      return selected
+/**
+ * The module a File-menu save acts on: the one above the selected row. A module is keyed by the id of the
+ * root row that holds it — the assembly, or the module itself when it has no assembly — so a selected row
+ * is followed up the parents until that root is reached. A module row names its file in the description,
+ * which is what resolves it: its own id is not the root's.
+ */
+const currentModule = (state: Pick<AppState, 'modules' | 'selectedNode' | 'parents' | 'roots' | 'children'>): OpenedModule | undefined => {
+  if (!state.selectedNode)
+    return state.modules[0]
+  let id = state.selectedNode.id
+  for (let guard = 0; guard < 256; guard++) {
+    const node = findNode(state, id)
+    if (node?.kind === 'module') {
+      const byPath = state.modules.find((module) => module.path === node.description)
+      if (byPath)
+        return byPath
+    }
+    const root = state.modules.find((module) => module.id === id)
+    if (root)
+      return root
+    const parentId = state.parents[id]
+    if (!parentId)
+      break
+    id = parentId
   }
   return state.modules[0]
 }
@@ -1616,14 +1651,241 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  saveModuleAs: async () => {
+  mergeAssembly: async (node) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      const merged = await window.dnSpy.mergeAssembly(workspaceId, transactionId, node.id)
+      if (!merged) {
+        await window.dnSpy.rollbackEdit(workspaceId, transactionId)
+        return false
+      }
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      get().appendOutput(t('Merged an assembly into {name}.', { name: node.label }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Merge failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  compileCode: async (node, mode, source) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return { ok: false, diagnostics: [] }
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      const result = await window.dnSpy.compileSource(workspaceId, node.id, mode, source, transactionId)
+      if (!result.success) {
+        await window.dnSpy.rollbackEdit(workspaceId, transactionId)
+        return { ok: false, diagnostics: result.diagnostics }
+      }
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      if (node.kind === 'type') {
+        const parentId = get().parents[node.id]
+        if (parentId)
+          await refreshChildren(get, set, parentId)
+        await refreshChildren(get, set, node.id)
+      }
+      get().appendOutput(t('Compiled {name}.', { name: node.label }))
+      return { ok: true, diagnostics: result.diagnostics }
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Compile failed: {message}', { message }))
+      return { ok: false, diagnostics: [{ severity: 'error', id: '', text: message, startLine: 0, startColumn: 0, endLine: 0, endColumn: 0 }] }
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  applyAssemblyOptions: async (node, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.setAssemblyOptions(workspaceId, transactionId, node.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      get().appendOutput(t('Edited assembly {name}.', { name: options.name }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Assembly edit failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  applyModuleOptions: async (node, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.setModuleOptions(workspaceId, transactionId, node.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      get().appendOutput(t('Edited module {name}.', { name: options.name }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Module edit failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  applyResourceOptions: async (node, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.setResourceOptions(workspaceId, transactionId, node.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      get().appendOutput(t('Edited resource {name}.', { name: options.name }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Resource edit failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  createResource: async (owner, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      const created = await window.dnSpy.createResource(workspaceId, transactionId, owner.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      await get().revealNode(created.nodeId)
+      get().appendOutput(t('Created resource {name}.', { name: created.label }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Create resource failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  applyResourceElementOptions: async (node, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.setResourceElementOptions(workspaceId, transactionId, node.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      const parentId = get().parents[node.id]
+      if (parentId)
+        await refreshChildren(get, set, parentId)
+      get().appendOutput(t('Edited resource element {name}.', { name: options.name }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Resource element edit failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  createResourceElement: async (resourceNode, options) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    set({ busy: true, error: undefined })
+    let transactionId: string | undefined
+    try {
+      transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+      await window.dnSpy.createResourceElement(workspaceId, transactionId, resourceNode.id, options)
+      const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      await refreshAfterEdit(get, set, committed)
+      await refreshChildren(get, set, resourceNode.id)
+      get().appendOutput(t('Created resource element {name}.', { name: options.name }))
+      return true
+    } catch (error) {
+      if (transactionId) {
+        try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      get().appendOutput(t('Create resource element failed: {message}', { message }))
+      return false
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  saveModuleAs: async (options) => {
     const { workspaceId } = get()
     const module = currentModule(get())
     if (!workspaceId || !module)
       return false
     set({ busy: true, error: undefined })
     try {
-      const saved = await window.dnSpy.saveModuleAs(workspaceId, module.id, module.name.endsWith('.dll') || module.name.endsWith('.exe') ? module.name : `${module.name}.dll`)
+      const saved = await window.dnSpy.saveModuleAs(workspaceId, module.id, module.name.endsWith('.dll') || module.name.endsWith('.exe') ? module.name : `${module.name}.dll`, options)
       if (!saved)
         return false
       set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
@@ -1639,14 +1901,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  saveModule: async () => {
+  saveModule: async (options) => {
     const { workspaceId } = get()
     const module = currentModule(get())
     if (!workspaceId || !module)
       return false
     set({ busy: true, error: undefined })
     try {
-      const saved = await window.dnSpy.saveModule(workspaceId, module.id)
+      const saved = await window.dnSpy.saveModule(workspaceId, module.id, options)
       set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
       get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
       return true
@@ -1660,13 +1922,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  saveAllModules: async () => {
+  saveAllModules: async (options) => {
     const { workspaceId } = get()
     if (!workspaceId)
       return false
     set({ busy: true, error: undefined })
     try {
-      const result = await window.dnSpy.saveAllModules(workspaceId)
+      const result = await window.dnSpy.saveAllModules(workspaceId, options)
       set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
       for (const saved of result.saved)
         get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
@@ -1997,7 +2259,7 @@ export const useAppStore = create<AppState>((set, get) => ({
    * rather than patched. The other direction is not offered by this port's tree: dnSpy shows it on a module
    * document standing on its own, and a module here always hangs off an assembly row.
    */
-  convertModule: async (node) => {
+  convertModule: async (node, toAssembly = false) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
       return false
@@ -2005,7 +2267,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let transactionId: string | undefined
     try {
       transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
-      await window.dnSpy.convertModule(workspaceId, transactionId, node.id, false)
+      await window.dnSpy.convertModule(workspaceId, transactionId, node.id, toAssembly)
       const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
       await refreshAfterEdit(get, set, committed)
       get().appendOutput(t('Converted {name} to a net module.', { name: node.label }))
@@ -5068,6 +5330,13 @@ export const ownerTypeIdOf = (
       return undefined
   }
   return undefined
+}
+
+const refreshChildren = async (get: StoreGet, set: StoreSet, nodeId: string): Promise<void> => {
+  const workspaceId = get().workspaceId
+  if (!workspaceId) return
+  const refreshed = await window.dnSpy.getChildren(workspaceId, nodeId)
+  set((state) => ({ children: { ...state.children, [nodeId]: refreshed.nodes } }))
 }
 
 const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommitResponse): Promise<string[]> => {

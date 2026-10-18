@@ -180,8 +180,16 @@ public sealed partial class WorkspaceManager {
 			.Resources
 			.OrderBy(resource => resource.Name.String, StringComparer.OrdinalIgnoreCase)
 			.ThenBy(resource => resource.MDToken.Raw)
-			.Select((resource, index) => GetOrAddNode($"resource:{node.AsModuleEntry!.Path}:{index}:{resource.Name}", NodeKind.Resource, resource, node.Module))
+			.Select(resource => GetOrAddNode(ResourceKey(node.AsModuleEntry!, resource), NodeKind.Resource, resource, node.Module))
 			.ToArray();
+
+		/// <summary>
+		/// The key a resource row is known by. It names the resource rather than its place in the sorted
+		/// list, so adding or deleting a resource does not renumber the rows around it — the row keeps the
+		/// id a tab or a selection is holding.
+		/// </summary>
+		static string ResourceKey(ModuleEntry module, Resource resource) => ResourceKey(module, resource.Name.String);
+		static string ResourceKey(ModuleEntry module, string name) => $"resource:{module.Path}:{name}";
 
 		/// <summary>
 		/// The entries of a .resources file, read with dnlib's resource reader — which decodes the built-in

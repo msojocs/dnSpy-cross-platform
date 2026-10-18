@@ -88,6 +88,9 @@ export interface DocumentViewCommands {
   /** Opens the create dialog for a node of this kind inside the type the node belongs to. */
   onCreateMember(kind: CreatedKind, nested: boolean, node: TreeNode): void
   onEditMethodBody(node: TreeNode): void
+  /** dnSpy's "Edit IL Instructions": the method body editor, opened on the method whose statement is
+   *  under the caret with that statement's instructions selected. */
+  onEditIlInstructions(statement: CodeStatement): void
   onReplaceMethodBodyWithStub(node: TreeNode): void
   onAnalyze(node: TreeNode): void
   /** dnSpy's class breakpoint and class tracepoint for the type a reference names. */
@@ -275,6 +278,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       onEditNode: (node) => commandsRef.current.onEditNode(node),
       onCreateMember: (kind, nested, node) => commandsRef.current.onCreateMember(kind, nested, node),
       onEditMethodBody: (node) => commandsRef.current.onEditMethodBody(node),
+      onEditIlInstructions: (statement) => commandsRef.current.onEditIlInstructions(statement),
       onReplaceMethodBodyWithStub: (node) => commandsRef.current.onReplaceMethodBodyWithStub(node),
       onAnalyze: (node) => commandsRef.current.onAnalyze(node),
       onAnalyzeReference: (target) => commandsRef.current.onAnalyzeReference(target),

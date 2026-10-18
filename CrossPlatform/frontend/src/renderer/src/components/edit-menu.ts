@@ -1,5 +1,5 @@
 import type { HexBodyKind } from '../app-store'
-import type { HexRange, HexTargetResponse } from '../../../shared/protocol'
+import type { HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
 import type { TranslationValues } from '../localization'
 import { hexMenuEntries, type HexShowKind } from './hex-menu'
 
@@ -28,6 +28,10 @@ export interface EditMenuContext {
   selectionKind?: string
   /** `selectedNode.label`, used by the dynamic "Delete {name}" / "Remove {name}" headers. */
   selectionLabel?: string
+  /** `selectedNode.icon`, which tells a .resources file from any other resource. */
+  selectionIcon?: string
+  /** The kind of the row above the selection, which tells a net module from a module. */
+  selectionParentKind?: string
   activeDocument: ActiveDocument
   /**
    * Whether a code document is open in a viewer. dnSpy's Edit-menu hex commands fall back to the file the
@@ -49,11 +53,26 @@ export interface EditMenuContext {
   onFindStringReferences(): void
   onEditMethodBody(): void
   onEditResource(): void
+  /** dnSpy's Edit Assembly / Edit Module windows. */
+  onEditAssembly(): void
+  onEditModule(): void
+  /** The C# compiler commands — dnSpy's Edit Code windows. */
+  onEditMethodCode(): void
+  onEditClassCode(): void
+  onAddClassMembersCode(): void
+  onAddClassCode(): void
+  onEditAssemblyAttributesCode(): void
+  /** dnSpy's Merge with Assembly. */
+  onMergeAssembly(): void
+  /** Opens one of the Create ... Resource commands for the selection. */
+  onCreateResource(kind: ResourceCreateKind): void
+  /** Opens the New Resource command of a .resources file — dnSpy's "Create Resource...". */
+  onCreateResourceElement(): void
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
   /** Converts the selected module into a net module, dropping the assembly around it. */
-  onConvertModule(): void
+  onConvertModule(toAssembly?: boolean): void
   /** Opens the assemblies the selected node's module references name. The recursive form walks the whole
    *  closure instead of stopping at the module's own references; dnSpy registers both on this menu as
    *  well as on the tree's. */
@@ -119,6 +138,17 @@ const never = (): boolean => false
 
 const kindIs = (...kinds: string[]) => (ctx: EditMenuContext): boolean =>
   ctx.selectionKind !== undefined && kinds.includes(ctx.selectionKind)
+
+/**
+ * Whether the selection is a .resources file or one of its entries, which is what dnSpy's element
+ * commands require — `nodes[0] is ResourceElementSetNode || node.Parent is ResourceElementSetNode`.
+ * The tree marks such a file by the folder image dnSpy gives it.
+ */
+const inResourcesFile = (ctx: EditMenuContext): boolean =>
+  ctx.selectionKind === 'resourceentry' || (ctx.selectionKind === 'resource' && ctx.selectionIcon === 'SourceFileGroup')
+
+/** Whether the selection can hold a manifest resource — the Resources folder, or a resource row. */
+const canCreateResource = (ctx: EditMenuContext): boolean => kindIs('resource', 'resourceentry')(ctx) || ctx.selectionKind === 'resourcesgroup'
 
 const documentIs = (document: ActiveDocument) => (ctx: EditMenuContext): boolean => ctx.activeDocument === document
 
@@ -188,12 +218,12 @@ const EDIT_ENTRIES: EditEntry[] = [
   // 3000 — AsmEditor: Misc
   { group: GROUP_MISC, order: 0, icon: 'Namespace', label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.selectionKind === 'namespace' && ctx.selectionLabel !== '-' && ctx.hasEmptyNamespaceSibling, action: (ctx) => ctx.onMoveTypesToEmptyNamespace() },
   { group: GROUP_MISC, order: 10, icon: 'Namespace', label: (ctx) => ctx.t('Rename Namespace'), visible: kindIs('namespace'), action: (ctx) => ctx.onRenameNamespace() },
-  { group: GROUP_MISC, order: 20, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: never },
+  { group: GROUP_MISC, order: 20, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: (ctx) => ctx.selectionKind === 'module' && ctx.selectionParentKind !== 'assembly', action: (ctx) => ctx.onConvertModule(true) },
   // dnSpy shows the reverse of this one on a module document standing on its own — a module whose parent
   // is not an assembly row. Every module in this tree hangs off an assembly row, so that rule would never
   // match anything; the conversion this port can run is the one that drops the assembly, and Undo is the
   // way back.
-  { group: GROUP_MISC, order: 30, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: kindIs('module'), action: (ctx) => ctx.onConvertModule() },
+  { group: GROUP_MISC, order: 30, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => ctx.selectionKind === 'module' && ctx.selectionParentKind === 'assembly', action: (ctx) => ctx.onConvertModule(false) },
 
   // 4000 — AsmEditor: New
   { group: GROUP_NEW, order: 0, label: (ctx) => ctx.t('Create Assembly...'), visible: (ctx) => ctx.selectionKind === undefined || ctx.selectionKind === 'module' },
@@ -206,31 +236,31 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_NEW, order: 70, icon: 'NewField', label: (ctx) => ctx.t('Create Field...'), visible: isMember, action: (ctx) => ctx.onCreateMember('field') },
   { group: GROUP_NEW, order: 80, icon: 'NewProperty', label: (ctx) => ctx.t('Create Property...'), visible: isMember, action: (ctx) => ctx.onCreateMember('property') },
   { group: GROUP_NEW, order: 90, icon: 'NewEvent', label: (ctx) => ctx.t('Create Event...'), visible: isMember, action: (ctx) => ctx.onCreateMember('event') },
-  { group: GROUP_NEW, order: 100, label: (ctx) => ctx.t('Create File Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 110, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 120, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 130, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 140, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 150, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 170, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 180, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: kindIs('resource', 'resourceentry') },
-  { group: GROUP_NEW, order: 190, label: (ctx) => ctx.t('Create Resource...'), visible: kindIs('resource', 'resourceentry') },
+  { group: GROUP_NEW, order: 100, label: (ctx) => ctx.t('Create File Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('file') },
+  { group: GROUP_NEW, order: 110, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('multiFile') },
+  { group: GROUP_NEW, order: 120, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('assemblyLinked') },
+  { group: GROUP_NEW, order: 130, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('fileLinked') },
+  { group: GROUP_NEW, order: 140, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: canCreateResource },
+  { group: GROUP_NEW, order: 150, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: canCreateResource },
+  { group: GROUP_NEW, order: 170, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResource('byteArray') },
+  { group: GROUP_NEW, order: 180, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResource('stream') },
+  { group: GROUP_NEW, order: 190, label: (ctx) => ctx.t('Create Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResourceElement() },
 
   // 5000 — AsmEditor: Settings
-  { group: GROUP_SETTINGS, order: 0, icon: 'Settings', label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
-  { group: GROUP_SETTINGS, order: 10, icon: 'Settings', label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: kindIs('module') },
+  { group: GROUP_SETTINGS, order: 0, icon: 'Settings', label: (ctx) => ctx.t('Edit Assembly...'), shortcut: 'Alt+Enter', visible: kindIs('module'), action: (ctx) => ctx.onEditAssembly() },
+  { group: GROUP_SETTINGS, order: 10, icon: 'Settings', label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: kindIs('module'), action: (ctx) => ctx.onEditModule() },
   { group: GROUP_SETTINGS, order: 20, icon: 'Settings', label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: kindIs('type'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 30, icon: 'Settings', label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: kindIs('method'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 40, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: kindIs('method') },
-  { group: GROUP_SETTINGS, order: 41, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: kindIs('module') },
-  { group: GROUP_SETTINGS, order: 42, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember },
-  { group: GROUP_SETTINGS, order: 43, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember },
-  { group: GROUP_SETTINGS, order: 44, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule },
+  { group: GROUP_SETTINGS, order: 40, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodCode() },
+  { group: GROUP_SETTINGS, order: 41, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: kindIs('module'), action: (ctx) => ctx.onEditAssemblyAttributesCode() },
+  { group: GROUP_SETTINGS, order: 42, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember, action: (ctx) => ctx.onEditClassCode() },
+  { group: GROUP_SETTINGS, order: 43, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember, action: (ctx) => ctx.onAddClassMembersCode() },
+  { group: GROUP_SETTINGS, order: 44, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule, action: (ctx) => ctx.onAddClassCode() },
   // dnSpy's merge runs its compiled-module importer over a picked DLL, merging every type it holds into
   // this module. That importer is the machinery behind the C# compile commands and the port has neither
   // it nor a dnlib merger to stand in for it, so the entry keeps its place and stays disabled rather than
   // offering a command that would corrupt the module it was run on.
-  { group: GROUP_SETTINGS, order: 49.999, icon: 'Assembly', label: (ctx) => ctx.t('Merge with Assembly...'), visible: inModule },
+  { group: GROUP_SETTINGS, order: 49.999, icon: 'Assembly', label: (ctx) => ctx.t('Merge with Assembly...'), visible: inModule, action: (ctx) => ctx.onMergeAssembly() },
   { group: GROUP_SETTINGS, order: 50, icon: 'Settings', label: (ctx) => ctx.t('Edit Field...'), shortcut: 'Alt+Enter', visible: kindIs('field'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 50, icon: 'Editor', label: (ctx) => ctx.t('Edit Method Body...'), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodBody() },
   { group: GROUP_SETTINGS, order: 51, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: kindIs('method'), action: (ctx) => ctx.onReplaceMethodBodyWithStub() },
@@ -239,7 +269,7 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_SETTINGS, order: 60, icon: 'Settings', label: (ctx) => ctx.t('Edit Property...'), shortcut: 'Alt+Enter', visible: kindIs('property'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 70, icon: 'Settings', label: (ctx) => ctx.t('Edit Event...'), shortcut: 'Alt+Enter', visible: kindIs('event'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 90, icon: 'Settings', label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resource'), action: (ctx) => ctx.onEditResource() },
-  { group: GROUP_SETTINGS, order: 100, icon: 'Settings', label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resourceentry') },
+  { group: GROUP_SETTINGS, order: 100, icon: 'Settings', label: (ctx) => ctx.t('Edit Resource...'), shortcut: 'Alt+Enter', visible: kindIs('resourceentry'), action: (ctx) => ctx.onEditResource() },
 
   // 6000 — Hex editor. The entries live in hex-menu.ts, shared with the code viewer's context menu,
   // which shows the same group.

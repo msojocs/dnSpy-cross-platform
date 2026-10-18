@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import type { AppCommandLine, DecompilerLanguage, SearchLocation, SearchType, TextSpan, TreeNode } from '../../shared/protocol'
+import type { AppCommandLine, CompilerMode, DecompilerLanguage, ResourceCreateKind, SaveModuleOptions, SearchLocation, SearchType, TextSpan, TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
-import { buildSession, enableSessionPersistence, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
+import { buildSession, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
 import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
@@ -24,7 +24,12 @@ import { useAnalyzerStore } from './analyzer-store'
 import { useSearchStore, updateSearchSettings } from './search-store'
 import { useStringReferencesStore } from './string-references-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
-import { GoToTokenDialog, MethodBodyEditor, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
+import { GoToTokenDialog, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
+import { MethodBodyDialog } from './components/MethodBodyDialog'
+import { CreateResourceDialog, CreateResourceElementDialog, ResourceElementDialog, ResourceOptionsDialog } from './components/ResourceDialogs'
+import { AssemblyOptionsDialog, ModuleOptionsDialog } from './components/AssemblyModuleDialogs'
+import { SaveModuleOptionsDialog, defaultSaveModuleOptions } from './components/SaveModuleOptionsDialog'
+import { EditCodeDialog } from './components/EditCodeDialog'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
 import { AutosPane, BreakpointsPane, CallStackPane, LocalsPane, ModuleBreakpointsPane, ModulesPane, ProcessesPane, StaticFieldsPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
@@ -318,7 +323,16 @@ export const App = (): React.JSX.Element => {
   const backgroundImageOn = options.backgroundImage.isEnabled && options.backgroundImage.images.trim().length > 0
   const [renameNode, setRenameNode] = useState<TreeNode>()
   const [renameNamespaceNode, setRenameNamespaceNode] = useState<TreeNode>()
-  const [editMethodNode, setEditMethodNode] = useState<TreeNode>()
+  const [editMethodBody, setEditMethodBody] = useState<{ node: TreeNode; selection?: { start: number; end: number } }>()
+  const [resourceDialog, setResourceDialog] = useState<
+    | { mode: 'options' | 'element' | 'createElement'; node: TreeNode }
+    | { mode: 'create'; node: TreeNode; kind: ResourceCreateKind }
+  >()
+  const [assemblyModuleDialog, setAssemblyModuleDialog] = useState<{ mode: 'assembly' | 'module'; node: TreeNode }>()
+  // dnSpy remembers the writer options between saves; the Save Module window edits this copy.
+  const [saveModuleOptions, setSaveModuleOptions] = useState<SaveModuleOptions>(defaultSaveModuleOptions)
+  const [saveOptionsOpen, setSaveOptionsOpen] = useState(false)
+  const [codeDialog, setCodeDialog] = useState<{ node: TreeNode; mode: CompilerMode; sourceNodeId?: string }>()
   // dnSpy's Go to Token box. It is opened from the tree, and the node it was opened over is what names
   // the module the token is looked up in.
   const [tokenNode, setTokenNode] = useState<TreeNode>()
@@ -399,6 +413,18 @@ export const App = (): React.JSX.Element => {
   const goToToken = useAppStore((state) => state.goToToken)
   const saveCode = useAppStore((state) => state.saveCode)
   const replaceResource = useAppStore((state) => state.replaceResource)
+  const mergeAssembly = useAppStore((state) => state.mergeAssembly)
+  // dnSpy's Edit Resource opens the properties dialog for a resource, and the element editor for one
+  // of a .resources file's rows; the byte-for-byte replacement the port grew earlier is kept for the
+  // document's Save button, which is where dnSpy writes a resource out.
+  const editResource = (node: TreeNode): void => setResourceDialog({ mode: node.kind === 'resourceentry' ? 'element' : 'options', node })
+  const createResource = (kind: ResourceCreateKind, node: TreeNode): void => setResourceDialog({ mode: 'create', node, kind })
+  const createResourceElement = (node: TreeNode): void => {
+    const parentId = node.kind === 'resourceentry' ? useAppStore.getState().parents[node.id] : undefined
+    const resourceNode = parentId ? findNode(useAppStore.getState(), parentId) : node
+    if (resourceNode)
+      setResourceDialog({ mode: 'createElement', node: resourceNode })
+  }
   const saveResource = useAppStore((state) => state.saveResource)
   const loadDependencies = useAppStore((state) => state.loadDependencies)
   const convertModule = useAppStore((state) => state.convertModule)
@@ -1947,18 +1973,51 @@ export const App = (): React.JSX.Element => {
    * The commands this port has no plumbing for yet are simply left out: their menu entries show up the
    * moment one is supplied.
    */
+  /**
+   * The C# compiler commands open dnSpy's Edit Code window. The source decompiled into it is the
+   * outermost type's — a nested type or a member's method is edited inside the type that declares it,
+   * which is the unit the importer merges back.
+   */
+  const openCodeDialog = (node: TreeNode, mode: CompilerMode): void => {
+    let sourceNodeId: string | undefined
+    if (mode === 'editMethod' || mode === 'editClass' || mode === 'addMembers') {
+      const state = useAppStore.getState()
+      let typeNode = node.kind === 'type' ? node : findNode(state, state.parents[node.id] ?? '')
+      while (typeNode?.kind === 'type') {
+        sourceNodeId = typeNode.id
+        const parent = findNode(state, state.parents[typeNode.id] ?? '')
+        if (parent?.kind !== 'type')
+          break
+        typeNode = parent
+      }
+      if (!sourceNodeId)
+        return
+    }
+    setCodeDialog({ node, mode, sourceNodeId })
+  }
+
   const explorerCommands: AssemblyExplorerCommands = {
     onOpenNode: (node) => { void addDocumentTab(node) },
     onOpenInNewTab: (node) => { void openNodeInNewTab(node.id) },
     onDeleteNode: (node) => deleteSelected(node),
     onEditNode: (node) => openEditNode(node),
     onCreateMember: (kind, nested, node) => createMember(kind, nested, node),
-    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
+    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodBody({ node }) },
     onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
-    onEditResource: (node) => { void replaceResource(node) },
+    onEditResource: (node) => editResource(node),
+    onEditAssembly: (node) => setAssemblyModuleDialog({ mode: 'assembly', node }),
+    onEditModule: (node) => setAssemblyModuleDialog({ mode: 'module', node }),
+    onMergeAssembly: (node) => { void mergeAssembly(node) },
+    onEditMethodCode: (node) => openCodeDialog(node, 'editMethod'),
+    onEditClassCode: (node) => openCodeDialog(node, 'editClass'),
+    onAddClassMembersCode: (node) => openCodeDialog(node, 'addMembers'),
+    onAddClassCode: (node) => openCodeDialog(node, 'addClass'),
+    onEditAssemblyAttributesCode: (node) => openCodeDialog(node, 'editAssembly'),
+    onCreateResource: (kind, node) => createResource(kind, node),
+    onCreateResourceElement: (node) => createResourceElement(node),
     onSaveResource: (nodes, raw, useSubDirs) => { void saveResource(nodes, raw, useSubDirs) },
     onLoadDependencies: (node, recursive) => { void loadDependencies(node, recursive) },
-    onConvertModule: (node) => { void convertModule(node) },
+    onConvertModule: (node, toAssembly) => { void convertModule(node, toAssembly) },
     onRenameNamespace: (node) => setRenameNamespaceNode(node),
     onMoveTypesToEmptyNamespace: (node) => { void moveTypesToEmptyNamespace(node) },
     onSortAssemblies: () => { void sortAssemblies() },
@@ -1994,6 +2053,30 @@ export const App = (): React.JSX.Element => {
    * the viewer is handed the callbacks instead of reaching for the layout model. The node each command
    * acts on is the one the menu picked, never the explorer's selection: the two are usually different.
    */
+  /**
+   * dnSpy's "Edit IL Instructions": the statement under the caret names the method by its token, and the
+   * body editor opens on it with the instructions the statement covers selected. The node may not have
+   * been listed yet — a body's method need not be expanded in the tree — so the backend is asked for it
+   * and the roots are read again before the dialog is handed the node.
+   */
+  const editIlInstructions = async (statement: { modulePath: string; metadataToken: number; ilOffset: number; ilEndOffset: number }): Promise<void> => {
+    const workspaceId = useAppStore.getState().workspaceId
+    if (!workspaceId)
+      return
+    try {
+      const found = await window.dnSpy.findMember(workspaceId, statement.modulePath, statement.metadataToken)
+      if (!found.nodeId)
+        return
+      await useAppStore.getState().refreshRoots()
+      const node = findNode(useAppStore.getState(), found.nodeId)
+      if (node?.kind === 'method')
+        setEditMethodBody({ node, selection: { start: statement.ilOffset, end: statement.ilEndOffset } })
+    }
+    catch (error) {
+      appendOutput(t('Navigation failed: {message}', { message: error instanceof Error ? error.message : String(error) }))
+    }
+  }
+
   const documentViewCommands = (): DocumentViewCommands => ({
     // dnSpy's document viewer "Open in New Tab" follows the reference under the caret, and the reference
     // goes to a tab of its own rather than the one a plain follow would reuse.
@@ -2004,7 +2087,8 @@ export const App = (): React.JSX.Element => {
     onDeleteNode: (node) => deleteSelected(node),
     onEditNode: (node) => openEditNode(node),
     onCreateMember: (kind, nested, node) => createMember(kind, nested, node),
-    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodNode(node) },
+    onEditMethodBody: (node) => { if (node.kind === 'method') setEditMethodBody({ node }) },
+    onEditIlInstructions: (statement) => { void editIlInstructions(statement) },
     onReplaceMethodBodyWithStub: (node) => { if (node.kind === 'method') void replaceMethodBodyWithStub(node) },
     onAnalyze: (node) => void openAnalysis(node),
     onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
@@ -2148,9 +2232,9 @@ export const App = (): React.JSX.Element => {
         onCloseAllFramework={() => void closeAllFrameworkAssemblies()}
         onCloseAllMissing={() => void closeAllMissingFiles()}
         dirty={dirty}
-        onSave={() => void saveModule()}
-        onSaveModule={() => void saveModuleAs()}
-        onSaveAll={() => void saveAllModules()}
+        onSave={() => void saveModule(saveModuleOptions)}
+        onSaveModule={() => setSaveOptionsOpen(true)}
+        onSaveAll={() => void saveAllModules(saveModuleOptions)}
         onReloadAll={() => void reloadAll()}
         onSortAssemblies={() => void sortAssemblies()}
         onFind={() => { findInActiveDocumentEditor() }}
@@ -2158,12 +2242,24 @@ export const App = (): React.JSX.Element => {
         onFindStringReferences={() => findStringReferences(useAppStore.getState().selectedNodes)}
         onUndo={undo}
         onRedo={redo}
-        onEditMethodBody={() => { if (selectedNode?.kind === 'method') setEditMethodNode(selectedNode) }}
-        onEditResource={() => { if (selectedNode) void replaceResource(selectedNode) }}
+        onEditMethodBody={() => { if (selectedNode?.kind === 'method') setEditMethodBody({ node: selectedNode }) }}
+        onEditResource={() => { if (selectedNode) editResource(selectedNode) }}
+        onEditAssembly={() => { if (selectedNode) setAssemblyModuleDialog({ mode: 'assembly', node: selectedNode }) }}
+        onEditModule={() => { if (selectedNode) setAssemblyModuleDialog({ mode: 'module', node: selectedNode }) }}
+        onEditMethodCode={() => { if (selectedNode) openCodeDialog(selectedNode, 'editMethod') }}
+        onEditClassCode={() => { if (selectedNode) openCodeDialog(selectedNode, 'editClass') }}
+        onAddClassMembersCode={() => { if (selectedNode) openCodeDialog(selectedNode, 'addMembers') }}
+        onAddClassCode={() => { if (selectedNode) openCodeDialog(selectedNode, 'addClass') }}
+        onEditAssemblyAttributesCode={() => { if (selectedNode) openCodeDialog(selectedNode, 'editAssembly') }}
+        onMergeAssembly={() => { if (selectedNode) void mergeAssembly(selectedNode) }}
+        onCreateResource={(kind) => { if (selectedNode) createResource(kind, selectedNode) }}
+        onCreateResourceElement={() => { if (selectedNode) createResourceElement(selectedNode) }}
+        selectionIcon={selectedNode?.icon}
         onDelete={deleteSelected}
         onRenameNamespace={() => { if (selectedNode?.kind === 'namespace') setRenameNamespaceNode(selectedNode) }}
         onMoveTypesToEmptyNamespace={() => { if (selectedNode?.kind === 'namespace') void moveTypesToEmptyNamespace(selectedNode) }}
-        onConvertModule={() => { if (selectedNode?.kind === 'module') void convertModule(selectedNode) }}
+        onConvertModule={(toAssembly) => { if (selectedNode?.kind === 'module') void convertModule(selectedNode, toAssembly) }}
+        selectionParentKind={selectedNode && useAppStore.getState().parents[selectedNode.id] ? findNode(useAppStore.getState(), useAppStore.getState().parents[selectedNode.id])?.kind : undefined}
         onLoadDependencies={(recursive) => { if (selectedNode) void loadDependencies(selectedNode, recursive) }}
         onReplaceMethodBodyWithStub={() => { if (selectedNode?.kind === 'method') void replaceMethodBodyWithStub(selectedNode) }}
         hexTarget={hexTarget}
@@ -2380,7 +2476,15 @@ export const App = (): React.JSX.Element => {
       </footer>
       {renameNode && <RenameDialog node={renameNode} onClose={() => setRenameNode(undefined)} />}
       {renameNamespaceNode && <RenameNamespaceDialog node={renameNamespaceNode} onClose={() => setRenameNamespaceNode(undefined)} />}
-      {editMethodNode && <MethodBodyEditor node={editMethodNode} onClose={() => setEditMethodNode(undefined)} />}
+      {editMethodBody && <MethodBodyDialog node={editMethodBody.node} selection={editMethodBody.selection} onClose={() => setEditMethodBody(undefined)} />}
+      {codeDialog && <EditCodeDialog node={codeDialog.node} mode={codeDialog.mode} sourceNodeId={codeDialog.sourceNodeId} theme={theme} onClose={() => setCodeDialog(undefined)} />}
+      {saveOptionsOpen && <SaveModuleOptionsDialog initial={saveModuleOptions} onClose={() => setSaveOptionsOpen(false)} onAccept={(options) => { setSaveModuleOptions(options); setSaveOptionsOpen(false); void saveModuleAs(options) }} />}
+      {assemblyModuleDialog?.mode === 'assembly' && <AssemblyOptionsDialog node={assemblyModuleDialog.node} onClose={() => setAssemblyModuleDialog(undefined)} />}
+      {assemblyModuleDialog?.mode === 'module' && <ModuleOptionsDialog node={assemblyModuleDialog.node} onClose={() => setAssemblyModuleDialog(undefined)} />}
+      {resourceDialog?.mode === 'options' && <ResourceOptionsDialog node={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
+      {resourceDialog?.mode === 'element' && <ResourceElementDialog node={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
+      {resourceDialog?.mode === 'create' && <CreateResourceDialog owner={resourceDialog.node} kind={resourceDialog.kind} onClose={() => setResourceDialog(undefined)} />}
+      {resourceDialog?.mode === 'createElement' && <CreateResourceElementDialog resourceNode={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
       {tokenNode && <GoToTokenDialog node={tokenNode} onClose={() => setTokenNode(undefined)} />}
       {/* dnSpy's Add Class Tracepoint asks for the settings first, with the trace already switched on, and only
           then puts a breakpoint on every method of the type — each carrying what the dialog said. */}

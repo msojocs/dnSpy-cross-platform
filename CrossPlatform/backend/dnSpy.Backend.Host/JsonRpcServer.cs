@@ -224,12 +224,30 @@ internal sealed class JsonRpcServer {
 				return await workspaces.GoToHexMetadataAsync(DeserializeParams<HexGoToMetadataRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexFind:
 				return await workspaces.FindHexAsync(DeserializeParams<HexFindRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.AssemblyGetOptions:
+				return await workspaces.GetAssemblyOptionsAsync(DeserializeParams<AssemblyOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.AssemblySetOptions:
+				await workspaces.QueueAssemblyOptionsAsync(DeserializeParams<SetAssemblyOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
+			case RpcMethods.ModuleGetOptions:
+				return await workspaces.GetModuleOptionsAsync(DeserializeParams<ModuleOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleSetOptions:
+				await workspaces.QueueModuleOptionsAsync(DeserializeParams<SetModuleOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
 			case RpcMethods.ModuleGetInfo:
 				return await workspaces.GetModuleInfoAsync(DeserializeParams<ModuleInfoRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditBegin:
 				return await workspaces.BeginEditAsync(DeserializeParams<BeginEditRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditGetMethodBody:
 				return await workspaces.GetMethodBodyAsync(DeserializeParams<MethodBodyRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.EditGetIlBody:
+				return await workspaces.GetIlBodyAsync(DeserializeParams<GetIlBodyRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.EditTransformIlBody:
+				return await workspaces.TransformIlBodyAsync(DeserializeParams<TransformIlBodyRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.CompilerGetAssemblyAttributesSource:
+				return await workspaces.GetAssemblyAttributesSourceAsync(DeserializeParams<CompilerAssemblyAttributesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.CompilerCompile:
+				return await workspaces.CompileSourceAsync(DeserializeParams<CompileSourceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditGetOptions:
 				return await workspaces.GetOptionsAsync(DeserializeParams<GetNodeOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditCreate:
@@ -247,6 +265,9 @@ internal sealed class JsonRpcServer {
 				return new { queued = true };
 			case RpcMethods.EditReplaceMethodBody:
 				await workspaces.QueueMethodBodyAsync(DeserializeParams<ReplaceMethodBodyRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
+			case RpcMethods.EditReplaceIlBody:
+				await workspaces.QueueIlBodyAsync(DeserializeParams<ReplaceIlBodyRequest>(request), cancellationToken).ConfigureAwait(false);
 				return new { queued = true };
 			case RpcMethods.EditReplaceMethodBodyWithStub:
 				await workspaces.QueueMethodBodyStubAsync(DeserializeParams<ReplaceMethodBodyWithStubRequest>(request), cancellationToken).ConfigureAwait(false);
@@ -269,6 +290,12 @@ internal sealed class JsonRpcServer {
 				return await workspaces.UndoAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditRedo:
 				return await workspaces.RedoAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleSaveAsWithOptions:
+				return await workspaces.SaveModuleWithOptionsAsync(DeserializeParams<SaveModuleWithOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleSaveWithOptions:
+				return await workspaces.SaveModuleInPlaceWithOptionsAsync(DeserializeParams<SaveModuleInPlaceWithOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleSaveAllWithOptions:
+				return await workspaces.SaveAllModulesWithOptionsAsync(DeserializeParams<SaveAllWithOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleSaveAs:
 				return await workspaces.SaveModuleAsync(DeserializeParams<SaveModuleRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleSave:
@@ -295,6 +322,21 @@ internal sealed class JsonRpcServer {
 				return await workspaces.GetSpecialNodeAsync(DeserializeParams<SpecialNodeRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.TreeFindByToken:
 				return await workspaces.FindByTokenAsync(DeserializeParams<FindByTokenRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceGetOptions:
+				return await workspaces.GetResourceOptionsAsync(DeserializeParams<ResourceOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceSetOptions:
+				await workspaces.QueueResourceOptionsAsync(DeserializeParams<SetResourceOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
+			case RpcMethods.ResourceCreate:
+				return await workspaces.CreateResourceAsync(DeserializeParams<CreateResourceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceGetElementOptions:
+				return await workspaces.GetResourceElementOptionsAsync(DeserializeParams<ResourceElementOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ResourceSetElementOptions:
+				await workspaces.QueueResourceElementOptionsAsync(DeserializeParams<SetResourceElementOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
+			case RpcMethods.ResourceCreateElement:
+				await workspaces.QueueCreateResourceElementAsync(DeserializeParams<CreateResourceElementRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
 			case RpcMethods.ResourceGetData:
 				return await workspaces.GetResourceDataAsync(DeserializeParams<ResourceDataRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.WorkspaceLoadDependencies:

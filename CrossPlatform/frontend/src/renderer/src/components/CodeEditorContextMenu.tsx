@@ -57,6 +57,8 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onDeleteNode?(node: TreeNode): void
   onEditNode?(node: TreeNode): void
   onEditMethodBody?(node: TreeNode): void
+  /** dnSpy's "Edit IL Instructions", which opens the body editor on the statement's method. */
+  onEditIlInstructions?(statement: CodeStatement): void
   onReplaceMethodBodyWithStub?(node: TreeNode): void
   onCreateMember?(kind: CreatedKind, nested: boolean, node: TreeNode): void
   onAnalyze?(node: TreeNode): void
@@ -308,7 +310,8 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // 6000 — IL edits (GROUP_CTX_DOCVIEWER_ASMED_ILED). dnSpy's C# compile commands, Merge with Assembly
   // and Edit IL Instructions have no equivalent here; the two that do act on the method the caret names.
   { group: GROUP_ASMED_ILED, order: 20, key: 'edit-il-instructions', icon: image('Editor'), label: (ctx) => ctx.t('Edit IL Instructions'), shortcut: 'Ctrl+Shift+E', visible: never },
-  { group: GROUP_ASMED_ILED, order: 21, key: 'edit-method-body', icon: image('Editor'), label: (ctx) => ctx.t('Edit Method Body...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onEditMethodBody !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onEditMethodBody?.(node) } },
+  { group: GROUP_ASMED_ILED, order: 20, key: 'edit-method-body', icon: image('Editor'), label: (ctx) => ctx.t('Edit Method Body...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onEditMethodBody !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onEditMethodBody?.(node) } },
+  { group: GROUP_ASMED_ILED, order: 20, key: 'edit-il-instructions', icon: image('Editor'), label: (ctx) => ctx.t('Edit IL Instructions...'), visible: (ctx) => ctx.statement !== undefined && ctx.onEditIlInstructions !== undefined, run: (ctx) => { if (ctx.statement) ctx.onEditIlInstructions?.(ctx.statement) } },
   { group: GROUP_ASMED_ILED, order: 21, key: 'replace-method-body-with-stub', icon: noImage, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onReplaceMethodBodyWithStub !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onReplaceMethodBodyWithStub?.(node) } },
 
   // 7000 — Tokens (GROUP_CTX_DOCVIEWER_TOKENS): where to go, then what to copy.

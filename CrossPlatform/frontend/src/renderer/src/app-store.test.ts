@@ -2663,9 +2663,28 @@ describe('file commands', () => {
     })
 
     await expect(useAppStore.getState().saveModule()).resolves.toBe(true)
-    expect(saveModule).toHaveBeenCalledWith('w1', 'n2')
+    expect(saveModule).toHaveBeenCalledWith('w1', 'n2', undefined)
     expect(useAppStore.getState().dirty).toBe(false)
     expect(useAppStore.getState().savedStateId).toBe('s2')
+  })
+
+  it('saves the module a selected member belongs to, not the first one', async () => {
+    const moduleRowB = { id: 'nb', label: 'B', kind: 'module', hasChildren: true, description: '/B.dll' }
+    const method = { id: 'nm', label: 'M()', kind: 'method', hasChildren: false }
+    useAppStore.setState({
+      workspaceId: 'w1',
+      modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')],
+      roots: [rootA],
+      children: { n2: [moduleRowB], nb: [method] },
+      parents: { nb: 'n2', nm: 'nb' },
+      selectedNode: method,
+      dirty: true,
+      workspaceStateId: 's2',
+      savedStateId: 's1',
+    })
+
+    await expect(useAppStore.getState().saveModule()).resolves.toBe(true)
+    expect(saveModule).toHaveBeenCalledWith('w1', 'n2', undefined)
   })
 
   it('saves every module the backend reports modified', async () => {
@@ -2680,7 +2699,7 @@ describe('file commands', () => {
     })
 
     await expect(useAppStore.getState().saveAllModules()).resolves.toBe(true)
-    expect(saveAllModules).toHaveBeenCalledWith('w1')
+    expect(saveAllModules).toHaveBeenCalledWith('w1', undefined)
     expect(useAppStore.getState().dirty).toBe(false)
     expect(useAppStore.getState().savedStateId).toBe('s2')
   })

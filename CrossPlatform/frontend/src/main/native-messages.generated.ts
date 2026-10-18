@@ -8,6 +8,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "cs": {
     "allFiles": "Všechny soubory",
     "xmlFiles": "Soubory XML",
+    "mergeWithAssembly": "Sloučit se sestavením",
     "saveResource": "Uložit zdroj",
     "saveResources": "Uložit zdroje",
     "executables": "Spustitelné soubory",
@@ -20,6 +21,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "de": {
     "allFiles": "Alle Dateien",
     "xmlFiles": "XML-Dateien",
+    "mergeWithAssembly": "Mit Assembly zusammenführen",
     "saveResource": "Ressource speichern",
     "saveResources": "Ressourcen speichern",
     "executables": "Ausführbare Dateien",
@@ -32,6 +34,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "es-ES": {
     "allFiles": "Todos los archivos",
     "xmlFiles": "Archivos XML",
+    "mergeWithAssembly": "Combinar con el ensamblado",
     "saveResource": "Guardar recurso",
     "saveResources": "Guardar recursos",
     "executables": "Archivos ejecutables",
@@ -45,6 +48,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "fa": {
     "allFiles": "همه پرونده ها",
     "xmlFiles": "فایل های XML",
+    "mergeWithAssembly": "ادغام با اسمبلی دیگر",
     "saveResource": "ذخیره ریسورس",
     "saveResources": "ذخیره ریسورس ها",
     "executables": "فایل های اجرایی",
@@ -59,6 +63,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "fr": {
     "allFiles": "Tous les fichiers",
     "xmlFiles": "Fichiers XML",
+    "mergeWithAssembly": "Fusionner avec l'Assembly",
     "saveResource": "Sauver la ressource",
     "saveResources": "Sauver les ressources",
     "executables": "Exécutables",
@@ -72,6 +77,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "hu": {
     "allFiles": "Minden Fájl",
     "xmlFiles": "XML fájlok",
+    "mergeWithAssembly": "Összevonás szerelvénnyel",
     "saveResource": "Erőforrás mentése",
     "saveResources": "Erőforrások mentése",
     "executables": "Végrehajtható fájlok",
@@ -85,6 +91,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "it": {
     "allFiles": "Tutti i file",
     "xmlFiles": "File XML",
+    "mergeWithAssembly": "Fondere con Assembly",
     "saveResource": "Salva risorsa",
     "saveResources": "Salva risorse",
     "executables": "Eseguibili",
@@ -97,6 +104,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "pt-BR": {
     "allFiles": "Todos os arquivos",
     "xmlFiles": "Arquivos XML",
+    "mergeWithAssembly": "Juntar com Assembly",
     "saveResource": "Salvar Recurso",
     "saveResources": "Salvar Recursos",
     "executables": "Executáveis",
@@ -110,6 +118,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "pt-PT": {
     "allFiles": "Todos os Ficheiros",
     "xmlFiles": "Ficheiros XML",
+    "mergeWithAssembly": "Juntar com Assembly",
     "saveResource": "Guardar Recurso",
     "saveResources": "Guardar Recursos",
     "executables": "Executáveis",
@@ -123,6 +132,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "ru": {
     "allFiles": "Все файлы",
     "xmlFiles": "XML-файлы",
+    "mergeWithAssembly": "Объединить со сборкой",
     "saveResource": "Сохранить ресурс",
     "saveResources": "Сохранить ресурсы",
     "executables": "Исполняемые файлы",
@@ -137,6 +147,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "tr": {
     "allFiles": "Tüm dosyalar",
     "xmlFiles": "XML dosyaları",
+    "mergeWithAssembly": "Montaj ile Birleştirme",
     "saveResource": "Kaynağı Kaydet",
     "saveResources": "Kaynakları Kaydet",
     "executables": "Yürütülebilir dosyalar",
@@ -151,6 +162,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "uk": {
     "allFiles": "Всі Файли",
     "xmlFiles": "XML Файли",
+    "mergeWithAssembly": "Об'єднати зі збіркою",
     "saveResource": "Зберегти ресурс",
     "saveResources": "Зберегти ресурси",
     "executables": "Виконувані файли",
@@ -165,6 +177,7 @@ export const generatedNativeMessages: Readonly<Record<Exclude<UiLocale, 'en' | '
   "vi": {
     "allFiles": "Tất cả tập tin",
     "xmlFiles": "Các tập tin XML",
+    "mergeWithAssembly": "Merge với Assembly",
     "saveResource": "Lưu Resource",
     "saveResources": "Lưu các Resource",
     "executables": "Thực thi",

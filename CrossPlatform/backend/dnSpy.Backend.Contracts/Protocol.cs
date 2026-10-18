@@ -57,8 +57,25 @@ public static class RpcMethods {
 	public const string HexFind = "hex/find";
 	public const string EditHexPatch = "edit/hexPatch";
 	public const string ModuleGetInfo = "module/getInfo";
+	/// <summary>Edit Assembly / Edit Module and their write-backs.</summary>
+	public const string AssemblyGetOptions = "assembly/getOptions";
+	public const string AssemblySetOptions = "assembly/setOptions";
+	public const string ModuleGetOptions = "module/getOptions";
+	public const string ModuleSetOptions = "module/setOptions";
 	public const string EditBegin = "edit/begin";
 	public const string EditGetMethodBody = "edit/getMethodBody";
+	/// <summary>The full method-body model the IL editor works on, and its write-back — see
+	/// <see cref="IlMethodBodyDto"/>.</summary>
+	public const string EditGetIlBody = "edit/getIlBody";
+	public const string EditReplaceIlBody = "edit/replaceIlBody";
+	/// <summary>Runs an instruction-list command over a body being edited, without a transaction.</summary>
+	public const string EditTransformIlBody = "edit/transformIlBody";
+	/// <summary>Compiles C# source for the compiler commands — Edit Method (C#) and the rest.</summary>
+	public const string CompilerCompile = "compiler/compile";
+	/// <summary>Merges an assembly the user picked into the module.</summary>
+	public const string CompilerMerge = "compiler/merge";
+	/// <summary>The assembly attributes written as C# source, for the Edit Assembly Attributes window.</summary>
+	public const string CompilerGetAssemblyAttributesSource = "compiler/getAssemblyAttributesSource";
 	public const string EditRename = "edit/rename";
 	public const string EditDelete = "edit/delete";
 	public const string EditSetNamespace = "edit/setNamespace";
@@ -75,6 +92,10 @@ public static class RpcMethods {
 	public const string ModuleSaveAs = "module/saveAs";
 	public const string ModuleSave = "module/save";
 	public const string ModuleSaveAll = "module/saveAll";
+	/// <summary>Save As, Save and Save All with the options dnSpy's Save Module window offers.</summary>
+	public const string ModuleSaveAsWithOptions = "module/saveAsWithOptions";
+	public const string ModuleSaveWithOptions = "module/saveWithOptions";
+	public const string ModuleSaveAllWithOptions = "module/saveAllWithOptions";
 	public const string WorkspaceReload = "workspace/reload";
 	public const string WorkspaceSortAssemblies = "workspace/sortAssemblies";
 	/// <summary>Removes one assembly from the tree — dnSpy's Remove Assembly.</summary>
@@ -86,6 +107,16 @@ public static class RpcMethods {
 	public const string TreeFindByToken = "tree/findByToken";
 	/// <summary>The bytes a resource node holds, for dnSpy's Save Resource commands.</summary>
 	public const string ResourceGetData = "resource/getData";
+	/// <summary>The manifest-resource model the Edit Resource dialog opens with, and its write-back.</summary>
+	public const string ResourceGetOptions = "resource/getOptions";
+	public const string ResourceSetOptions = "resource/setOptions";
+	/// <summary>Creates a resource — dnSpy's Create ... Resource commands.</summary>
+	public const string ResourceCreate = "resource/create";
+	/// <summary>The model of one .resources entry, and its write-back.</summary>
+	public const string ResourceGetElementOptions = "resource/getElementOptions";
+	public const string ResourceSetElementOptions = "resource/setElementOptions";
+	/// <summary>Adds an entry to a .resources file.</summary>
+	public const string ResourceCreateElement = "resource/createElement";
 	/// <summary>Opens the assemblies a module's references name — dnSpy's Load Dependencies.</summary>
 	public const string WorkspaceLoadDependencies = "workspace/loadDependencies";
 	/// <summary>Turns a module into an assembly or back — dnSpy's two Convert commands.</summary>
@@ -2006,3 +2037,433 @@ public interface IDebugSourceProvider {
 	/// <summary>The statements and IL of a method body, or null when the module or method cannot be read.</summary>
 	Task<MethodSourceDto?> GetMethodSourceAsync(string? workspaceId, string modulePath, int metadataToken, CancellationToken cancellationToken);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The IL method body editor — dnSpy's MethodBodyDlg, which is a fuller model than the one
+// edit/getMethodBody answers with. It is declared here, after everything else in this file, so that
+// the metadata tokens of the types above — which the tests and e2e pin — do not move. The older,
+// narrower DTOs (MethodBodyResponse / ReplaceMethodBodyRequest) stay for the code that still uses
+// them; the editor reads and writes these.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>What a method's body is: none, CIL, or native code — dnSpy's <c>MethodBodyType</c>.</summary>
+public static class IlBodyTypes {
+	public const string None = "none";
+	public const string Cil = "cil";
+	public const string Native = "native";
+}
+
+/// <summary>
+/// What an instruction's operand points at. The value the client sends back is what the opcode's
+/// operand type demands; the kind is what tells the client which editor to show — dnSpy's
+/// <c>InstructionOperandType</c>, which its own view model derives from the selected opcode.
+/// </summary>
+public static class IlOperandKinds {
+	public const string None = "none";
+	/// <summary>A number; <see cref="IlBodyInstructionDto.Operand"/> holds its invariant text.</summary>
+	public const string Number = "number";
+	public const string String = "string";
+	/// <summary>A branch target: <see cref="IlBodyInstructionDto.Operand"/> is the instruction's label.</summary>
+	public const string Branch = "branch";
+	/// <summary>Switch targets: <see cref="IlBodyInstructionDto.Operand"/> is a comma-separated label list.</summary>
+	public const string Switch = "switch";
+	/// <summary>A local variable, by its 0-based index in <see cref="IlMethodBodyDto.Locals"/>.</summary>
+	public const string Local = "local";
+	/// <summary>A method argument, by its 0-based index in <see cref="IlMethodBodyDto.ParameterNames"/>.</summary>
+	public const string Argument = "argument";
+	/// <summary>A type: a <see cref="IlBodyInstructionDto.TypeSignature"/>, a node id, or a token.</summary>
+	public const string Type = "type";
+	/// <summary>A field reference: a node id or a token.</summary>
+	public const string Field = "field";
+	/// <summary>A method reference: a node id, a token, or a <see cref="IlBodyInstructionDto.MethodRef"/>.</summary>
+	public const string Method = "method";
+	/// <summary>An <c>InlineTok</c> operand that may be any of a type, field or method.</summary>
+	public const string Token = "token";
+	/// <summary>A call-site signature, for <c>calli</c>.</summary>
+	public const string Signature = "signature";
+}
+
+/// <summary>One local variable of a method body — dnSpy's <c>LocalVM</c>.</summary>
+/// <param name="Attributes">dnlib's <c>PdbLocalAttributes</c> as a raw value.</param>
+public sealed record IlLocalDto(
+	string? Name,
+	TypeSigDto? Type,
+	bool IsPinned = false,
+	int Attributes = 0,
+	string Display = "");
+
+/// <summary>
+/// One exception handler — dnSpy's <c>ExceptionHandlerVM</c>. The five positions name instructions by
+/// their labels; a position that is not used by the handler type is null.
+/// </summary>
+/// <param name="HandlerType">"catch", "filter", "finally" or "fault".</param>
+public sealed record IlExceptionHandlerDto(
+	string HandlerType,
+	string? TryStart,
+	string? TryEnd,
+	string? FilterStart,
+	string? HandlerStart,
+	string? HandlerEnd,
+	TypeSigDto? CatchType,
+	string Display = "");
+
+/// <summary>
+/// One instruction of the IL editor. Unlike <see cref="IlInstructionDto"/>, an operand may be a
+/// structured reference the editor is allowed to create — a method reference built from a declaring
+/// type, a name and a signature, generic arguments for a <c>MethodSpec</c>, or a call-site signature.
+/// </summary>
+/// <param name="Operand">A number's text, a string literal, a label, a comma-separated label list, or an index.</param>
+/// <param name="NodeId">A tree node the operand names, for a member the workspace already holds.</param>
+/// <param name="Token">A metadata token, hexadecimal without the "0x".</param>
+/// <param name="MethodRef">A method reference to build (or resolve) for the operand.</param>
+/// <param name="MethodSpecArguments">Generic arguments that make the operand a <c>MethodSpec</c>.</param>
+/// <param name="TypeSignature">A type to build (or resolve) for the operand.</param>
+/// <param name="CallSiteSignature">A call-site signature, for <c>calli</c>.</param>
+public sealed record IlBodyInstructionDto(
+	string Label,
+	string OpCode,
+	string? OperandKind = null,
+	string? Operand = null,
+	string? OperandDisplay = null,
+	string? NodeId = null,
+	string? Token = null,
+	MethodRefDto? MethodRef = null,
+	IReadOnlyList<TypeSigDto>? MethodSpecArguments = null,
+	TypeSigDto? TypeSignature = null,
+	MethodSigDto? CallSiteSignature = null);
+
+public sealed record GetIlBodyRequest(string WorkspaceId, string MethodNodeId);
+
+/// <summary>
+/// A method body as dnSpy's Edit Method Body window models it. The four position fields are reported
+/// for display only — the dialog shows them read-only, the way WPF's window does — and are ignored
+/// when the body is written back except where a file offset is meaningful.
+/// </summary>
+public sealed record IlMethodBodyDto(
+	string BodyType,
+	int CodeType,
+	int MaxStack,
+	bool KeepOldMaxStack,
+	bool InitLocals,
+	int LocalVarSigTok,
+	uint HeaderRva,
+	ulong HeaderFileOffset,
+	uint Rva,
+	ulong FileOffset,
+	uint NativeRva,
+	IReadOnlyList<IlLocalDto> Locals,
+	IReadOnlyList<IlBodyInstructionDto> Instructions,
+	IReadOnlyList<IlExceptionHandlerDto> ExceptionHandlers,
+	IReadOnlyList<string> ParameterNames);
+
+/// <summary>
+/// Writes an edited body back. The transaction is the usual one: nothing is applied until it is
+/// committed, and the inverse is what Undo runs.
+/// </summary>
+public sealed record ReplaceIlBodyRequest(
+	string WorkspaceId,
+	string TransactionId,
+	string MethodNodeId,
+	string BodyType,
+	int CodeType,
+	int MaxStack,
+	bool KeepOldMaxStack,
+	bool InitLocals,
+	int LocalVarSigTok,
+	IReadOnlyList<IlLocalDto> Locals,
+	IReadOnlyList<IlBodyInstructionDto> Instructions,
+	IReadOnlyList<IlExceptionHandlerDto> ExceptionHandlers,
+	uint NativeRva);
+
+/// <summary>The instruction-list commands of dnSpy's IL editor — its context menu and shortcuts.</summary>
+public static class IlTransformOperations {
+	/// <summary>Replace macro opcodes with their long forms (<c>ldloc.0</c> → <c>ldloc 0</c>).</summary>
+	public const string SimplifyAll = "simplifyAll";
+	/// <summary>Replace long forms with the shortest opcode that carries the same operand.</summary>
+	public const string OptimizeAll = "optimizeAll";
+	/// <summary>Turn the selected instructions into <c>nop</c>.</summary>
+	public const string ReplaceWithNop = "replaceWithNop";
+	/// <summary>Replace each selected instruction with as many <c>nop</c>s as it occupied bytes.</summary>
+	public const string ReplaceWithMultipleNops = "replaceWithMultipleNops";
+	/// <summary>Invert the selected conditional branches.</summary>
+	public const string InvertBranch = "invertBranch";
+	/// <summary>Turn a conditional branch into pops plus an unconditional branch.</summary>
+	public const string ConvertBranchToUnconditional = "convertBranchToUnconditional";
+	/// <summary>Remove the selected instructions, replacing their stack effects with pops and a default value.</summary>
+	public const string RemoveAndAddPops = "removeAndAddPops";
+}
+
+/// <summary>
+/// Runs one of <see cref="IlTransformOperations"/> over an instruction list that is still being edited.
+/// The operation is pure: it neither touches the module nor needs a transaction, so a command that
+/// turns out to be unwanted is undone by the dialog's own Cancel.
+/// </summary>
+public sealed record TransformIlBodyRequest(
+	string WorkspaceId,
+	string MethodNodeId,
+	string Operation,
+	IReadOnlyList<IlLocalDto> Locals,
+	IReadOnlyList<IlBodyInstructionDto> Instructions,
+	IReadOnlyList<int> SelectedIndexes,
+	IReadOnlyList<string> ParameterNames);
+
+/// <summary>The instruction and local lists after a transform; the dialog replaces its own with them.</summary>
+public sealed record TransformIlBodyResponse(
+	IReadOnlyList<IlLocalDto> Locals,
+	IReadOnlyList<IlBodyInstructionDto> Instructions);
+
+// ---------------------------------------------------------------------------------------------
+// Resource editing — dnSpy's ResourceOptions/ResourceVM and ResourceElementVM dialogs. Declared
+// after everything else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>How a manifest resource is stored — dnlib's <c>ResourceType</c>.</summary>
+public static class ManifestResourceKinds {
+	public const string Embedded = "embedded";
+	public const string AssemblyLinked = "assemblyLinked";
+	public const string Linked = "linked";
+}
+
+/// <summary>What one of dnSpy's Create Resource commands creates.</summary>
+public static class ResourceCreateKinds {
+	/// <summary>A file's bytes, stored as they are.</summary>
+	public const string File = "file";
+	/// <summary>A .resources file holding one byte array per file — dnSpy's Multi File Resource.</summary>
+	public const string MultiFile = "multiFile";
+	public const string AssemblyLinked = "assemblyLinked";
+	public const string FileLinked = "fileLinked";
+	/// <summary>A .resources file holding one <c>byte[]</c>.</summary>
+	public const string ByteArray = "byteArray";
+	/// <summary>A .resources file holding one <c>Stream</c>.</summary>
+	public const string Stream = "stream";
+	/// <summary>A .resources file holding one string.</summary>
+	public const string String = "string";
+}
+
+/// <summary>The kinds the resource element editor understands.</summary>
+public static class ResourceElementKinds {
+	public const string Null = "null";
+	public const string String = "string";
+	public const string Boolean = "boolean";
+	public const string Char = "char";
+	public const string Byte = "byte";
+	public const string SByte = "sbyte";
+	public const string Int16 = "int16";
+	public const string UInt16 = "uint16";
+	public const string Int32 = "int32";
+	public const string UInt32 = "uint32";
+	public const string Int64 = "int64";
+	public const string UInt64 = "uint64";
+	public const string Single = "single";
+	public const string Double = "double";
+	public const string Decimal = "decimal";
+	public const string DateTime = "dateTime";
+	public const string TimeSpan = "timeSpan";
+	public const string ByteArray = "byteArray";
+	public const string Stream = "stream";
+	/// <summary>A serialized object (a user type), kept as the bytes it is.</summary>
+	public const string Binary = "binary";
+}
+
+public sealed record ResourceOptionsRequest(string WorkspaceId, string ResourceNodeId);
+
+/// <summary>
+/// A manifest resource as dnSpy's ResourceVM models it. <paramref name="Attributes"/> is dnlib's
+/// <c>ManifestResourceAttributes</c> as a raw value; the visibility is its low two bits.
+/// </summary>
+public sealed record ResourceOptionsDto(
+	string Kind,
+	string Name,
+	int Attributes,
+	string? AssemblyFullName,
+	string? LinkedFileName,
+	bool FileContainsNoMetadata,
+	string? FileHash,
+	IReadOnlyList<CustomAttributeDto> CustomAttributes,
+	string Display = "");
+
+public sealed record SetResourceOptionsRequest(string WorkspaceId, string TransactionId, string ResourceNodeId, ResourceOptionsDto Options);
+
+/// <summary>One entry a new .resources file starts with.</summary>
+/// <param name="Base64Data">The entry's bytes — a byte array or stream value.</param>
+/// <param name="Text">A string value, when the entry is a string.</param>
+public sealed record CreateResourceEntryDto(string Name, string? Base64Data = null, string? Text = null);
+
+/// <summary>
+/// Creates a resource — dnSpy's Create File/Multi File/Assembly Linked/File Linked/Byte Array/Stream
+/// resource commands. The owner is any node of the module the resource goes into.
+/// </summary>
+public sealed record CreateResourceRequest(
+	string WorkspaceId,
+	string TransactionId,
+	string OwnerNodeId,
+	string Kind,
+	string Name,
+	int Attributes,
+	string? Base64Data = null,
+	string? Text = null,
+	string? AssemblyFullName = null,
+	string? LinkedFileName = null,
+	bool FileContainsNoMetadata = false,
+	IReadOnlyList<CreateResourceEntryDto>? Entries = null);
+
+public sealed record CreateResourceResponse(string NodeId, string Label);
+
+public sealed record ResourceElementOptionsRequest(string WorkspaceId, string NodeId);
+
+/// <summary>
+/// A .resources entry as the element editor models it. <paramref name="Kind"/> is one of
+/// <see cref="ResourceElementKinds"/>; a text value travels in <paramref name="Text"/>, bytes in
+/// <paramref name="Base64Data"/>, and a serialized object adds the type it was written as.
+/// </summary>
+public sealed record ResourceElementOptionsDto(
+	string Kind,
+	string Name,
+	string? Text,
+	string? Base64Data,
+	int TypeCode,
+	string? TypeName,
+	string Display = "");
+
+public sealed record SetResourceElementOptionsRequest(string WorkspaceId, string TransactionId, string NodeId, ResourceElementOptionsDto Options);
+
+/// <summary>Adds an entry to a .resources file the workspace holds.</summary>
+public sealed record CreateResourceElementRequest(
+	string WorkspaceId,
+	string TransactionId,
+	string ResourceNodeId,
+	string Kind,
+	string Name,
+	string? Text = null,
+	string? Base64Data = null);
+
+// ---------------------------------------------------------------------------------------------
+// Edit Assembly / Edit Module — dnSpy's AssemblyOptionsVM and ModuleOptionsVM. Appended after
+// everything else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+public sealed record AssemblyOptionsRequest(string WorkspaceId, string NodeId);
+
+/// <summary>
+/// An assembly as dnSpy's Edit Assembly window models it. Enum-valued fields are the raw dnlib values;
+/// the version is four parts because the window has four boxes.
+/// </summary>
+public sealed record AssemblyOptionsDto(
+	string Name,
+	string? Culture,
+	int HashAlgorithm,
+	int Attributes,
+	string PublicKey,
+	int VersionMajor,
+	int VersionMinor,
+	int VersionBuild,
+	int VersionRevision,
+	IReadOnlyList<CustomAttributeDto> CustomAttributes,
+	IReadOnlyList<DeclSecurityDto> DeclSecurities,
+	string FullName);
+
+public sealed record SetAssemblyOptionsRequest(string WorkspaceId, string TransactionId, string NodeId, AssemblyOptionsDto Options);
+
+public sealed record ModuleOptionsRequest(string WorkspaceId, string NodeId);
+
+/// <summary>
+/// A module as dnSpy's Edit Module window models it. The three GUIDs travel as text with the empty
+/// string standing for "no such row"; the entry point is a metadata token in hexadecimal for a managed
+/// method, "file:name" for a file, or null when the native RVA is the one that applies.
+/// </summary>
+public sealed record ModuleOptionsDto(
+	string Name,
+	int Kind,
+	string Mvid,
+	string EncId,
+	string EncBaseId,
+	string? RuntimeVersion,
+	int TablesHeaderVersion,
+	string? Cor20HeaderRuntimeVersion,
+	int Cor20HeaderFlags,
+	int Machine,
+	int Characteristics,
+	int DllCharacteristics,
+	string? ManagedEntryPoint,
+	uint NativeEntryPoint,
+	IReadOnlyList<CustomAttributeDto> CustomAttributes,
+	string Display);
+
+public sealed record SetModuleOptionsRequest(string WorkspaceId, string TransactionId, string NodeId, ModuleOptionsDto Options);
+
+// ---------------------------------------------------------------------------------------------
+// Save Module options — dnSpy's SaveModuleOptionsVM. Appended after everything else so the
+// metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>
+/// The writer options dnSpy's Save Module window offers. The defaults are the ones dnlib writes with,
+/// which is what the port used before the window existed.
+/// </summary>
+/// <param name="PreserveRids">Keep every row where it is instead of compacting the tables.</param>
+/// <param name="PreserveUsOffsets">Keep the #US heap's offsets, which the string literals are read by.</param>
+/// <param name="PreserveStringsOffsets">Keep the #Strings heap's offsets.</param>
+/// <param name="PreserveBlobOffsets">Keep the #Blob heap's offsets.</param>
+/// <param name="KeepWin32Resources">Write the module's Win32 resources.</param>
+/// <param name="ShareMethodBodies">Share identical method bodies, which dnlib does not do by default.</param>
+/// <param name="AddCheckSum">Write the PE checksum.</param>
+/// <param name="AddMvidSection">Write the MVID into its own section.</param>
+/// <param name="WritePdb">Write a PDB beside the module when it has debug symbols.</param>
+/// <param name="KeepExtraPeData">Keep the original file's extra PE data (mixed-mode writes only).</param>
+/// <param name="MixedMode">Write through dnlib's native module writer, which a mixed-mode module needs.</param>
+/// <param name="ModuleKind">Overrides the module kind the file is written as.</param>
+public sealed record SaveModuleOptionsDto(
+	bool PreserveRids = false,
+	bool PreserveUsOffsets = false,
+	bool PreserveStringsOffsets = false,
+	bool PreserveBlobOffsets = false,
+	bool KeepWin32Resources = true,
+	bool ShareMethodBodies = false,
+	bool AddCheckSum = false,
+	bool AddMvidSection = false,
+	bool WritePdb = false,
+	bool KeepExtraPeData = true,
+	bool MixedMode = false,
+	int? ModuleKind = null);
+
+public sealed record SaveModuleWithOptionsRequest(string WorkspaceId, string ModuleId, string DestinationPath, bool Overwrite, SaveModuleOptionsDto? Options = null);
+
+public sealed record SaveModuleInPlaceWithOptionsRequest(string WorkspaceId, string ModuleId, SaveModuleOptionsDto? Options = null);
+
+public sealed record SaveAllWithOptionsRequest(string WorkspaceId, SaveModuleOptionsDto? Options = null);
+
+// ---------------------------------------------------------------------------------------------
+// The C# code editor — dnSpy's compiler commands. Appended after everything else so the metadata
+// tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>
+/// Compiles the source an Edit Code window holds and, when a transaction is named and the compilation
+/// succeeds, queues the import of the generated assembly into the module. Compile-only requests answer
+/// the diagnostics without touching the module, which is what the window's Compile button does.
+/// </summary>
+/// <param name="Mode">One of the backend's <c>CompilerModes</c>.</param>
+/// <param name="Source">The C# source, as one file — dnSpy's <c>main.cs</c>.</param>
+public sealed record CompileSourceRequest(string WorkspaceId, string NodeId, string Mode, string Source, string? TransactionId = null);
+
+/// <summary>One diagnostic, laid out the way dnSpy's CompilerDiagnosticVM shows a row.</summary>
+public sealed record CompilerDiagnosticDto(
+	string Severity,
+	string Text,
+	string Id,
+	string? FileName,
+	int StartLine,
+	int StartColumn,
+	int EndLine,
+	int EndColumn);
+
+/// <summary>Whether the source compiled, and what the compiler and the importer said about it.</summary>
+public sealed record CompileSourceResponse(bool Success, IReadOnlyList<CompilerDiagnosticDto> Diagnostics);
+
+/// <summary>Merges another assembly's bytes into a module — dnSpy's Merge with Assembly.</summary>
+public sealed record MergeAssemblyRequest(string WorkspaceId, string TransactionId, string NodeId, string Base64Data);
+
+/// <summary>Asks for the assembly's attributes as C# source — what Edit Assembly Attributes opens with.</summary>
+public sealed record CompilerAssemblyAttributesRequest(string WorkspaceId, string NodeId);
+
+public sealed record CompilerSourceResponse(string Source);

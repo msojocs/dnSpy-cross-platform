@@ -660,15 +660,16 @@ test.describe('the workspace shell', () => {
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
-    const ilDialog = page.getByRole('dialog', { name: /Edit IL/ })
-    await expect(ilDialog.getByLabel('Opcode 0')).toBeVisible()
-    await ilDialog.getByRole('button', { name: 'Apply' }).click()
+    const ilDialog = page.getByRole('dialog', { name: 'Edit Method Body' })
+    await expect(ilDialog.getByLabel('OpCode 0')).toBeVisible()
+    await ilDialog.getByRole('button', { name: 'OK' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
     // The toolbar's save button is dnSpy's Save All, which writes each module back to its own file; what
     // these two tests write is the copy the save dialog is pointed at, so they go through Save Module...
     await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
     await page.getByRole('menuitem', { name: 'File', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Save Module...' }).click()
+    await page.getByRole('dialog', { name: 'Save Module' }).getByRole('button', { name: 'OK' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
   })
@@ -695,6 +696,10 @@ test.describe('the workspace shell', () => {
       'Create Property...',
       'Create Event...',
       'Edit Type...',
+      'Edit Class (C#)...',
+      'Add Class Members (C#)...',
+      'Add Class (C#)...',
+      'Merge with Assembly...',
       'Load Dependencies',
       'Load Dependencies Recursively',
       'Go to Token...',
@@ -725,6 +730,11 @@ test.describe('the workspace shell', () => {
       'Open in New Tab',
       'Convert Assembly to NetModule',
       'Create Type...',
+      'Edit Assembly...',
+      'Edit Module...',
+      'Edit Assembly Attributes (C#)...',
+      'Add Class (C#)...',
+      'Merge with Assembly...',
       'Load Dependencies',
       'Load Dependencies Recursively',
       'Go to Entry Point',
@@ -1073,6 +1083,7 @@ test.describe('the workspace shell', () => {
     await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
     await page.getByRole('menuitem', { name: 'File', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Save Module...' }).click()
+    await page.getByRole('dialog', { name: 'Save Module' }).getByRole('button', { name: 'OK' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
 
@@ -2307,7 +2318,8 @@ test.describe('the code viewer context menu', () => {
     expect(index('Create Method')).toBeGreaterThan(index('Delete Method'))
     expect(index('Edit Method')).toBeGreaterThan(index('Create Method'))
     expect(index('Edit Method Body...')).toBeGreaterThan(index('Edit Method'))
-    expect(index('Copy MD Token')).toBeGreaterThan(index('Edit Method Body...'))
+    expect(index('Edit IL Instructions...')).toBeGreaterThan(index('Edit Method Body...'))
+    expect(index('Copy MD Token')).toBeGreaterThan(index('Edit IL Instructions...'))
     expect(index('Copy Full Name')).toBeGreaterThan(index('Copy MD Token'))
     // A code document is open in front of this menu, so the hex editor is one command away from it: the
     // file the command opens is this document's, and the caret's own statement follows it inside the group.
@@ -2316,7 +2328,7 @@ test.describe('the code viewer context menu', () => {
     expect(index('Analyze')).toBeGreaterThan(index('Show Instructions in Hex Editor'))
     expect(index('Find')).toBeGreaterThan(index('Analyze'))
     // Nothing this port cannot run is on screen, and neither the bookmark group nor Select All is in it.
-    for (const absent of ['Set Next Statement', 'Add Class Breakpoint', 'Break When Exception Thrown', 'Go to Token', 'Edit IL Instructions', 'Go to Resource', 'Incremental Search', 'Select All', 'Bookmark'])
+    for (const absent of ['Set Next Statement', 'Add Class Breakpoint', 'Break When Exception Thrown', 'Go to Token', 'Go to Resource', 'Incremental Search', 'Select All', 'Bookmark'])
       expect(labels.filter((label) => label.includes(absent))).toEqual([])
     await page.keyboard.press('Escape')
     await expect(menu).not.toBeVisible()

@@ -404,6 +404,10 @@ interface AppState {
   hexCopyMethodBody(): Promise<boolean>
   /** Writes the clipboard's hexadecimal text over the selected method's body. */
   hexPasteMethodBody(): Promise<boolean>
+  /** Writes bytes straight into the file image of a hex tab — what typing, pasting, deleting and filling in
+   * the hex editor do. The patch undoes and redoes like any other edit; a file that is not a managed module
+   * refuses it. */
+  hexWriteBytes(moduleId: string, offset: number, data: Uint8Array, message?: string): Promise<boolean>
   replaceResource(node: TreeNode): Promise<boolean>
   saveModuleAs(): Promise<boolean>
   /** Writes the selected module back over its own file — dnSpy's Save. */
@@ -1559,6 +1563,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       return false
     }
     return writeHexPatch(get, set, selectedNode.id, method.bodyOffset, bytesToBase64(data), t('Updated method body bytes for {name}.', { name: selectedNode.label }))
+  },
+
+  /**
+   * A byte write from the hex editor. The tab acts on the module it shows, which is the node the patch is
+   * aimed at; the backend bounds it by the file alone, since a write outside a member has no member to stay
+   * inside of. The message the user gets is dnSpy's own wording for each command.
+   */
+  hexWriteBytes: async (moduleId, offset, data, message) => {
+    if (data.length === 0)
+      return false
+    return writeHexPatch(get, set, moduleId, offset, bytesToBase64(data), message ?? t('Wrote {count} byte(s) at 0x{offset}.', { count: data.length, offset: offset.toString(16).toUpperCase() }))
   },
 
   replaceResource: async (node) => {

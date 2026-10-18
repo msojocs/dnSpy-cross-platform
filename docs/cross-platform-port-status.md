@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.13（调试器）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.7（Hex 编辑器浏览）、4.13（调试器）与 4.15（Roslyn 语言服务）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -45,12 +45,12 @@
 | 应用壳与通用 UI | 100% | 37 | 0 | 0 | 3 | 全部功能点对齐 WPF：读 `.dntheme` 的主题服务（界面与代码视图都按主题资源着色，支持用户主题）、15 种界面语言、按类别与主题的字体页、带 Debug 窗格的 Output 窗口、dnSpy 图标集覆盖菜单与工具窗口、`--settings-file` 与便携模式、`-p`/`-pn` 附加 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~83% | 63 | 16 | 7 | 4 | Roslyn 表达式求值与 func-eval，Locals/Autos/Watch 1–4 可展开、改值、DebuggerDisplay；Set Next Statement、Run to Cursor、模块断点、返回值；Threads/Modules/Processes/Memory/Disassembly 窗口；缺 Mono/Unity 与多进程 |
-| 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
+| 程序集编辑（AsmEditor） | ~53% | 31 | 11 | 27 | 2 | 元数据对话框完整；Hex 视图可直接改写；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
 | C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
 | 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
-| Hex 编辑器（浏览） | ~31% | 6 | 7 | 18 | 0 | 只读分页转储；没有光标、选区、直接改写 |
+| Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 属 4.12 未移植 |
 | 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
 | dnSpy.Console 命令行 | 0% | 0 | 0 | 12 | 0 | 没有对应 CLI，后端也没有导出项目能力 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 293 / 🟡 79 / ❌ 110 / ⛔ 30，完成度约 **69%**（2026-10-17 调试器补齐前为 ✅ 260 / 🟡 84 / ❌ 138 / ⛔ 30；2026-10-17 应用壳补齐前为 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30；2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 313 / 🟡 75 / ❌ 94 / ⛔ 30，完成度约 **73%**（2026-10-18 Hex 编辑器浏览补齐前为 ✅ 293 / 🟡 79 / ❌ 110 / ⛔ 30）（2026-10-17 调试器补齐前为 ✅ 260 / 🟡 84 / ❌ 138 / ⛔ 30；2026-10-17 应用壳补齐前为 ✅ 253 / 🟡 91 / ❌ 138 / ⛔ 30；2026-10-16 搜索窗口补齐前为 ✅ 248 / 🟡 94 / ❌ 140 / ⛔ 30；2026-10-16 分析器补齐前为 ✅ 243 / 🟡 99 / ❌ 140 / ⛔ 30；2026-10-14 程序集树复核后为 ✅ 200 / 🟡 109 / ❌ 170 / ⛔ 30；2026-10-14 晚反编译设置接通后为 ✅ 218 / 🟡 98 / ❌ 163 / ⛔ 30；2026-10-15 会话恢复光标与滚动位置后为 ✅ 219 / 🟡 97 / ❌ 163 / ⛔ 30；2026-10-14 字符串引用窗口完成后为 ✅ 238 / 🟡 97 / ❌ 144 / ⛔ 30；2026-10-15 Roslyn 语言服务完成后为 ✅ 242 / 🟡 96 / ❌ 141 / ⛔ 30——这两次「完成」都没有接通，2026-10-16 按实现与测试复核、重写后即为本行的数字）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -71,7 +71,7 @@
 | 改方法体 | 风险大 | 无 C# 编辑；IL 编辑器不能编辑局部变量和异常处理器，带 try/catch 的方法会丢 EH |
 | 保存 | 基本可用，有缺陷 | 多模块时保存目标错误；无写出选项，不保留 RID，混合模式程序集无法正确保存 |
 | 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件）、单步、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；内存与反汇编窗口；只能调一个 CoreCLR 进程 |
-| 元数据表、Hex 修改 | 基本不可用 | 只有 PE 头只读文本与只读 hex 转储 |
+| 元数据表、Hex 修改 | 浏览可用，改写局部可用 | Hex 可滚动浏览、查找、复制、直接改字节并撤销；PE 头仍是只读文本，元数据表视图未实现 |
 | 脚本、批处理导出 | 很有限 | REPL 不能操作已打开的程序集，没有 CLI，也没有导出项目 |
 
 ## 2. 跨模块问题
@@ -79,7 +79,7 @@
 这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
 
 1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。注意：由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，某些 WPF dnSpy 特有的选项（如 `ShowTokenAndRvaComments`、`SortMembers` 等）在基础 ILSpy 中不存在，暂时被忽略。仍改了没效果的是：
-   - 文本编辑器、Hex 编辑器（Memory 窗口只读其中的大小写与分组）、书签语法高亮、REPL；
+   - 文本编辑器、Hex 编辑器的部分选项（Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
    - General 的版本号与 PublicKeyToken 等程序集树页选项。
 
    Output 页的自动换行、行号、时间戳与时间格式（2026-10-17 起）、Environment › Font 页，以及调试器页与 Disassembler / Code Style 页（2026-10-17 起，经 `debug/setOptions` 交给引擎）已生效。
@@ -90,7 +90,7 @@
 
 3. **VB 文档没有 span 与语句表，IL 的只有一部分。** C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。IL 视图（含 IL with C#）有逐指令的语句表、成员声明处的定义 span，以及（2026-10-16 起）每条指令操作数所指成员的引用 span，所以 IL 里可以跳转、书签可以挂到指令上、分析器的「显示方法内的引用」会落到操作数上；但断点仍只按 C# 的语句表下。VB 是 C# 文本的转换，没有任何 span 与语句表（方法文档还会变成空壳类），因此 VB 视图里不能跳转、不能下断点，搜索和分析器结果只打开方法。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决格式。
 
-4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。仍未绑的只剩十六进制只读视图里的几个（Ctrl+X、Ctrl+Shift+D 等，本移植版不能改字节）。主菜单现在可以用键盘操作。
+4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。十六进制视图后来补了自己的快捷键（Ctrl+G/M/L/F、F5、Ctrl+D/Ctrl+Shift+D、Ctrl+Alt+S 等，见 4.7）。主菜单现在可以用键盘操作。
 
 5. **程序集树的多选只有部分命令用上。** 树已支持 Ctrl/Shift 多选和键盘扩选，Remove Assembly、保存资源、Search MSDN、分析（2026-10-16 起）、位置为「选中文件 / 同一文件夹 / 选中类型」的搜索作用于整个选区；但删除类型与成员、多节点合并反编译仍只看一个节点。
 
@@ -109,7 +109,7 @@
 | 3 | 保存单个模块会清掉全局 `dirty`，即使其他模块仍有修改 | `FE/app-store.ts` 保存逻辑 | 代码推断 |
 | 4 | IL 编辑器从不重算 MaxStack。前端总是回传 `maxStack`，后端因此设 `KeepOldMaxStack = true`，加指令后栈深可能不够 | `BE/WorkspaceManager.cs` 方法体替换 | 代码推断 |
 | 5 | ~~Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数~~ 已修复（2026-10-13）：改走 `resource/getItems`，`raw` 一路传到后端 | `MAIN/index.ts` 的 `edit:saveResource` | 已核实 |
-| 6 | PE-only、ELF、未知文件的 Open Hex Editor 读不出数据：`GetHexLength` / `ReadHexAsync` 走 `GetModule()`，对这三类文件抛异常 | `BE/WorkspaceManager.cs` | 代码推断 |
+| 6 | ~~PE-only、ELF、未知文件的 Open Hex Editor 读不出数据~~ 已修复（2026-10-18）：`GetHexLength` / `ReadHexAsync` 改走 `GetHexEntry`，按模块、树节点、PE-only、ELF、未知文件依次解析；只有托管模块会叠加 hex 补丁 | `BE/WorkspaceManager.cs` | 已核实 |
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
 | 8 | ~~C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志~~ 已修复（2026-10-18）：会话各自持有执行锁、取消源与 generation；Reset 取消旧令牌并触发 `ScriptResetting` 后立即建立新会话，排队中的提交随旧令牌取消，旧会话的输出按 generation 丢弃。另：输出帧改为同步写入管道，避免单核机器上同步等待异步写造成的死锁 | `BE/Scripting/CSharpScriptService.cs`、`BE/JsonRpcServer.cs` | 已核实 |
 | 9 | ~~基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持~~ 已修复（2026-10-16）：基类型行可分析，菜单打开前向后端确认引用能解析（WPF 的 CanAnalyze），解析不了的不显示「分析」 | `FE/components/CodeEditorContextMenu.tsx`、`FE/components/AssemblyExplorer.tsx` | 已核实 |
@@ -348,45 +348,47 @@
 
 ### 4.7 Hex 编辑器（浏览与交互）
 
-完成度约 31%（✅ 6 / 🟡 7 / ❌ 18）。WPF 范围：`WPF/Hex/`，以及 `AE/Hex/` 中的「Show in Hex Editor」等定位命令。从节点出发的 Hex 写入见 4.12。
+完成度约 84%（✅ 24 / 🟡 4 / ❌ 3）。WPF 范围：`WPF/Hex/`，以及 `AE/Hex/` 中的「Show in Hex Editor」等定位命令。从节点出发的 Hex 写入见 4.12。
 
-Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的分页转储：每页 4 KiB、每行 16 字节，带 ASCII 列，可以高亮一段范围，没有光标和选区。
+2026-10-18 按实现与测试复核。WPF 的编辑器模型已经移植：`hex-model.ts` 照 `HexBufferLineFormatterImpl`、`HexOffsetFormatter`、`HexValueFormatter` 与 `SettingsConstants` 做行布局（每行字节数含「适合宽度」、分组、33 种值格式、四种偏移格式、大小写、ASCII 列与不可读单元格），`FE/components/HexEditor.tsx` 是整文件可滚动的转储（按 64 KiB 分块按需读取，只画视口内的行），有光标、选区、直接键入、右键菜单、四个对话框与查找条。旧的分页只读视图已删除。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Open Hex Editor | `AE/Hex/Commands.cs` | `hex-menu.ts`，RPC `hex/getLength`、`hex/readRange` | 🟡 | 托管模块可用；PE-only/ELF/未知文件读不出（缺陷 #6） |
+| Open Hex Editor | `AE/Hex/Commands.cs` | `hex-menu.ts`，RPC `hex/getLength`、`hex/readRange` | ✅ | 托管模块、PE-only、ELF 与未知文件都能打开并浏览（缺陷 #6 已修） |
 | Show Instructions in Hex Editor（当前语句） | 同上 | RPC `hex/resolveStatement` | ✅ | |
 | Show Instructions / Method Body / Initial Value | 同上 | RPC `hex/resolveTarget`、`BE/HexTargets.cs` | ✅ | |
-| Show in Hex Editor（资源） | 同上 | `ResolveResourceTarget` | 🟡 | 只认 EmbeddedResource |
-| Show in Hex Editor（地址引用） | 同上 | 隐藏 | ❌ | |
-| Hex Write return true/false/空方法体 | 同上 | `edit/hexPatch` | ✅ | 与 4.13 重复计入 |
-| Hex Copy / Paste Method Body | 同上 | `hexCopyMethodBody` 等 | ✅ | 与 4.13 重复计入 |
-| 字节显示 | `Hex/Editor/WpfHexViewImpl.cs` | `HexView` | 🟡 | 每行字节数、大小写写死；列不能开关 |
-| 滚动 | `Hex/Editor/HexViewScrollerImpl.cs` | 翻页按钮 | 🟡 | 只能按 4 KiB 翻页 |
-| Go to Position | `Hex/Commands/GoToPositionDlg.xaml` | 工具栏偏移框 | 🟡 | 只认十六进制文件偏移 |
-| Go to Metadata | `Hex/Commands/GoToMetadataDlg.xaml` | 无 | ❌ | |
-| Select | `Hex/Commands/SelectDlg.xaml` | 无 | ❌ | |
-| 光标与选区 | `Hex/Editor/HexCaretImpl.cs`、`HexSelectionImpl.cs` | 无 | ❌ | |
-| 直接键入改字节 | `Hex/Operations/HexEditorOperationsImpl.cs` | 无 | ❌ | 后端 `edit/hexPatch` 已能接受模块级补丁，缺界面 |
-| 撤销 / 重做 | `AE/Hex/HexBufferUndoRedo.cs` | `edit/undo`、`edit/redo` | ✅ | |
-| 删除 / 清零 | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
-| Fill Selection | 同上 | 无 | ❌ | |
-| Copy / Copy Special | 同上、`Hex/Operations/ClipboardUtils.cs` | 无 | ❌ | |
-| Paste / Paste Special | 同上 | 无 | ❌ | |
-| 查找 / 替换 | `Hex/Editor/Search/HexViewSearchService.cs` | 无 | ❌ | |
-| 右键「每行字节数」「值格式」 | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | 视图没有右键菜单 |
-| 本地设置对话框 | `Hex/Commands/LocalSettingsDlg.xaml` | 无 | ❌ | |
-| Save Selection | `Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
-| 只显示选中字节 | 同上 | 无 | ❌ | |
-| Refresh | 同上 | 编辑后自动重读 | 🟡 | |
-| 结构信息（悬停、结构高亮） | `Hex/Files/*`、`Hex/Intellisense/*` | 无 | ❌ | |
-| F12 跳到代码、Follow 引用、Edit Field | `Hex/ContextMenuCommands/*` | 无 | ❌ | |
-| 命中范围高亮 | `Hex/Editor/HexMarkerService.cs` | `hex-byte-marked` | ✅ | |
-| Hex 选项页 | `Hex/HexEditor/*AppSettingsPage.cs` | `options-pages.ts` | 🟡 | 不生效 |
-| 当前行高亮、列分隔线、缩放 | `Hex/Editor/CurrentLineHighlighter.cs` 等 | 无 | ❌ | |
-| Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs` | 无 | ❌ | |
+| Show in Hex Editor（资源） | 同上 | `ResolveResourceTarget` | 🟡 | 只认 EmbeddedResource，资源元素没有目标 |
+| Show in Hex Editor（地址引用） | 同上 | 隐藏 | ❌ | 代码里没有地址引用模型 |
+| Hex Write return true/false/空方法体 | 同上 | `edit/hexPatch` | ✅ | 与 4.12 重复计入 |
+| Hex Copy / Paste Method Body | 同上 | `hexCopyMethodBody` 等 | ✅ | 与 4.12 重复计入 |
+| 字节显示 | `Hex/Editor/WpfHexViewImpl.cs` | `hex-model.ts` 的 `lineOf`、`HexView` | ✅ | 每行字节数（含适合宽度）、值格式、分组、大小写、偏移格式、列开关与 ASCII 列 |
+| 滚动 | `Hex/Editor/HexViewScrollerImpl.cs` | `HexView` 的滚动与行虚拟化 | ✅ | 全文件连续滚动，滚轮、滚动条、方向键、PageUp/PageDown |
+| Go to Position | `Hex/Commands/GoToPositionDlg.xaml` | `HexGoToPositionDialog`、RPC `hex/resolvePosition` | ✅ | 绝对/文件/RVA/当前位置，可选「选中到新位置」；数字按 dnSpy 规则解析（十进制，`0x`/`&H`/`h` 为十六进制） |
+| Go to Metadata | `Hex/Commands/GoToMetadataDlg.xaml` | `HexGoToMetadataDialog`、RPC `hex/goToMetadata` | ✅ | 元数据标记、方法体、#Blob、#Strings、#US、#GUID；流与表的文件偏移由 dnlib 给出 |
+| Select | `Hex/Commands/SelectDlg.xaml` | `HexSelectDialog` | ✅ | 起点/终点或起点/长度，四种位置类型 |
+| 光标与选区 | `Hex/Editor/HexCaretImpl.cs`、`HexSelectionImpl.cs` | `HexView` 的 caret/anchor | ✅ | 点击、拖动、Shift+点击、方向键按半字节移动、Tab 切换列、Ctrl+A |
+| 直接键入改字节 | `Hex/Operations/HexEditorOperationsImpl.cs` | `hexWriteBytes` → `edit/hexPatch` | ✅ | 值列改半字节、ASCII 列按选项里的编码写字节；每次按键一次可撤销的事务 |
+| 撤销 / 重做 | `AE/Hex/HexBufferUndoRedo.cs` | `edit/undo`、`edit/redo` | ✅ | 字节写入是普通编辑事务，撤销后视图自动重读 |
+| 删除 / 清零 | `Hex/ContextMenuCommands/Commands.cs` | 右键的 Clear Byte / Clear Selected Bytes（Del） | ✅ | |
+| Fill Selection | 同上 | 右键的 Fill Selection... | ✅ | 按字节值填充，默认 0xFF |
+| Copy / Copy Special | 同上、`Hex/Operations/ClipboardUtils.cs` | 右键 Copy Special 子菜单 | ✅ | 十六进制、UTF-8、Unicode、C#/VB 数组、文本、偏移、UInt16/32/64（含大端）、文件偏移 |
+| Paste / Paste Special | 同上 | 右键 Paste Special 子菜单与 Ctrl+V | ✅ | 十六进制、UTF-8/Unicode 字符串（含 7 位长度前缀）、.NET 元数据 Blob |
+| 查找 / 替换 | `Hex/Editor/Search/HexViewSearchService.cs` | 查找条、RPC `hex/find` | 🟡 | 十六进制或文本、F3/Shift+F3、循环；没有替换与增量查找 |
+| 右键「每行字节数」「值格式」 | `Hex/ContextMenuCommands/Commands.cs` | `HexView` 的右键菜单 | ✅ | 每行字节数（适合宽度、8/16/32/48/64）与 33 种值格式，带勾选 |
+| 本地设置对话框 | `Hex/Commands/LocalSettingsDlg.xaml` | `HexLocalSettingsDialog` | ✅ | 列开关、起始/结束/基准位置、相对位置、偏移位数、每行字节数、值格式与偏移格式 |
+| Save Selection | `Hex/ContextMenuCommands/Commands.cs` | 右键 Save Selection...、IPC `hex:saveSelection` | ✅ | 原生保存对话框，按 1 MiB 分块读出后写盘 |
+| 只显示选中字节 | 同上 | 右键的 Show Only Selected Bytes / Show All Bytes（Ctrl+D、Ctrl+Shift+D） | ✅ | 视图限定在选区之内，行号与滚动随之重算 |
+| Refresh | 同上 | 右键 Refresh（F5） | ✅ | 丢弃分块缓存重新读取，编辑与撤销也会自动重读 |
+| 结构信息（悬停、结构高亮） | `Hex/Files/*`、`Hex/Intellisense/*` | 无 | ❌ | 没有 PE/元数据结构模型接到 hex 视图 |
+| F12 跳到代码、Follow 引用、Edit Field | `Hex/ContextMenuCommands/*` | 无 | ❌ | 依赖上一条的结构模型 |
+| 命中范围高亮 | `Hex/Editor/HexMarkerService.cs` | `.hex-byte-marked` | ✅ | 查找结果与「Show ... in Hex Editor」的范围内都标出 |
+| Hex 选项页 | `Hex/HexEditor/*AppSettingsPage.cs` | `HexView` 读取 `hexEditor.hexViewer` | 🟡 | 影响显示的那几项已生效（当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码、每行字节数默认值）；高亮当前值、结构高亮、滚动条与缩放页仍不生效 |
+| 当前行高亮、列分隔线、缩放 | `Hex/Editor/CurrentLineHighlighter.cs` 等 | `.hex-current-line`、`.hex-column-lines`，全局缩放 | ✅ | 前两项跟随选项页；缩放沿用文档标签的 Ctrl+滚轮 |
+| Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs` | `dnspy.hexViews.v1` | 🟡 | 每个文件的光标、选区、每行字节数与值格式在下次打开同一文件时恢复；标签本身仍只由 Reload All 重新打开，不随会话恢复 |
 
-测试：后端 `WorkspaceManagerTests.cs`（有界读取、目标解析、补丁读回）；`SpecialDocuments.test.tsx`；e2e 覆盖 hex 写方法体并撤销、在 hex 中打开指令、`4D 5A` 断言。PE-only/ELF 的读取没有测试。
+实现要点：后端新增 `hex/resolvePosition`、`hex/goToMetadata` 与 `hex/find`（`BE/WorkspaceManager.cs`），`hex/getLength` 与 `hex/readRange` 改为接受 `IModuleEntry`，因此 PE-only、ELF 与未知文件也能浏览；字节写入仍走 `edit/hexPatch`，一次按键一个事务。
+
+测试：后端 `WorkspaceManagerTests.cs`（有界读取、目标解析、补丁读回、位置/元数据/查找、原生 PE 读取）；前端 `hex-model.test.ts`（行布局、值格式、偏移格式、复制/粘贴格式、查找解析）与 `SpecialDocuments.test.tsx`（渲染、分块读取、导航标记、按键、Ctrl+A、键入写字节、无分页）；e2e 覆盖 hex 写方法体并撤销、在 hex 中打开指令、光标移动、Go to Position、查找、Select All、Go to Metadata 与 `4D 5A` 断言。
 
 ### 4.8 元数据/PE 视图与本机反汇编
 
@@ -535,7 +537,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 
-整体完成度约 51%（✅ 29 / 🟡 12 / ❌ 28 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
+整体完成度约 53%（✅ 31 / 🟡 11 / ❌ 27 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
 
 元数据编辑最完整：五类成员的编辑、新建、删除对话框与 WPF 逐页对齐，命名空间操作和事务式撤销也很扎实。差距集中在 Roslyn 源码编辑、方法体编辑器、资源新建与元素编辑、程序集/模块对话框、保存选项。
 
@@ -546,7 +548,7 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | 通用对话框（DnlibDialogs、ViewHelpers） | ~79% | 5 | 1 | 1 | 0 |
 | Commands（菜单落位与杂项命令） | ~75% | 4 | 1 | 1 | 1 |
 | UndoRedo | ~83% | 4 | 2 | 0 | 0 |
-| Hex（修改能力） | ~44% | 3 | 1 | 4 | 0 |
+| Hex（修改能力） | ~63% | 5 | 0 | 3 | 0 |
 | Module | ~38% | 1 | 1 | 2 | 0 |
 | SaveModule | ~33% | 1 | 2 | 3 | 0 |
 | MethodBody | ~28% | 1 | 3 | 5 | 0 |
@@ -618,8 +620,8 @@ Hex 视图（`FE/components/SpecialDocuments.tsx` 的 `HexView`）是只读的�
 | Hex Write return true/false/空方法体 | `AE/Hex/Commands.cs` | `hex-menu.ts` → RPC `edit/hexPatch` | ✅ | |
 | Hex Copy / Paste Method Body | 同上 | 剪贴板传十六进制文本 | ✅ | |
 | Hex 修改接入撤销与保存 | `AE/Hex/HexBufferUndoRedo.cs` | 补丁作为事务操作，保存时重定位 | ✅ | 见缺陷 #7 |
-| Hex 视图里直接改写、粘贴、填充 | `WPF/Hex/ContextMenuCommands/Commands.cs` | 无 | ❌ | |
-| Go to Offset / Metadata / 选择 | 同上 | 偏移输入框 | 🟡 | |
+| Hex 视图里直接改写、粘贴、填充 | `WPF/Hex/ContextMenuCommands/Commands.cs` | `HexView` → `hexWriteBytes`、`edit/hexPatch` | ✅ | 键入、粘贴（含粘贴特殊）、填充与清零，每次一个事务；PE-only/ELF 文件只读 |
+| Go to Offset / Metadata / 选择 | 同上 | `HexGoToPositionDialog`、`HexGoToMetadataDialog`、`HexSelectDialog` | ✅ | 见 4.7 |
 | 单独保存 Hex 文档、改非 .NET 文件 | `AE/Hex/HexTabSaver.cs` | 后端拒绝 PE-only 文件 | ❌ | |
 | 编辑 PE 头与元数据表字段 | `AE/Hex/Nodes/*`、`AE/Hex/PE/*VM.cs` | 无 | ❌ | |
 | MD 表命令与 Go to MD Table Row | `AE/Hex/MDTableContextMenuCommands.cs` | 灰显 | ❌ | |
@@ -943,7 +945,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 1. 修 Save / Save Module 的目标模块（缺陷 #1），以及保存单个模块清掉全局 `dirty`（缺陷 #3）。
 2. ~~停止调试时区分启动的进程与附加的进程，后者走 Detach，并在菜单里加 Detach All（缺陷 #2）~~ 已完成（2026-10-17）。
 3. ~~关闭窗口前，有未保存修改时弹出「保存 / 放弃 / 取消」对话框~~ 已完成（2026-10-14）。
-4. 修 PE-only/ELF 文件的 hex 读取（缺陷 #6）。Raw Save Resource（缺陷 #5）已修。
+4. ~~修 PE-only/ELF 文件的 hex 读取（缺陷 #6）~~ 已完成（2026-10-18）。Raw Save Resource（缺陷 #5）已修。
 5. IL 编辑器默认重算 MaxStack（缺陷 #4）。
 
 **P1：让已有界面生效**（UI 已经做好，只差接线）
@@ -961,7 +963,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 2. 方法体编辑器支持局部变量与异常处理器，以及指令插入、移动和操作数选择器。
 3. ~~调试器的表达式求值与 func-eval、对象字段展开（Watch、Autos、DebuggerDisplay、完整断点条件都依赖它）~~ 已完成（2026-10-17）。
 4. Roslyn 源码编辑（Edit Method / Class (C#)），连带 ModuleImporter 与 Merge with Assembly。
-5. 元数据表子树与表格视图；Hex 视图的光标、选区与直接改写。
+5. 元数据表子树与表格视图；Hex 视图的结构信息与 F12 跳转（光标、选区与直接改写已于 2026-10-18 完成，见 4.7）。
 6. Export to Project 与 CLI（共用 `WholeProjectDecompiler`）。
 7. 保存选项：保留 RID/堆、写 PDB、混合模式模块。
 
@@ -971,16 +973,16 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 ## 6. 测试基线
 
-2026-10-18 C# 交互窗口补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
+2026-10-18 Hex 编辑器浏览补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 459 通过（C# 交互窗口补齐后；此前为 438、425、406、403、359） |
+| 后端 `dotnet test` | 462 通过（Hex 编辑器浏览补齐后；此前为 459、438、425、406、403、359） |
 | 前端 `tsc --noEmit`（`tsconfig.json`、`tsconfig.node.json`） | 0 错误 |
-| 前端 vitest | 1225 通过（C# 交互窗口补齐后；此前为 1214、1201、1103、1095、1041） |
-| e2e（Playwright Electron） | 95 通过、3 跳过、0 失败 |
+| 前端 vitest | 1243 通过（Hex 编辑器浏览补齐后；此前为 1225、1214、1201、1103、1095、1041） |
+| e2e（Playwright Electron） | 96 通过、3 跳过、0 失败 |
 
-调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等。C# 交互窗口这一轮改了 `Protocol.cs` 的脚本记录（输出加颜色、评估响应加 generation、Reset 请求/响应、完整性请求、反向请求），e2e 里钉死的标记随之变为 `RpcException @02000082`、`get_Code @060009EC`（此前依次为 `@02000079`/`@0600095C`、`@0200007A`/`@06000976`）。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
+Hex 编辑器这一轮改了 `Protocol.cs`（三个请求/响应记录：位置解析、元数据定位、查找），e2e 里钉死的标记随之变为 `RpcException @02000088`、`get_Code @06000A56`（此前为 `@02000082`/`@060009EC`）。调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等。C# 交互窗口那一轮改了 `Protocol.cs` 的脚本记录（输出加颜色、评估响应加 generation、Reset 请求/响应、完整性请求、反向请求）。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
 
 复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.10、4.11、4.14、4.15 各节末尾；分析器这次改 `Protocol.cs`（两个请求加语言参数、`TextColors.ILModule`）没有挪动这两个标记。
 
@@ -990,7 +992,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、程序集树（键盘、图标、最近文件、命令行、Reload、移除与撤销）、断点判定与跟踪点、异常设置、书签。
 
-明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、PE-only/ELF 的 hex 读取、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框，以及 Memory 与 Processes 窗口的前端。应用壳里，`--settings-file` 与 `-p`/`-pn` 只有单测、没有 e2e，系统高对比度切换只在单测里模拟；窗口状态与关闭询问有单测，但没有 e2e。
+明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框，以及 Memory 与 Processes 窗口的前端。应用壳里，`--settings-file` 与 `-p`/`-pn` 只有单测、没有 e2e，系统高对比度切换只在单测里模拟；窗口状态与关闭询问有单测，但没有 e2e。
 
 ## 7. 与现有文档的出入
 

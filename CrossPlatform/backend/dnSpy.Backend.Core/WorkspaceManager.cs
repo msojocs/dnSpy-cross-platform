@@ -103,6 +103,15 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 	public Task<HexStatementResponse> ResolveHexStatementAsync(HexStatementRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ResolveHexStatement(request), cancellationToken);
 
+	public Task<HexResolvePositionResponse> ResolveHexPositionAsync(HexResolvePositionRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ResolveHexPosition(request), cancellationToken);
+
+	public Task<HexGoToMetadataResponse> GoToHexMetadataAsync(HexGoToMetadataRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GoToHexMetadata(request), cancellationToken);
+
+	public Task<HexFindResponse> FindHexAsync(HexFindRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindHexAsync(request, cancellationToken), cancellationToken);
+
 	public Task QueueHexPatchAsync(HexPatchRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => {
 			w.QueueHexPatch(request);
@@ -2646,21 +2655,254 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return new DecompileResponse(csharp.Title, "visual-basic", conversion.ConvertedCode, Array.Empty<TextSpanDto>(), diagnostics);
 		}
 
-		public HexLengthResponse GetHexLength(string moduleId) => new(GetModule(moduleId).FileLength);
+		public HexLengthResponse GetHexLength(string moduleId) => new(GetHexEntry(moduleId).FileLength);
 
 		public async Task<HexReadResponse> ReadHexAsync(string moduleId, long offset, int count, CancellationToken cancellationToken) {
-			var module = GetModule(moduleId);
-			if (offset > module.FileLength)
+			var entry = GetHexEntry(moduleId);
+			if (offset > entry.FileLength)
 				throw new RpcException(ErrorCodes.InvalidParams, "Offset is beyond the end of the file.");
-			var actualCount = (int)Math.Min(count, module.FileLength - offset);
+			// A file that could not be read while the tree was built has no length, and reading it would
+			// only raise again — an empty dump is the honest answer, the way dnSpy shows one.
+			var actualCount = (int)Math.Min(count, entry.FileLength - offset);
+			if (actualCount <= 0)
+				return new HexReadResponse(offset, string.Empty, true);
 			var buffer = new byte[actualCount];
-			await using var stream = new FileStream(module.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
-			stream.Position = offset;
-			await stream.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
+			try {
+				await using var stream = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
+				stream.Position = offset;
+				await stream.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
+			}
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+				throw new RpcException(ErrorCodes.SaveFailed, $"The file could not be read: {ex.Message}");
+			}
 			// The file on disk never holds a patch; the hex tab reads the patched image, like every other
-			// reader of the module does.
-			module.OverlayHexPatches(offset, buffer);
-			return new HexReadResponse(offset, Convert.ToBase64String(buffer), offset + actualCount >= module.FileLength);
+			// reader of the module does. Only a managed module can carry patches — the other entries are
+			// read-only documents.
+			if (entry is ModuleEntry module)
+				module.OverlayHexPatches(offset, buffer);
+			return new HexReadResponse(offset, Convert.ToBase64String(buffer), offset + actualCount >= entry.FileLength);
+		}
+
+		/// <summary>
+		/// The file a hex tab shows. Unlike <see cref="GetModule"/>, which answers for the modules an edit can
+		/// reach, this also accepts the read-only files dnSpy opens a hex editor on — a native PE image, an
+		/// ELF image, a file nothing could be read from — because browsing their bytes is the whole point of
+		/// the hex editor there.
+		/// </summary>
+		IModuleEntry GetHexEntry(string moduleId) {
+			if (modules.TryGetValue(moduleId, out var module))
+				return module;
+			if (nodes.TryGetValue(moduleId, out var node) && node.Module is IModuleEntry entry)
+				return entry;
+			if (peModules.TryGetValue(moduleId, out var peModule))
+				return peModule;
+			if (elfFiles.TryGetValue(moduleId, out var elf))
+				return elf;
+			if (unknownFiles.TryGetValue(moduleId, out var unknown))
+				return unknown;
+			throw new RpcException(ErrorCodes.NodeNotFound, "The module no longer exists.");
+		}
+
+		/// <summary>The PE image behind a hex document, which is what RVA and PE-relative addresses need.</summary>
+		static IPEImage? GetPeImage(IModuleEntry entry) => entry switch {
+			ModuleEntry module => module.Module.Metadata.PEImage,
+			PeOnlyModuleEntry pe => pe.PEImage,
+			_ => null,
+		};
+
+		/// <summary>
+		/// What the Go to Position dialog was given, as a file offset. dnSpy's hex buffer is the file itself
+		/// here, so "absolute" and "file" are the same position; "current" arrives as the client already
+		/// having added the delta up, and "rva" goes through the PE image's section table.
+		/// </summary>
+		public HexResolvePositionResponse ResolveHexPosition(HexResolvePositionRequest request) {
+			var entry = GetHexEntry(request.ModuleId);
+			if (request.Value < 0)
+				return new HexResolvePositionResponse(-1);
+			long offset;
+			switch (request.Kind) {
+			case "absolute":
+			case "file":
+			case "current":
+				offset = request.Value;
+				break;
+			case "rva":
+				// An RVA is only meaningful for an image with sections; an ELF file or a file nothing could
+				// be read from has none, which answers "no such position" rather than an error.
+				if (GetPeImage(entry) is not { } peImage)
+					return new HexResolvePositionResponse(-1);
+				// dnlib maps an RVA outside every section onto the file start rather than failing, so the
+				// image's own size decides whether the address means anything first.
+				if (request.Value >= peImage.ImageNTHeaders.OptionalHeader.SizeOfImage)
+					return new HexResolvePositionResponse(-1);
+				try {
+					offset = Convert.ToInt64(Convert.ToUInt64(peImage.ToFileOffset((RVA)(uint)request.Value)));
+				}
+				catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) {
+					return new HexResolvePositionResponse(-1);
+				}
+				break;
+			default:
+				throw new RpcException(ErrorCodes.InvalidParams, $"Unknown position kind '{request.Kind}'.");
+			}
+			return new HexResolvePositionResponse(offset < entry.FileLength ? offset : -1);
+		}
+
+		/// <summary>
+		/// What the Go to Metadata dialog was given, as the file range it names. The stream offsets dnlib
+		/// reports are file offsets, so the only arithmetic is the index inside the stream or the row inside
+		/// the table, exactly as dnSpy's own Go to Metadata does it.
+		/// </summary>
+		public HexGoToMetadataResponse GoToHexMetadata(HexGoToMetadataRequest request) {
+			var entry = GetHexEntry(request.ModuleId);
+			// Metadata only exists in a managed module; a native PE's or an ELF file's hex tab answers
+			// "nothing here", which is what keeps the menu entry from naming a position that is not there.
+			if (entry is not ModuleEntry module || request.Value < 0)
+				return new HexGoToMetadataResponse(null);
+			var metadata = module.Module.Metadata;
+			var value = request.Value;
+			HexRangeDto? range;
+			switch (request.Kind) {
+			case "blob":
+				range = StreamRange(metadata.BlobStream, value, 0);
+				break;
+			case "strings":
+				range = StreamRange(metadata.StringsStream, value, 0);
+				break;
+			case "us":
+				range = StreamRange(metadata.USStream, value & 0x00FFFFFF, 0);
+				break;
+			case "guid":
+				range = value == 0 ? null : StreamRange(metadata.GuidStream, (value - 1) * 16, 16);
+				break;
+			case "table":
+			case "memberRva":
+				range = TableRowRange(module, value, request.Kind == "memberRva");
+				break;
+			default:
+				throw new RpcException(ErrorCodes.InvalidParams, $"Unknown metadata kind '{request.Kind}'.");
+			}
+			return new HexGoToMetadataResponse(range);
+		}
+
+		/// <summary>A range inside one metadata stream, or null when the index runs past its end.</summary>
+		static HexRangeDto? StreamRange(dnlib.DotNet.MD.DotNetStream? stream, long index, long length) {
+			if (stream is null || index < 0 || index > stream.StreamLength)
+				return null;
+			var start = Convert.ToInt64(Convert.ToUInt64(stream.StartOffset));
+			if (length == 0)
+				return new HexRangeDto(start + index, 0);
+			return index + length <= stream.StreamLength ? new HexRangeDto(start + index, length) : null;
+		}
+
+		/// <summary>
+		/// The file range one metadata table row covers. With <paramref name="memberRva"/> the row's first
+		/// column — the RVA, which both the Method and the FieldRVA table keep there — is followed to the
+		/// data it points at, which is dnSpy's "go to method body".
+		/// </summary>
+		static HexRangeDto? TableRowRange(ModuleEntry module, long token, bool memberRva) {
+			var metadata = module.Module.Metadata;
+			if (metadata.TablesStream is not { } tablesStream)
+				return null;
+			var table = (dnlib.DotNet.MD.Table)((token >> 24) & 0xFF);
+			var rid = (uint)(token & 0x00FFFFFF);
+			if (tablesStream.Get(table) is not { } mdTable || !mdTable.IsValidRID(rid))
+				return null;
+			var rowOffset = Convert.ToInt64(Convert.ToUInt64(mdTable.StartOffset)) + (long)(rid - 1) * mdTable.RowSize;
+			if (!memberRva)
+				return new HexRangeDto(rowOffset, mdTable.RowSize);
+			if (table is not (dnlib.DotNet.MD.Table.Method or dnlib.DotNet.MD.Table.FieldRVA))
+				return null;
+			if (metadata.PEImage is not { } peImage)
+				return null;
+			// The row's first column is the RVA. It is read straight out of the image, which is where the
+			// tables live, so the value the table holds is what the file shows.
+			uint rva;
+			try {
+				var reader = peImage.CreateReader();
+				reader.Position = Convert.ToUInt32(Convert.ToUInt64(mdTable.StartOffset) + (rid - 1UL) * (ulong)mdTable.RowSize);
+				rva = reader.ReadUInt32();
+			}
+			catch (Exception ex) when (ex is IOException or ArgumentException) {
+				return null;
+			}
+			if (rva == 0)
+				return null;
+			try {
+				return new HexRangeDto(Convert.ToInt64(Convert.ToUInt64(peImage.ToFileOffset((RVA)rva))), 0);
+			}
+			catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) {
+				return null;
+			}
+		}
+
+		/// <summary>
+		/// One Find step over the file's bytes. The search reads the file in chunks with the pattern's
+		/// length overlapping, so a match straddling two reads is still found, and it sees the hex patches
+		/// the tab shows. A forward search answers the first match at or after <paramref name="start"/>; a
+		/// reverse one answers the last match at or before it.
+		/// </summary>
+		public async Task<HexFindResponse> FindHexAsync(HexFindRequest request, CancellationToken cancellationToken) {
+			var entry = GetHexEntry(request.ModuleId);
+			byte[] pattern;
+			try {
+				pattern = Convert.FromBase64String(request.Base64Pattern);
+			}
+			catch (FormatException ex) {
+				throw new RpcException(ErrorCodes.InvalidParams, "The search pattern is not valid base64.", null, ex);
+			}
+			if (pattern.Length == 0)
+				throw new RpcException(ErrorCodes.InvalidParams, "The search pattern is empty.");
+			var length = entry.FileLength;
+			if (length < pattern.Length)
+				return new HexFindResponse(-1);
+			var start = Math.Clamp(request.Start, 0, length - pattern.Length);
+			var module = entry as ModuleEntry;
+			await using var stream = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
+			// Forward: everything from the start offset to the end. Reverse: everything before the start
+			// offset, so a match that already begins there is not answered again.
+			var found = request.Reverse
+				? await FindInRangeAsync(stream, module, 0, Math.Max(0, start - 1), pattern, reverse: true, cancellationToken).ConfigureAwait(false)
+				: await FindInRangeAsync(stream, module, start, length, pattern, reverse: false, cancellationToken).ConfigureAwait(false);
+			if (found < 0 && request.Wrap) {
+				// Wrap once: the part that was already searched is searched again from the other end.
+				found = request.Reverse
+					? await FindInRangeAsync(stream, module, start - 1, length, pattern, reverse: true, cancellationToken).ConfigureAwait(false)
+					: await FindInRangeAsync(stream, module, 0, start + pattern.Length - 1, pattern, reverse: false, cancellationToken).ConfigureAwait(false);
+			}
+			return new HexFindResponse(found);
+		}
+
+		const int HexFindChunkSize = 1024 * 1024;
+
+		static async Task<long> FindInRangeAsync(FileStream stream, ModuleEntry? module, long from, long to, byte[] pattern, bool reverse, CancellationToken cancellationToken) {
+			if (from < 0)
+				from = 0;
+			if (to > stream.Length)
+				to = stream.Length;
+			if (to - from < pattern.Length)
+				return -1;
+			var buffer = new byte[HexFindChunkSize + pattern.Length - 1];
+			for (var pos = from; pos < to; pos += HexFindChunkSize) {
+				cancellationToken.ThrowIfCancellationRequested();
+				var count = (int)Math.Min(buffer.Length, to - pos);
+				stream.Position = pos;
+				await stream.ReadExactlyAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+				module?.OverlayHexPatches(pos, buffer);
+				if (reverse) {
+					for (var i = count - pattern.Length; i >= 0; i--) {
+						if (buffer.AsSpan(i, pattern.Length).SequenceEqual(pattern))
+							return pos + i;
+					}
+				}
+				else {
+					for (var i = 0; i <= count - pattern.Length; i++) {
+						if (buffer.AsSpan(i, pattern.Length).SequenceEqual(pattern))
+							return pos + i;
+					}
+				}
+			}
+			return -1;
 		}
 
 		/// <summary>

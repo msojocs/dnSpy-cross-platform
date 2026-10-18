@@ -49,6 +49,12 @@ public static class RpcMethods {
 	public const string HexReadRange = "hex/readRange";
 	public const string HexResolveTarget = "hex/resolveTarget";
 	public const string HexResolveStatement = "hex/resolveStatement";
+	/// <summary>Turns what the Go to Position dialog was given into a file offset — absolute, file or RVA.</summary>
+	public const string HexResolvePosition = "hex/resolvePosition";
+	/// <summary>Turns what the Go to Metadata dialog was given into the file range it names.</summary>
+	public const string HexGoToMetadata = "hex/goToMetadata";
+	/// <summary>Finds a byte pattern in the file, from a start offset and in one direction, for Find.</summary>
+	public const string HexFind = "hex/find";
 	public const string EditHexPatch = "edit/hexPatch";
 	public const string ModuleGetInfo = "module/getInfo";
 	public const string EditBegin = "edit/begin";
@@ -552,6 +558,37 @@ public sealed record HexStatementResponse(string? ModuleId, HexRangeDto? Range);
 /// transaction like any other edit, so it undoes and redoes with the rest of them.
 /// </summary>
 public sealed record HexPatchRequest(string WorkspaceId, string TransactionId, string NodeId, long Offset, string Base64Data);
+
+/// <summary>
+/// What the Go to Position dialog asked for. <see cref="Kind"/> is "absolute" (the hex editor's own
+/// addressing), "file" (a PE file offset), "rva" (a relative virtual address) or "current" (a delta from
+/// the position the dialog opened at, which the client has already added up before asking).
+/// </summary>
+public sealed record HexResolvePositionRequest(string WorkspaceId, string ModuleId, string Kind, long Value);
+
+/// <summary>The file offset the position names, or -1 when the file has no such position.</summary>
+public sealed record HexResolvePositionResponse(long Offset);
+
+/// <summary>
+/// What the Go to Metadata dialog asked for. <see cref="Kind"/> is "table" (a metadata token),
+/// "memberRva" (a method or field RVA row's token), "blob", "strings", "us" (an index into the #US
+/// stream, with or without its 0x70 tag byte) or "guid" (a 1-based index into the #GUID stream).
+/// <see cref="Value"/> is the token or index.
+/// </summary>
+public sealed record HexGoToMetadataRequest(string WorkspaceId, string ModuleId, string Kind, long Value);
+
+/// <summary>The range the metadata item covers, or null when the file has no such item.</summary>
+public sealed record HexGoToMetadataResponse(HexRangeDto? Range);
+
+/// <summary>
+/// One Find step. The pattern is the exact bytes to look for; <see cref="Start"/> is where the search
+/// begins (inside the found range for "find next"), and <see cref="Wrap"/> makes it start over at the
+/// other end of the file when it runs off it.
+/// </summary>
+public sealed record HexFindRequest(string WorkspaceId, string ModuleId, string Base64Pattern, long Start, bool Reverse, bool Wrap);
+
+/// <summary>The offset the pattern was found at, or -1 when it was not.</summary>
+public sealed record HexFindResponse(long Offset);
 
 public sealed record ModuleInfoRequest(string WorkspaceId, string ModuleId);
 

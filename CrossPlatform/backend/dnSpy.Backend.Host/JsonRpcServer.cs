@@ -218,6 +218,12 @@ internal sealed class JsonRpcServer {
 				return await workspaces.ResolveHexTargetAsync(DeserializeParams<HexTargetRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.HexResolveStatement:
 				return await workspaces.ResolveHexStatementAsync(DeserializeParams<HexStatementRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.HexResolvePosition:
+				return await workspaces.ResolveHexPositionAsync(DeserializeParams<HexResolvePositionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.HexGoToMetadata:
+				return await workspaces.GoToHexMetadataAsync(DeserializeParams<HexGoToMetadataRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.HexFind:
+				return await workspaces.FindHexAsync(DeserializeParams<HexFindRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleGetInfo:
 				return await workspaces.GetModuleInfoAsync(DeserializeParams<ModuleInfoRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditBegin:

@@ -1178,23 +1178,55 @@ select:focus-visible,
   background: var(--surface);
 }
 
+/* The hex editor: a scrollable dump over a status bar, with the find bar and the context menu floating
+   over it. dnSpy's colours come from the theme's hex text entries. */
+.hex-view {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 22px;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+}
+
 .hex-content {
   min-width: max-content;
   min-height: 0;
   margin: 0;
   padding: 8px 12px;
   overflow: auto;
+  outline: none;
   user-select: text;
   background: var(--tcbg-hextext, var(--surface));
   color: var(--tc-hextext, var(--text));
-  line-height: 1.5;
+  line-height: 20px;
   white-space: pre;
+  cursor: text;
+}
+
+.hex-content:focus {
+  outline: none;
 }
 
 /* One row of the dump. Rendering it a row at a time is what lets a single byte be marked, which a
    whole-dump text node could not do. */
 .hex-line {
-  min-height: 20px;
+  height: 20px;
+  white-space: pre;
+}
+
+/* The gutter between the drawn rows and the lines that are scrolled past, which is what makes the
+   scrollbar's size the file's size. */
+.hex-spacer {
+  pointer-events: none;
+}
+
+.hex-values {
+  padding-left: 1ch;
+}
+
+.hex-ascii {
+  padding-left: 1ch;
 }
 
 .hex-address {
@@ -1202,9 +1234,155 @@ select:focus-visible,
   opacity: 0.75;
 }
 
+/* Every other group of bytes wears the shared textual colour, the way dnSpy alternates them. */
+.hex-byte.hex-group-1 {
+  opacity: 0.85;
+}
+
+.hex-column-lines .hex-values {
+  border-left: 1px solid var(--border);
+  margin-left: 1ch;
+}
+
+.hex-column-lines .hex-ascii {
+  border-left: 1px solid var(--border);
+  margin-left: 1ch;
+}
+
 /* Marked with the same colour the menus and selection use, so it reads as the current selection. */
 .hex-byte-marked {
   background: var(--selection);
+}
+
+/* The hit range a "Show ... in Hex Editor" command named, and the selection in the caret's column. */
+.hex-byte-selected {
+  background: var(--tcbg-hexselected, var(--selection));
+}
+
+.hex-highlight-current-line .hex-current-line {
+  background: var(--tcbg-hexcurrentline, transparent);
+}
+
+.hex-byte-caret {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.hex-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px;
+  border-top: 1px solid var(--border);
+  background: var(--wpf-EnvironmentWindowBackgroundColor, var(--surface));
+  color: var(--text-muted, var(--text));
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.hex-status-offset {
+  font-family: var(--font-family-monospace, monospace);
+}
+
+/* dnSpy's Find control floats in the dump's top right corner. */
+.hex-find {
+  position: absolute;
+  top: 6px;
+  right: 18px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 25%);
+}
+
+.hex-find input {
+  width: 200px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+}
+
+.hex-find-status {
+  padding-right: 4px;
+  color: var(--error, #d9534f);
+}
+
+/* The context menu is the menu bar's popup, pinned where the right-click landed. */
+.hex-context-menu {
+  position: fixed;
+  z-index: 200;
+}
+
+.hex-dialog {
+  min-width: 360px;
+  max-width: 460px;
+}
+
+.hex-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.hex-kind-row,
+.hex-check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hex-kind-row {
+  padding: 1px 0;
+}
+
+.hex-kind-shortcut {
+  margin-left: auto;
+  color: var(--text-muted, var(--text));
+}
+
+.hex-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hex-field > span:first-child {
+  flex: none;
+  width: 150px;
+}
+
+.hex-field input,
+.hex-field select {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+}
+
+.hex-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px 10px;
+  border: 1px solid var(--border);
+}
+
+.hex-fieldset > legend {
+  padding: 0 4px;
+  color: var(--text-muted, var(--text));
 }
 
 .module-info-view {

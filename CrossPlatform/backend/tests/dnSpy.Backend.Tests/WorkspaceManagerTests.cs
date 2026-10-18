@@ -788,6 +788,103 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	[Fact]
+	public async Task AHexPositionIsAnAbsoluteFileOrRvaAddressAndAMetadataItemIsItsRow() {
+		var opened = await OpenContractsAssemblyAsync();
+		var moduleId = Assert.Single(opened.Modules).Id;
+
+		// Absolute and file positions are the same address here: the buffer is the file.
+		var absolute = await manager.ResolveHexPositionAsync(
+			new HexResolvePositionRequest(opened.WorkspaceId, moduleId, "absolute", 0x20),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(0x20, absolute.Offset);
+
+		// What the RVA of the DOS header maps to is the start of the file, which is where "MZ" lives.
+		var rva = await manager.ResolveHexPositionAsync(
+			new HexResolvePositionRequest(opened.WorkspaceId, moduleId, "rva", 0),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(0, rva.Offset);
+
+		// A position past the end is "no such position", not an error the caller has to catch.
+		var beyond = await manager.ResolveHexPositionAsync(
+			new HexResolvePositionRequest(opened.WorkspaceId, moduleId, "rva", 0x7FFF_FFFF),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(-1, beyond.Offset);
+
+		// A metadata token names the row the tables stream holds for it; the range covers that row.
+		var table = await manager.GoToHexMetadataAsync(
+			new HexGoToMetadataRequest(opened.WorkspaceId, moduleId, "table", 0x02000005),
+			TestContext.Current.CancellationToken);
+		var row = Assert.IsType<HexRangeDto>(table.Range);
+		Assert.True(row.Offset > 0);
+		Assert.True(row.Length > 0);
+		// #Strings offset 1 is the first string, an empty one in every writer that starts with a zero byte;
+		// what matters is that the range sits inside the file.
+		var strings = await manager.GoToHexMetadataAsync(
+			new HexGoToMetadataRequest(opened.WorkspaceId, moduleId, "strings", 1),
+			TestContext.Current.CancellationToken);
+		Assert.NotNull(strings.Range);
+		var length = (await manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, moduleId), TestContext.Current.CancellationToken)).Length;
+		Assert.InRange(strings.Range!.Offset, 0, length - 1);
+
+		// A token no table holds is answered with "nothing here".
+		var invalid = await manager.GoToHexMetadataAsync(
+			new HexGoToMetadataRequest(opened.WorkspaceId, moduleId, "table", 0x02FFFFFF),
+			TestContext.Current.CancellationToken);
+		Assert.Null(invalid.Range);
+	}
+
+	[Fact]
+	public async Task FindHexAnswersMatchesInEitherDirectionAndWraps() {
+		var opened = await OpenContractsAssemblyAsync();
+		var moduleId = Assert.Single(opened.Modules).Id;
+		var dosHeader = Convert.ToBase64String([(byte)'M', (byte)'Z']);
+
+		var first = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, dosHeader, 0, false, false),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(0, first.Offset);
+
+		// Find next starts after the match it was given, so the next "MZ" is the one to look for.
+		var next = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, dosHeader, 1, false, false),
+			TestContext.Current.CancellationToken);
+		Assert.True(next.Offset > 0, "A PE image spells MZ again inside its metadata or a string.");
+
+		var previous = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, dosHeader, next.Offset, true, false),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(0, previous.Offset);
+
+		// A pattern nothing holds answers -1, and wrapping does not invent one.
+		var missing = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, Convert.ToBase64String([0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0x00]), 0, false, true),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(-1, missing.Offset);
+
+		// A search sees the hex patches the tab shows, not the file on disk.
+		await CommitHexPatchAsync(opened.WorkspaceId, moduleId, 0x200, [0xCA, 0xFE, 0xBA, 0xBE]);
+		var patched = await manager.FindHexAsync(
+			new HexFindRequest(opened.WorkspaceId, moduleId, Convert.ToBase64String([0xCA, 0xFE, 0xBA, 0xBE]), 0, false, false),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(0x200, patched.Offset);
+	}
+
+	[Fact]
+	public async Task AHexReadOfANativePeFileWorksEvenThoughItCannotBeEdited() {
+		// A PE file that is not managed gets a hex editor in dnSpy all the same; the read is what has to
+		// accept it, while every edit path keeps refusing it.
+		var path = Path.Combine(AppContext.BaseDirectory, "dnSpy.Backend.Tests.dll");
+		var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+		var assemblyId = Assert.Single(opened.Modules).Id;
+		var length = await manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, assemblyId), TestContext.Current.CancellationToken);
+		Assert.True(length.Length > 0);
+		var bytes = Convert.FromBase64String((await manager.ReadHexAsync(
+			new HexReadRequest(opened.WorkspaceId, assemblyId, 0, 2),
+			TestContext.Current.CancellationToken)).Base64Data);
+		Assert.Equal("MZ", System.Text.Encoding.ASCII.GetString(bytes));
+	}
+
+	[Fact]
 	public async Task APatchShowsUpInTheHexReadAndUndoPutsTheOriginalBytesBack() {
 		var opened = await OpenContractsAssemblyAsync();
 		var moduleId = Assert.Single(opened.Modules).Id;

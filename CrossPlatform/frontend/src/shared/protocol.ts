@@ -646,6 +646,28 @@ export interface HexStatementResponse {
   range: HexRange | null
 }
 
+/** What Go to Position accepts: the hex editor's own address, a PE file offset, a relative virtual
+ * address, or a delta from the position the dialog opened at. */
+export type HexPositionKind = 'absolute' | 'file' | 'rva' | 'current'
+
+export interface HexResolvePositionResponse {
+  /** The file offset, or -1 when the file has no such position. */
+  offset: number
+}
+
+/** What Go to Metadata accepts: a table token, a method or field RVA row's token, an index into one of
+ * the metadata streams, or a 1-based GUID index. */
+export type HexMetadataKind = 'table' | 'memberRva' | 'blob' | 'strings' | 'us' | 'guid'
+
+export interface HexGoToMetadataResponse {
+  range: HexRange | null
+}
+
+export interface HexFindResponse {
+  /** The offset the pattern was found at, or -1 when it was not. */
+  offset: number
+}
+
 export interface ModuleInfoResponse {
   name: string
   path: string
@@ -1651,6 +1673,17 @@ export interface DnSpyApi {
   /** Queues a raw byte patch over the module's file image, undone and redone with the rest of the
    * transaction's edits. */
   patchHex(workspaceId: string, transactionId: string, nodeId: string, offset: number, base64Data: string): Promise<void>
+  /** What the Go to Position dialog was given — "absolute", "file", "rva" or "current" — as a file
+   * offset, or -1 when the file has no such position. */
+  resolveHexPosition(workspaceId: string, moduleId: string, kind: HexPositionKind, value: number): Promise<HexResolvePositionResponse>
+  /** What the Go to Metadata dialog was given as the file range it names, or null when the file has no
+   * such item. */
+  goToHexMetadata(workspaceId: string, moduleId: string, kind: HexMetadataKind, value: number): Promise<HexGoToMetadataResponse>
+  /** One Find step: the offset the pattern was found at, or -1. */
+  findHex(workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean): Promise<HexFindResponse>
+  /** Saves a byte range of the file to a file the user picks — dnSpy's Save Selection. Answers the path
+   * written, or undefined when the dialog was cancelled. */
+  saveHexSelection(workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string): Promise<string | undefined>
   getModuleInfo(workspaceId: string, moduleId: string): Promise<ModuleInfoResponse>
   beginEdit(workspaceId: string): Promise<BeginEditResponse>
   getMethodBody(workspaceId: string, methodNodeId: string): Promise<MethodBodyResponse>

@@ -597,6 +597,29 @@ const registerIpc = (): void => {
   ipcMain.handle('hex:resolveTarget', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('hex/resolveTarget', { workspaceId, nodeId }))
   ipcMain.handle('hex:resolveStatement', (_event, workspaceId: string, modulePath: string, metadataToken: number, ilOffset: number, ilEndOffset: number) => requireBackend().invoke('hex/resolveStatement', { workspaceId, modulePath, metadataToken, ilOffset, ilEndOffset }))
   ipcMain.handle('hex:patch', (_event, workspaceId: string, transactionId: string, nodeId: string, offset: number, base64Data: string) => requireBackend().invoke('edit/hexPatch', { workspaceId, transactionId, nodeId, offset, base64Data }))
+  ipcMain.handle('hex:resolvePosition', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/resolvePosition', { workspaceId, moduleId, kind, value }))
+  ipcMain.handle('hex:goToMetadata', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/goToMetadata', { workspaceId, moduleId, kind, value }))
+  ipcMain.handle('hex:find', (_event, workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean) => requireBackend().invoke('hex/find', { workspaceId, moduleId, base64Pattern, start, reverse, wrap }))
+  // dnSpy's Hex Editor › Save Selection: the bytes are read back in the same bounded chunks the view uses
+  // and written to the file the user picks, so a selection of any size saves without being held twice.
+  ipcMain.handle('hex:saveSelection', async (_event, workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string) => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: nativeText().saveCode,
+      defaultPath: suggestedName ?? 'hex.bin',
+      filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
+    })
+    if (result.canceled || !result.filePath)
+      return undefined
+    const chunks: Buffer[] = []
+    const maxRead = 1024 * 1024
+    for (let position = 0; position < count; position += maxRead) {
+      const read = Math.min(maxRead, count - position)
+      const response = await requireBackend().invoke<{ base64Data: string }>('hex/readRange', { workspaceId, moduleId, offset: offset + position, count: read })
+      chunks.push(Buffer.from(response.base64Data, 'base64'))
+    }
+    await writeFile(result.filePath, Buffer.concat(chunks))
+    return result.filePath
+  })
   ipcMain.handle('module:info', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('module/getInfo', { workspaceId, moduleId }))
   ipcMain.handle('edit:begin', (_event, workspaceId: string) => requireBackend().invoke('edit/begin', { workspaceId }))
   ipcMain.handle('edit:getMethodBody', (_event, workspaceId: string, methodNodeId: string) => requireBackend().invoke('edit/getMethodBody', { workspaceId, methodNodeId }))

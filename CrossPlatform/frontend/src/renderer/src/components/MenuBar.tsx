@@ -708,7 +708,7 @@ export const MenuBar = ({
   )
 }
 
-const MenuPopup = ({ items, onClose, depth = 0 }: { items: MenuItem[]; onClose: () => void; depth?: number }): React.JSX.Element => {
+export const MenuPopup = ({ items, onClose, depth = 0 }: { items: MenuItem[]; onClose: () => void; depth?: number }): React.JSX.Element => {
   const [openIndex, setOpenIndex] = useState<number | undefined>()
   return (
     <div className={depth === 0 ? 'menu-popup' : 'menu-popup menu-submenu'} role="menu">

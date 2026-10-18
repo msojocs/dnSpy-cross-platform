@@ -93,7 +93,19 @@ public static class RpcMethods {
 	/// <summary>The debugger options the engine acts on, which apply to every session, running or not.</summary>
 	public const string DebugSetOptions = "debug/setOptions";
 	public const string ScriptEvaluate = "script/evaluate";
+	/// <summary>Drops the session and builds a fresh one; <see cref="ScriptResetRequest.LoadConfig"/> is the
+	/// <c>#reset noconfig</c> argument.</summary>
 	public const string ScriptReset = "script/reset";
+	/// <summary>Whether the input is a complete submission — dnSpy's <c>SyntaxFactory.IsCompleteSubmission</c>,
+	/// which decides whether Enter submits it or inserts a new line.</summary>
+	public const string ScriptIsComplete = "script/isComplete";
+	/// <summary>A notification: the lines a submission printed so far, sent while it still runs.</summary>
+	public const string ScriptOutput = "script/output";
+	/// <summary>A request from the host to the client — a script's message box or input box. Answered with
+	/// <see cref="ClientResponse"/>.</summary>
+	public const string ClientRequest = "client/request";
+	/// <summary>The client's answer to a <see cref="ClientRequest"/>, sent as a notification.</summary>
+	public const string ClientResponse = "client/response";
 	/// <summary>The exception types the debug engine can break on, with their default and current settings.</summary>
 	public const string ExceptionGet = "exceptions/get";
 	/// <summary>Applies the client's Add/Remove/Update diff against the defaults and answers with the new list.</summary>
@@ -1059,11 +1071,11 @@ public sealed record DebugEventNotification(string SessionId, string Event, Json
 
 public sealed record ScriptEvaluateRequest(string Code);
 
-/// <summary>
-/// One line of the C# Interactive window. <paramref name="Kind"/> is one of the
-/// <see cref="ScriptOutputEntry"/> constants and picks the colour the client paints it in.
-/// </summary>
-public sealed record ScriptOutputEntry(string Kind, string Text) {
+/// <summary>One line of the C# Interactive window. <paramref name="Kind"/> is one of the
+/// <see cref="ScriptOutputEntry"/> constants and picks the colour the client paints it in;
+/// <paramref name="Color"/> is a color class name (see <see cref="TextColors"/>) when the line has one of
+/// its own, which is what a script's <c>Print(TextColor, ...)</c> asks for.</summary>
+public sealed record ScriptOutputEntry(string Kind, string Text, string? Color = null) {
 	/// <summary>Something the script printed — <c>PrintLine</c>, or the script's own <c>Console</c>.</summary>
 	public const string Output = "output";
 
@@ -1077,7 +1089,52 @@ public sealed record ScriptOutputEntry(string Kind, string Text) {
 	public const string Banner = "banner";
 }
 
-public sealed record ScriptEvaluateResponse(IReadOnlyList<ScriptOutputEntry> Entries);
+/// <summary>The lines the submission produced that were not already streamed, and the generation of the
+/// session they belong to — a response carrying an older generation is from a session a reset replaced.</summary>
+public sealed record ScriptEvaluateResponse(IReadOnlyList<ScriptOutputEntry> Entries, int Generation);
+
+/// <summary><paramref name="LoadConfig"/> is false for <c>#reset noconfig</c>: the new engine starts without
+/// the response file's references and imports. <paramref name="ShowBanner"/> is true when the window opens
+/// rather than for a reset, since the WPF window prints its engine banner only the first time.</summary>
+public sealed record ScriptResetRequest(bool LoadConfig = true, bool ShowBanner = false);
+
+/// <summary>The banner of the engine that replaced the old one, and the generation every later output
+/// notification carries — a line printed by the session that was reset belongs to a generation the client
+/// drops.</summary>
+public sealed record ScriptResetResponse(IReadOnlyList<ScriptOutputEntry> Entries, int Generation);
+
+/// <summary>A notification: one line a submission produced, sent while it still runs. The client ignores a
+/// generation older than the one its reset answered with.</summary>
+public sealed record ScriptOutputNotification(int Generation, ScriptOutputEntry Entry);
+
+/// <summary>The C# Interactive window's input, to be checked for completeness before Enter submits it.</summary>
+public sealed record ScriptIsCompleteRequest(string Code);
+
+/// <summary>Whether the input is a complete submission.</summary>
+public sealed record ScriptIsCompleteResponse(bool Complete);
+
+/// <summary>
+/// A request the host sends the client, for the things a script needs a UI for — its
+/// <see cref="MsgBoxButton"/>s and input boxes. <paramref name="Id"/> is echoed in the answer.
+/// </summary>
+public sealed record ClientRequestNotification(string Id, string Method, JsonElement Parameters);
+
+/// <summary>The client's answer to a <see cref="ClientRequestNotification"/>. Exactly one of
+/// <paramref name="Result"/> and <paramref name="Error"/> is set.</summary>
+public sealed record ClientResponseNotification(string Id, JsonElement? Result, string? Error);
+
+/// <summary>
+/// What the script service needs from its client: the lines a submission prints while it runs, and the UI a
+/// script asks for. A host without a window passes null for the client, and the UI methods answer as if the
+/// user had closed the box.
+/// </summary>
+public interface IScriptClient {
+	/// <summary>One line a submission produced, in the generation's session.</summary>
+	void WriteOutput(int generation, ScriptOutputEntry entry);
+
+	/// <summary>Asks the client's UI for an answer; null when it has none.</summary>
+	Task<JsonElement?> RequestAsync(string method, JsonElement parameters, CancellationToken cancellationToken);
+}
 
 /// <summary>
 /// A breakpoint the client asked for, expressed in decompiled-source coordinates. A breakpoint that

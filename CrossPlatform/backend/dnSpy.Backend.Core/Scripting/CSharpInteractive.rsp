@@ -1,0 +1,17 @@
+# The C# Interactive window's response file, read from the directory the backend runs in or from dnSpy's
+# data directory. The same options as the WPF window's CSharpInteractive.rsp:
+#
+#   /r:assembly or /r:"path"     add a reference
+#   /u:Namespace                 import a namespace
+#   /lib:path                    look for references in this directory too
+#   /loadpath:path               look for #load scripts in this directory too
+#
+# The BCL and the host's own assemblies are available without a line here; this file adds the two
+# namespaces a script needs for TextColor and for Resolve<T>().
+
+/r:dnSpy.Backend.Contracts
+/r:dnSpy.Backend.Core
+/r:dnlib
+
+/u:dnSpy.Backend.Contracts
+/u:dnSpy.Backend.Core

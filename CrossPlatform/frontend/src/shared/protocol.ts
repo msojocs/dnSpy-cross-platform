@@ -1411,12 +1411,43 @@ export type ScriptOutputKind = 'output' | 'result' | 'error' | 'banner' | 'echo'
 export interface ScriptOutputEntry {
   kind: ScriptOutputKind
   text: string
+  /** A color class name the line carries of its own — what a script's `Print(TextColor, ...)` asks for. */
+  color?: string | null
   /** An `echo` entry's semantic colors, the ones its input had when it was submitted. */
   colors?: ClassifiedSpan[]
 }
 
 export interface ScriptEvaluateResponse {
   entries: ScriptOutputEntry[]
+  /** The session the submission ran in; a response from an older generation belongs to a reset engine. */
+  generation: number
+}
+
+/** What `#reset` passes: `loadConfig` is the `noconfig` argument; `showBanner` is the window opening. */
+export interface ScriptResetOptions {
+  loadConfig?: boolean
+  showBanner?: boolean
+}
+
+export interface ScriptResetResponse {
+  entries: ScriptOutputEntry[]
+  generation: number
+}
+
+/** A notification: one line a submission produced, sent while it still runs. */
+export interface ScriptOutputNotification {
+  generation: number
+  entry: ScriptOutputEntry
+}
+
+/** A script's `Ask<T>`: the input box the window shows, and what it displays beside it. */
+export interface ScriptAskRequest {
+  id: string
+  label: string
+  defaultText?: string | null
+  title?: string | null
+  /** Why the previous answer was refused, or null for the first ask. */
+  error?: string | null
 }
 
 /** The user interface languages: English and the cultures dnSpy ships a `*.Resources.<culture>.resx` for. */
@@ -1730,7 +1761,15 @@ export interface DnSpyApi {
   /** Runs one submission in the C# Interactive session and returns the lines it produced. */
   evaluateScript(code: string): Promise<ScriptEvaluateResponse>
   /** Drops the C# Interactive session and builds a fresh one, reporting the engine banner. */
-  resetScript(): Promise<ScriptEvaluateResponse>
+  resetScript(options?: ScriptResetOptions): Promise<ScriptResetResponse>
+  /** Whether the C# Interactive input is a complete submission, which is what makes Enter run it. */
+  isScriptComplete(code: string): Promise<{ complete: boolean }>
+  /** Lines a submission prints while it is still running. */
+  onScriptOutput(callback: (notification: ScriptOutputNotification) => void): () => void
+  /** A script's `Ask<T>` box: answer with `respondScriptAsk`. */
+  onScriptAsk(callback: (request: ScriptAskRequest) => void): () => void
+  /** Answers the ask box; null is its Cancel button. */
+  respondScriptAsk(id: string, text: string | null): Promise<void>
   minimizeWindow(): Promise<void>
   /** Restores and focuses the window, as the debugger does when the process breaks. */
   bringWindowToFront(): Promise<void>

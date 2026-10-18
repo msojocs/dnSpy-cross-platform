@@ -147,6 +147,11 @@ export class BackendClient {
     })
   }
 
+  /** Sends a notification, the direction a request's answer and a cancellation travel. */
+  notify(method: string, params: unknown): void {
+    this.sendNotification(method, params)
+  }
+
   async dispose(): Promise<void> {
     const child = this.process
     if (!child)

@@ -242,12 +242,79 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
     const request = searchRequests.get(progress.progressToken)
     if (request && !request.sender.isDestroyed())
       request.sender.send('search:progress', { requestKey: request.requestKey, start: progress.start, results: progress.results })
+  } else if (method === 'script/output') {
+    mainWindow?.webContents.send('script:output', parameters)
+  } else if (method === 'client/request') {
+    void handleClientRequest(parameters as ClientRequest)
   } else if (method === 'stringReferences/progress') {
     const progress = parameters as { progressToken: string; start: number; references: StringReference[] }
     const request = stringReferencesRequests.get(progress.progressToken)
     if (request && !request.sender.isDestroyed())
       request.sender.send('stringReferences:progress', { requestKey: request.requestKey, start: progress.start, references: progress.references })
   }
+}
+
+// What a script's message box and input box ask the client for. The host waits for the answer, so a
+// question that cannot be shown has to be answered anyway — with the box closed.
+interface ClientRequest {
+  id: string
+  method: string
+  parameters: {
+    message?: string
+    buttons?: string[]
+    label?: string
+    defaultText?: string | null
+    title?: string | null
+    error?: string | null
+  }
+}
+
+const answerClientRequest = (id: string, result: unknown): void =>
+  backend?.notify('client/response', { id, result, error: null })
+
+/** The text of one of dnSpy's MsgBox buttons. */
+const msgBoxButtonLabel = (id: string): string => {
+  const text = nativeText()
+  switch (id) {
+    case 'cancel': return text.cancel
+    case 'yes': return text.yes
+    case 'no': return text.no
+    default: return text.ok
+  }
+}
+
+const handleClientRequest = async (request: ClientRequest): Promise<void> => {
+  const parameters = request.parameters ?? {}
+  if (request.method === 'script/ask') {
+    if (!mainWindow || mainWindow.webContents.isDestroyed()) {
+      answerClientRequest(request.id, { text: null })
+      return
+    }
+    mainWindow.webContents.send('script:ask', {
+      id: request.id,
+      label: parameters.label ?? '',
+      defaultText: parameters.defaultText ?? null,
+      title: parameters.title ?? null,
+      error: parameters.error ?? null,
+    })
+    return
+  }
+  // dnSpy's MsgBox: a message and the buttons the script asked for. The answer is a button name.
+  const names = parameters.buttons && parameters.buttons.length > 0 ? parameters.buttons : ['ok']
+  if (!mainWindow) {
+    answerClientRequest(request.id, { button: names[0] })
+    return
+  }
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: parameters.title ?? 'dnSpy',
+    message: parameters.message ?? '',
+    buttons: names.map(msgBoxButtonLabel),
+    defaultId: 0,
+    cancelId: names.includes('cancel') ? names.indexOf('cancel') : -1,
+    noLink: true,
+  })
+  answerClientRequest(request.id, { button: names[response] ?? names[0] })
 }
 
 const createWindow = (): void => {
@@ -806,7 +873,12 @@ const registerIpc = (): void => {
   // A submission may legitimately run for minutes, which the 60 s default would cut short; the
   // resulting system/cancel would look to the user like a script that simply never finished.
   ipcMain.handle('script:evaluate', (_event, code: string) => requireBackend().invoke('script/evaluate', { code }, 600_000))
-  ipcMain.handle('script:reset', () => requireBackend().invoke('script/reset', {}, 600_000))
+  ipcMain.handle('script:reset', (_event, options: { loadConfig?: boolean; showBanner?: boolean } | undefined) =>
+    requireBackend().invoke('script/reset', { loadConfig: options?.loadConfig ?? true, showBanner: options?.showBanner ?? false }, 600_000))
+  ipcMain.handle('script:isComplete', (_event, code: string) => requireBackend().invoke('script/isComplete', { code }))
+  ipcMain.handle('script:askResponse', (_event, id: string, text: string | null) => {
+    requireBackend().notify('client/response', { id, result: { text }, error: null })
+  })
 
   ipcMain.handle('script:classify', (_event, code: string) => requireBackend().invoke('script/classify', { code }))
   // The Roslyn language service of a C# code editor: one backend workspace per open document.

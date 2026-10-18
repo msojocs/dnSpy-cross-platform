@@ -8,7 +8,11 @@ using dnSpy.Backend.Host;
 var options = HostOptions.Parse(args);
 using var shutdown = new CancellationTokenSource();
 using var workspaceManager = new WorkspaceManager();
-using var scriptService = new CSharpScriptService();
+// The script engine's output and its message boxes go through the server, which does not exist yet; the
+// client is attached once it does. The workspace is what a script's Resolve<T>() answers with.
+var scriptClient = new JsonRpcScriptClient();
+using var scriptService = new CSharpScriptService(scriptClient);
+scriptService.Services.Register(workspaceManager);
 using var languageService = new RoslynLanguageService();
 // The workspace manager resolves decompiled-source breakpoints to IL for the debug engine, so the
 // engine is created after it and handed the interface. A null engine means the host runs without
@@ -28,6 +32,7 @@ var server = new JsonRpcServer(
 	debugManager,
 	options,
 	shutdown);
+scriptClient.Server = server;
 
 try {
 	await server.RunAsync(shutdown.Token).ConfigureAwait(false);

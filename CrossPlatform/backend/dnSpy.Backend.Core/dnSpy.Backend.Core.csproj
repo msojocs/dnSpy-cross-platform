@@ -9,6 +9,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The default response file the script engine reads, shipped beside the host. -->
+    <None Include="Scripting\CSharpInteractive.rsp" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="dnSpy.Backend.Tests" />
   </ItemGroup>
 

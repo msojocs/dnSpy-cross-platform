@@ -1,0 +1,78 @@
+import { describe, expect, it } from 'vitest'
+import type { ScriptOutputEntry } from '../../../shared/protocol'
+import { scriptCodeText, scriptLines, scriptText } from '../script-lines'
+
+describe('scriptLines', () => {
+  it('joins the fragments a submission prints onto one line until the newline', () => {
+    const entries: ScriptOutputEntry[] = [
+      { kind: 'echo', text: 'Print("a"); PrintLine("b");' },
+      { kind: 'output', text: 'a' },
+      { kind: 'output', text: 'b\n' },
+      { kind: 'result', text: '2\n', color: 'replOutputText' },
+    ]
+
+    expect(scriptLines(entries)).toEqual([
+      { kind: 'echo', parts: [{ text: '> ' }, { text: 'Print("a"); PrintLine("b");' }], code: 'Print("a"); PrintLine("b");' },
+      { kind: 'output', parts: [{ text: 'a' }, { text: 'b' }] },
+      { kind: 'result', parts: [{ text: '2', color: 'replOutputText' }] },
+    ])
+  })
+
+  it('splits an entry that carries several lines and ends terminal kinds without a newline', () => {
+    const entries: ScriptOutputEntry[] = [
+      { kind: 'error', text: 'CS0103: first\nsecond\n', color: 'error' },
+      { kind: 'help', text: 'Keyboard shortcuts:' },
+    ]
+
+    expect(scriptLines(entries)).toEqual([
+      { kind: 'error', parts: [{ text: 'CS0103: first', color: 'error' }] },
+      { kind: 'error', parts: [{ text: 'second', color: 'error' }] },
+      { kind: 'help', parts: [{ text: 'Keyboard shortcuts:' }] },
+    ])
+  })
+
+  it('writes a multi-line echo with the secondary prompt and its own colors per line', () => {
+    const entries: ScriptOutputEntry[] = [{
+      kind: 'echo',
+      text: 'if (true) {\n  Missing();\n}',
+      colors: [
+        { start: 0, length: 2, color: 'keyword' },
+        { start: 14, length: 7, color: 'error' },
+      ],
+    }]
+
+    const [first, second, third] = scriptLines(entries)
+    expect(first.parts).toEqual([{ text: '> ' }, { text: 'if (true) {', colors: [{ start: 0, length: 2, color: 'keyword' }] }])
+    expect(second.parts).toEqual([{ text: '. ' }, { text: '  Missing();', colors: [{ start: 2, length: 7, color: 'error' }] }])
+    expect(third.parts).toEqual([{ text: '. ' }, { text: '}' }])
+  })
+
+  it('keeps an empty line that two newlines make', () => {
+    expect(scriptLines([{ kind: 'output', text: 'one\n\ntwo\n' }])).toEqual([
+      { kind: 'output', parts: [{ text: 'one' }] },
+      { kind: 'output', parts: [{ text: '' }] },
+      { kind: 'output', parts: [{ text: 'two' }] },
+    ])
+  })
+})
+
+describe('scriptText and scriptCodeText', () => {
+  const entries: ScriptOutputEntry[] = [
+    { kind: 'echo', text: 'var x = 1;' },
+    { kind: 'output', text: 'hello\n' },
+    { kind: 'echo', text: 'x + 1' },
+    { kind: 'result', text: '2\n' },
+  ]
+
+  it('writes the whole window with its prompts', () => {
+    expect(scriptText(entries, 'x + 2')).toBe('> var x = 1;\nhello\n> x + 1\n2\n> x + 2')
+  })
+
+  it('writes only the submitted code, leaving output and prompts out', () => {
+    expect(scriptCodeText(entries, 'x + 2')).toBe('var x = 1;\nx + 1\nx + 2')
+  })
+
+  it('leaves a blank pending input out', () => {
+    expect(scriptCodeText(entries, '  ')).toBe('var x = 1;\nx + 1')
+  })
+})

@@ -24,6 +24,9 @@ internal sealed class JsonRpcServer {
 	readonly CancellationTokenSource shutdown;
 	readonly SemaphoreSlim outputGate = new(1, 1);
 	readonly ConcurrentDictionary<string, CancellationTokenSource> requests = new(StringComparer.Ordinal);
+	/// <summary>The answers to the client requests the host is waiting for — a script's message box or input box.</summary>
+	readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement?>> clientRequests = new(StringComparer.Ordinal);
+	int nextClientRequestId;
 	readonly JsonSerializerOptions jsonOptions = CreateJsonOptions();
 	volatile bool handshakeComplete;
 
@@ -315,7 +318,13 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.ScriptEvaluate:
 				return await scripts.EvaluateAsync(DeserializeParams<ScriptEvaluateRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ScriptReset:
-				return await scripts.ResetAsync().ConfigureAwait(false);
+				var reset = DeserializeParams<ScriptResetRequest>(request);
+				return await scripts.ResetAsync(reset.LoadConfig, reset.ShowBanner, cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ScriptIsComplete:
+				return new ScriptIsCompleteResponse(CSharpScriptService.IsCompleteSubmission(DeserializeParams<ScriptIsCompleteRequest>(request).Code));
+			case RpcMethods.ClientResponse:
+				CompleteClientRequest(DeserializeParams<ClientResponseNotification>(request));
+				return new { acknowledged = true };
 			case RpcMethods.ScriptClassify:
 				return await scripts.ClassifyAsync(DeserializeParams<ScriptClassifyRequest>(request).Code, cancellationToken).ConfigureAwait(false);
 			case RpcMethods.LanguageServiceOpen:
@@ -424,21 +433,62 @@ internal sealed class JsonRpcServer {
 		Error = new RpcError(code, message),
 	}, CancellationToken.None).ConfigureAwait(false);
 
-	async Task WriteResponseAsync(RpcResponse response, CancellationToken cancellationToken) {
+#pragma warning disable VSTHRD103 // Synchronous I/O is deliberate: see WriteNotificationAsync.
+	Task WriteResponseAsync(RpcResponse response, CancellationToken cancellationToken) {
 		var payload = JsonSerializer.SerializeToUtf8Bytes(response, jsonOptions);
 		var header = Encoding.ASCII.GetBytes($"Content-Length: {payload.Length}\r\n\r\n");
-		await outputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		outputGate.Wait(cancellationToken);
 		try {
-			await output.WriteAsync(header, cancellationToken).ConfigureAwait(false);
-			await output.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-			await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+			output.Write(header, 0, header.Length);
+			output.Write(payload, 0, payload.Length);
+			output.Flush();
 		}
 		finally {
 			outputGate.Release();
 		}
+		return Task.CompletedTask;
+	}
+#pragma warning restore VSTHRD103
+
+
+	/// <summary>One line a script produced, while it is still running.</summary>
+	internal Task WriteScriptOutputAsync(ScriptOutputNotification notification) =>
+		WriteNotificationAsync(RpcMethods.ScriptOutput, notification);
+
+	/// <summary>
+	/// Asks the client's UI a question and waits for its <see cref="RpcMethods.ClientResponse"/> notification.
+	/// A canceled wait answers null, the same as a box the user closed.
+	/// </summary>
+	internal async Task<JsonElement?> RequestClientAsync(string method, JsonElement parameters, CancellationToken cancellationToken) {
+		var id = Interlocked.Increment(ref nextClientRequestId).ToString();
+		var pending = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously);
+		clientRequests[id] = pending;
+		using var registration = cancellationToken.Register(() => {
+			if (clientRequests.TryRemove(id, out var request))
+				request.TrySetResult(null);
+		});
+		try {
+			await WriteNotificationAsync(RpcMethods.ClientRequest, new ClientRequestNotification(id, method, parameters)).ConfigureAwait(false);
+			return await pending.Task.ConfigureAwait(false);
+		}
+		finally {
+			clientRequests.TryRemove(id, out _);
+		}
 	}
 
-	async Task WriteNotificationAsync(string method, object parameters) {
+	void CompleteClientRequest(ClientResponseNotification response) {
+		if (clientRequests.TryRemove(response.Id, out var pending))
+			pending.TrySetResult(response.Error is null ? response.Result : null);
+	}
+
+	/// <summary>
+	/// Writes one frame. The write is synchronous: a script's output is written from the script's own thread,
+	/// which blocks until the frame is on the wire anyway, and a pipe write that only finishes on a thread-pool
+	/// thread would deadlock against that thread on a host with one processor (the async write's continuation
+	/// needs a pool thread the blocked caller is holding).
+	/// </summary>
+#pragma warning disable VSTHRD103 // Synchronous I/O is deliberate here too: see the comment below.
+	Task WriteNotificationAsync(string method, object parameters) {
 		try {
 			var payload = JsonSerializer.SerializeToUtf8Bytes(new {
 				jsonrpc = "2.0",
@@ -446,11 +496,11 @@ internal sealed class JsonRpcServer {
 				@params = parameters,
 			}, jsonOptions);
 			var header = Encoding.ASCII.GetBytes($"Content-Length: {payload.Length}\r\n\r\n");
-			await outputGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+			outputGate.Wait();
 			try {
-				await output.WriteAsync(header).ConfigureAwait(false);
-				await output.WriteAsync(payload).ConfigureAwait(false);
-				await output.FlushAsync().ConfigureAwait(false);
+				output.Write(header, 0, header.Length);
+				output.Write(payload, 0, payload.Length);
+				output.Flush();
 			}
 			finally {
 				outputGate.Release();
@@ -459,7 +509,9 @@ internal sealed class JsonRpcServer {
 		catch (Exception ex) {
 			HostLog.Error("notification-write-failed", ex);
 		}
+		return Task.CompletedTask;
 	}
+#pragma warning restore VSTHRD103
 
 	async Task<byte[]?> ReadFrameAsync(CancellationToken cancellationToken) {
 		var headerBuffer = new ArrayBufferWriter<byte>();

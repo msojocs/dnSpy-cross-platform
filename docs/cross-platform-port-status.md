@@ -46,7 +46,7 @@
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~83% | 63 | 16 | 7 | 4 | Roslyn 表达式求值与 func-eval，Locals/Autos/Watch 1–4 可展开、改值、DebuggerDisplay；Set Next Statement、Run to Cursor、模块断点、返回值；Threads/Modules/Processes/Memory/Disassembly 窗口；缺 Mono/Unity 与多进程 |
 | 程序集编辑（AsmEditor） | ~51% | 29 | 12 | 28 | 2 | 元数据对话框完整；没有 C# 编辑，方法体编辑器很弱，保存无选项 |
-| C# 交互窗口 | ~44% | 6 | 10 | 9 | 2 | REPL 主流程可用，输入有语义着色；脚本访问不到 dnSpy，输出一次性返回 |
+| C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
 | 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；无导出项目 |
 | 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
@@ -111,7 +111,7 @@
 | 5 | ~~Raw Save Resource 与 Save Resource 写出相同的字节：主进程丢掉了 `raw` 参数~~ 已修复（2026-10-13）：改走 `resource/getItems`，`raw` 一路传到后端 | `MAIN/index.ts` 的 `edit:saveResource` | 已核实 |
 | 6 | PE-only、ELF、未知文件的 Open Hex Editor 读不出数据：`GetHexLength` / `ReadHexAsync` 走 `GetModule()`，对这三类文件抛异常 | `BE/WorkspaceManager.cs` | 代码推断 |
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
-| 8 | C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志 | `BE/Scripting/CSharpScriptService.cs` | 代码推断 |
+| 8 | ~~C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志~~ 已修复（2026-10-18）：会话各自持有执行锁、取消源与 generation；Reset 取消旧令牌并触发 `ScriptResetting` 后立即建立新会话，排队中的提交随旧令牌取消，旧会话的输出按 generation 丢弃。另：输出帧改为同步写入管道，避免单核机器上同步等待异步写造成的死锁 | `BE/Scripting/CSharpScriptService.cs`、`BE/JsonRpcServer.cs` | 已核实 |
 | 9 | ~~基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持~~ 已修复（2026-10-16）：基类型行可分析，菜单打开前向后端确认引用能解析（WPF 的 CanAnalyze），解析不了的不显示「分析」 | `FE/components/CodeEditorContextMenu.tsx`、`FE/components/AssemblyExplorer.tsx` | 已核实 |
 | 10 | 编辑器里单击引用时光标显示为手形，但只有 Ctrl+单击才跳转，而且在同一标签里跳（WPF 单击跳转，Ctrl+单击开新标签） | `FE/components/DocumentView.tsx` 的 `onMouseDown` | 代码推断 |
 
@@ -818,7 +818,7 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 
 ### 4.14 C# 交互窗口（Scripting）
 
-完成度约 44%（✅ 6 / 🟡 10 / ❌ 9 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`BE/Scripting/CSharpScriptService.cs`，RPC `script/evaluate`、`script/reset`、`script/classify`。
+完成度约 98%（✅ 24 / 🟡 1 / ❌ 0 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`FE/script-lines.ts`、`BE/Scripting/CSharpScriptService.cs`；RPC `script/evaluate`、`script/reset`、`script/isComplete`、`script/classify`，通知 `script/output`，以及宿主反向请求 `client/request` / `client/response`。
 
 脚本在后端 Host 进程内执行；计划文档 §3.2 写的是「独立子进程隔离执行环境」，与实现不符。
 
@@ -826,33 +826,45 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 |---|---|---|---|
 | 打开窗口（Ctrl+Alt+N） | `CSharp/CSharpToolWindowContent.cs` | ✅ | |
 | 持久会话，变量跨提交保留 | `Common/ScriptControlVM.cs` | ✅ | |
-| 返回值、诊断、异常格式化 | 同上 | ✅ | |
-| 横幅与提示语 | `CSharp/CSharpControlVM.cs` | ✅ | |
-| `#help` | `Common/HelpCommand.cs` | ✅ | |
-| 清屏 | `Common/ClearCommand.cs` | 🟡 | 没有 Ctrl+L 和右键菜单 |
-| 重置 | `Common/ResetCommand.cs` | 🟡 | 见缺陷 #8 |
-| `#r` / `#load` 与搜索路径 | `ScriptControlVM.cs` | 🟡 | 相对路径只在后端安装目录解析 |
-| 预置引用与 `.rsp` | `CSharpInteractive.rsp` | 🟡 | 写死 9 个 using，用户不能配置 |
-| 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | 🟡 | Enter 无条件提交 |
-| 历史 | `Text/Editor/ReplCommandInfoProvider.cs` | 🟡 | 只有 Alt+↑/↓，没有前缀匹配 |
-| Escape 清空输入、Ctrl+A 两段选择 | `ReplCommandTargetFilter.cs` | ❌ | |
+| 返回值、诊断、异常格式化 | 同上 | ✅ | 诊断最多 5 条，其余按 WPF 写成 `+ additional N error(s)` |
+| 横幅与提示语 | `CSharp/CSharpControlVM.cs` | ✅ | 开窗依次打印引擎版本、`Loading context from '...'`（找到响应文件时）和 `Type "#help" for more information.` |
+| `#help` | `Common/HelpCommand.cs` | ✅ | 与 WPF 同一张表：Enter、Ctrl+Enter、Shift+Enter、Esc、Alt+↑/↓、Ctrl+Alt+↑/↓、Ctrl+A |
+| 清屏 | `Common/ClearCommand.cs` | ✅ | 工具栏、右键菜单与 Ctrl+L |
+| 重置 | `Common/ResetCommand.cs` | ✅ | `#reset [noconfig]`；取消旧会话、触发 `ScriptResetting`，随即建立新会话，不等待不响应取消的脚本（缺陷 #8 已修复） |
+| `#r` / `#load` 与搜索路径 | `ScriptControlVM.cs` | ✅ | 相对路径按用户目录、`~/scripts`、数据目录/scripts、程序目录/scripts 解析；`#r` 的简单程序集名先查运行时程序集，再交给 Roslyn |
+| 预置引用与 `.rsp` | `CSharpInteractive.rsp` | ✅ | 读程序目录与数据目录的 `CSharpInteractive.rsp`（随 Host 发布并可改），支持 `/r`、`/u`、`/lib`、`/loadpath`；`#reset noconfig` 跳过 |
+| 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | ✅ | Enter 只提交 `#` 命令或 `IsCompleteSubmission` 为真的输入，否则换行；Ctrl+Enter 强制提交；Shift+Enter 换行；Escape 清空输入 |
+| 历史 | `Text/Editor/ReplCommandInfoProvider.cs` | ✅ | Alt+↑/↓ 遍历；Ctrl+Alt+↑/↓ 只选匹配当前输入的命令；保留最近 100 条 |
+| Escape 清空输入、Ctrl+A 两段选择 | `ReplCommandTargetFilter.cs` | ✅ | 第一次 Ctrl+A 选当前输入，第二次选整个日志 |
 | 输入代码语义着色 | `ScriptControlVM.cs` | ✅ | `script/classify` 按会话的下一次提交编译输入，用 `RoslynClassifier` 的映射给出 dnSpy 主题色，未绑定的名字为红色；回显保留输入时的颜色（见 4.15） |
-| Print / PrintLine / PrintError | `dnSpy.Contracts.DnSpy/Scripting/Roslyn/IScriptGlobals.cs` | 🟡 | 每次 Print 单独成行；缺部分重载 |
-| 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ❌ | |
-| 输出实时出现 | 同上 | 🟡 | 整次提交结束后一次返回 |
-| PrintOptions | `Common/PrintOptionsImpl.cs` | ❌ | |
-| `Resolve<T>` 访问 dnSpy 服务 | `WPF/Scripting/ServiceLocator.cs` | ❌ | 脚本读不到已打开的程序集 |
-| 消息框与输入框 | `ScriptGlobals.cs` | ❌ | |
+| Print / PrintLine / PrintError | `dnSpy.Contracts.DnSpy/Scripting/Roslyn/IScriptGlobals.cs` | ✅ | 全套重载：格式串、`TextColor`、`object` 值、异常、`PrintLineError`；`Print` 留在当前行，`PrintLine` 结束它 |
+| 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ✅ | `TextColor` 枚举（复制 WPF 的全部颜色名）、`Write(ColorAndText)`、`CreateWriter()`、`IOutputWriter` / `IOutputWritable` |
+| 输出实时出现 | 同上 | ✅ | 每行以 `script/output` 通知推送，带 generation；脚本在后台线程的打印也继续追加到日志 |
+| PrintOptions | `Common/PrintOptionsImpl.cs` | ✅ | Ellipsis、EscapeNonPrintableCharacters、MaximumOutputLength、MemberDisplayFormat、NumberRadix、AutoColorizeObjects |
+| `Resolve<T>` 访问 dnSpy 服务 | `WPF/Scripting/ServiceLocator.cs` | ✅ | 后端服务注册表；Host 登记 `WorkspaceManager`，脚本可用 `Resolve<WorkspaceManager>()` 读取已打开的程序集。可解析的服务比 WPF 的窗口服务少 |
+| 消息框与输入框 | `ScriptGlobals.cs` | ✅ | `Show`/`ShowYesNo`/… 走客户端原生消息框，`Ask<T>` 弹输入框并按 converter/verifier 重问直到有效或取消；没有 `ownerWindow` 参数（WPF 的 `Window` 类型） |
 | UI 线程（UIDispatcher、`UI(...)`） | 同上 | ⛔ | WPF Dispatcher 专属 |
-| 生命周期与协作取消（Token、Break） | 同上 | ❌ | |
-| 复制、Copy Code、剪切、粘贴 | `Common/Commands.cs` | 🟡 | 没有 Copy Code 和右键菜单 |
-| 保存文本 / 保存代码 | `Commands/RoslynReplIds.cs` | ❌ | |
-| 自动换行开关 | `Common/ReplSettings.cs` | ❌ | 写死为开 |
-| 显示行号开关 | `Common/Commands.cs` | ❌ | 写死为关 |
-| REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | 🟡 | 不生效 |
+| 生命周期与协作取消（Token、Break） | 同上 | ✅ | `Token`、`ScriptResetting`（重置时先取消令牌再触发，未注销的脚本输出仍可见）、`Break()` |
+| 复制、Copy Code、剪切、粘贴 | `Common/Commands.cs` | ✅ | 右键菜单与 Ctrl+C / Ctrl+Shift+C / Ctrl+X / Ctrl+V；Copy Code 要有选区，取提交过的代码（日志里的选区按整行取，WPF 是精确字符区间） |
+| 保存文本 / 保存代码 | `Commands/RoslynReplIds.cs` | ✅ | Ctrl+S / Ctrl+Shift+S 与右键菜单；Save 写整个窗口（含提示符），Save Code 只写提交过的代码与当前输入（选中的日志行按整行取） |
+| 自动换行开关 | `Common/ReplSettings.cs` | ✅ | 工具栏复选框，状态存进 REPL 选项 |
+| 显示行号开关 | `Common/Commands.cs` | ✅ | 右键菜单与选项页；默认开（同 WPF 的 `ShowLineNumbers`）；日志与输入框是分开的视图，行号画在输入框上 |
+| REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | 🟡 | General（自动换行、行号、当前行高亮）、Scroll Bars、Tabs 与 Advanced 的 Indicator margin / Mouse wheel zoom / Don't add extra line spacing 已生效；Advanced 的压缩空行、Selection margin、Zoom control、引用高亮与缩进参考线在拆分后的 Monaco 输入框里没有对应 |
 | VB Interactive | `VisualBasic/*` | ⛔ | WPF 自己在 csproj 中排除了 VB 文件 |
 
-测试：后端 `CSharpScriptServiceTests.cs` 16 条（含 5 条着色）；前端 `app-store.test.ts` 中约 13 条；e2e 2 个场景（提交与会话、语义着色）。
+实现要点：
+
+- **实时输出**：`script/output` 通知把每一行（连同颜色类）在脚本运行时推给窗口，响应只在没有客户端时（单测、无窗口宿主）返回整批结果。帧改成了同步写管道：脚本线程会阻塞到行写进管道，而单核宿主上「同步等待异步写」会让异步续体排在被阻塞的线程池线程之后，形成死锁。
+- **重置与隔离**：每个会话有自己的执行锁、取消源和 generation。Reset 只取消旧会话并换上新会话，所以不响应取消的脚本不会拖住新引擎；旧会话的输出与迟到结果按 generation 丢弃。排队中的提交用旧令牌取消。
+- **反向请求**：脚本的 `Show`/`Ask<T>` 由宿主发出 `client/request` 通知，主进程用原生消息框回答，或把输入框交给渲染进程的弹窗（`onScriptAsk` / `respondScriptAsk`），答案以 `client/response` 通知回到宿主。无窗口的宿主按「用户取消」回答。
+- **脚本可见性与兼容层**：`dnSpy.Backend.Contracts/Scripting.cs` 复刻了 WPF 的 `TextColor`、`IPrintOptions`、`IOutputWriter`、`IOutputWritable`、`ICachedWriter`、`MsgBoxButton`，因为脚本只能引用后端契约程序集。默认引用包含 `dnSpy.Backend.Contracts`、`dnSpy.Backend.Core`、`dnlib`，默认导入再加两个 dnSpy 命名空间。
+
+实现文件：
+
+- 后端：`BE/Scripting/CSharpScriptService.cs`（会话、输出路由、globals）、`ScriptAssemblyResolver.cs`（`#r` 与 `/r` 的解析）、`ResponseFileReader.cs`（rsp 与 `RespFileUtils`）、`Scripting/CSharpInteractive.rsp`；`BE/dnSpy.Backend.Contracts/Scripting.cs`；`BE/JsonRpcServer.cs` 的分发、通知与反向请求；`BE/JsonRpcScriptClient.cs`
+- 前端：`FE/components/CSharpInteractive.tsx`（工具栏、命令、右键菜单、Ask 弹窗、选项）、`FE/script-lines.ts`（把带换行的输出片段拼回行、Save/Copy Code 的文本）、`FE/app-store.ts`（`#` 命令、history、generation 过滤）、`MAIN/index.ts` 与 `PRELOAD/index.ts`（`script:isComplete`、`script:output`、`script:ask`）
+
+测试：后端 `CSharpScriptServiceTests.cs` 37 条（除原有 REPL 语义外，新增完整性判断、Print 重载与颜色、PrintOptions、CachedWriter、rsp 与 noconfig、`#r`/`#load` 搜索路径、Resolve、消息框/输入框与重问、运行中实时输出、不响应取消脚本上的 Reset、ScriptResetting）；前端 `CSharpInteractive.test.tsx` 7 条（输出片段拼行、多行回显、空行、Save/Copy Code 文本）、`app-store.test.ts` 新增 5 条（noconfig、流式输出、generation 过滤与迟到响应）；e2e 3 个场景（提交与会话、编辑键与历史/保存/实时输出/Ask、语义着色）。
 
 ### 4.15 Roslyn 语言服务
 
@@ -955,20 +967,20 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 **P3：扩展范围**
 
-字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；~~Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor~~（2026-10-17 已完成）；Mono/Unity 调试；脚本 `Resolve<T>` API；扩展系统；更新检查。
+字符串引用窗口；程序集与模块属性对话框；资源新建与元素编辑；~~Memory、Disassembly、Processes 等调试窗口；Set Next Statement 与 Run to Cursor~~（2026-10-17 已完成）；~~脚本 `Resolve<T>` API~~（2026-10-18 已完成）；Mono/Unity 调试；扩展系统；更新检查。
 
 ## 6. 测试基线
 
-2026-10-17 调试器补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
+2026-10-18 C# 交互窗口补齐后在本机重新跑过（后端与前端都是真实构建，`DebugTarget` 夹具也重新构建）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 438 通过（应用壳补齐后为 425，分析器补齐后为 406，字符串引用与 Roslyn 复核后为 403，应用壳复核时为 359） |
+| 后端 `dotnet test` | 459 通过（C# 交互窗口补齐后；此前为 438、425、406、403、359） |
 | 前端 `tsc --noEmit`（`tsconfig.json`、`tsconfig.node.json`） | 0 错误 |
-| 前端 vitest | 1214 通过（应用壳补齐后为 1201，分析器补齐后为 1103，字符串引用与 Roslyn 复核后为 1095，应用壳复核后为 1041） |
-| e2e（Playwright Electron） | 94 通过、3 跳过、0 失败 |
+| 前端 vitest | 1225 通过（C# 交互窗口补齐后；此前为 1214、1201、1103、1095、1041） |
+| e2e（Playwright Electron） | 95 通过、3 跳过、0 失败 |
 
-调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等；`Protocol.cs` 只在末尾追加了类型，`RpcException @0200007A`、`get_Code @06000976` 没有挪动。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
+调试器这一轮把变量窗口的数字改成与 WPF 一样默认十六进制，e2e 里 Locals 的断言随之写成 `0x0000002A` 等。C# 交互窗口这一轮改了 `Protocol.cs` 的脚本记录（输出加颜色、评估响应加 generation、Reset 请求/响应、完整性请求、反向请求），e2e 里钉死的标记随之变为 `RpcException @02000082`、`get_Code @060009EC`（此前依次为 `@02000079`/`@0600095C`、`@0200007A`/`@06000976`）。引擎的 JSON 回复改为驼峰命名（`DebugJson`），着色片段到前端是 `{ text, color }`。
 
 复核前 HEAD 后端和前端都构建不过（见 4.11），所以那之前记的数字都来自更早的构建。改 `Protocol.cs` 后 e2e 里钉死的元数据标记变为 `RpcException @02000079`、`get_Code @0600095C`；整包导入 Monaco 带来的右键光标定位回归（「keeps the caret on what it was right-clicked on」）随 `monaco.ts` 改回 `editor.api` 消失。这一轮新增的用例见 4.10、4.11、4.14、4.15 各节末尾；分析器这次改 `Protocol.cs`（两个请求加语言参数、`TextColors.ILModule`）没有挪动这两个标记。
 
@@ -986,7 +998,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 |---|---|---|
 | `docs/linux-release-1.0.md` | 调试「不含异常断点与表达式求值」 | 两者都已实现（4.13，表达式求值于 2026-10-17 补上） |
 | `docs/linux-release-1.0.md` | 稳定版功能包含「ECMA-335 Metadata Tables」 | 只有 Module Information 中的各表行数，没有元数据表视图（4.8） |
-| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 438 / 1214 / 94（见第 6 节） |
+| `docs/linux-release-1.0.md` | 验证结果：.NET 13/13、Vitest 2/2、Electron 7/7 | 当前为 459 / 1225 / 95（见第 6 节） |
 | `docs/linux-release-1.0.md` | 能力包含「嵌入资源替换」「结构化 IL 方法体编辑」 | 属实，但方法体编辑不能编辑局部变量和异常处理器（4.12） |
 | `docs/linux-support-plan.md` §3.2 | C#/VB 交互窗口在「独立子进程隔离执行环境」中运行 | 脚本在后端 Host 进程内执行，没有 VB（4.14） |
 | `docs/linux-support-plan.md` §14 | 验收条件包含「恢复窗口尺寸」「查看监视表达式」 | 窗口尺寸与位置自 2026-10-14 起会恢复（4.1）；监视表达式仍未实现 |

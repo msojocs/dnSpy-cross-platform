@@ -31,6 +31,7 @@ import type {
   OpenedModule,
   ClassifiedSpan,
   ScriptOutputEntry,
+  ScriptOutputNotification,
   SpecialNodeKind,
   TextSpan,
   TreeNode,
@@ -317,6 +318,8 @@ interface AppState {
   scriptHistory: string[]
   /** Set once the session has been built, so reopening the window does not rebuild it. */
   scriptStarted: boolean
+  /** The generation of the session; a line streamed by an older one belongs to a reset engine and is dropped. */
+  scriptGeneration: number
   /**
    * Where the hex commands point for the selected node: a method's body and code, a field's initial
    * value, a resource's data. Resolved when the selection changes, since the Edit menu has to know
@@ -685,8 +688,11 @@ interface AppState {
    * the log keeps, as dnSpy's REPL keeps a submitted command's colors; without them the echo is classified first.
    */
   evaluateScript(code: string, colors?: ClassifiedSpan[]): Promise<void>
-  /** Rebuilds the session, which is what `#reset` does and what drops the script's variables. */
-  resetScript(): Promise<void>
+  /** Rebuilds the session, which is what `#reset` does and what drops the script's variables.
+   *  `loadConfig` is false for `#reset noconfig`. */
+  resetScript(loadConfig?: boolean): Promise<void>
+  /** Appends a line the host streamed while a submission runs. */
+  appendScriptOutput(notification: ScriptOutputNotification): void
   clearScriptOutput(): void
   /** Reprints the `#help` text without going near the host. */
   showScriptHelp(): void
@@ -794,6 +800,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   scriptRunning: false,
   scriptHistory: [],
   scriptStarted: false,
+  scriptGeneration: 0,
   busy: false,
   dirty: false,
   canUndo: false,
@@ -3041,16 +3048,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   startScript: async () => {
     if (get().scriptStarted) return
     set({ scriptStarted: true })
-    await rebuildScriptSession(set)
+    subscribeScriptOutput()
+    // Opening the window is the one case that prints the engine banner: the WPF window's Logo comes from
+    // OnVisible, not from Reset.
+    await rebuildScriptSession(set, { loadConfig: true, showBanner: true })
     appendScriptEntries(set, [{ kind: 'help', text: t('Type "#help" for more information.') }])
   },
 
-  resetScript: async () => {
+  resetScript: async (loadConfig = true) => {
     // The window narrates every explicit reset — the toolbar button and `#reset` alike, as the
     // upstream command does. Opening the window is the one case that prints the banner alone.
     appendScriptEntries(set, [{ kind: 'output', text: t('Resetting execution engine.') }])
-    await rebuildScriptSession(set)
+    await rebuildScriptSession(set, { loadConfig, showBanner: false })
   },
+
+  appendScriptOutput: (notification) => set((state) => {
+    // A line from the engine a reset replaced belongs to a session nobody is looking at any more.
+    if (notification.generation < state.scriptGeneration)
+      return {}
+    return {
+      scriptGeneration: notification.generation,
+      scriptEntries: [...state.scriptEntries, notification.entry].slice(-MAX_SCRIPT_ENTRIES),
+    }
+  }),
 
   evaluateScript: async (code, colors) => {
     const submission = code.trim()
@@ -3065,7 +3085,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Pressing Enter twice on the same line should not fill the history with copies of it.
       scriptHistory: history[history.length - 1] === submission ? history : [...history, submission].slice(-MAX_SCRIPT_HISTORY),
     }))
-    switch (scriptCommandOf(submission)) {
+    const command = scriptCommandOf(submission)
+    switch (command?.name) {
       case 'clear':
       case 'cls':
         get().clearScriptOutput()
@@ -3074,13 +3095,20 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().showScriptHelp()
         return
       case 'reset':
-        await get().resetScript()
+        // `#reset noconfig` starts the engine without its response file, as dnSpy's ResetCommand does.
+        await get().resetScript(!command.args.includes('noconfig'))
         return
     }
     set({ scriptRunning: true })
     try {
       const response = await window.dnSpy.evaluateScript(submission)
+      // A host with a client streams every line as it is produced and answers with none; a headless one
+      // (or a test) answers with the whole batch instead.
       appendScriptEntries(set, response.entries)
+      // A response that arrives after a reset belongs to the engine the reset replaced; its generation must
+      // not move the window back to that session.
+      if (response.generation > get().scriptGeneration)
+        set({ scriptGeneration: response.generation })
     } catch (error) {
       appendScriptEntries(set, [scriptFailureEntry(error)])
     } finally {
@@ -4550,10 +4578,10 @@ const SCRIPT_COMMANDS = ['clear', 'cls', 'help', 'reset']
  * case-sensitively and only as the first word, exactly like the window's `#` parser, so `#Help`
  * reaches the compiler and fails the way it does upstream.
  */
-const scriptCommandOf = (submission: string): string | undefined => {
+const scriptCommandOf = (submission: string): { name: string; args: string[] } | undefined => {
   if (!submission.startsWith('#')) return undefined
-  const [name] = submission.slice(1).trimStart().split(/\s+/)
-  return name !== undefined && SCRIPT_COMMANDS.includes(name) ? name : undefined
+  const [name, ...args] = submission.slice(1).trimStart().split(/\s+/)
+  return name !== undefined && SCRIPT_COMMANDS.includes(name) ? { name, args } : undefined
 }
 
 const appendScriptEntries = (set: StoreSet, entries: ScriptOutputEntry[]): void => {
@@ -4570,11 +4598,25 @@ const classifySubmission = async (submission: string): Promise<ClassifiedSpan[] 
   }
 }
 
-const rebuildScriptSession = async (set: StoreSet): Promise<void> => {
+/**
+ * Listens for the lines the host streams while a submission runs. The window shows them as they arrive,
+ * which is how a script that prints for a minute fills the log instead of answering all at once; the
+ * subscription outlives every reset, since a new session streams the same way.
+ */
+let scriptOutputSubscribed = false
+const subscribeScriptOutput = (): void => {
+  if (scriptOutputSubscribed || typeof window === 'undefined' || !window.dnSpy?.onScriptOutput)
+    return
+  scriptOutputSubscribed = true
+  window.dnSpy.onScriptOutput((notification) => useAppStore.getState().appendScriptOutput(notification))
+}
+
+const rebuildScriptSession = async (set: StoreSet, options: { loadConfig: boolean; showBanner: boolean }): Promise<void> => {
   set({ scriptRunning: true })
   try {
-    const response = await window.dnSpy.resetScript()
+    const response = await window.dnSpy.resetScript(options)
     appendScriptEntries(set, response.entries)
+    set({ scriptGeneration: response.generation })
   } catch (error) {
     appendScriptEntries(set, [scriptFailureEntry(error)])
   } finally {
@@ -4593,17 +4635,18 @@ const helpRow = (command: string, description: string): ScriptOutputEntry => ({
   text: `  ${command}${' '.repeat(Math.max(1, 21 - command.length))}${description}`,
 })
 
-/**
- * The `#help` text. Upstream lists Ctrl+A and Ctrl+Alt+Up/Down as well; those are not bound in
- * this input box, and advertising a shortcut that does nothing is worse than leaving it out.
- */
+/** The `#help` text, in the order and wording of dnSpy's HelpCommand. */
 const scriptHelpEntries = (): ScriptOutputEntry[] => [
   { kind: 'help', text: t('Keyboard shortcuts:') },
   helpRow('Enter', t('Execute the command')),
   helpRow('Ctrl+Enter', t('Execute the command')),
   helpRow('Shift+Enter', t('Insert a new line')),
+  helpRow('Esc', t('Clear current input')),
   helpRow('Alt+Up Arrow', t('Show previous command')),
   helpRow('Alt+Down Arrow', t('Show next command')),
+  helpRow('Ctrl+Alt+Up Arrow', t('Show previous command matching the current input text')),
+  helpRow('Ctrl+Alt+Down Arrow', t('Show next command matching the current input text')),
+  helpRow('Ctrl+A', t('Select input text. Press again to select all text')),
   { kind: 'help', text: t('REPL commands:') },
   helpRow('#clear, #cls', t('Clear the script editor')),
   helpRow('#help', t('Display the help')),

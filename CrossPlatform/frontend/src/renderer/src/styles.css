@@ -835,6 +835,52 @@ select:focus-visible,
   font-size: 11px;
 }
 
+/* ScriptControl.xaml's Separator between the history buttons and Save. */
+.script-toolbar-separator {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+/* A script's Ask<T> box, which has no WPF analogue in the window itself (MsgBox.Ask opens its own). */
+.script-ask-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 35%);
+}
+
+.script-ask {
+  display: grid;
+  gap: 8px;
+  min-width: 340px;
+  max-width: 640px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.script-ask-error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.script-ask-input {
+  width: 100%;
+}
+
+.script-ask-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .script-log {
   overflow: auto;
   white-space: pre-wrap;

@@ -150,7 +150,19 @@ const api: DnSpyApi = {
   saveDebugModule: async (sessionId, moduleId, path) => (await ipcRenderer.invoke('debug:saveModule', sessionId, { moduleId, path })).body?.path ?? '',
   disconnectDebug: (sessionId, terminateDebuggee) => ipcRenderer.invoke('debug:disconnect', sessionId, terminateDebuggee),
   evaluateScript: (code) => ipcRenderer.invoke('script:evaluate', code),
-  resetScript: () => ipcRenderer.invoke('script:reset'),
+  resetScript: (options) => ipcRenderer.invoke('script:reset', options ?? {}),
+  isScriptComplete: (code) => ipcRenderer.invoke('script:isComplete', code),
+  onScriptOutput: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, notification: Parameters<typeof callback>[0]): void => callback(notification)
+    ipcRenderer.on('script:output', listener)
+    return () => ipcRenderer.removeListener('script:output', listener)
+  },
+  onScriptAsk: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: Parameters<typeof callback>[0]): void => callback(request)
+    ipcRenderer.on('script:ask', listener)
+    return () => ipcRenderer.removeListener('script:ask', listener)
+  },
+  respondScriptAsk: (id, text) => ipcRenderer.invoke('script:askResponse', id, text),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   bringWindowToFront: () => ipcRenderer.invoke('window:bringToFront'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),

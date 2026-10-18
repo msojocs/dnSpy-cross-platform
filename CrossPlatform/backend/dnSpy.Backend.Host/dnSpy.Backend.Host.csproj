@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The C# Interactive window's default response file, beside the executable where the engine looks. -->
+    <None Include="..\dnSpy.Backend.Core\Scripting\CSharpInteractive.rsp" Link="CSharpInteractive.rsp" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\dnSpy.Backend.Contracts\dnSpy.Backend.Contracts.csproj" />
     <ProjectReference Include="..\dnSpy.Backend.Core\dnSpy.Backend.Core.csproj" />
     <ProjectReference Include="..\dnSpy.Backend.Debugging.CorDebug\dnSpy.Backend.Debugging.CorDebug.csproj" />

@@ -867,10 +867,10 @@ describe('C# Interactive', () => {
   const banner = { kind: 'banner', text: 'Microsoft (R) Roslyn C# Compiler version 4.14.0' }
 
   beforeEach(() => {
-    evaluateScript.mockReset().mockResolvedValue({ entries: [{ kind: 'result', text: '2' }] })
-    resetScript.mockReset().mockResolvedValue({ entries: [banner] })
+    evaluateScript.mockReset().mockResolvedValue({ entries: [{ kind: 'result', text: '2' }], generation: 1 })
+    resetScript.mockReset().mockResolvedValue({ entries: [banner], generation: 1 })
     Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, evaluateScript, resetScript } })
-    useAppStore.setState({ scriptEntries: [], scriptRunning: false, scriptHistory: [], scriptStarted: false })
+    useAppStore.setState({ scriptEntries: [], scriptRunning: false, scriptHistory: [], scriptStarted: false, scriptGeneration: 0 })
   })
 
   it('echoes a submission and appends what the host returned', async () => {
@@ -961,6 +961,12 @@ describe('C# Interactive', () => {
     ])
   })
 
+  it('passes noconfig to the reset, which drops the response file', async () => {
+    await useAppStore.getState().evaluateScript('#reset noconfig')
+
+    expect(resetScript).toHaveBeenCalledWith({ loadConfig: false, showBanner: false })
+  })
+
   it('leaves an unknown #command to the host', async () => {
     await useAppStore.getState().evaluateScript('#nonsense')
 
@@ -978,10 +984,37 @@ describe('C# Interactive', () => {
   it('narrates an explicit reset and prints the fresh banner', async () => {
     await useAppStore.getState().resetScript()
 
+    expect(resetScript).toHaveBeenCalledWith({ loadConfig: true, showBanner: false })
     expect(useAppStore.getState().scriptEntries).toEqual([
       { kind: 'output', text: translate('Resetting execution engine.') },
       banner,
     ])
+    expect(useAppStore.getState().scriptGeneration).toBe(1)
+  })
+
+  it('appends the lines the host streams while a submission runs', () => {
+    useAppStore.setState({ scriptGeneration: 3 })
+
+    useAppStore.getState().appendScriptOutput({ generation: 3, entry: { kind: 'output', text: 'tick' } })
+
+    expect(useAppStore.getState().scriptEntries).toEqual([{ kind: 'output', text: 'tick' }])
+  })
+
+  it('does not move the generation back when a response arrives after a reset', async () => {
+    evaluateScript.mockResolvedValue({ entries: [], generation: 1 })
+    useAppStore.setState({ scriptGeneration: 2 })
+
+    await useAppStore.getState().evaluateScript('x')
+
+    expect(useAppStore.getState().scriptGeneration).toBe(2)
+  })
+
+  it('drops output from the session a reset replaced', () => {
+    useAppStore.setState({ scriptGeneration: 4, scriptEntries: [{ kind: 'output', text: 'current' }] })
+
+    useAppStore.getState().appendScriptOutput({ generation: 3, entry: { kind: 'output', text: 'stale' } })
+
+    expect(useAppStore.getState().scriptEntries).toEqual([{ kind: 'output', text: 'current' }])
   })
 
   it('builds the session once, printing the banner and the help hint', async () => {
@@ -989,6 +1022,7 @@ describe('C# Interactive', () => {
     await useAppStore.getState().startScript()
 
     expect(resetScript).toHaveBeenCalledOnce()
+    expect(resetScript).toHaveBeenCalledWith({ loadConfig: true, showBanner: true })
     const entries = useAppStore.getState().scriptEntries
     expect(entries[0]).toEqual(banner)
     expect(entries[entries.length - 1]).toEqual({ kind: 'help', text: translate('Type "#help" for more information.') })

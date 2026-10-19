@@ -79,6 +79,32 @@ AppImage 需要系统允许 Chromium user namespace sandbox。在启用了严格
 
 也就是说，单个文件无法识别不会让整个打开操作失败：多选时其余文件照常打开，无法识别的文件以文件名保留在树中。
 
+## 命令行版 dnSpy.Console
+
+安装包里带有与 WPF 版同名的 `dnSpy.Console`，位于应用资源的 `backend/<平台-架构>/` 目录；从源码构建时也可以用 `dotnet run --project CrossPlatform/backend/dnSpy.Console -- ...` 运行。参数与 WPF 版一致，区别只是路径用 Linux 的写法：
+
+```bash
+# 把目录里的 .NET 文件都导出为 SDK 风格工程，并生成 solution.sln
+dnSpy.Console --sdk-project -o /tmp/out /some/path
+
+# 递归导出，不写 .sln
+dnSpy.Console -r --no-sln -o /tmp/out /some/path
+
+# 单个类型或成员写到标准输出；--md 后是元数据 token（十进制或 0x 十六进制）
+dnSpy.Console -t System.Int32 /path/to/assembly.dll
+dnSpy.Console --md 0x06000123 /path/to/assembly.dll
+
+# 换语言：C#、Visual Basic、IL、IL with C#，也可以写语言 GUID
+dnSpy.Console -l IL -t Some.Namespace.Type assembly.dll
+
+# 显示全部参数和语言选项
+dnSpy.Console
+```
+
+常用开关：`-o` 输出目录、`-r` 递归、`-l` 语言、`-t`/`--type` 类型、`--md` token、`--asm-path` 程序集搜索路径、`--user-gac` 用户 GAC 目录、`--no-gac`、`--no-stdlib`、`--gac-file`、`--sdk-project`、`--vs`、`--project-guid`、`--sln-name`、`--no-sln`、`--no-resources`、`--no-resx`、`--no-baml`、`--spaces`、`--threads`、`--no-color`。每个语言还接受自己的反编译选项（`--xml-doc`、`--anon-methods`、`--async`、`--tokens` 等），布尔选项可以用 `--no-` 或 `--dont-` 关掉；`dnSpy.Console` 自身会把支持的全部选项列出来。
+
+用 `--md` 或 `-t` 时只能给一个文件。BAML 资源默认会还原为 XAML 页（`Page`/`ApplicationDefinition`），把导出的 WPF 工程直接编译回去；`--no-baml` 则保留原始的 `.baml`。
+
 ## Linux 调试权限
 
 启动的子进程通常不需要额外权限。附加到现有进程时，目标必须属于同一用户，并且受到 Yama、容器、SELinux 或 AppArmor 策略约束。

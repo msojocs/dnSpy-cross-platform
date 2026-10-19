@@ -17,6 +17,16 @@ dotnet build dnSpy.CrossPlatform.slnx
 dotnet test dnSpy.CrossPlatform.slnx
 ```
 
+The solution also builds `dnSpy.Console`, the command-line decompiler the WPF build ships as
+`dnSpy.Console.exe`. It exports projects (`-o`), writes a single type or member to stdout
+(`-t`, `--md`), and takes the same switches and decompiler languages (C#, Visual Basic, IL,
+IL with C#) as its Windows counterpart:
+
+```bash
+dotnet run --project backend/dnSpy.Console -- --sdk-project -o /tmp/out /path/to/assembly.dll
+dotnet run --project backend/dnSpy.Console -- -t System.Int32 /path/to/assembly.dll
+```
+
 ## Desktop application
 
 The debug engine runs inside the backend and loads the CLR's `libdbgshim.so`, which the build brings in

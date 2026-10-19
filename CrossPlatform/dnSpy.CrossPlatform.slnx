@@ -4,6 +4,7 @@
     <Project Path="backend/dnSpy.Backend.Core/dnSpy.Backend.Core.csproj" />
     <Project Path="backend/dnSpy.Backend.Debugging.CorDebug/dnSpy.Backend.Debugging.CorDebug.csproj" />
     <Project Path="backend/dnSpy.Backend.Host/dnSpy.Backend.Host.csproj" />
+    <Project Path="backend/dnSpy.Console/dnSpy.Console.csproj" />
   </Folder>
   <Folder Name="/backend/tests/">
     <Project Path="backend/tests/AnalyzerTarget/AnalyzerTarget.csproj" />

@@ -72,7 +72,7 @@ pnpm package:mac       # 在 macOS（arm64）上跑
 
 **每个平台只能在对应系统上打包**：Windows 安装器需要 Windows 或 wine，macOS 的 `dmg` 需要 macOS。产物输出到 `CrossPlatform/artifacts/packages/`，中间产物（后端 publish、SBOM）在 `CrossPlatform/artifacts/` 下。
 
-脚本按顺序做四件事：生成图标 → 构建前端 → `dotnet publish` 后端到 `artifacts/publish/backend/<平台目录名>` → 生成 SBOM → 调 electron-builder。
+脚本按顺序做四件事：生成图标 → 构建前端 → `dotnet publish` 后端到 `artifacts/publish/backend/<平台目录名>` → 生成 SBOM → 调 electron-builder。后端发布包含两个可执行文件：`dnSpy.Backend.Host`（GUI 的 RPC 宿主）与 `dnSpy.Console`（命令行反编译器，见 `linux-user-guide.md`），它们发布到同一个目录并共用自包含运行时。
 
 **平台目录名必须等于 `${process.platform}-${process.arch}`**（`linux-x64`、`win32-x64`、`darwin-arm64`），因为主进程就是按这个名字去 `resources/backend/` 下找后端的。映射表在 `scripts/package-platform.mjs` 里，改它的时候连同 `cross-platform` 的 `.NET RID`（`osx-arm64`，不是 `darwin-arm64`）一起看。
 

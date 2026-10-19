@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>dnSpy.Cli</RootNamespace>
+    <AssemblyName>dnSpy.Console</AssemblyName>
+    <!-- The console is synchronous: it waits for the VB converter's task with nothing to deadlock
+         against (no SynchronizationContext), and there is no UI thread to marshal back to. -->
+    <NoWarn>$(NoWarn);VSTHRD002</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\dnSpy.Backend.Core\dnSpy.Backend.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="dnSpy.Backend.Tests" />
+  </ItemGroup>
+</Project>

@@ -78,6 +78,7 @@ const signNativeBackend = () => {
   // SDK stops doing that.
   const nativeFiles = [
     resolve(backendOutput, 'dnSpy.Backend.Host'),
+    resolve(backendOutput, 'dnSpy.Console'),
     resolve(backendOutput, 'libdbgshim.dylib'),
     resolve(backendOutput, 'runtimes', platform.runtimeIdentifier, 'native', 'libdbgshim.dylib'),
   ]
@@ -96,9 +97,9 @@ run('pnpm', ['--dir', 'frontend', 'build'])
 // A stale backend from an earlier platform would be silently repackaged, so the publish tree is
 // rebuilt from nothing every time.
 rmSync(resolve(rootDirectory, 'artifacts/publish'), { recursive: true, force: true })
-run('dotnet', [
+const publishArgs = (project) => [
   'publish',
-  'backend/dnSpy.Backend.Host/dnSpy.Backend.Host.csproj',
+  project,
   '--configuration', 'Release',
   '--runtime', platform.runtimeIdentifier,
   '--self-contained', 'true',
@@ -110,7 +111,12 @@ run('dotnet', [
   // it has no business deciding whether a build produces artifacts.
   '-p:NuGetAudit=false',
   '--output', `artifacts/publish/backend/${platform.backendDirectory}`,
-])
+]
+run('dotnet', publishArgs('backend/dnSpy.Backend.Host/dnSpy.Backend.Host.csproj'))
+// dnSpy.Console goes into the same directory as the host, the way the WPF build ships it beside
+// dnSpy.exe. Both are self-contained apps on the same runtime, so the second publish only adds the
+// console's own files — the runtime assemblies the two share are written once.
+run('dotnet', publishArgs('backend/dnSpy.Console/dnSpy.Console.csproj'))
 
 if (requestedPlatform === 'mac')
   signNativeBackend()

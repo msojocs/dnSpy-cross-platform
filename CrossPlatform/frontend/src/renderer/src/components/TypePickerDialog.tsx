@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
-import type { TreeNode } from '../../../shared/protocol'
+import type { DecompilerLanguage, SearchResult, SearchType, TreeNode } from '../../../shared/protocol'
+import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
+import { ColoredText } from './ColoredText'
+import { DsIcon } from './DsIcon'
 import { iconFamily, NodeIcon } from './AssemblyExplorer'
 import { CloseGlyph, TreeExpanderGlyph } from './DsGlyphs'
 import { trapTabKey, useModalLayer } from './modal-stack'
@@ -11,7 +14,7 @@ import { trapTabKey, useModalLayer } from './modal-stack'
  * the assembly explorer's own, with everything the caller did not ask for hidden — a picker opened for
  * a type shows types and the containers that hold them, and nothing else.
  */
-export type PickerMode = 'type' | 'member' | 'field' | 'method' | 'constructor'
+export type PickerMode = 'type' | 'member' | 'field' | 'method' | 'constructor' | 'module'
 
 /**
  * Whether a node is one of the answers this mode is looking for. A mode that only wants part of a kind
@@ -29,6 +32,7 @@ const SELECTABLE: Record<PickerMode, (node: TreeNode) => boolean> = {
   field: (node) => node.kind === 'field',
   method: (node) => node.kind === 'method',
   constructor: isInstanceConstructor,
+  module: (node) => node.kind === 'module',
 }
 
 /**
@@ -38,6 +42,9 @@ const SELECTABLE: Record<PickerMode, (node: TreeNode) => boolean> = {
  */
 const CONTAINERS = ['assembly', 'module', 'namespace', 'referencesgroup', 'assemblyreference', 'type']
 
+/** The containers a mode shows: a module is only ever under its assembly, so a module picker stops there. */
+const containersOf = (mode: PickerMode): string[] => mode === 'module' ? ['assembly'] : CONTAINERS
+
 /** dnSpy's own titles for the pickers, `Pick_Type` and friends. */
 const PICKER_TITLES: Record<PickerMode, string> = {
   type: 'Pick a Type',
@@ -45,7 +52,33 @@ const PICKER_TITLES: Record<PickerMode, string> = {
   field: 'Pick a Field',
   method: 'Pick a Method',
   constructor: 'Pick a Constructor',
+  module: 'Pick a Module',
 }
+
+/** What the search row looks for in each mode — the filter's VisibleMembersFlags as a SearchType. */
+const SEARCH_TYPES: Record<PickerMode, SearchType> = {
+  type: 'type',
+  member: 'member',
+  field: 'field',
+  method: 'method',
+  constructor: 'method',
+  module: 'module',
+}
+
+/** dnSpy's search list stops after this many results. */
+const MAX_PICKER_RESULTS = 10000
+
+/** How long a keystroke waits for the next before the search starts over — dnSpy's 100 ms. */
+const PICKER_SEARCH_DELAY_MS = 100
+
+let nextPickerSearch = 0
+
+/** The languages the picker's combo offers, which change how the search list writes its rows. */
+const PICKER_LANGUAGES: { value: DecompilerLanguage, label: string }[] = [
+  { value: 'cSharp', label: 'C#' },
+  { value: 'visualBasic', label: 'Visual Basic' },
+  { value: 'il', label: 'IL' },
+]
 
 interface PickerRowProps {
   node: TreeNode
@@ -64,7 +97,7 @@ interface PickerRowProps {
 const PickerRow = ({ node, parents, mode, children, expanded, loading, selectedId, onSelect, onToggle, onPick }: PickerRowProps): React.JSX.Element | null => {
   const { t } = useLanguage()
   const selectable = SELECTABLE[mode](node)
-  if (!selectable && !CONTAINERS.includes(node.kind))
+  if (!selectable && !containersOf(mode).includes(node.kind))
     return null
   const open = expanded[node.id] ?? false
   const trail = [...parents, node]
@@ -163,6 +196,15 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [trail, setTrail] = useState<TreeNode[]>([])
   const [error, setError] = useState<string>()
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+  const [tooMany, setTooMany] = useState(false)
+  const [picked, setPicked] = useState<SearchResult>()
+  const [language, setLanguage] = useState<DecompilerLanguage>(() => useAppStore.getState().defaultLanguage === 'ilWithCSharp' ? 'il' : useAppStore.getState().defaultLanguage)
+  const [reloadRoots, setReloadRoots] = useState(0)
+  const search = useRef<HTMLInputElement>(null)
+  const searchKey = useRef<string | undefined>(undefined)
 
   // A picker can be dismissed while a load is in flight — the user closes it or picks something —
   // and the response must not land in a dialog that is on its way out.
@@ -193,6 +235,60 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
   // every render — an array is a different value each time, its contents are not.
   const rootKey = rootNodeIds === undefined ? undefined : rootNodeIds.join('\n')
 
+  // dnSpy's MemberPickerVM: every keystroke starts the search over after a short wait, and the search runs
+  // through every document the picker's tree holds, its results streaming into the list above the tree.
+  useEffect(() => {
+    if (searchKey.current)
+      void window.dnSpy.cancelSearch(searchKey.current).catch(() => undefined)
+    searchKey.current = undefined
+    setResults([])
+    setPicked(undefined)
+    setTooMany(false)
+    if (query.trim().length === 0) {
+      setSearching(false)
+      return
+    }
+    const key = `picker-${++nextPickerSearch}`
+    const timer = window.setTimeout(() => {
+      searchKey.current = key
+      setSearching(true)
+      void window.dnSpy.search(workspaceId, {
+        query,
+        searchType: SEARCH_TYPES[mode],
+        location: rootKey === undefined ? 'allFiles' : 'selectedFiles',
+        selectedNodeIds: rootKey === undefined ? undefined : rootKey.split('\n'),
+        caseSensitive: false,
+        matchWholeWords: false,
+        matchAnySearchTerm: false,
+        searchDecompiledData: false,
+        searchFrameworkAssemblies: true,
+        searchCompilerGeneratedMembers: true,
+        maxResults: MAX_PICKER_RESULTS,
+        language,
+      }, key).then((response) => {
+        if (searchKey.current !== key || !alive.current)
+          return
+        setResults((current) => [...current, ...response.results.slice(Math.max(current.length - (response.start ?? 0), 0))])
+        setTooMany(response.truncated)
+        setSearching(false)
+      }, () => {
+        if (searchKey.current === key && alive.current)
+          setSearching(false)
+      })
+    }, PICKER_SEARCH_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [query, language, mode, rootKey, workspaceId])
+
+  useEffect(() => window.dnSpy.onSearchProgress?.((progress) => {
+    if (progress.requestKey === searchKey.current && alive.current)
+      setResults((current) => [...current, ...progress.results.slice(Math.max(current.length - progress.start, 0))])
+  }), [])
+
+  useEffect(() => () => {
+    if (searchKey.current)
+      void window.dnSpy.cancelSearch(searchKey.current).catch(() => undefined)
+  }, [])
+
   useEffect(() => {
     void (async () => {
       try {
@@ -212,7 +308,34 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
           setError(cause instanceof Error ? cause.message : String(cause))
       }
     })()
-  }, [workspaceId, rootKey])
+  }, [workspaceId, rootKey, reloadRoots])
+
+  /** A search result picked: its node and the chain above it, which is what a caller reads the namespace from. */
+  const pickResult = async (result: SearchResult): Promise<void> => {
+    if (!result.nodeId)
+      return
+    try {
+      const path = await window.dnSpy.getNodePath(workspaceId, result.nodeId)
+      const node = path.nodes.at(-1) ?? await window.dnSpy.getNode(workspaceId, result.nodeId)
+      if (!SELECTABLE[mode](node)) {
+        setError(t('You must select a correct node'))
+        return
+      }
+      onPick(node, path.nodes.length > 0 ? path.nodes : [node])
+    }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  /** dnSpy's "Open Assembly or NetModule": the file joins the documents the picker's tree lists. */
+  const openAssembly = async (): Promise<void> => {
+    const paths = await window.dnSpy.openAssemblies()
+    if (paths.length === 0)
+      return
+    await useAppStore.getState().openPaths(paths, { remember: true, select: false })
+    setReloadRoots((value) => value + 1)
+  }
 
   const toggle = (node: TreeNode, parents: TreeNode[]): void => {
     setTrail([...parents, node])
@@ -223,7 +346,9 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
   }
 
   const selected = trail.at(-1)
-  const canPick = selected !== undefined && SELECTABLE[mode](selected)
+  // A search result picked in the list wins over the tree's selection, as dnSpy's does.
+  const pickError = picked ? undefined : selected === undefined ? 'A type must be selected.' : SELECTABLE[mode](selected) ? undefined : 'You must select a correct node'
+  const canPick = picked !== undefined || pickError === undefined
 
   return (
     <div
@@ -238,12 +363,63 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
         role="dialog"
         aria-modal="true"
         aria-label={t(title ?? PICKER_TITLES[mode])}
-        onKeyDown={(event) => trapTabKey(event, dialog.current)}
+        onKeyDown={(event) => {
+          // dnSpy's picker: Ctrl+E and Ctrl+F go to the search box with its text selected.
+          if (event.ctrlKey && (event.key === 'e' || event.key === 'f')) {
+            event.preventDefault()
+            search.current?.focus()
+            search.current?.select()
+            return
+          }
+          trapTabKey(event, dialog.current)
+        }}
       >
         <div className="modal-title">
           <span>{t(title ?? PICKER_TITLES[mode])}</span>
           <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
+        <div className="picker-search">
+          <label>{t('Search')}
+            <input
+              ref={search}
+              autoFocus
+              aria-label={t('Search')}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && query) {
+                  event.stopPropagation()
+                  setQuery('')
+                }
+              }}
+            />
+          </label>
+          <button type="button" className="icon-button" aria-label={t('Open Assembly or NetModule')} title={t('Open Assembly or NetModule')} onClick={() => void openAssembly()}><DsIcon name="OpenFolder" /></button>
+          <select aria-label={t('Language')} value={language} onChange={(event) => setLanguage(event.target.value as DecompilerLanguage)}>
+            {PICKER_LANGUAGES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+          </select>
+        </div>
+        {query.trim().length > 0 && (
+          <div className={`picker-results${tooMany ? ' too-many' : ''}`} role="listbox" aria-label={t('Search Results')}>
+            {results.map((result, index) => (
+              <div
+                key={`${result.nodeId ?? ''}:${index}`}
+                role="option"
+                aria-selected={picked === result}
+                className={picked === result ? 'selected' : undefined}
+                title={result.toolTip ?? undefined}
+                onClick={() => { setPicked(result); setTrail([]) }}
+                onDoubleClick={() => void pickResult(result)}
+              >
+                {result.icon && <DsIcon name={result.icon} />}
+                <span className="picker-result-name">{result.nameParts ? <ColoredText parts={result.nameParts} /> : result.name}</span>
+                <span className="picker-result-location">{result.locationParts ? <ColoredText parts={result.locationParts} /> : result.location}</span>
+              </div>
+            ))}
+            {searching && <div className="picker-searching">{t('Searching...')}</div>}
+            {tooMany && <div className="picker-error">{t('Search aborted, more than {count} results found.', { count: MAX_PICKER_RESULTS.toLocaleString() })}</div>}
+          </div>
+        )}
         <div className="picker-body">
           {error && <div className="picker-error">{error}</div>}
           <div className="assembly-tree" role="tree" aria-label={t('Assembly Explorer')}>
@@ -257,7 +433,7 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
                 expanded={expanded}
                 loading={loading}
                 selectedId={selected?.id}
-                onSelect={(node, nodeTrail) => setTrail(nodeTrail)}
+                onSelect={(node, nodeTrail) => { setTrail(nodeTrail); setPicked(undefined) }}
                 onToggle={toggle}
                 onPick={onPick}
               />
@@ -267,7 +443,7 @@ export const TypePickerDialog = ({ workspaceId, mode, title, rootNodeIds, onPick
         <div className="modal-actions">
           <span className="modal-action-spacer" />
           <button type="button" onClick={onClose}>{t('Cancel')}</button>
-          <button type="button" className="primary" disabled={!canPick} onClick={() => { if (selected) onPick(selected, trail) }}>{t('OK')}</button>
+          <button type="button" className="primary" disabled={!canPick} title={pickError === undefined ? undefined : t(pickError)} onClick={() => { if (picked) void pickResult(picked); else if (selected) onPick(selected, trail) }}>{t('OK')}</button>
         </div>
       </div>
     </div>

@@ -3,11 +3,12 @@ import { languageChoices, useLanguage, type LanguagePreference } from '../locali
 import { buildEditMenu, type ActiveDocument, type CreatedKind, type HexShowKind, type MenuItem } from './edit-menu'
 import { buildFileMenu } from './file-menu'
 import type { HexBodyKind } from '../app-store'
-import type { HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
+import type { HexRange, HexTargetResponse, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import { WindowControls } from './WindowControls'
 import { MenuEntryIcon } from './DsIcon'
 import { SubmenuArrowGlyph } from './DsGlyphs'
 import { themeKey, themeMenuName, useThemes } from '../theme-service'
+import { useMetadataTableCommands } from '../metadata-table'
 
 /** A theme by the key the theme service gives it (theme-service.ts). */
 export type ThemeName = string
@@ -28,6 +29,11 @@ interface MenuBarProps {
   /** `selectedNode.icon`, which tells a .resources file from any other resource. */
   selectionIcon?: string
   selectionParentKind?: string
+  selectionParentIcon?: string
+  selectionIndexInParent?: number
+  /** Every selected row and the tree's parent links, which the delete commands act on and count. */
+  selection?: TreeNode[]
+  parents?: Record<string, string>
   /** Whether the selected namespace's module already has an empty namespace to move its types into. */
   hasEmptyNamespaceSibling: boolean
   /** Which document the Edit menu's hex groups key off. */
@@ -77,11 +83,18 @@ interface MenuBarProps {
   onMergeAssembly(): void
   onCreateResource(kind: ResourceCreateKind): void
   onCreateResourceElement(): void
+  onCreateImageResources(): void
+  onCreateImageList(): void
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
   /** Converts the selected module into a net module — dnSpy's Convert Assembly to NetModule. */
   onConvertModule(toAssembly?: boolean): void
+  onCreateAssembly?(): void
+  onCreateNetModule?(): void
+  onAddNewNetModule?(): void
+  onAddExistingNetModule?(): void
+  onRemoveNetModule?(): void
   /** Opens the assemblies the selected module's references name — dnSpy's two Load Dependencies
    *  commands, which it registers on this menu as well as on the assembly explorer's. */
   onLoadDependencies(recursive: boolean): void
@@ -94,6 +107,11 @@ interface MenuBarProps {
   onHexWriteBody(kind: HexBodyKind): void
   onHexCopyBody(): void
   onHexPasteBody(): void
+  /** dnSpy's Go to MD Table Row: whether there is a module to ask about, the selected row's token for the entry
+   *  that goes to it directly, and the command — asking for a token when it is given none. */
+  canGoToMdTableRow?: boolean
+  mdTableRowToken?: number
+  onGoToMdTableRow?(token?: number): void
   onCreateMember(kind: CreatedKind): void
   onEditNode(): void
   onShowCode(): void
@@ -216,6 +234,10 @@ export const MenuBar = ({
   selectionLabel,
   selectionIcon,
   selectionParentKind,
+  selectionParentIcon,
+  selectionIndexInParent,
+  selection,
+  parents,
   hasEmptyNamespaceSibling,
   activeDocument,
   canShowCode,
@@ -259,14 +281,24 @@ export const MenuBar = ({
   onMergeAssembly,
   onCreateResource,
   onCreateResourceElement,
+  onCreateImageResources,
+  onCreateImageList,
   onDelete,
   onRenameNamespace,
   onMoveTypesToEmptyNamespace,
   onConvertModule,
+  onCreateAssembly,
+  onCreateNetModule,
+  onAddNewNetModule,
+  onAddExistingNetModule,
+  onRemoveNetModule,
   onLoadDependencies,
   onReplaceMethodBodyWithStub,
   hexTarget,
   hexStatement,
+  canGoToMdTableRow,
+  mdTableRowToken,
+  onGoToMdTableRow,
   onOpenHex,
   onShowHexAt,
   onHexWriteBody,
@@ -378,6 +410,8 @@ export const MenuBar = ({
   onQuit,
   onShowOptions,
 }: MenuBarProps): React.JSX.Element => {
+  // The metadata table document the Edit menu acts on, which registers its commands when it gets the focus.
+  const mdTableCommands = useMetadataTableCommands((state) => state.active?.commands)
   const [openMenu, setOpenMenu] = useState<string>()
   const host = useRef<HTMLDivElement>(null)
   const { language, t } = useLanguage()
@@ -469,6 +503,10 @@ export const MenuBar = ({
       selectionLabel,
       selectionIcon,
       selectionParentKind,
+      selectionParentIcon,
+      selectionIndexInParent,
+      selection,
+      parents,
       hasEmptyNamespaceSibling,
       activeDocument,
       documentAvailable: activeDocument === 'code',
@@ -491,14 +529,25 @@ export const MenuBar = ({
       onMergeAssembly,
       onCreateResource,
       onCreateResourceElement,
+      onCreateImageResources,
+      onCreateImageList,
       onDelete,
       onRenameNamespace,
       onMoveTypesToEmptyNamespace,
       onConvertModule,
+      onCreateAssembly,
+      onCreateNetModule,
+      onAddNewNetModule,
+      onAddExistingNetModule,
+      onRemoveNetModule,
       onLoadDependencies,
       onReplaceMethodBodyWithStub,
       hexTarget,
       hexStatement,
+      mdTable: activeDocument === 'md-table' ? mdTableCommands : undefined,
+      canGoToMdTableRow,
+      mdTableRowToken,
+      onGoToMdTableRow,
       onOpenHex,
       onShowHexAt,
       onHexWriteBody,

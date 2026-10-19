@@ -17,6 +17,9 @@ export interface OpenedModule {
   /** A file the workspace opened by itself to resolve a reference — dnSpy's auto-loaded documents, which a
    *  reload only brings back when a tab still shows something of them. */
   autoLoaded?: boolean
+  /** A document Create Assembly or Create NetModule made, which has no file until it is saved: its path is the
+   *  workspace's own name for it, and a saved list leaves it out. */
+  inMemory?: boolean
 }
 
 export interface OpenWorkspaceResponse {
@@ -692,6 +695,81 @@ export interface HexTargetResponse {
   method: HexMethodTarget | null
   fieldInitialValue: HexRange | null
   resource: HexRange | null
+  /** The bytes of a PE header, the tables stream header, a metadata table or one of its rows — what dnSpy's Show in
+   *  Hex Editor shows for its hex nodes. */
+  structure?: HexRange | null
+  /** What a section header or a metadata stream header describes — dnSpy's Show Data in Hex Editor. */
+  structureData?: HexRange | null
+}
+
+/** One bit field of a flags field: a check box, or — with values — a combo box over `count` bits. */
+export interface HexBitField {
+  name: string
+  bit: number
+  count: number
+  values?: { value: number; name: string }[] | null
+}
+
+/**
+ * One field of a PE or metadata structure, dnSpy's HexField: where it is in the file, its current value — read
+ * through the document's patches — and, for a flags field, its bits. `text` is the value as dnSpy writes it; a
+ * 64-bit value may not fit `value`, so the client reads the number from `text`.
+ */
+export interface HexField {
+  name: string
+  offset: number
+  size: number
+  kind: 'byte' | 'int16' | 'uint16' | 'int32' | 'uint32' | 'uint64' | 'string'
+  value: number
+  text: string
+  bits?: HexBitField[] | null
+  /** What dnSpy shows beside the field, read only: a time stamp as a date, say. */
+  note?: string | null
+  /** The box dnSpy draws the field in — "Flags", a data directory's name. */
+  group?: string | null
+}
+
+export interface HexStructure {
+  nodeId: string
+  name: string
+  offset: number
+  length: number
+  fields: HexField[]
+}
+
+export interface MetadataColumn {
+  name: string
+  /** Where the column is in a row. */
+  offset: number
+  size: number
+}
+
+/** A metadata table as dnSpy's MetadataTableVM shows it. */
+export interface MetadataTable {
+  nodeId: string
+  table: number
+  name: string
+  rows: number
+  rowSize: number
+  offset: number
+  columns: MetadataColumn[]
+  hasInfo: boolean
+  canSort: boolean
+}
+
+export interface MetadataRow {
+  rid: number
+  token: number
+  offset: number
+  values: number[]
+  info?: string | null
+}
+
+export interface MetadataFindRecordResponse {
+  nodeId: string | null
+  /** The rows from the document down to the table, which the tree opens to show the record. */
+  path: string[]
+  error: string | null
 }
 
 /** The bytes one statement of a code document covers, or null when it has none. The module is named
@@ -776,6 +854,8 @@ export interface IlExceptionHandler {
   handlerEnd?: string | null
   catchType: TypeSigDto | null
   display: string
+  /** The catch type's token, hexadecimal — what Copy MD Token copies. */
+  catchTypeToken?: string | null
 }
 
 /**
@@ -796,6 +876,33 @@ export interface IlBodyInstruction {
   methodSpecArguments?: TypeSigDto[] | null
   typeSignature?: TypeSigDto | null
   callSiteSignature?: MethodSigDto | null
+  /** A MemberRef the operand dialog built — or, read from a body, the MemberRef the operand is. */
+  memberRef?: MemberRefDto | null
+  /** The custom attributes of the MethodSpec the operand is. */
+  methodSpecCustomAttributes?: CustomAttributeDto[] | null
+  /** The method whose module `token` and `nodeId` belong to; a copy pasted into another module is imported. */
+  tokenOwnerNodeId?: string | null
+}
+
+/** The class of a MemberRef — dnSpy's MemberRefVM.Class: a type, a TypeSpec, a method of the module or a module. */
+export interface MemberRefParentDto {
+  kind: 'type' | 'typeSpec' | 'methodDef' | 'moduleRef'
+  type?: TypeSigDto | null
+  nodeId?: string | null
+  token?: string | null
+  moduleName?: string | null
+  display: string
+}
+
+/** A MemberRef as dnSpy's MemberRefDlg edits it. */
+export interface MemberRefDto {
+  isField: boolean
+  class?: MemberRefParentDto | null
+  name: string
+  methodSignature?: MethodSigDto | null
+  fieldType?: TypeSigDto | null
+  customAttributes?: CustomAttributeDto[] | null
+  display: string
 }
 
 /** A method body as dnSpy's Edit Method Body window models it — the three lists and the header. */
@@ -819,6 +926,22 @@ export interface IlMethodBody {
 
 /** How a manifest resource is stored — the backend's ManifestResourceKinds. */
 export type ResourceKind = 'embedded' | 'assemblyLinked' | 'linked'
+
+/** The languages the compiler commands can be in — the backend's CompilerLanguages. */
+export type CompilerLanguage = 'csharp' | 'visualBasic'
+
+/** The Compiler options page's values for a language — the backend's CompilerSettingsDto. */
+export interface CompilerSettings {
+  preprocessorSymbols: string
+  optimize: boolean
+  checkOverflow: boolean
+  allowUnsafe: boolean
+  optionExplicit: boolean
+  optionInfer: boolean
+  optionStrict: boolean
+  optionCompareBinary: boolean
+  embedVisualBasicRuntime: boolean
+}
 
 /** The modes dnSpy's compiler commands run in — the backend's CompilerModes. */
 export type CompilerMode = 'editMethod' | 'editClass' | 'addMembers' | 'addClass' | 'editAssembly'
@@ -913,6 +1036,12 @@ export type ResourceCreateKind = 'file' | 'multiFile' | 'assemblyLinked' | 'file
 export type ResourceElementKind =
   | 'null' | 'string' | 'boolean' | 'char' | 'byte' | 'sbyte' | 'int16' | 'uint16' | 'int32' | 'uint32'
   | 'int64' | 'uint64' | 'single' | 'double' | 'decimal' | 'dateTime' | 'timeSpan' | 'byteArray' | 'stream' | 'binary'
+  /** A serialized System.Drawing.Bitmap or Icon, edited as the image file it holds. */
+  | 'serializedImage'
+  /** A serialized System.Windows.Forms.ImageListStreamer, edited as the "Data" bytes it holds. */
+  | 'imageListStreamer'
+  /** Image files made into serialized Bitmaps and Icons — dnSpy's Create System.Data.Bitmap/Icon Resource. */
+  | 'imageFiles'
 
 export interface ResourceElementOptions {
   kind: ResourceElementKind
@@ -922,6 +1051,16 @@ export interface ResourceElementOptions {
   typeCode: number
   typeName?: string | null
   display: string
+  /** A byte array or stream that holds an image file, which dnSpy edits with its image window. */
+  isImage?: boolean
+  /** How a serialized value is stored — dnlib's SerializationFormat — which an image is written back in. */
+  serializationFormat?: string | null
+}
+
+/** An image file picked for a resource: its name and its bytes. */
+export interface ResourceImageFile {
+  name: string
+  base64Data: string
 }
 
 export interface CreateResourceEntry {
@@ -949,6 +1088,8 @@ export interface CreateResourceElementOptions {
   name: string
   text?: string
   base64Data?: string
+  /** For `imageFiles`: the files, each an entry named after it. */
+  images?: ResourceImageFile[]
 }
 
 export interface TransformIlBodyResponse {
@@ -964,6 +1105,132 @@ export interface EditCommitResponse {
   canRedo: boolean
   /** Every module the workspace holds, sent only when the step changed which documents the tree holds —
    *  undoing or redoing a removal dnSpy recorded in the history. */
+  modules?: OpenedModule[] | null
+  /** The documents with unsaved changes once the step has run — dnSpy's modified documents, which undoing
+   *  back to where a document was saved takes it off again. */
+  modifiedDocuments?: ModifiedDocument[] | null
+}
+
+/**
+ * A document with unsaved changes. `id` is what the save calls take — a root's id, or the module row of a net
+ * module. A document Create Assembly made has no file yet (`inMemory`, empty `path`). `isHexDocument` is one
+ * whose only changes are bytes written over its file, which dnSpy saves as a hex buffer, with a file name only.
+ */
+export interface ModifiedDocument {
+  id: string
+  name: string
+  path: string
+  inMemory: boolean
+  isHexDocument: boolean
+}
+
+/**
+ * The writer options dnSpy's Save Module window edits: dnlib's ModuleWriterOptions (NativeModuleWriterOptions
+ * for a mixed-mode module) field for field. `null` is "what the writer would use" — an empty box in the
+ * window, or every check box of a flags group left undecided.
+ */
+export interface WriterOptions {
+  useMixedMode: boolean
+  writePdb: boolean
+  shareMethodBodies: boolean
+  moduleKind: number
+  addCheckSum: boolean
+  addMvidSection: boolean
+  keepExtraPeData: boolean
+  keepWin32Resources: boolean
+  /** dnlib's MetadataFlags. */
+  metadataFlags: number
+  preserveOtherMetadataStreams: boolean
+  metadataSignature: number | null
+  metadataMajorVersion: number | null
+  metadataMinorVersion: number | null
+  metadataReserved1: number | null
+  metadataVersionString: string | null
+  metadataStorageFlags: number | null
+  metadataReserved2: number | null
+  tablesReserved1: number | null
+  tablesMajorVersion: number | null
+  tablesMinorVersion: number | null
+  tablesUseEnc: boolean | null
+  tablesForceBigColumns: boolean | null
+  tablesExtraData: number | null
+  tablesLog2Rid: number | null
+  tablesHasDeletedRows: boolean | null
+  cor20MajorRuntimeVersion: number | null
+  cor20MinorRuntimeVersion: number | null
+  cor20Flags: number | null
+  cor20EntryPoint: number | null
+  machine: number
+  subsystem: number
+  timeDateStamp: number | null
+  pointerToSymbolTable: number | null
+  numberOfSymbols: number | null
+  characteristics: number | null
+  majorLinkerVersion: number | null
+  minorLinkerVersion: number | null
+  imageBase: number | null
+  sectionAlignment: number | null
+  fileAlignment: number | null
+  majorOperatingSystemVersion: number | null
+  minorOperatingSystemVersion: number | null
+  majorImageVersion: number | null
+  minorImageVersion: number | null
+  majorSubsystemVersion: number | null
+  minorSubsystemVersion: number | null
+  win32VersionValue: number | null
+  dllCharacteristics: number | null
+  sizeOfStackReserve: number | null
+  sizeOfStackCommit: number | null
+  sizeOfHeapReserve: number | null
+  sizeOfHeapCommit: number | null
+  loaderFlags: number | null
+  numberOfRvaAndSizes: number | null
+}
+
+/** What a document's save window starts from: the file and, for a module, the writer options. */
+export interface DocumentSaveOptions {
+  documentId: string
+  name: string
+  fileName: string
+  isHexDocument: boolean
+  canWritePdb: boolean
+  canUseMixedMode: boolean
+  isMixedModeModule: boolean
+  writer: WriterOptions | null
+}
+
+/** One document of a save run: the file it goes to and the options it is written with. */
+export interface SaveDocumentRequest {
+  documentId: string
+  fileName: string
+  writer?: WriterOptions | null
+}
+
+/** How far a save run has got, both bars 0 to 1. */
+export interface SaveDocumentsProgress {
+  requestKey: string
+  fileIndex: number
+  fileName: string
+  fileProgress: number
+  totalProgress: number
+}
+
+export interface SaveDocumentResult {
+  documentId: string
+  fileName: string
+  saved: boolean
+  length: number
+  sha256?: string | null
+  log: string[]
+  errorCount: number
+  error?: string | null
+}
+
+export interface SaveDocumentsResponse {
+  results: SaveDocumentResult[]
+  canceled: boolean
+  modifiedDocuments: ModifiedDocument[]
+  /** Sent when a new document took a file of its own, which changes the module list. */
   modules?: OpenedModule[] | null
 }
 
@@ -1879,6 +2146,9 @@ export interface DnSpyApi {
   /** dnSpy's "The file hasn't been saved yet. Do you want to save it before continuing?" for `count` files: save
    *  them first, let them go unsaved, or call the command off. */
   askSaveModified(count: number): Promise<'save' | 'discard' | 'cancel'>
+  /** dnSpy's "There are {0} unsaved files. Do you want to save them before exiting?": Yes or No, and closing the
+   *  box calls the exit off. */
+  askExitUnsaved(count: number): Promise<'save' | 'discard' | 'cancel'>
   getRoots(workspaceId: string): Promise<TreeNodesResponse>
   getChildren(workspaceId: string, nodeId: string): Promise<TreeNodesResponse>
   getNode(workspaceId: string, nodeId: string): Promise<TreeNode>
@@ -1922,6 +2192,16 @@ export interface DnSpyApi {
   /** Where the hex commands point for a selected node: a method's body and code, a field's initial
    * value, a resource's data. */
   resolveHexTarget(workspaceId: string, nodeId: string): Promise<HexTargetResponse>
+  /** dnSpy's AsmEditor hex nodes: a PE header, the tables stream header or a metadata row as fields. */
+  getHexStructure(workspaceId: string, nodeId: string): Promise<HexStructure>
+  getMetadataTable(workspaceId: string, nodeId: string): Promise<MetadataTable>
+  getMetadataTableRows(workspaceId: string, nodeId: string, startRid: number, count: number): Promise<{ rows: MetadataRow[] }>
+  /** dnSpy's TableSorter over a run of rows: the rows' bytes in sorted order, which the client writes as a patch. */
+  sortMetadataTable(workspaceId: string, nodeId: string, rid: number, count: number): Promise<{ offset: number; base64Data: string }>
+  /** dnSpy's Copy as Text of a metadata table: its header and the rows. */
+  getMetadataTableText(workspaceId: string, nodeId: string, rids: number[]): Promise<{ text: string }>
+  /** The metadata row of a token in the document a node is in — dnSpy's Go to MD Table Row. */
+  findMetadataRecord(workspaceId: string, nodeId: string, token: number): Promise<MetadataFindRecordResponse>
   /** Where a statement under the caret of a code document lives in the file. */
   resolveHexStatement(workspaceId: string, modulePath: string, metadataToken: number, ilOffset: number, ilEndOffset: number): Promise<HexStatementResponse>
   /** Queues a raw byte patch over the module's file image, undone and redone with the rest of the
@@ -1969,9 +2249,9 @@ export interface DnSpyApi {
   replaceResourceFromFile(workspaceId: string, transactionId: string, resourceNodeId: string): Promise<boolean>
   /** The manifest-resource model the Edit Resource dialog opens with. */
   /** Compiles C# source for an Edit Code window; with a transactionId and no errors, queues the import. */
-  compileSource(workspaceId: string, nodeId: string, mode: CompilerMode, source: string, transactionId?: string): Promise<CompileSourceResponse>
+  compileSource(workspaceId: string, nodeId: string, mode: CompilerMode, source: string, transactionId?: string, language?: CompilerLanguage, settings?: CompilerSettings): Promise<CompileSourceResponse>
   /** The assembly's attributes as C# source, which is what Edit Assembly Attributes opens with. */
-  getAssemblyAttributesSource(workspaceId: string, nodeId: string): Promise<{ source: string }>
+  getAssemblyAttributesSource(workspaceId: string, nodeId: string, language?: CompilerLanguage): Promise<{ source: string }>
   /** Picks an assembly to merge into the module — dnSpy's Merge with Assembly. */
   mergeAssembly(workspaceId: string, transactionId: string, nodeId: string): Promise<boolean>
   getAssemblyOptions(workspaceId: string, nodeId: string): Promise<AssemblyOptions>
@@ -1998,6 +2278,42 @@ export interface DnSpyApi {
   saveModule(workspaceId: string, moduleId: string, options?: SaveModuleOptions): Promise<SaveModuleResponse>
   /** Writes every modified module back over its own file — dnSpy's Save All. */
   saveAllModules(workspaceId: string, options?: SaveModuleOptions): Promise<SaveAllResponse>
+  /** The bytes of IL instructions, in the order named — dnSpy's Copy IL Bytes. "??" stands for a byte only a save
+   *  can tell, which `hasUnknownBytes` reports. */
+  getIlBytes(workspaceId: string, modulePath: string, instructions: { metadataToken: number; ilOffset: number }[]): Promise<{ hex: string; hasUnknownBytes: boolean }>
+  /** An empty workspace, for a document a command makes before anything was opened. */
+  createWorkspace(): Promise<OpenWorkspaceResponse>
+  /** dnSpy's Create Assembly, queued in a transaction: the node the new document will be. */
+  createAssembly(workspaceId: string, transactionId: string, options: AssemblyOptions, clrVersion: string): Promise<{ nodeId: string; label: string }>
+  /** dnSpy's Create NetModule, queued in a transaction. */
+  createNetModule(workspaceId: string, transactionId: string, name: string, mvid: string, clrVersion: string): Promise<{ nodeId: string; label: string }>
+  /** dnSpy's Add New / Add Existing NetModule to Assembly: a new one from its options, or the file at `path`. */
+  addNetModule(workspaceId: string, transactionId: string, assemblyNodeId: string, module: { name: string; mvid: string; clrVersion: string } | { path: string }): Promise<{ nodeId: string; label: string }>
+  /** dnSpy's Remove NetModule from Assembly. */
+  removeNetModule(workspaceId: string, transactionId: string, moduleNodeId: string): Promise<void>
+  /** The .NET version a new net module of the assembly starts as. */
+  getNetModuleDefaults(workspaceId: string, assemblyNodeId: string): Promise<{ clrVersion: string }>
+  /** dnSpy's image pickers: several files for Create System.Data.Bitmap/Icon Resource (its ImagesFilter, with
+   *  cursors), one for an image list's Add and Edit (the image list's own filter, without them). The files are read
+   *  here, since the renderer may not read the disk. */
+  pickImageFiles(multiple: boolean, includeCursors: boolean): Promise<ResourceImageFile[]>
+  /** The picker of Add Existing NetModule: dnSpy's NetModuleFilter. */
+  pickNetModuleFile(): Promise<string | undefined>
+  /** The documents with unsaved changes — what Save All saves and what closing the window asks about. */
+  getModifiedDocuments(workspaceId: string): Promise<ModifiedDocument[]>
+  /** What a document's Save Module window opens with; `useMixedMode` re-reads the options for that writer. */
+  getSaveOptions(workspaceId: string, documentId: string, useMixedMode?: boolean): Promise<DocumentSaveOptions>
+  /** Writes the documents — dnSpy's Save Module and Save Modules windows. Progress arrives on `onSaveProgress`
+   *  under `requestKey`, which `cancelSave` stops the run by. */
+  saveDocuments(workspaceId: string, documents: SaveDocumentRequest[], requestKey: string): Promise<SaveDocumentsResponse>
+  cancelSave(requestKey: string): Promise<void>
+  onSaveProgress(callback: (progress: SaveDocumentsProgress) => void): () => void
+  /** The save picker behind the "..." of the Save Module window's file name: a .NET module, or any file for a
+   *  document saved as bytes. */
+  pickSaveFileName(defaultPath: string, kind: 'module' | 'any', extension?: string): Promise<string | undefined>
+  /** dnSpy's ValidateFileName for the window's file name: the message's template and the folder it names, or
+   *  nothing when the name will do. */
+  validateSaveFileName(fileName: string): Promise<{ template: string; folder?: string } | undefined>
   /** Writes text the user picks a file for — a decompiled document's code, or the Output window's log.
    *  `title` names the save box; without one it is the port's "Save Code". */
   saveCode(suggestedName: string, text: string, title?: string): Promise<string | undefined>

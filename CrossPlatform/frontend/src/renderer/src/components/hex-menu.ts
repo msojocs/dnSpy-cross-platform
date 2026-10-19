@@ -6,7 +6,7 @@ import type { TranslationValues } from '../localization'
  * The parts of a selection a "Show ... in Hex Editor" command jumps to. dnSpy registers these commands
  * once per node subtype and they are mutually exclusive, so only the first of each label ever shows.
  */
-export type HexShowKind = 'statement' | 'instructions' | 'body' | 'fieldInitialValue' | 'resource'
+export type HexShowKind = 'statement' | 'instructions' | 'body' | 'fieldInitialValue' | 'resource' | 'structure' | 'structureData'
 
 /**
  * What the hex menu needs to know. It is a subset of `EditMenuContext`, so the Edit menu, the code
@@ -62,9 +62,8 @@ const documentKinds = ['assembly', 'module', 'pedocument', 'elfdocument', 'unkno
 const isDocumentRow = (ctx: HexMenuContext): boolean =>
   ctx.selectionKind !== undefined && documentKinds.includes(ctx.selectionKind)
 
-// Items dnSpy shows only for node types this port has no equivalent of (address references into a hex
-// editor, a hex document's own tree, PE section headers). They stay in the table so the group keeps
-// WPF's shape, but never show.
+// The item dnSpy shows only for a reference this port has no equivalent of — an address reference into a hex
+// editor, written in a code document. It stays in the table so the group keeps WPF's shape, but never shows.
 const never = (): boolean => false
 
 /**
@@ -99,10 +98,10 @@ export const hexMenuEntries: HexMenuEntry[] = [
   // The two "Show Instructions" commands are mutually exclusive upstream: this one runs off the
   // statement under the caret, the other off the selected method.
   { order: 20, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: statementCommandShows, run: (ctx) => ctx.onShowHexAt('statement') },
-  // A node of a hex document's own tree (PE headers, metadata tables), which this port does not model.
-  { order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
-  // A PE section header or a metadata stream node, likewise absent here.
-  { order: 40, icon: 'Binary', label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
+  // A node of the PE tree — a header, the tables stream, a metadata table or one of its rows: its own bytes.
+  { order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structure), run: (ctx) => ctx.onShowHexAt('structure') },
+  // A section header or a metadata stream: the data it describes.
+  { order: 40, icon: 'Binary', label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: (ctx) => !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structureData), run: (ctx) => ctx.onShowHexAt('structureData') },
   { order: 50, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('instructions') },
   { order: 60, icon: 'Binary', label: (ctx) => ctx.t('Show Method Body in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('body') },
   { order: 70, icon: 'Binary', label: (ctx) => ctx.t('Show Initial Value in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.fieldInitialValue), run: (ctx) => ctx.onShowHexAt('fieldInitialValue') },

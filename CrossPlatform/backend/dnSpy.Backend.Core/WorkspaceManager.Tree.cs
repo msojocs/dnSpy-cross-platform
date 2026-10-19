@@ -195,14 +195,14 @@ public sealed partial class WorkspaceManager {
 				var operations = kept.Select(entry => new EditOperation(entry.Id, entry, () => {
 					var detached = DetachRoot(entry);
 					return () => ReattachRoot(detached);
-				}, ChangesRoots: true)).ToArray();
+				}, ChangesRoots: true, Modifies: false)).ToArray();
 				var undo = new Stack<Action>();
 				foreach (var entry in kept) {
 					var detached = DetachRoot(entry);
 					removed.AddRange(detached.Nodes.Select(node => node.Id));
 					undo.Push(() => ReattachRoot(detached));
 				}
-				undoHistory.Push(new EditHistoryEntry(operations, undo.ToArray(), stateId, stateId));
+				undoHistory.Push(new EditHistoryEntry(nextHistoryId++, operations, undo.ToArray(), stateId, stateId));
 				redoHistory.Clear();
 			}
 			else if (onlyInRedo) {
@@ -397,7 +397,7 @@ public sealed partial class WorkspaceManager {
 				}
 				candidates = candidates.Where(named.Contains);
 			}
-			return new ModifiedModulesResponse(candidates.Where(module => module.IsModified || module.HexPatches.Count > 0).Select(module => module.Path).ToArray());
+			return new ModifiedModulesResponse(candidates.Where(IsModified).Select(module => module.Path).ToArray());
 		}
 
 		/// <summary>
@@ -1223,7 +1223,14 @@ public sealed partial class WorkspaceManager {
 				return result;
 			}
 			foreach (var module in assemblyModules) {
-				if (ReferenceEquals(module, moduleEntry.Module) || module is not ModuleDefMD netModule || string.IsNullOrEmpty(netModule.Location) || !File.Exists(netModule.Location))
+				if (ReferenceEquals(module, moduleEntry.Module))
+					continue;
+				// A net module an edit added — a new one with no file among them — is an entry already.
+				if (netModules.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Module, module)) is { } added) {
+					result.Add(GetOrAddNode($"module:{added.Path}", NodeKind.Module, added.Module, added));
+					continue;
+				}
+				if (module is not ModuleDefMD netModule || string.IsNullOrEmpty(netModule.Location) || !File.Exists(netModule.Location))
 					continue;
 				if (!netModules.TryGetValue(netModule.Location, out var entry)) {
 					entry = new ModuleEntry(netModule.Location, netModule) { Id = moduleEntry.Id };

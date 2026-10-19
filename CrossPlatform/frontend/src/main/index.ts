@@ -30,6 +30,8 @@ const analyzerRequests = new Map<string, { controller: AbortController; sender: 
 // The search window's searches still running, kept the same way: a new query calls the last one off.
 const searchRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 const stringReferencesRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
+// The save runs of the Save Module and Save Modules windows, whose Cancel calls them off.
+const saveRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -246,6 +248,11 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
     mainWindow?.webContents.send('script:output', parameters)
   } else if (method === 'client/request') {
     void handleClientRequest(parameters as ClientRequest)
+  } else if (method === 'module/saveProgress') {
+    const progress = parameters as { progressToken: string; fileIndex: number; fileName: string; fileProgress: number; totalProgress: number }
+    const request = saveRequests.get(progress.progressToken)
+    if (request && !request.sender.isDestroyed())
+      request.sender.send('module:saveProgress', { ...progress, progressToken: undefined, requestKey: request.requestKey })
   } else if (method === 'stringReferences/progress') {
     const progress = parameters as { progressToken: string; start: number; references: StringReference[] }
     const request = stringReferencesRequests.get(progress.progressToken)
@@ -510,7 +517,7 @@ const registerIpc = (): void => {
   ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw }))
   ipcMain.handle('resource:find', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/find', { workspaceId, nodeId }))
   ipcMain.handle('resource:getItemNames', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('resource/getItemNames', { workspaceId, nodeIds, raw: false }))
-  ipcMain.handle('compiler:getAssemblyAttributesSource', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('compiler/getAssemblyAttributesSource', { workspaceId, nodeId }))
+  ipcMain.handle('compiler:getAssemblyAttributesSource', (_event, workspaceId: string, nodeId: string, language?: string) => requireBackend().invoke('compiler/getAssemblyAttributesSource', { workspaceId, nodeId, language: language ?? 'csharp' }))
   ipcMain.handle('compiler:merge', async (_event, workspaceId: string, transactionId: string, nodeId: string) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: nativeText().mergeWithAssembly,
@@ -525,7 +532,8 @@ const registerIpc = (): void => {
     await requireBackend().invoke('compiler/merge', { workspaceId, transactionId, nodeId, base64Data: data.toString('base64') })
     return true
   })
-  ipcMain.handle('compiler:compile', (_event, workspaceId: string, nodeId: string, mode: string, source: string, transactionId?: string) => requireBackend().invoke('compiler/compile', { workspaceId, nodeId, mode, source, transactionId }))
+  ipcMain.handle('compiler:compile', (_event, workspaceId: string, nodeId: string, mode: string, source: string, transactionId?: string, language?: string, settings?: Record<string, unknown>) =>
+    requireBackend().invoke('compiler/compile', { workspaceId, nodeId, mode, source, transactionId, language: language ?? 'csharp', settings }))
   ipcMain.handle('assembly:getOptions', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('assembly/getOptions', { workspaceId, nodeId }))
   ipcMain.handle('assembly:setOptions', (_event, workspaceId: string, transactionId: string, nodeId: string, options: Record<string, unknown>) => requireBackend().invoke('assembly/setOptions', { workspaceId, transactionId, nodeId, options }))
   ipcMain.handle('module:getOptions', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('module/getOptions', { workspaceId, nodeId }))
@@ -624,6 +632,12 @@ const registerIpc = (): void => {
   ipcMain.handle('hex:length', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('hex/getLength', { workspaceId, moduleId }))
   ipcMain.handle('hex:read', (_event, workspaceId: string, moduleId: string, offset: number, count: number) => requireBackend().invoke('hex/readRange', { workspaceId, moduleId, offset, count }))
   ipcMain.handle('hex:resolveTarget', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('hex/resolveTarget', { workspaceId, nodeId }))
+  ipcMain.handle('hex:getStructure', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('hex/getStructure', { workspaceId, nodeId }))
+  ipcMain.handle('metadata:getTable', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('metadata/getTable', { workspaceId, nodeId }))
+  ipcMain.handle('metadata:getTableRows', (_event, workspaceId: string, nodeId: string, startRid: number, count: number) => requireBackend().invoke('metadata/getTableRows', { workspaceId, nodeId, startRid, count }))
+  ipcMain.handle('metadata:sortTable', (_event, workspaceId: string, nodeId: string, rid: number, count: number) => requireBackend().invoke('metadata/sortTable', { workspaceId, nodeId, rid, count }))
+  ipcMain.handle('metadata:tableText', (_event, workspaceId: string, nodeId: string, rids: number[]) => requireBackend().invoke('metadata/tableText', { workspaceId, nodeId, rids }))
+  ipcMain.handle('metadata:findRecord', (_event, workspaceId: string, nodeId: string, token: number) => requireBackend().invoke('metadata/findRecord', { workspaceId, nodeId, token }))
   ipcMain.handle('hex:resolveStatement', (_event, workspaceId: string, modulePath: string, metadataToken: number, ilOffset: number, ilEndOffset: number) => requireBackend().invoke('hex/resolveStatement', { workspaceId, modulePath, metadataToken, ilOffset, ilEndOffset }))
   ipcMain.handle('hex:patch', (_event, workspaceId: string, transactionId: string, nodeId: string, offset: number, base64Data: string) => requireBackend().invoke('edit/hexPatch', { workspaceId, transactionId, nodeId, offset, base64Data }))
   ipcMain.handle('hex:resolvePosition', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/resolvePosition', { workspaceId, moduleId, kind, value }))
@@ -733,6 +747,107 @@ const registerIpc = (): void => {
     requireBackend().invoke('module/save', { workspaceId, moduleId }))
   ipcMain.handle('module:saveAll', (_event, workspaceId: string, options?: Record<string, unknown>) =>
     requireBackend().invoke('module/saveAllWithOptions', { workspaceId, options }))
+  ipcMain.handle('workspace:create', () => requireBackend().invoke('workspace/create', {}))
+  ipcMain.handle('assembly:create', (_event, workspaceId: string, transactionId: string, options: Record<string, unknown>, clrVersion: string) =>
+    requireBackend().invoke('assembly/create', { workspaceId, transactionId, options, clrVersion }))
+  ipcMain.handle('module:createNetModule', (_event, workspaceId: string, transactionId: string, name: string, mvid: string, clrVersion: string) =>
+    requireBackend().invoke('module/createNetModule', { workspaceId, transactionId, name, mvid, clrVersion }))
+  ipcMain.handle('module:addNetModule', (_event, workspaceId: string, transactionId: string, assemblyNodeId: string, module: Record<string, unknown>) =>
+    requireBackend().invoke('module/addNetModule', { workspaceId, transactionId, assemblyNodeId, ...module }))
+  ipcMain.handle('module:removeNetModule', (_event, workspaceId: string, transactionId: string, moduleNodeId: string) =>
+    requireBackend().invoke('module/removeNetModule', { workspaceId, transactionId, moduleNodeId }))
+  ipcMain.handle('module:netModuleDefaults', (_event, workspaceId: string, assemblyNodeId: string) =>
+    requireBackend().invoke('module/getNetModuleDefaults', { workspaceId, assemblyNodeId }))
+  // dnSpy's NetModuleFilter for Add Existing NetModule. A test names the file up front.
+  ipcMain.handle('dialog:pickNetModule', async () => {
+    if (!app.isPackaged && process.env.DNSPY_E2E_NETMODULE_PATH)
+      return process.env.DNSPY_E2E_NETMODULE_PATH
+    const text = nativeText()
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openFile'],
+      filters: [{ name: `${text.dotNetNetModules} (*.netmodule)`, extensions: ['netmodule'] }, { name: text.allFiles, extensions: ['*'] }],
+    })
+    return result.canceled || result.filePaths.length === 0 ? undefined : result.filePaths[0]
+  })
+  // dnSpy's PickFilenameConstants.ImagesFilter. A test names the files up front.
+  ipcMain.handle('dialog:pickImages', async (_event, multiple: boolean, includeCursors: boolean) => {
+    const e2ePaths = !app.isPackaged ? process.env.DNSPY_E2E_IMAGE_PATHS : undefined
+    let paths: string[]
+    if (e2ePaths) {
+      paths = e2ePaths.split(path.delimiter).filter(Boolean)
+    }
+    else {
+      const text = nativeText()
+      const extensions = ['png', 'gif', 'bmp', 'dib', 'jpg', 'jpeg', 'jpe', 'jif', 'jfif', 'jfi', 'ico', ...(includeCursors ? ['cur'] : [])]
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        filters: [{ name: text.images, extensions }, { name: text.allFiles, extensions: ['*'] }],
+      })
+      if (result.canceled)
+        return []
+      paths = result.filePaths
+    }
+    const files = []
+    for (const file of paths)
+      files.push({ name: path.basename(file), base64Data: (await readFile(file)).toString('base64') })
+    return files
+  })
+  ipcMain.handle('document:getIlBytes', (_event, workspaceId: string, modulePath: string, instructions: unknown[]) =>
+    requireBackend().invoke('document/getIlBytes', { workspaceId, modulePath, instructions }))
+  ipcMain.handle('workspace:modifiedDocuments', async (_event, workspaceId: string) =>
+    (await requireBackend().invoke<{ documents: unknown[] }>('workspace/getModifiedDocuments', { workspaceId })).documents)
+  ipcMain.handle('module:saveOptions', (_event, workspaceId: string, documentId: string, useMixedMode?: boolean) =>
+    requireBackend().invoke('module/getSaveOptions', { workspaceId, documentId, useMixedMode: useMixedMode ?? null }))
+  // dnSpy's Save Module and Save Modules windows run the save while they show its progress; a big module takes a
+  // while, so it gets the long deadline, and the window's Cancel calls it off by the key it named it with.
+  ipcMain.handle('module:saveDocuments', async (event, workspaceId: string, documents: unknown[], requestKey: string) => {
+    const key = `${event.sender.id}:${requestKey}`
+    const entry = { controller: new AbortController(), sender: event.sender, requestKey }
+    saveRequests.set(key, entry)
+    try {
+      return await requireBackend().invoke('module/saveDocuments', { workspaceId, documents, progressToken: key }, 600_000, entry.controller.signal)
+    } finally {
+      if (saveRequests.get(key) === entry)
+        saveRequests.delete(key)
+    }
+  })
+  ipcMain.handle('module:cancelSave', (event, requestKey: string) => {
+    saveRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
+  // dnSpy's PathUtils.ValidateFileName, which looks at the disk as well as at the name: the main process is the
+  // side that can. Answers the message's template and its argument, or nothing for a name that will do.
+  ipcMain.handle('dialog:validateSaveFileName', (_event, fileName: string): { template: string; folder?: string } | undefined => {
+    if (fileName.length === 0)
+      return { template: "Filename can't be empty." }
+    if (fileName.trim().length === 0)
+      return { template: "Filename can't contain only white space" }
+    if (fileName.length >= 4096)
+      return { template: 'Filename is too long.' }
+    if (fileName.includes('\0') || (process.platform === 'win32' && /[<>"|?*]/.test(fileName.replace(/^[a-zA-Z]:/, ''))))
+      return { template: 'Filename contains at least one invalid path character.' }
+    if (path.basename(fileName).length === 0 || fileName.endsWith(path.sep))
+      return { template: "Filename can't be empty." }
+    if (existsSync(fileName) && statSync(fileName).isDirectory())
+      return { template: 'A folder with the same name as the filename already exists.' }
+    const folder = path.dirname(fileName)
+    if (folder && !existsSync(folder))
+      return { template: "Folder '{folder}' doesn't exist.", folder }
+    return undefined
+  })
+  // The "..." beside the Save Module window's file name: dnSpy's DotNetAssemblyOrModuleFilter for a module, any
+  // file for a document saved as bytes. A test names the file up front.
+  ipcMain.handle('dialog:pickSaveFileName', async (_event, defaultPath: string, kind: 'module' | 'any', extension?: string) => {
+    if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_PATH)
+      return process.env.DNSPY_E2E_SAVE_PATH
+    const text = nativeText()
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: defaultPath || undefined,
+      filters: kind === 'module'
+        ? [{ name: `${text.dotNetExecutables} (*.exe, *.dll, *.netmodule, *.winmd)`, extensions: extension ? [extension, 'exe', 'dll', 'netmodule', 'winmd'] : ['exe', 'dll', 'netmodule', 'winmd'] }, { name: text.allFiles, extensions: ['*'] }]
+        : [{ name: text.allFiles, extensions: ['*'] }],
+    })
+    return result.canceled || !result.filePath ? undefined : result.filePath
+  })
   ipcMain.handle('document:saveCode', async (_event, suggestedName: string, text: string, title?: string) => {
     if (typeof suggestedName !== 'string' || typeof text !== 'string')
       throw new TypeError('Invalid save-code request.')
@@ -1090,6 +1205,26 @@ const registerIpc = (): void => {
     })
     return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
   })
+  // dnSpy's AppWindow_MainWindowClosing: Yes saves the files, No exits without them, and closing the box — Escape
+  // here, which no button answers to — stays. A test names its answer up front.
+  ipcMain.handle('app:askExitUnsaved', async (_event, count: number): Promise<'save' | 'discard' | 'cancel'> => {
+    const e2eAnswer = !app.isPackaged ? process.env.DNSPY_E2E_SAVE_PROMPT : undefined
+    if (e2eAnswer === 'save' || e2eAnswer === 'discard' || e2eAnswer === 'cancel')
+      return e2eAnswer
+    if (!mainWindow)
+      return 'cancel'
+    const text = nativeText()
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'dnSpy',
+      message: count === 1 ? text.askExitUnsavedFile : text.askExitUnsavedFiles.replace('{0}', String(count)),
+      buttons: [text.yes, text.no],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    })
+    return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
+  })
   ipcMain.handle('app:setLocale', (_event, locale: UiLocale) => {
     if (isUiLocale(locale)) {
       uiLocale = locale
@@ -1121,7 +1256,8 @@ const registerIpc = (): void => {
   // dnSpy's ShowIgnorableMessage, as the native box the port draws it with: the caller decides what a box
   // whose "Don't show again" was ticked means — this only reports that it was.
   ipcMain.handle('app:askMessage', async (_event, message: string, buttons: string[]) => {
-    if (!mainWindow)
+    // A native box no test can press: a test answers every question with its first button — dnSpy's "Yes".
+    if (!mainWindow || (!app.isPackaged && process.env.DNSPY_E2E_ASK_ANSWER === 'first'))
       return { button: buttons[0], dontShowAgain: false }
     const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
       type: 'question',

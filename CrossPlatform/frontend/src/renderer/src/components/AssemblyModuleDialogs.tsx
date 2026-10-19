@@ -164,24 +164,60 @@ const NumberBox = ({ label, value, onChange }: { label: string; value: number; o
 }
 
 interface AssemblyOptionsDialogProps {
-  node: TreeNode
+  /** The assembly to edit; Create Assembly has none. */
+  node?: TreeNode
+  /** dnSpy's Create Assembly: the same window, titled for it, starting from AssemblyOptions.Create("MyAssembly")
+   *  and with the .NET Version box the edit window hides. */
+  create?: boolean
   onClose(): void
 }
 
+/** The .NET versions Create Assembly and Create NetModule offer — dnSpy's NetModuleOptionsVM.clrVersionList. */
+export const CLR_VERSIONS = [
+  { value: '1.0', label: '1.0' },
+  { value: '1.1', label: '1.1' },
+  { value: '2.0', label: '2.0 - 3.5' },
+  { value: '4.0', label: '4.0 - 4.8' },
+] as const
+
+/** dnSpy's AssemblyOptions.Create: a name, version 0.0.0.0, SHA1 and nothing else. */
+export const newAssemblyOptions = (name: string): AssemblyOptions => ({
+  name,
+  culture: '',
+  hashAlgorithm: 0x8004,
+  attributes: 0,
+  publicKey: '',
+  versionMajor: 0,
+  versionMinor: 0,
+  versionBuild: 0,
+  versionRevision: 0,
+  customAttributes: [],
+  declSecurities: [],
+  fullName: '',
+})
+
+/** dnlib's AssemblyDef.FullName for options that have not been near an assembly yet. */
+const assemblyFullName = (options: AssemblyOptions): string => {
+  const token = options.publicKey.trim() ? 'PublicKeyToken=<key>' : 'PublicKeyToken=null'
+  return `${options.name}, Version=${options.versionMajor}.${options.versionMinor}.${options.versionBuild}.${options.versionRevision}, Culture=${options.culture || 'neutral'}, ${token}`
+}
+
 /** dnSpy's `AssemblyOptionsDlg`: Main, Custom Attributes and Security Declarations. */
-export const AssemblyOptionsDialog = ({ node, onClose }: AssemblyOptionsDialogProps): React.JSX.Element => {
+export const AssemblyOptionsDialog = ({ node, create = false, onClose }: AssemblyOptionsDialogProps): React.JSX.Element => {
   const { t } = useLanguage()
   const workspaceId = useAppStore((state) => state.workspaceId)
   const applyAssemblyOptions = useAppStore((state) => state.applyAssemblyOptions)
-  const [options, setOptions] = useState<AssemblyOptions>()
-  const [initial, setInitial] = useState<AssemblyOptions>()
+  const createAssembly = useAppStore((state) => state.createAssembly)
+  const [options, setOptions] = useState<AssemblyOptions | undefined>(() => create ? newAssemblyOptions('MyAssembly') : undefined)
+  const [initial, setInitial] = useState<AssemblyOptions | undefined>(() => create ? newAssemblyOptions('MyAssembly') : undefined)
+  const [clrVersion, setClrVersion] = useState<string>('4.0')
   const [customAttributes, setCustomAttributes] = useState<CustomAttributeDraft[]>([])
   const [declSecurities, setDeclSecurities] = useState<DeclSecurityDraft[]>([])
   const [failure, setFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!workspaceId)
+    if (!workspaceId || create || !node)
       return
     let cancelled = false
     void window.dnSpy.getAssemblyOptions(workspaceId, node.id)
@@ -195,12 +231,13 @@ export const AssemblyOptionsDialog = ({ node, onClose }: AssemblyOptionsDialogPr
       })
       .catch((reason: unknown) => { if (!cancelled) setFailure(reason instanceof Error ? reason.message : String(reason)) })
     return () => { cancelled = true }
-  }, [workspaceId, node.id])
+  }, [workspaceId, node, create])
 
+  const title = create ? 'Create Assembly' : 'Edit Assembly'
   if (!options || !workspaceId) {
     return (
       <OptionsShell
-        title="Edit Assembly"
+        title={title}
         hideTabStrip
         tabs={[{ label: 'Main', content: <div className={failure ? 'modal-error' : 'il-loading'}>{failure ?? t('Loading...')}</div> }]}
         invalid={failure !== undefined}
@@ -251,8 +288,15 @@ export const AssemblyOptionsDialog = ({ node, onClose }: AssemblyOptionsDialogPr
         <NumberBox label="Version Build" value={options.versionBuild} onChange={(versionBuild) => patch({ versionBuild })} />
         <NumberBox label="Version Revision" value={options.versionRevision} onChange={(versionRevision) => patch({ versionRevision })} />
       </div>
+      {create && (
+        <label>{t('.NET Version')}
+          <select aria-label={t('.NET Version')} value={clrVersion} onChange={(event) => setClrVersion(event.target.value)}>
+            {CLR_VERSIONS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+          </select>
+        </label>
+      )}
       <FlagBoxes flags={options.attributes} entries={ASSEMBLY_FLAGS} onChange={(attributes) => patch({ attributes })} legend="Flags" />
-      <label>{t('Full Name')}<input readOnly aria-label={t('Full Name')} value={options.fullName} /></label>
+      <label>{t('Full Name')}<input readOnly aria-label={t('Full Name')} value={create ? assemblyFullName(options) : options.fullName} /></label>
     </div>
   )
   const tabs: OptionsTab[] = [
@@ -262,7 +306,7 @@ export const AssemblyOptionsDialog = ({ node, onClose }: AssemblyOptionsDialogPr
   ]
   return (
     <OptionsShell
-      title="Edit Assembly"
+      title={title}
       className="options-dialog"
       tabs={tabs}
       invalid={!options.name.trim()}
@@ -280,12 +324,14 @@ export const AssemblyOptionsDialog = ({ node, onClose }: AssemblyOptionsDialogPr
           setFailure(reason instanceof Error ? reason.message : String(reason))
           return
         }
-        void applyAssemblyOptions(node, written).then((applied) => { setBusy(false); if (applied) onClose(); else setFailure(useAppStore.getState().error) })
+        const done = create || !node ? createAssembly(written, clrVersion) : applyAssemblyOptions(node, written)
+        void done.then((applied) => { setBusy(false); if (applied) onClose(); else setFailure(useAppStore.getState().error) })
       }}
       onClose={onClose}
       onReset={() => {
         if (initial) {
           setOptions(initial)
+          setClrVersion('4.0')
           setCustomAttributes(initial.customAttributes.map(customAttributeDraft))
           setDeclSecurities(initial.declSecurities.map(declSecurityDraft))
         }

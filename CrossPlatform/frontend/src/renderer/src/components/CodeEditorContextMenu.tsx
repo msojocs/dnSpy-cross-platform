@@ -48,6 +48,8 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onGoToEntryPoint?(node: TreeNode): void
   onGoToGlobalCctor?(node: TreeNode): void
   onGoToToken?(node: TreeNode): void
+  /** dnSpy's Go to MD Table Row: asks for a token in the node's module, or goes to the given one. */
+  onGoToMdTableRow?(node: TreeNode, token?: number): void
   onStartDebug?(): void
   onToggleBreakpoint?(): void
   /** Enables or disables `breakpoint`, which is what Ctrl+F9 does. */
@@ -83,6 +85,9 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   /** Writes plain text to the clipboard, which is what dnSpy's two copy commands put there. */
   copyText?(text: string): void
   onCopy?(): void
+  /** The IL instructions the selection covers, in an IL view — what Copy IL Bytes copies — and the command. */
+  ilSelection?: { modulePath: string; metadataToken: number; ilOffset: number }[]
+  onCopyIlBytes?(): void
   onFind?(): void
   /** dnSpy's Incremental Search, Ctrl+I: what is typed next is looked for from the caret as it is typed. */
   onIncrementalSearch?(): void
@@ -329,6 +334,10 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: image('EntryPoint'), label: (ctx) => ctx.t('Go to Entry Point'), visible: (ctx) => ctx.hasEntryPoint === true && ctx.documentNode !== undefined && ctx.onGoToEntryPoint !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToEntryPoint?.(ctx.documentNode) } },
   { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: noImage, label: (ctx) => ctx.t('Go to Global Cctor'), visible: (ctx) => ctx.hasGlobalCctor === true && ctx.documentNode !== undefined && ctx.onGoToGlobalCctor !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToGlobalCctor?.(ctx.documentNode) } },
   { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: noImage, label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+D', visible: (ctx) => ctx.documentNode !== undefined && ctx.onGoToToken !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToToken?.(ctx.documentNode) } },
+  // dnSpy's GoToMDTableRowUIHexEditorCommand and GoToMDTableRowHexEditorCommand: the row of a token asked for in
+  // the document's module, and the row of the reference under the caret.
+  { group: GROUP_TOKENS, order: 30, key: 'go-to-md-table-row', icon: noImage, label: (ctx) => ctx.t('Go to MD Table Row...'), shortcut: 'Ctrl+Shift+D', visible: (ctx) => ctx.documentNode !== undefined && ctx.onGoToMdTableRow !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToMdTableRow?.(ctx.documentNode) } },
+  { group: GROUP_TOKENS, order: 40, key: 'go-to-md-table-row-token', icon: noImage, label: (ctx) => ctx.t('Go to MD Table Row ({token})', { token: ((ctx.referenceNode?.metadataToken ?? 0) >>> 0).toString(16).toUpperCase().padStart(8, '0') }), shortcut: 'Shift+Alt+R', visible: (ctx) => ctx.referenceNode?.metadataToken !== undefined && ctx.onGoToMdTableRow !== undefined, run: (ctx) => { if (ctx.referenceNode?.metadataToken !== undefined) ctx.onGoToMdTableRow?.(ctx.referenceNode, ctx.referenceNode.metadataToken) } },
   { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: noImage, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 60, key: 'copy-full-name', icon: noImage, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
 
@@ -351,6 +360,8 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // nothing to do; Copy is still needed, since the menu replaces Monaco's own.
   { group: GROUP_EDITOR, order: 0, key: 'copy', icon: image('Copy'), label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: (ctx) => ctx.hasSelection && ctx.onCopy !== undefined, run: (ctx) => ctx.onCopy?.() },
   { group: GROUP_EDITOR, order: 10, key: 'find', icon: image('Search'), label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: (ctx) => ctx.onFind !== undefined, run: (ctx) => ctx.onFind?.() },
+  // dnSpy's CopyILBytesCommand: only over a selection that covers an instruction of an IL view.
+  { group: GROUP_EDITOR, order: 20, key: 'copy-il-bytes', icon: image('Copy'), label: (ctx) => ctx.t('Copy IL Bytes'), shortcut: 'Ctrl+B', visible: (ctx) => (ctx.ilSelection?.length ?? 0) > 0 && ctx.onCopyIlBytes !== undefined, run: (ctx) => ctx.onCopyIlBytes?.() },
   { group: GROUP_EDITOR, order: 20, key: 'incremental-search', icon: image('Search'), label: (ctx) => ctx.t('Incremental Search'), shortcut: 'Ctrl+I', visible: (ctx) => ctx.onIncrementalSearch !== undefined, run: (ctx) => ctx.onIncrementalSearch?.() },
 ]
 

@@ -28,6 +28,7 @@ public sealed class EditContext {
 		Signatures = new SignatureCodec(this);
 		Constants = new ConstantCodec(this);
 		MethodRefs = new MethodRefCodec(this);
+		MemberRefs = new MemberRefCodec(this);
 		Attributes = new CustomAttributeCodec(this);
 		MarshalTypes = new MarshalTypeCodec(this);
 		ImplMaps = new ImplMapCodec(this);
@@ -63,6 +64,9 @@ public sealed class EditContext {
 
 	/// <summary>References to methods — a custom attribute's constructor, an override's two halves.</summary>
 	public MethodRefCodec MethodRefs { get; }
+
+	/// <summary>MemberRefs as the IL editor's MemberRef dialog builds them.</summary>
+	public MemberRefCodec MemberRefs { get; }
 	public CustomAttributeCodec Attributes { get; }
 	public MarshalTypeCodec MarshalTypes { get; }
 	public ImplMapCodec ImplMaps { get; }

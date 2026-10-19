@@ -249,6 +249,102 @@ public sealed class WorkspaceIlBodyTests : IDisposable {
 		new OpenWorkspaceRequest([typeof(IlBodyFixture).Assembly.Location]),
 		TestContext.Current.CancellationToken);
 
+	[Fact]
+	public async Task AnInstructionPastedFromAnotherModuleHasWhatItNamesImported() {
+		var opened = await manager.OpenAsync(
+			new OpenWorkspaceRequest([typeof(IlBodyFixture).Assembly.Location, typeof(SearchTarget.Library).Assembly.Location]),
+			TestContext.Current.CancellationToken);
+		var source = await FindMethodInRootAsync(opened.WorkspaceId, typeof(IlBodyFixture).Assembly.Location, typeof(IlBodyFixture).Namespace!, nameof(IlBodyFixture), nameof(IlBodyFixture.WithLocalsAndHandler) + "(");
+		var sourceBody = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, source.Id), TestContext.Current.CancellationToken);
+		// `new InvalidOperationException("too large")`: a MemberRef of this test assembly, by its token there.
+		var newobj = Assert.Single(sourceBody.Instructions, instruction => instruction.OpCode == "newobj");
+		Assert.Equal(source.Id, newobj.TokenOwnerNodeId);
+		Assert.NotNull(newobj.MemberRef);
+
+		var target = await FindMethodInRootAsync(opened.WorkspaceId, typeof(SearchTarget.Library).Assembly.Location, "SearchTarget", "Library", "Ratio(");
+		var targetBody = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, target.Id), TestContext.Current.CancellationToken);
+		var pasted = targetBody with {
+			Locals = [],
+			ExceptionHandlers = [],
+			Instructions = [
+				new IlBodyInstructionDto("L0", "ldstr", IlOperandKinds.String, "pasted"),
+				newobj with { Label = "L1" },
+				new IlBodyInstructionDto("L2", "throw", IlOperandKinds.None),
+			],
+		};
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueIlBodyAsync(ToReplaceRequest(opened.WorkspaceId, transaction.TransactionId, target.Id, pasted), TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var reread = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, target.Id), TestContext.Current.CancellationToken);
+		var imported = Assert.Single(reread.Instructions, instruction => instruction.OpCode == "newobj");
+		Assert.Contains("System.InvalidOperationException::.ctor(System.String)", imported.OperandDisplay, StringComparison.Ordinal);
+		Assert.Equal(target.Id, imported.TokenOwnerNodeId);
+	}
+
+	[Fact]
+	public async Task TheOperandDialogsMemberRefIsWrittenAsANewReference() {
+		var opened = await OpenAsync();
+		var method = await FindFixtureMethodAsync(opened.WorkspaceId, nameof(IlBodyFixture.WithLocalsAndHandler));
+		var body = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken);
+		var newobj = Assert.Single(body.Instructions, instruction => instruction.OpCode == "newobj");
+		var memberRef = newobj.MemberRef!;
+		Assert.False(memberRef.IsField);
+		Assert.Equal(".ctor", memberRef.Name);
+		Assert.Equal(MemberRefParentKinds.Type, memberRef.Class!.Kind);
+		// What the dialog hands back: the reference rebuilt from its class, name and signature, with no token.
+		var edited = body with {
+			Instructions = body.Instructions.Select(instruction => instruction.Label == newobj.Label
+				? instruction with { Token = null, NodeId = null, TokenOwnerNodeId = null, MemberRef = memberRef }
+				: instruction).ToArray(),
+		};
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueIlBodyAsync(ToReplaceRequest(opened.WorkspaceId, transaction.TransactionId, method.Id, edited), TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var reread = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken);
+		var rebuilt = Assert.Single(reread.Instructions, instruction => instruction.OpCode == "newobj");
+		Assert.Equal(".ctor", rebuilt.MemberRef?.Name);
+		Assert.Contains("InvalidOperationException", rebuilt.MemberRef?.Class?.Display, StringComparison.Ordinal);
+		Assert.NotEqual(newobj.Token, rebuilt.Token);
+	}
+
+	[Fact]
+	public async Task CopiesTheBytesOfInstructionsFromTheFileUntilTheBodyIsEdited() {
+		var opened = await OpenAsync();
+		var method = await FindFixtureMethodAsync(opened.WorkspaceId, nameof(IlBodyFixture.WithLocalsAndHandler));
+		var body = await manager.GetIlBodyAsync(new GetIlBodyRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken);
+		var path = typeof(IlBodyFixture).Assembly.Location;
+		var token = Convert.ToInt32(method.MetadataToken!.Value);
+		var ldstr = Assert.Single(body.Instructions, instruction => instruction.OpCode == "ldstr");
+		var ldstrOffset = Convert.ToInt32(ldstr.Label[3..], 16);
+
+		var original = await manager.GetIlBytesAsync(new IlBytesRequest(opened.WorkspaceId, path, [new IlBytesInstructionDto(token, ldstrOffset)]), TestContext.Current.CancellationToken);
+		// ldstr is 72 followed by the string's token, which the file knows.
+		Assert.Matches("^72[0-9A-F]{6}70$", original.Hex);
+		Assert.False(original.HasUnknownBytes);
+
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		var edited = body with { Instructions = [new IlBodyInstructionDto("L0", "nop", IlOperandKinds.None), .. body.Instructions] };
+		await manager.QueueIlBodyAsync(ToReplaceRequest(opened.WorkspaceId, transaction.TransactionId, method.Id, edited), TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var moved = await manager.GetIlBytesAsync(new IlBytesRequest(opened.WorkspaceId, path, [new IlBytesInstructionDto(token, 0), new IlBytesInstructionDto(token, ldstrOffset + 1)]), TestContext.Current.CancellationToken);
+		// The nop, then the ldstr, whose string is only known once the module is saved.
+		Assert.Equal("0072????????", moved.Hex);
+		Assert.True(moved.HasUnknownBytes);
+	}
+
+	async Task<TreeNodeDto> FindMethodInRootAsync(string workspaceId, string path, string namespaceName, string typeName, string methodPrefix) {
+		var root = Assert.Single((await manager.GetRootsAsync(new WorkspaceRequest(workspaceId), TestContext.Current.CancellationToken)).Nodes, node => node.Description == path);
+		var module = Assert.Single(await ChildrenAsync(workspaceId, root.Id), node => node.Kind == "module");
+		var namespaces = await ChildrenAsync(workspaceId, module.Id);
+		var @namespace = Assert.Single(namespaces, node => node.Label == namespaceName);
+		var types = await ChildrenAsync(workspaceId, @namespace.Id);
+		var type = Assert.Single(types, node => node.Label == typeName);
+		return Assert.Single(await ChildrenAsync(workspaceId, type.Id), node => node.Kind == "method" && node.Label.StartsWith(methodPrefix, StringComparison.Ordinal));
+	}
+
 	async Task<IReadOnlyList<TreeNodeDto>> ChildrenAsync(string workspaceId, string nodeId) =>
 		(await manager.GetChildrenAsync(new NodeRequest(workspaceId, nodeId), TestContext.Current.CancellationToken)).Nodes;
 

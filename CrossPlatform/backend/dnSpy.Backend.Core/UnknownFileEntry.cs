@@ -11,6 +11,15 @@ internal sealed class UnknownFileEntry : WorkspaceManager.IModuleEntry {
 	public string Path { get; }
 	public long FileLength { get; }
 
+	/// <inheritdoc/>
+	public long SavedHistoryId { get; set; }
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexPatches { get; } = [];
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexBase { get; } = [];
+
 	public UnknownFileEntry(string path) {
 		Path = path;
 		FileLength = GetFileLength(path);

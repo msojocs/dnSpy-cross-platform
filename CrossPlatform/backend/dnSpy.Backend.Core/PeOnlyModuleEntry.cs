@@ -12,10 +12,14 @@ internal sealed class PeOnlyModuleEntry : WorkspaceManager.IModuleEntry {
 	public PEImage PEImage { get; }
 	public long FileLength { get; }
 
-	/// <summary>
-	/// Always false - non-managed PE files cannot be edited.
-	/// </summary>
-	public bool IsModified { get; set; }
+	/// <inheritdoc/>
+	public long SavedHistoryId { get; set; }
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexPatches { get; } = [];
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexBase { get; } = [];
 
 	public PeOnlyModuleEntry(string path, PEImage peImage) {
 		Path = path;

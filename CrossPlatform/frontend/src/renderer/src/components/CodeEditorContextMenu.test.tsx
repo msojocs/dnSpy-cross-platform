@@ -411,3 +411,18 @@ describe('searchMsdnUrl', () => {
     expect(searchMsdnUrl('')).toBe('https://learn.microsoft.com/search/?q=')
   })
 })
+
+describe('the document viewer\'s Go to MD Table Row commands', () => {
+  it('ask for a token in the document\'s module, or go to the row of the reference under the caret', () => {
+    const onGoToMdTableRow = vi.fn()
+    const ctx = methodReferenceContext({ onGoToMdTableRow })
+    const keys = menuKeys(ctx)
+    expect(keys.indexOf('go-to-md-table-row')).toBeGreaterThan(keys.indexOf('go-to-token'))
+    expect(keys.indexOf('go-to-md-table-row-token')).toBeLessThan(keys.indexOf('copy-md-token'))
+    runEntry(ctx, 'go-to-md-table-row')
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith(methodNode)
+    runEntry(ctx, 'go-to-md-table-row-token')
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith(methodNode, 0x06000001)
+    expect(menuKeys(context({ documentNode: methodNode, onGoToMdTableRow }))).not.toContain('go-to-md-table-row-token')
+  })
+})

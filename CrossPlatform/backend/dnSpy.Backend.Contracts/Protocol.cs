@@ -221,6 +221,43 @@ public static class RpcMethods {
 	public const string LanguageServiceIndentation = "languageService/indentation";
 	/// <summary>The spans of the syntax around positions, innermost first — dnSpy's Roslyn text structure navigator.</summary>
 	public const string LanguageServiceSelectionRanges = "languageService/selectionRanges";
+	/// <summary>The documents with unsaved changes — dnSpy's IUndoCommandService.GetModifiedDocuments.</summary>
+	public const string WorkspaceGetModifiedDocuments = "workspace/getModifiedDocuments";
+	/// <summary>The writer options a document's Save Module window opens with, dnlib's own for the module.</summary>
+	public const string ModuleGetSaveOptions = "module/getSaveOptions";
+	/// <summary>Writes one or more documents, each to the file and with the options its window names — the work
+	/// dnSpy's Save Module and Save Modules windows run. Cancellable, and it reports progress as it goes.</summary>
+	public const string ModuleSaveDocuments = "module/saveDocuments";
+	/// <summary>A notification: how far module/saveDocuments has got.</summary>
+	public const string ModuleSaveProgress = "module/saveProgress";
+	/// <summary>The bytes of IL instructions a code view's selection covers — dnSpy's Copy IL Bytes.</summary>
+	public const string DocumentGetIlBytes = "document/getIlBytes";
+	/// <summary>A workspace with no document in it, for a command that makes the first one — dnSpy's Create Assembly
+	/// with nothing open.</summary>
+	public const string WorkspaceCreate = "workspace/create";
+	/// <summary>dnSpy's Create Assembly: a new assembly that exists only in the workspace until it is saved.</summary>
+	public const string AssemblyCreate = "assembly/create";
+	/// <summary>dnSpy's Create NetModule: a new net module of its own, in the workspace only.</summary>
+	public const string ModuleCreateNetModule = "module/createNetModule";
+	/// <summary>dnSpy's Add New / Add Existing NetModule to Assembly.</summary>
+	public const string ModuleAddNetModule = "module/addNetModule";
+	/// <summary>dnSpy's Remove NetModule from Assembly.</summary>
+	public const string ModuleRemoveNetModule = "module/removeNetModule";
+	/// <summary>The .NET version a new net module of an assembly starts as — the manifest module's.</summary>
+	public const string ModuleGetNetModuleDefaults = "module/getNetModuleDefaults";
+	/// <summary>The fields of one PE header, the tables stream header or one metadata table row — the form dnSpy's
+	/// AsmEditor hex nodes show — with the values the document's bytes hold now.</summary>
+	public const string HexGetStructure = "hex/getStructure";
+	/// <summary>The layout of one metadata table: its columns, where its rows are and whether it can be sorted.</summary>
+	public const string MetadataGetTable = "metadata/getTable";
+	/// <summary>A run of rows of one metadata table — the grid dnSpy's metadata table node shows.</summary>
+	public const string MetadataGetTableRows = "metadata/getTableRows";
+	/// <summary>dnSpy's Sort and Sort Selection on a metadata table: the rows' bytes in sorted order, for one hex patch.</summary>
+	public const string MetadataSortTable = "metadata/sortTable";
+	/// <summary>dnSpy's Go to MD Table Row: the row node a metadata token names in a module's tables stream.</summary>
+	public const string MetadataFindRecord = "metadata/findRecord";
+	/// <summary>dnSpy's Copy as Text on a metadata table's rows.</summary>
+	public const string MetadataTableText = "metadata/tableText";
 }
 
 public static class ErrorCodes {
@@ -263,8 +300,10 @@ public sealed record AddModulesRequest(string WorkspaceId, IReadOnlyList<string>
 public sealed record AddModulesResponse(IReadOnlyList<OpenedModule> Modules, IReadOnlyList<string> Skipped, string StateId);
 
 /// <summary>One file the workspace holds. <paramref name="AutoLoaded"/> is set on a file the workspace opened
-/// by itself to resolve a reference — dnSpy's auto-loaded documents, which a saved list leaves out.</summary>
-public sealed record OpenedModule(string Id, string Name, string Path, bool HasPdb, bool AutoLoaded = false);
+/// by itself to resolve a reference — dnSpy's auto-loaded documents, which a saved list leaves out.
+/// <para><paramref name="InMemory"/> is set on a document Create Assembly or Create NetModule made, which has no file yet: its
+/// path is a name of the workspace's own, and a saved list leaves it out.</para></summary>
+public sealed record OpenedModule(string Id, string Name, string Path, bool HasPdb, bool AutoLoaded = false, bool InMemory = false);
 
 public sealed record WorkspaceRequest(string WorkspaceId);
 
@@ -647,14 +686,19 @@ public sealed record HexMethodTargetDto(
 
 /// <summary>
 /// Where the hex commands for one node point. Everything but <paramref name="ModuleId"/> and
-/// <paramref name="FileLength"/> is null when the node has no such target.
+/// <paramref name="FileLength"/> is null when the node has no such target. <paramref name="Structure"/> is the
+/// range a hex structure node stands for — a PE header, the tables stream header, a whole metadata table or one
+/// of its rows, dnSpy's HexNode.Span — and <paramref name="StructureData"/> is what "Show Data in Hex Editor"
+/// opens for a section header (the section's raw data) or a storage stream header (the stream's data).
 /// </summary>
 public sealed record HexTargetResponse(
 	string ModuleId,
 	long FileLength,
 	HexMethodTargetDto? Method = null,
 	HexRangeDto? FieldInitialValue = null,
-	HexRangeDto? Resource = null);
+	HexRangeDto? Resource = null,
+	HexRangeDto? Structure = null,
+	HexRangeDto? StructureData = null);
 
 /// <summary>
 /// A statement under the caret of a code document, named the way a bookmark names its target: the IL
@@ -779,7 +823,7 @@ public sealed record EditTransactionRequest(string WorkspaceId, string Transacti
 /// The history after an edit, an undo or a redo. <paramref name="Modules"/> is only set when the step changed
 /// which documents the tree holds — undoing or redoing a removal — and is then every module the workspace holds.
 /// </summary>
-public sealed record EditCommitResponse(int Version, string StateId, IReadOnlyList<string> ChangedNodeIds, bool CanUndo, bool CanRedo, IReadOnlyList<OpenedModule>? Modules = null);
+public sealed record EditCommitResponse(int Version, string StateId, IReadOnlyList<string> ChangedNodeIds, bool CanUndo, bool CanRedo, IReadOnlyList<OpenedModule>? Modules = null, IReadOnlyList<ModifiedDocumentDto>? ModifiedDocuments = null);
 
 public sealed record SaveModuleRequest(string WorkspaceId, string ModuleId, string DestinationPath, bool Overwrite = false);
 
@@ -2188,7 +2232,8 @@ public sealed record IlExceptionHandlerDto(
 	string? HandlerStart,
 	string? HandlerEnd,
 	TypeSigDto? CatchType,
-	string Display = "");
+	string Display = "",
+	string? CatchTypeToken = null);
 
 /// <summary>
 /// One instruction of the IL editor. Unlike <see cref="IlInstructionDto"/>, an operand may be a
@@ -2202,6 +2247,11 @@ public sealed record IlExceptionHandlerDto(
 /// <param name="MethodSpecArguments">Generic arguments that make the operand a <c>MethodSpec</c>.</param>
 /// <param name="TypeSignature">A type to build (or resolve) for the operand.</param>
 /// <param name="CallSiteSignature">A call-site signature, for <c>calli</c>.</param>
+/// <param name="MemberRef">A MemberRef the operand dialog built — a field's or a method's — or the MemberRef the
+/// operand is, for the dialog to start from.</param>
+/// <param name="MethodSpecCustomAttributes">The custom attributes of the <c>MethodSpec</c> the operand is.</param>
+/// <param name="TokenOwnerNodeId">The method whose module <see cref="Token"/> and <see cref="NodeId"/> belong to, which
+/// an instruction pasted into a method of another module is imported from — dnSpy's InstructionVM.Import.</param>
 public sealed record IlBodyInstructionDto(
 	string Label,
 	string OpCode,
@@ -2213,7 +2263,10 @@ public sealed record IlBodyInstructionDto(
 	MethodRefDto? MethodRef = null,
 	IReadOnlyList<TypeSigDto>? MethodSpecArguments = null,
 	TypeSigDto? TypeSignature = null,
-	MethodSigDto? CallSiteSignature = null);
+	MethodSigDto? CallSiteSignature = null,
+	MemberRefDto? MemberRef = null,
+	IReadOnlyList<CustomAttributeDto>? MethodSpecCustomAttributes = null,
+	string? TokenOwnerNodeId = null);
 
 public sealed record GetIlBodyRequest(string WorkspaceId, string MethodNodeId);
 
@@ -2325,6 +2378,12 @@ public static class ResourceCreateKinds {
 
 /// <summary>The kinds the resource element editor understands.</summary>
 public static class ResourceElementKinds {
+	/// <summary>A serialized System.Drawing.Bitmap or Icon, edited as the image file it holds.</summary>
+	public const string SerializedImage = "serializedImage";
+	/// <summary>A serialized System.Windows.Forms.ImageListStreamer, edited as the "Data" bytes it holds.</summary>
+	public const string ImageListStreamer = "imageListStreamer";
+	/// <summary>Image files made into serialized Bitmaps and Icons — dnSpy's Create System.Data.Bitmap/Icon Resource.</summary>
+	public const string ImageFiles = "imageFiles";
 	public const string Null = "null";
 	public const string String = "string";
 	public const string Boolean = "boolean";
@@ -2399,6 +2458,9 @@ public sealed record ResourceElementOptionsRequest(string WorkspaceId, string No
 /// <see cref="ResourceElementKinds"/>; a text value travels in <paramref name="Text"/>, bytes in
 /// <paramref name="Base64Data"/>, and a serialized object adds the type it was written as.
 /// </summary>
+/// <param name="IsImage">A byte array or stream that holds an image file — dnSpy edits it with its image window.</param>
+/// <param name="SerializationFormat">How a serialized value is stored (dnlib's SerializationFormat), which an image is
+/// written back in.</param>
 public sealed record ResourceElementOptionsDto(
 	string Kind,
 	string Name,
@@ -2406,11 +2468,15 @@ public sealed record ResourceElementOptionsDto(
 	string? Base64Data,
 	int TypeCode,
 	string? TypeName,
-	string Display = "");
+	string Display = "",
+	bool IsImage = false,
+	string? SerializationFormat = null);
 
 public sealed record SetResourceElementOptionsRequest(string WorkspaceId, string TransactionId, string NodeId, ResourceElementOptionsDto Options);
 
 /// <summary>Adds an entry to a .resources file the workspace holds.</summary>
+/// <param name="Images">For <c>imageFiles</c> — dnSpy's Create System.Data.Bitmap/Icon Resource — the image files, each
+/// becoming an entry named after its file, all in one step.</param>
 public sealed record CreateResourceElementRequest(
 	string WorkspaceId,
 	string TransactionId,
@@ -2418,7 +2484,11 @@ public sealed record CreateResourceElementRequest(
 	string Kind,
 	string Name,
 	string? Text = null,
-	string? Base64Data = null);
+	string? Base64Data = null,
+	IReadOnlyList<ResourceImageFileDto>? Images = null);
+
+/// <summary>An image file picked for a resource: its name and its bytes.</summary>
+public sealed record ResourceImageFileDto(string Name, string Base64Data);
 
 // ---------------------------------------------------------------------------------------------
 // Edit Assembly / Edit Module — dnSpy's AssemblyOptionsVM and ModuleOptionsVM. Appended after
@@ -2527,7 +2597,31 @@ public sealed record SaveAllWithOptionsRequest(string WorkspaceId, SaveModuleOpt
 /// </summary>
 /// <param name="Mode">One of the backend's <c>CompilerModes</c>.</param>
 /// <param name="Source">The C# source, as one file — dnSpy's <c>main.cs</c>.</param>
-public sealed record CompileSourceRequest(string WorkspaceId, string NodeId, string Mode, string Source, string? TransactionId = null);
+/// <param name="Language">One of <c>CompilerLanguages</c>: the language the source is in, which is the decompiler's when
+/// it has a compiler — dnSpy's EditCodeVMCreator.TryGetUsedLanguage — and C# otherwise.</param>
+/// <param name="Settings">The Compiler options page's values for the language; dnSpy's defaults when absent.</param>
+public sealed record CompileSourceRequest(string WorkspaceId, string NodeId, string Mode, string Source, string? TransactionId = null, string Language = "csharp", CompilerSettingsDto? Settings = null);
+
+/// <summary>The languages the compiler commands can be in.</summary>
+public static class CompilerLanguages {
+	public const string CSharp = "csharp";
+	public const string VisualBasic = "visualBasic";
+}
+
+/// <summary>
+/// The Compiler options page — dnSpy.Roslyn's C# and Visual Basic compiler settings. The first four are both
+/// languages'; the Option ones and embedding the runtime are Visual Basic's alone.
+/// </summary>
+public sealed record CompilerSettingsDto(
+	string PreprocessorSymbols = "TRACE",
+	bool Optimize = true,
+	bool CheckOverflow = false,
+	bool AllowUnsafe = true,
+	bool OptionExplicit = true,
+	bool OptionInfer = true,
+	bool OptionStrict = false,
+	bool OptionCompareBinary = true,
+	bool EmbedVisualBasicRuntime = false);
 
 /// <summary>One diagnostic, laid out the way dnSpy's CompilerDiagnosticVM shows a row.</summary>
 public sealed record CompilerDiagnosticDto(
@@ -2547,6 +2641,308 @@ public sealed record CompileSourceResponse(bool Success, IReadOnlyList<CompilerD
 public sealed record MergeAssemblyRequest(string WorkspaceId, string TransactionId, string NodeId, string Base64Data);
 
 /// <summary>Asks for the assembly's attributes as C# source — what Edit Assembly Attributes opens with.</summary>
-public sealed record CompilerAssemblyAttributesRequest(string WorkspaceId, string NodeId);
+public sealed record CompilerAssemblyAttributesRequest(string WorkspaceId, string NodeId, string Language = "csharp");
 
 public sealed record CompilerSourceResponse(string Source);
+
+// ---------------------------------------------------------------------------------------------
+// Saving — dnSpy's DocumentSaver with its Save Module and Save Modules windows. Appended after
+// everything else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>
+/// A document with unsaved changes. <see cref="Id"/> is what module/saveDocuments takes: a root's id, or the
+/// module row of a net module, which is a document of its own. A document dnSpy's Create Assembly made has
+/// no file yet: <see cref="InMemory"/> is set and <see cref="Path"/> is empty.
+/// </summary>
+/// <param name="IsHexDocument">Whether only bytes were written over the file — dnSpy's hex buffer, which is
+/// saved as the file's bytes with the edits on them and has no writer options to pick.</param>
+public sealed record ModifiedDocumentDto(string Id, string Name, string Path, bool InMemory, bool IsHexDocument);
+
+public sealed record ModifiedDocumentsResponse(IReadOnlyList<ModifiedDocumentDto> Documents);
+
+/// <summary>
+/// The writer options dnSpy's Save Module window edits — dnlib's ModuleWriterOptions or, for a mixed-mode
+/// module, its NativeModuleWriterOptions, field for field. A null number is "keep what the writer would use",
+/// which dnSpy shows as an empty text box; a null flag value is every check box of its group left undecided.
+/// </summary>
+public sealed record WriterOptionsDto(
+	bool UseMixedMode,
+	bool WritePdb,
+	bool ShareMethodBodies,
+	int ModuleKind,
+	bool AddCheckSum,
+	bool AddMvidSection,
+	bool KeepExtraPeData,
+	bool KeepWin32Resources,
+	uint MetadataFlags,
+	bool PreserveOtherMetadataStreams,
+	uint? MetadataSignature,
+	ushort? MetadataMajorVersion,
+	ushort? MetadataMinorVersion,
+	uint? MetadataReserved1,
+	string? MetadataVersionString,
+	byte? MetadataStorageFlags,
+	byte? MetadataReserved2,
+	uint? TablesReserved1,
+	byte? TablesMajorVersion,
+	byte? TablesMinorVersion,
+	bool? TablesUseEnc,
+	bool? TablesForceBigColumns,
+	uint? TablesExtraData,
+	byte? TablesLog2Rid,
+	bool? TablesHasDeletedRows,
+	ushort? Cor20MajorRuntimeVersion,
+	ushort? Cor20MinorRuntimeVersion,
+	uint? Cor20Flags,
+	uint? Cor20EntryPoint,
+	ushort Machine,
+	ushort Subsystem,
+	uint? TimeDateStamp,
+	uint? PointerToSymbolTable,
+	uint? NumberOfSymbols,
+	ushort? Characteristics,
+	byte? MajorLinkerVersion,
+	byte? MinorLinkerVersion,
+	ulong? ImageBase,
+	uint? SectionAlignment,
+	uint? FileAlignment,
+	ushort? MajorOperatingSystemVersion,
+	ushort? MinorOperatingSystemVersion,
+	ushort? MajorImageVersion,
+	ushort? MinorImageVersion,
+	ushort? MajorSubsystemVersion,
+	ushort? MinorSubsystemVersion,
+	uint? Win32VersionValue,
+	ushort? DllCharacteristics,
+	ulong? SizeOfStackReserve,
+	ulong? SizeOfStackCommit,
+	ulong? SizeOfHeapReserve,
+	ulong? SizeOfHeapCommit,
+	uint? LoaderFlags,
+	uint? NumberOfRvaAndSizes);
+
+/// <summary>Asks for the options a document's Save Module window opens with. <see cref="UseMixedMode"/> is the
+/// window's own check box, which re-reads every option when it is toggled; null starts from what the module is.</summary>
+public sealed record SaveOptionsRequest(string WorkspaceId, string DocumentId, bool? UseMixedMode = null);
+
+/// <summary>
+/// What a document's save window starts from: the file it is saved to, and the writer options — none for a
+/// document saved as bytes (<see cref="IsHexDocument"/>), which dnSpy's SaveHexOptionsDlg shows with a file
+/// name only.
+/// </summary>
+public sealed record DocumentSaveOptionsDto(
+	string DocumentId,
+	string Name,
+	string FileName,
+	bool IsHexDocument,
+	bool CanWritePdb,
+	bool CanUseMixedMode,
+	bool IsMixedModeModule,
+	WriterOptionsDto? Writer);
+
+/// <summary>One document to write, the file it goes to, and — for a module — the options it is written with.</summary>
+public sealed record SaveDocumentDto(string DocumentId, string FileName, WriterOptionsDto? Writer = null);
+
+public sealed record SaveDocumentsRequest(string WorkspaceId, IReadOnlyList<SaveDocumentDto> Documents, string? ProgressToken = null);
+
+/// <summary>How far a save has got: the file being written, its own progress and the whole run's, 0 to 1.</summary>
+public sealed record SaveDocumentsProgressNotification(string ProgressToken, int FileIndex, string FileName, double FileProgress, double TotalProgress);
+
+/// <summary>
+/// What became of one document. <see cref="Log"/> holds what the writer reported — dnSpy's Save window log —
+/// and <see cref="ErrorCount"/> how many of those lines were warnings or errors; the file is written all the same.
+/// <see cref="Error"/> is set when the file could not be written at all.
+/// </summary>
+public sealed record SaveDocumentResultDto(string DocumentId, string FileName, bool Saved, long Length, string? Sha256, IReadOnlyList<string> Log, int ErrorCount, string? Error);
+
+/// <summary>The outcome of a save run. <see cref="Canceled"/> says the user stopped it; the documents written
+/// before that stay written. <see cref="Modules"/> is sent when a document took a file of its own — a new
+/// assembly saved for the first time — so the client can read the module list again.</summary>
+public sealed record SaveDocumentsResponse(IReadOnlyList<SaveDocumentResultDto> Results, bool Canceled, IReadOnlyList<ModifiedDocumentDto> ModifiedDocuments, IReadOnlyList<OpenedModule>? Modules = null);
+
+// ---------------------------------------------------------------------------------------------
+// The IL editor's operand dialogs — dnSpy's MemberRefDlg and MethodSpecDlg. Appended after everything
+// else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>The kinds of class a MemberRef can belong to — dnSpy's MemberRefVM.Class buttons.</summary>
+public static class MemberRefParentKinds {
+	public const string Type = "type";
+	public const string TypeSpec = "typeSpec";
+	public const string MethodDef = "methodDef";
+	public const string ModuleRef = "moduleRef";
+}
+
+/// <summary>
+/// The class of a MemberRef: a type or a TypeSpec (<see cref="Type"/>), a method of the module — a vararg call
+/// site's own definition — named by its <see cref="NodeId"/> or <see cref="Token"/>, or a module reference by
+/// <see cref="ModuleName"/>, for a global member of another module of the assembly.
+/// </summary>
+public sealed record MemberRefParentDto(string Kind, TypeSigDto? Type = null, string? NodeId = null, string? Token = null, string? ModuleName = null, string Display = "");
+
+/// <summary>
+/// A MemberRef as dnSpy's MemberRefDlg edits it: its class, its name, the signature — a method's or a field's —
+/// and its custom attributes.
+/// </summary>
+public sealed record MemberRefDto(
+	bool IsField,
+	MemberRefParentDto? Class,
+	string Name,
+	MethodSigDto? MethodSignature = null,
+	TypeSigDto? FieldType = null,
+	IReadOnlyList<CustomAttributeDto>? CustomAttributes = null,
+	string Display = "");
+
+// ---------------------------------------------------------------------------------------------
+// Copy IL Bytes. Appended after everything else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>One instruction of a code view's selection: the method it is in and its IL offset there.</summary>
+public sealed record IlBytesInstructionDto(int MetadataToken, int IlOffset);
+
+/// <summary>Asks for the bytes of the instructions, in the order given — dnSpy's CopyILBytesCommand.</summary>
+public sealed record IlBytesRequest(string WorkspaceId, string ModulePath, IReadOnlyList<IlBytesInstructionDto> Instructions);
+
+/// <summary>
+/// The bytes as upper-case hex pairs with nothing between them, a byte that cannot be known written "??" — a token
+/// of a row the edits added, a string's offset — which <see cref="HasUnknownBytes"/> says so the client can explain it.
+/// </summary>
+public sealed record IlBytesResponse(string Hex, bool HasUnknownBytes);
+
+// ---------------------------------------------------------------------------------------------
+// New documents and net modules — dnSpy's Create Assembly, Create NetModule and the commands that add a net
+// module to an assembly or take it out. Appended after everything else so the metadata tokens of the types
+// above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>The .NET versions a new module can be made for — dnSpy's ClrVersion, as its combo lists them.</summary>
+public static class ClrVersions {
+	public const string Clr10 = "1.0";
+	public const string Clr11 = "1.1";
+	public const string Clr20 = "2.0";
+	public const string Clr40 = "4.0";
+}
+
+/// <summary>A new assembly: the Edit Assembly window's model and the .NET version its one module is made for.</summary>
+public sealed record CreateAssemblyRequest(string WorkspaceId, string TransactionId, AssemblyOptionsDto Options, string ClrVersion);
+
+/// <summary>A new net module of its own — dnSpy's NetModuleOptionsVM.</summary>
+public sealed record CreateNetModuleRequest(string WorkspaceId, string TransactionId, string Name, string Mvid, string ClrVersion);
+
+/// <summary>
+/// A net module added to the assembly a node is in: a new one, from <see cref="Name"/>, <see cref="Mvid"/> and
+/// <see cref="ClrVersion"/>, or the file at <see cref="Path"/>, which has to be a net module.
+/// </summary>
+public sealed record AddNetModuleRequest(string WorkspaceId, string TransactionId, string AssemblyNodeId, string? Name = null, string? Mvid = null, string? ClrVersion = null, string? Path = null);
+
+public sealed record RemoveNetModuleRequest(string WorkspaceId, string TransactionId, string ModuleNodeId);
+
+/// <summary>The node the new document or module will be once the edit is committed, and what the tree calls it.</summary>
+public sealed record CreateDocumentResponse(string NodeId, string Label);
+
+public sealed record NetModuleDefaultsRequest(string WorkspaceId, string AssemblyNodeId);
+
+/// <summary>What the Create NetModule window starts from for an assembly: the .NET version of its manifest module.</summary>
+public sealed record NetModuleDefaultsResponse(string ClrVersion);
+
+// ---------------------------------------------------------------------------------------------
+// The editable PE headers and .NET metadata tables — dnSpy's AsmEditor hex nodes (HexNode and its view models).
+// The backend describes the structures and reads their values through the document's hex patches; a change is
+// written by the client as an ordinary byte patch (edit/hexPatch). Appended after everything else so the metadata
+// tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+public sealed record HexStructureRequest(string WorkspaceId, string NodeId);
+
+/// <summary>One value an enum bit field can take — dnSpy's IntegerHexBitFieldEnumInfo.</summary>
+public sealed record HexEnumValueDto(ulong Value, string Name);
+
+/// <summary>
+/// A run of <paramref name="Count"/> bits of a flags field starting at <paramref name="Bit"/>. With
+/// <paramref name="Values"/> null it is one bit shown as a check box (dnSpy's BooleanHexBitField); otherwise it is a
+/// combo box over the values listed (IntegerHexBitField), and a value the list does not name selects nothing.
+/// </summary>
+public sealed record HexBitFieldDto(string Name, int Bit, int Count, IReadOnlyList<HexEnumValueDto>? Values);
+
+/// <summary>
+/// One field of a hex structure — dnSpy's HexField. <paramref name="Offset"/> is the field's file offset and
+/// <paramref name="Kind"/> one of "byte", "int16", "uint16", "int32", "uint32", "uint64" or "string". A number's
+/// <paramref name="Value"/> is the little-endian bytes read as unsigned, and <paramref name="Text"/> is what
+/// dnSpy's text box shows for it (SimpleTypeConverter: decimal for the fields dnSpy shows that way and for a value
+/// up to 9, "0x" and upper-case hex otherwise, a signed field with a minus sign). A "string" field is a fixed run of
+/// bytes — a section's name, the metadata version string, a stream's name — whose <paramref name="Value"/> is 0 and
+/// whose <paramref name="Text"/> is the bytes decoded and quoted as a C# string literal, NULs included, the way
+/// dnSpy's StringVM shows them. <paramref name="Bits"/> lists a flags field's bit fields in dnSpy's order,
+/// <paramref name="Note"/> is the read-only text dnSpy shows beside a field (a time stamp's date, what a metadata
+/// column refers to, a string field's text up to its first NUL), and <paramref name="Group"/> names the box the
+/// field or its bits are laid out in.
+/// </summary>
+public sealed record HexFieldDto(
+	string Name,
+	long Offset,
+	int Size,
+	string Kind,
+	ulong Value,
+	string Text,
+	IReadOnlyList<HexBitFieldDto>? Bits = null,
+	string? Note = null,
+	string? Group = null);
+
+/// <summary>A hex structure: its name (dnSpy's HexVM.Name), the file range it covers and its fields in dnSpy's order.</summary>
+public sealed record HexStructureDto(string NodeId, string Name, long Offset, long Length, IReadOnlyList<HexFieldDto> Fields);
+
+/// <summary>A metadata table, named by its node or by the node of one of its rows.</summary>
+public sealed record MetadataTableRequest(string WorkspaceId, string NodeId);
+
+/// <summary>One column of a metadata table; <paramref name="Offset"/> is relative to the start of a row.</summary>
+public sealed record MetadataColumnDto(string Name, int Offset, int Size);
+
+/// <summary>
+/// A metadata table's layout. <paramref name="Name"/> is dnSpy's "02 TypeDef", <paramref name="Offset"/> the file
+/// offset of its first row, <paramref name="HasInfo"/> whether its grid has dnSpy's Info column and
+/// <paramref name="CanSort"/> whether dnSpy's Sort commands apply to it (TableSorter.CanSort).
+/// </summary>
+public sealed record MetadataTableDto(
+	string NodeId,
+	int Table,
+	string Name,
+	uint Rows,
+	int RowSize,
+	long Offset,
+	IReadOnlyList<MetadataColumnDto> Columns,
+	bool HasInfo,
+	bool CanSort);
+
+/// <summary>Up to <paramref name="Count"/> rows of a table from <paramref name="StartRid"/> on; the range is clamped to the table.</summary>
+public sealed record MetadataTableRowsRequest(string WorkspaceId, string NodeId, uint StartRid, int Count);
+
+/// <summary>
+/// One row of a metadata table: its RID, token and file offset, the raw value of every column and the text of
+/// dnSpy's Info column — null for a table that has none.
+/// </summary>
+public sealed record MetadataRowDto(uint Rid, uint Token, long Offset, IReadOnlyList<ulong> Values, string? Info);
+
+public sealed record MetadataTableRowsResponse(IReadOnlyList<MetadataRowDto> Rows);
+
+/// <summary>The rows [<paramref name="Rid"/>, <paramref name="Rid"/> + <paramref name="Count"/>) of a table, to be sorted.</summary>
+public sealed record MetadataSortRequest(string WorkspaceId, string NodeId, uint Rid, uint Count);
+
+/// <summary>The sorted rows' bytes and the file offset they go to, which the client writes as one hex patch.</summary>
+public sealed record MetadataSortResponse(long Offset, string Base64Data);
+
+/// <summary>A metadata token to find in the module any node of <paramref name="NodeId"/> belongs to.</summary>
+public sealed record MetadataFindRecordRequest(string WorkspaceId, string NodeId, uint Token);
+
+/// <summary>
+/// The row node a token names and the ids of the nodes above it, from the document's root down to its table, for
+/// the client to expand. When the token is not a row of the module's tables, <paramref name="NodeId"/> is null and
+/// <paramref name="Error"/> is the message dnSpy's Go to MD Table Row shows.
+/// </summary>
+public sealed record MetadataFindRecordResponse(string? NodeId, IReadOnlyList<string> Path, string? Error);
+
+/// <summary>The rows of a table to copy as text, by RID.</summary>
+public sealed record MetadataTableTextRequest(string WorkspaceId, string NodeId, IReadOnlyList<uint> Rids);
+
+/// <summary>The rows as dnSpy's Copy as Text writes them: a tab-separated header line, then a line per row.</summary>
+public sealed record MetadataTableTextResponse(string Text);

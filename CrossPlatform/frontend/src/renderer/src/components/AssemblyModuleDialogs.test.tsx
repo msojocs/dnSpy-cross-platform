@@ -122,3 +122,23 @@ describe('ModuleOptionsDialog', () => {
     expect(written.characteristics & 0x2000).toBe(0x2000)
   })
 })
+
+describe('Create Assembly', () => {
+  it('opens on dnSpy\'s new assembly and creates it for the .NET version picked', async () => {
+    const createAssembly = vi.fn(async () => true)
+    useAppStore.setState({ workspaceId: 'ws', createAssembly })
+    const onClose = vi.fn()
+    render(<AssemblyOptionsDialog create onClose={onClose} />)
+
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Create Assembly')
+    expect(screen.getByLabelText('Name')).toHaveValue('MyAssembly')
+    expect(screen.getByLabelText('Hash Algorithm')).toHaveValue(String(0x8004))
+    expect(screen.getByLabelText('.NET Version')).toHaveValue('4.0')
+    expect(screen.getByLabelText('Full Name')).toHaveValue('MyAssembly, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null')
+    fireEvent.change(screen.getByLabelText('.NET Version'), { target: { value: '2.0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(createAssembly).toHaveBeenCalledWith(expect.objectContaining({ name: 'MyAssembly', versionMajor: 0 }), '2.0')
+  })
+})

@@ -3,6 +3,8 @@ import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
 import type { ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import type { MethodBreakpointTarget } from '../app-store'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
+import { compilerCommandLanguage } from './compiler-language'
+import { deleteHeader, deletionTargets } from './delete-commands'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
 import { MenuEntryIcon } from './DsIcon'
@@ -47,10 +49,20 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onCreateResource?(kind: ResourceCreateKind, node: TreeNode): void
   /** The New Resource command of a .resources file. */
   onCreateResourceElement?(node: TreeNode): void
+  /** dnSpy's Create System.Data.Bitmap/Icon Resource and Create System.Windows.Forms.ImageListStreamer Resource. */
+  onCreateImageResources?(node: TreeNode): void
+  onCreateImageList?(node: TreeNode): void
   onRenameNamespace?(node: TreeNode): void
   onMoveTypesToEmptyNamespace?(node: TreeNode): void
   /** Flips a module between a netmodule and an assembly. */
   onConvertModule?(node: TreeNode, toAssembly?: boolean): void
+  /** dnSpy's Create Assembly and Create NetModule, and the commands that add a net module to the assembly a row
+   *  is in or take a net module out of it. */
+  onCreateAssembly?(): void
+  onCreateNetModule?(): void
+  onAddNewNetModule?(node: TreeNode): void
+  onAddExistingNetModule?(node: TreeNode): void
+  onRemoveNetModule?(node: TreeNode): void
   /**
    * Merges another assembly into this node's module. No callback is ever supplied: dnSpy's merge is its
    * compiled-module importer — the same machinery that recompiles edited C# — and the port has neither
@@ -67,6 +79,8 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
   onGoToGlobalCctor?(node: TreeNode): void
   /** The node the menu was opened over names the module the token is looked up in. */
   onGoToToken?(node: TreeNode): void
+  /** dnSpy's Go to MD Table Row: asks for a token in the row's module, or goes to the row's own token. */
+  onGoToMdTableRow?(node: TreeNode, token?: number): void
   /** Saves what the resources hold — dnSpy's four Save commands: their values or (`raw`) their serialized bytes,
    *  and with several files whether the directories in their names are kept (`useSubDirs`). */
   onSaveResource?(nodes: TreeNode[], raw: boolean, useSubDirs: boolean): void
@@ -98,6 +112,14 @@ export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, H
   node: TreeNode
   /** The kind of the row above it, which tells a net module (no assembly above) from a module. */
   parentKind?: string
+  /** The tree's parent links, which tell a selected row whose ancestor is selected as well from a top-level one. */
+  parents?: Record<string, string>
+  /** The image of the row above, which tells an assembly root from a module standing on its own, and where the
+   *  row is among the rows of that one — an assembly's manifest module is the first. */
+  parentIcon?: string
+  indexInParent?: number
+  /** How many rows the one above has — a module that is its assembly's only one can become a net module. */
+  siblingCount?: number
   /**
    * The rows the command acts on: every selected row when the right-clicked one is among them, else that
    * row alone — dnSpy's tree right-clicks into the selection rather than replacing it.
@@ -106,6 +128,8 @@ export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, H
   /** Whether the right-clicked row reads a .resources entry, which the backend answered before the menu
    *  opened — dnSpy's ResourceRef.TryCreate, which is what shows Go to Resource. */
   readsResource?: boolean
+  /** Whether the row is in a managed module read from a file, which has the PE tree a metadata row is shown in. */
+  mdTableRowAvailable?: boolean
   /**
    * The files the selected resources would save as, both ways, which the backend answered before the menu
    * opened: dnSpy's Save commands are headed by how many there are (one by its name), are only offered when
@@ -198,8 +222,12 @@ const inModule = kindIs('assembly', 'module', 'namespace', 'type', 'method', 'fi
  */
 const isMember = kindIs('type', 'method', 'field', 'property', 'event')
 
-/** The header of dnSpy's "Delete X" commands, which name the node they would remove. */
-const deleteLabel = (ctx: AssemblyExplorerMenuContext): string => ctx.t('Delete {name}', { name: ctx.node.label })
+/** The rows a delete command takes, and its header: the one row by its name, several by how many. */
+const deleteTargets = (ctx: AssemblyExplorerMenuContext): TreeNode[] => deletionTargets(ctx.node, selectionOf(ctx), ctx.parents ?? {})
+const deleteLabel = (ctx: AssemblyExplorerMenuContext): string => deleteHeader(ctx.t, ctx.node.kind, deleteTargets(ctx), ctx.node)
+/** A delete command shows on its own kind, when the selection gives it something to delete. */
+const canDelete = (kind: string) => (ctx: AssemblyExplorerMenuContext): boolean =>
+  ctx.node.kind === kind && ctx.onDeleteNode !== undefined && deleteTargets(ctx).length > 0
 
 /** The rows a command acts on: every selected row when the right-clicked one is among them, else that row. */
 const selectionOf = (ctx: Pick<AssemblyExplorerMenuContext, 'node' | 'selection'>): TreeNode[] =>
@@ -241,6 +269,17 @@ const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndo
 
 /** The rows that are not in a .NET module: the documents that are no assembly, and the ELF rows under one. */
 const NOT_IN_DOTNET_MODULE_KINDS = ['pedocument', 'elfdocument', 'unknowndocument', 'elf', 'elfstructure']
+/** The rows dnSpy calls DsDocumentNodes: a document root, and a module row. */
+const DOCUMENT_KINDS = ['assembly', 'module', 'pedocument', 'elfdocument', 'unknowndocument']
+
+/** A module row under an assembly root — a root wearing a module's image is a module standing on its own. */
+const isAssemblyModuleRow = (ctx: AssemblyExplorerMenuContext): boolean =>
+  ctx.node.kind === 'module' && ctx.parentKind === 'assembly' && ctx.parentIcon !== 'ModulePublic'
+
+/** dnSpy's AddNetModuleToAssemblyCommand.CanExecute: one assembly row, or one module row under an assembly. */
+const inAssembly = (ctx: AssemblyExplorerMenuContext): boolean =>
+  selectionOf(ctx).length === 1 && ((ctx.node.kind === 'assembly' && ctx.node.icon !== 'ModulePublic') || isAssemblyModuleRow(ctx))
+
 const isInDotNetModule = (node: TreeNode): boolean => !NOT_IN_DOTNET_MODULE_KINDS.includes(node.kind)
 
 /** RemoveAssemblyCommand.GetHeader: one document by its row text, several by how many there are. */
@@ -358,15 +397,16 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // deletable node type, so exactly one of the latter is ever on screen: the node's kind picks it, and
   // its header names that node.
   { group: GROUP_DELETE, order: 0, key: 'remove-document', icon: image('Cancel'), label: removeLabel, shortcut: 'Del', visible: (ctx) => removalTargets(ctx).length > 0 && ctx.onRemoveAssembly !== undefined, run: (ctx) => ctx.onRemoveAssembly?.(removalTargets(ctx)) },
-  { group: GROUP_DELETE, order: 10, key: 'remove-netmodule', icon: image('Cancel'), label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
-  { group: GROUP_DELETE, order: 20, key: 'delete-type', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('type')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 30, key: 'delete-method', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('method')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 40, key: 'delete-field', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('field')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 50, key: 'delete-property', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('property')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 60, key: 'delete-event', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('event')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 70, key: 'delete-namespace', icon: image('Cancel'), label: (ctx) => ctx.t('Delete Namespace'), shortcut: 'Del', visible: (ctx) => kindIs('namespace')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 80, key: 'delete-resource', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: (ctx) => kindIs('resource')(ctx) && ctx.onDeleteNode !== undefined, run: deleteNode },
-  { group: GROUP_DELETE, order: 90, key: 'delete-resource-entry', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: never },
+  // The manifest module is the assembly's first row, and the one module that cannot leave it.
+  { group: GROUP_DELETE, order: 10, key: 'remove-netmodule', icon: image('Cancel'), label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: (ctx) => selectionOf(ctx).length === 1 && isAssemblyModuleRow(ctx) && ctx.onRemoveNetModule !== undefined, enabled: (ctx) => (ctx.indexInParent ?? 0) > 0, run: (ctx) => ctx.onRemoveNetModule?.(ctx.node) },
+  { group: GROUP_DELETE, order: 20, key: 'delete-type', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('type'), run: deleteNode },
+  { group: GROUP_DELETE, order: 30, key: 'delete-method', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('method'), run: deleteNode },
+  { group: GROUP_DELETE, order: 40, key: 'delete-field', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('field'), run: deleteNode },
+  { group: GROUP_DELETE, order: 50, key: 'delete-property', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('property'), run: deleteNode },
+  { group: GROUP_DELETE, order: 60, key: 'delete-event', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('event'), run: deleteNode },
+  { group: GROUP_DELETE, order: 70, key: 'delete-namespace', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('namespace'), run: deleteNode },
+  { group: GROUP_DELETE, order: 80, key: 'delete-resource', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('resource'), run: deleteNode },
+  { group: GROUP_DELETE, order: 90, key: 'delete-resource-entry', icon: image('Cancel'), label: deleteLabel, shortcut: 'Del', visible: canDelete('resourceentry'), run: deleteNode },
 
   // 3000 — AsmEditor: Misc (GROUP_CTX_DOCUMENTS_ASMED_MISC)
   { group: GROUP_MISC, order: 0, key: 'move-types-to-empty-namespace', icon: image('Namespace'), label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.node.label !== '-' && ctx.hasEmptyNamespaceSibling && ctx.onMoveTypesToEmptyNamespace !== undefined, run: (ctx) => ctx.onMoveTypesToEmptyNamespace?.(ctx.node) },
@@ -375,15 +415,15 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // the second. This tree cannot tell a netmodule from an assembly module — both are a `module` row — so
   // the first stays out rather than turning up on images it would not act on, and the second is what a
   // module row offers.
-  { group: GROUP_MISC, order: 20, key: 'convert-netmodule-to-assembly', icon: noImage, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: (ctx) => kindIs('module')(ctx) && ctx.parentKind !== 'assembly' && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, true) },
-  { group: GROUP_MISC, order: 30, key: 'convert-assembly-to-netmodule', icon: noImage, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => kindIs('module')(ctx) && ctx.parentKind === 'assembly' && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, false) },
+  { group: GROUP_MISC, order: 20, key: 'convert-netmodule-to-assembly', icon: noImage, label: (ctx) => ctx.t('Convert NetModule to Assembly'), visible: (ctx) => kindIs('module')(ctx) && ctx.parentIcon === 'ModulePublic' && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, true) },
+  { group: GROUP_MISC, order: 30, key: 'convert-assembly-to-netmodule', icon: noImage, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => isAssemblyModuleRow(ctx) && (ctx.siblingCount ?? 1) === 1 && ctx.onConvertModule !== undefined, run: (ctx) => ctx.onConvertModule?.(ctx.node, false) },
 
   // 4000 — AsmEditor: New (GROUP_CTX_DOCUMENTS_ASMED_NEW). The four assembly/netmodule commands and the
   // resource creates have no backend here; the six that do are the same ones the Edit menu offers.
-  { group: GROUP_NEW, order: 0, key: 'create-assembly', icon: noImage, label: (ctx) => ctx.t('Create Assembly...'), visible: never },
-  { group: GROUP_NEW, order: 10, key: 'add-new-netmodule', icon: noImage, label: (ctx) => ctx.t('Add New NetModule to Assembly...'), visible: never },
-  { group: GROUP_NEW, order: 20, key: 'add-existing-netmodule', icon: noImage, label: (ctx) => ctx.t('Add Existing NetModule to Assembly...'), visible: never },
-  { group: GROUP_NEW, order: 30, key: 'create-netmodule', icon: noImage, label: (ctx) => ctx.t('Create NetModule...'), visible: never },
+  { group: GROUP_NEW, order: 0, key: 'create-assembly', icon: noImage, label: (ctx) => ctx.t('Create Assembly...'), visible: (ctx) => DOCUMENT_KINDS.includes(selectionOf(ctx)[0].kind) && ctx.onCreateAssembly !== undefined, run: (ctx) => ctx.onCreateAssembly?.() },
+  { group: GROUP_NEW, order: 10, key: 'add-new-netmodule', icon: noImage, label: (ctx) => ctx.t('Add New NetModule to Assembly...'), visible: (ctx) => inAssembly(ctx) && ctx.onAddNewNetModule !== undefined, run: (ctx) => ctx.onAddNewNetModule?.(ctx.node) },
+  { group: GROUP_NEW, order: 20, key: 'add-existing-netmodule', icon: noImage, label: (ctx) => ctx.t('Add Existing NetModule to Assembly...'), visible: (ctx) => inAssembly(ctx) && ctx.onAddExistingNetModule !== undefined, run: (ctx) => ctx.onAddExistingNetModule?.(ctx.node) },
+  { group: GROUP_NEW, order: 30, key: 'create-netmodule', icon: noImage, label: (ctx) => ctx.t('Create NetModule...'), visible: (ctx) => selectionOf(ctx).some((node) => DOCUMENT_KINDS.includes(node.kind)) && ctx.onCreateNetModule !== undefined, run: (ctx) => ctx.onCreateNetModule?.() },
   { group: GROUP_NEW, order: 40, key: 'create-type', icon: image('NewClass'), label: (ctx) => ctx.t('Create Type...'), visible: (ctx) => kindIs('type', 'namespace', 'module')(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'type') },
   { group: GROUP_NEW, order: 50, key: 'create-nested-type', icon: image('NewClass'), label: (ctx) => ctx.t('Create Nested Type...'), visible: (ctx) => isMember(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'type', true) },
   { group: GROUP_NEW, order: 60, key: 'create-method', icon: image('NewMethod'), label: (ctx) => ctx.t('Create Method...'), visible: (ctx) => isMember(ctx) && ctx.onCreateMember !== undefined, run: (ctx) => createInNode(ctx, 'method') },
@@ -394,8 +434,8 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   { group: GROUP_NEW, order: 110, key: 'create-multi-file-resource', icon: noImage, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('multiFile', ctx.node) },
   { group: GROUP_NEW, order: 120, key: 'create-assembly-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('assemblyLinked', ctx.node) },
   { group: GROUP_NEW, order: 130, key: 'create-file-linked-resource', icon: noImage, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: (ctx) => canCreateResource(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('fileLinked', ctx.node) },
-  { group: GROUP_NEW, order: 140, key: 'create-bitmap-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: never },
-  { group: GROUP_NEW, order: 150, key: 'create-imagelist-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: never },
+  { group: GROUP_NEW, order: 140, key: 'create-bitmap-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateImageResources !== undefined, run: (ctx) => ctx.onCreateImageResources?.(ctx.node) },
+  { group: GROUP_NEW, order: 150, key: 'create-imagelist-resource', icon: image('NewImage'), label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateImageList !== undefined, run: (ctx) => ctx.onCreateImageList?.(ctx.node) },
   { group: GROUP_NEW, order: 170, key: 'create-byte-array-resource', icon: noImage, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('byteArray', ctx.node) },
   { group: GROUP_NEW, order: 180, key: 'create-stream-resource', icon: noImage, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResource !== undefined, run: (ctx) => ctx.onCreateResource?.('stream', ctx.node) },
   { group: GROUP_NEW, order: 190, key: 'create-resource', icon: noImage, label: (ctx) => ctx.t('Create Resource...'), visible: (ctx) => inResourcesFile(ctx) && ctx.onCreateResourceElement !== undefined, run: (ctx) => ctx.onCreateResourceElement?.(ctx.node) },
@@ -416,11 +456,11 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // here; the rest act on the module or the method the row names. Merge and the two Load Dependencies
   // commands sit in this group in the tree where the Edit menu files them under Settings — upstream
   // registers them once per menu, with a different group each time.
-  { group: GROUP_ILED, order: 10, key: 'edit-method-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('method')(ctx) && ctx.onEditMethodCode !== undefined, run: (ctx) => ctx.onEditMethodCode?.(ctx.node) },
-  { group: GROUP_ILED, order: 11, key: 'edit-assembly-attributes-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('module')(ctx) && ctx.onEditAssemblyAttributesCode !== undefined, run: (ctx) => ctx.onEditAssemblyAttributesCode?.(ctx.node) },
-  { group: GROUP_ILED, order: 12, key: 'edit-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: (ctx) => isMember(ctx) && ctx.onEditClassCode !== undefined, run: (ctx) => ctx.onEditClassCode?.(ctx.node) },
-  { group: GROUP_ILED, order: 13, key: 'add-class-members-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: (ctx) => isMember(ctx) && ctx.onAddClassMembersCode !== undefined, run: (ctx) => ctx.onAddClassMembersCode?.(ctx.node) },
-  { group: GROUP_ILED, order: 14, key: 'add-class-code', icon: image('CSFileNode'), label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: (ctx) => kindIs('assembly', 'module', 'namespace', 'type')(ctx) && ctx.onAddClassCode !== undefined, run: (ctx) => ctx.onAddClassCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 10, key: 'edit-method-code', icon: () => <MenuEntryIcon name={compilerCommandLanguage().icon} />, label: (ctx) => ctx.t('Edit Method ({language})...', { language: compilerCommandLanguage().name }), visible: (ctx) => kindIs('method')(ctx) && ctx.onEditMethodCode !== undefined, run: (ctx) => ctx.onEditMethodCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 11, key: 'edit-assembly-attributes-code', icon: () => <MenuEntryIcon name={compilerCommandLanguage().icon} />, label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: compilerCommandLanguage().name }), visible: (ctx) => kindIs('module')(ctx) && ctx.onEditAssemblyAttributesCode !== undefined, run: (ctx) => ctx.onEditAssemblyAttributesCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 12, key: 'edit-class-code', icon: () => <MenuEntryIcon name={compilerCommandLanguage().icon} />, label: (ctx) => ctx.t('Edit Class ({language})...', { language: compilerCommandLanguage().name }), visible: (ctx) => isMember(ctx) && ctx.onEditClassCode !== undefined, run: (ctx) => ctx.onEditClassCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 13, key: 'add-class-members-code', icon: () => <MenuEntryIcon name={compilerCommandLanguage().icon} />, label: (ctx) => ctx.t('Add Class Members ({language})...', { language: compilerCommandLanguage().name }), visible: (ctx) => isMember(ctx) && ctx.onAddClassMembersCode !== undefined, run: (ctx) => ctx.onAddClassMembersCode?.(ctx.node) },
+  { group: GROUP_ILED, order: 14, key: 'add-class-code', icon: () => <MenuEntryIcon name={compilerCommandLanguage().icon} />, label: (ctx) => ctx.t('Add Class ({language})...', { language: compilerCommandLanguage().name }), visible: (ctx) => kindIs('assembly', 'module', 'namespace', 'type')(ctx) && ctx.onAddClassCode !== undefined, run: (ctx) => ctx.onAddClassCode?.(ctx.node) },
   // The entry is in the table so the group keeps its WPF shape, but no shell supplies its callback: see
   // `onMergeAssembly`. The Edit menu files the same command under Settings, where it renders disabled for
   // the same reason; both are gated on the import this port has no way to run.
@@ -434,6 +474,10 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: image('EntryPoint'), label: (ctx) => ctx.t('Go to Entry Point'), visible: (ctx) => kindIs('assembly', 'module')(ctx) && ctx.onGoToEntryPoint !== undefined, run: (ctx) => ctx.onGoToEntryPoint?.(ctx.node) },
   { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: noImage, label: (ctx) => ctx.t('Go to Global Cctor'), visible: (ctx) => kindIs('assembly', 'module')(ctx) && ctx.onGoToGlobalCctor !== undefined, run: (ctx) => ctx.onGoToGlobalCctor?.(ctx.node) },
   { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: noImage, label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+D', visible: (ctx) => ctx.onGoToToken !== undefined, run: (ctx) => ctx.onGoToToken?.(ctx.node) },
+  // dnSpy registers its two Go to MD Table Row commands for the document viewer's token group, and they answer
+  // the tree as well; their own group follows the tree's.
+  { group: GROUP_TOKENS + 1, order: 30, key: 'go-to-md-table-row', icon: noImage, label: (ctx) => ctx.t('Go to MD Table Row...'), shortcut: 'Ctrl+Shift+D', visible: (ctx) => (ctx.selection === undefined || ctx.selection.length <= 1) && ctx.onGoToMdTableRow !== undefined && ctx.mdTableRowAvailable === true, run: (ctx) => ctx.onGoToMdTableRow?.(ctx.node) },
+  { group: GROUP_TOKENS + 1, order: 40, key: 'go-to-md-table-row-token', icon: noImage, label: (ctx) => ctx.t('Go to MD Table Row ({token})', { token: ((ctx.node.metadataToken ?? 0) >>> 0).toString(16).toUpperCase().padStart(8, '0') }), shortcut: 'Shift+Alt+R', visible: (ctx) => (ctx.selection === undefined || ctx.selection.length <= 1) && ctx.node.metadataToken !== undefined && ctx.onGoToMdTableRow !== undefined && ctx.mdTableRowAvailable === true, run: (ctx) => ctx.onGoToMdTableRow?.(ctx.node, ctx.node.metadataToken) },
   { group: GROUP_TOKENS, order: 40, key: 'copy-md-token', icon: noImage, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 50, key: 'copy-full-name', icon: noImage, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
 

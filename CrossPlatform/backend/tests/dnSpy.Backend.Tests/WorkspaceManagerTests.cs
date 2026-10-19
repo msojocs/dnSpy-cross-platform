@@ -1200,6 +1200,30 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	[Fact]
+	public async Task DeletesSeveralTypesAsOneStepThatOneUndoPutsBack() {
+		var opened = await OpenContractsAssemblyAsync();
+		var @namespace = await FindNamespaceAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts");
+		var names = new[] { "HelloRequest", "HelloResponse", "OpenWorkspaceRequest" };
+		var types = new List<TreeNodeDto>();
+		foreach (var name in names)
+			types.Add(await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", name));
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		// dnSpy's DeleteTypeDefCommand over a selection: each type is taken out of the list it is in at the moment
+		// it goes, so the ones before it having gone already does not move it.
+		foreach (var type in types)
+			await manager.QueueDeleteAsync(new DeleteEditRequest(opened.WorkspaceId, transaction.TransactionId, type.Id), TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var removed = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, @namespace.Id), TestContext.Current.CancellationToken);
+		Assert.DoesNotContain(removed.Nodes, node => names.Contains(node.Label));
+
+		var undone = await manager.UndoAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		Assert.False(undone.CanUndo);
+		var restored = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, @namespace.Id), TestContext.Current.CancellationToken);
+		Assert.All(types, type => Assert.Contains(restored.Nodes, node => node.Id == type.Id));
+	}
+
+	[Fact]
 	public async Task DeletesAPropertyTogetherWithItsAccessors() {
 		var opened = await OpenContractsAssemblyAsync();
 		var rpcException = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Contracts", "RpcException");
@@ -2231,12 +2255,14 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.Equal($"// {Path.GetFileName(path)}", document.Text.TrimEnd());
 			Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Severity == "info");
 
-			// There is nothing to edit or write, and the answer says so rather than naming the wrong thing.
-			var save = await Assert.ThrowsAsync<RpcException>(() => manager.SaveModuleInPlaceAsync(
+			// dnSpy saves a file it can only show as bytes the way its hex editor does, so writing it back in place
+			// with no patches on it leaves the file as it was.
+			var before = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+			var save = await manager.SaveModuleInPlaceAsync(
 				new SaveModuleInPlaceRequest(opened.WorkspaceId, root.Id),
-				TestContext.Current.CancellationToken));
-			Assert.Equal(ErrorCodes.NodeNotFound, save.Code);
-			Assert.Contains("not a managed assembly", save.Message, StringComparison.Ordinal);
+				TestContext.Current.CancellationToken);
+			Assert.Equal(path, save.Path);
+			Assert.Equal(before, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
 		}
 		finally {
 			File.Delete(path);
@@ -2391,7 +2417,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.Contains(streams, node => node.Label.EndsWith(": #Strings", StringComparison.Ordinal));
 
 		Assert.All(structures, node => Assert.Equal("pestructure", node.Kind));
-		Assert.All(structures, node => Assert.False(node.HasChildren));
+		// Only the stream that holds the metadata tables expands, into dnSpy's Tables Stream node.
+		Assert.All(structures, node => Assert.Equal(node.Label.EndsWith(": #~", StringComparison.Ordinal), node.HasChildren));
 		// A structure belongs to the file it was read from, which is the tooltip dnSpy shows for them.
 		Assert.All(structures, node => Assert.Equal(opened.Modules[0].Path, node.Description));
 		Assert.All(structures, node => Assert.Equal("BinaryFile", node.Icon));
@@ -2671,12 +2698,14 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			Assert.All(structures, node => Assert.Equal(path, node.Description));
 			Assert.All(structures, node => Assert.Equal("BinaryFile", node.Icon));
 
-			// There is nothing to edit or write, and the answer says so rather than naming the wrong thing.
-			var save = await Assert.ThrowsAsync<RpcException>(() => manager.SaveModuleInPlaceAsync(
+			// dnSpy saves a file it can only show as bytes the way its hex editor does, so writing it back in place
+			// with no patches on it leaves the file as it was.
+			var before = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+			var save = await manager.SaveModuleInPlaceAsync(
 				new SaveModuleInPlaceRequest(opened.WorkspaceId, root.Id),
-				TestContext.Current.CancellationToken));
-			Assert.Equal(ErrorCodes.NodeNotFound, save.Code);
-			Assert.Contains("not a managed assembly", save.Message, StringComparison.Ordinal);
+				TestContext.Current.CancellationToken);
+			Assert.Equal(path, save.Path);
+			Assert.Equal(before, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
 		}
 		finally {
 			File.Delete(path);

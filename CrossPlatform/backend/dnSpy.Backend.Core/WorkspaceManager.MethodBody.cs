@@ -41,7 +41,8 @@ public sealed partial class WorkspaceManager {
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The selected item is not a method.");
 			var moduleEntry = node.AsModuleEntry
 				?? throw new RpcException(ErrorCodes.EditValidationFailed, "PE-only modules do not support method body editing.");
-			var signatures = CreateEditContext(moduleEntry).Signatures;
+			var context = CreateEditContext(moduleEntry);
+			var signatures = context.Signatures;
 			var cilBody = method.MethodBody as CilBody;
 			var labels = cilBody is null
 				? new Dictionary<Instruction, string>()
@@ -86,17 +87,23 @@ public sealed partial class WorkspaceManager {
 					local.Type is PinnedSig,
 					(int)local.Attributes,
 					DescribeLocal(local))).ToArray() ?? [],
-				cilBody?.Instructions.Select(instruction => DescribeInstruction(method, signatures, instruction, labels)).ToArray() ?? [],
+				// Every token and node an operand names belongs to this method's module, which is what an instruction
+				// pasted into a method of another module is imported from.
+				cilBody?.Instructions.Select(instruction => WithOwner(DescribeInstruction(method, context, instruction, labels), methodNodeId)).ToArray() ?? [],
 				cilBody?.ExceptionHandlers.Select(handler => DescribeExceptionHandler(signatures, handler)).ToArray() ?? [],
 				method.Parameters.Select(parameter => parameter.Name ?? $"A_{parameter.Index}").ToArray());
 		}
+
+		static IlBodyInstructionDto WithOwner(IlBodyInstructionDto instruction, string methodNodeId) =>
+			instruction.Token is not null || instruction.NodeId is not null ? instruction with { TokenOwnerNodeId = methodNodeId } : instruction;
 
 		static string DescribeLocal(Local local) {
 			var name = string.IsNullOrEmpty(local.Name) ? $"V_{local.Index}" : local.Name;
 			return $"{local.Type?.FullName ?? "null"} {name}";
 		}
 
-		IlBodyInstructionDto DescribeInstruction(MethodDef method, SignatureCodec signatures, Instruction instruction, IReadOnlyDictionary<Instruction, string> labels) {
+		IlBodyInstructionDto DescribeInstruction(MethodDef method, EditContext context, Instruction instruction, IReadOnlyDictionary<Instruction, string> labels) {
+			var signatures = context.Signatures;
 			var opCode = instruction.OpCode.Name;
 			var label = labels[instruction];
 			switch (instruction.Operand) {
@@ -130,7 +137,14 @@ public sealed partial class WorkspaceManager {
 							spec.Method.Name,
 							signatures.MethodToDto(spec.Method.MethodSig),
 							spec.Method.FullName),
-						MethodSpecArguments: spec.GenericInstMethodSig?.GenericArguments.Select(argument => signatures.ToDtoRequired(argument)).ToArray());
+						MethodSpecArguments: spec.GenericInstMethodSig?.GenericArguments.Select(argument => signatures.ToDtoRequired(argument)).ToArray(),
+						MemberRef: spec.Method is MemberRef specMethod ? context.MemberRefs.ToDto(specMethod) : null,
+						MethodSpecCustomAttributes: context.Attributes.ToDtoList(spec.CustomAttributes));
+				case MemberRef memberRef:
+					// The MemberRef dialog starts from what the reference is; the token is what keeps it as it is.
+					return DescribeReference(label, opCode, memberRef.IsFieldRef ? IlOperandKinds.Field : IlOperandKinds.Method, memberRef) with {
+						MemberRef = context.MemberRefs.ToDto(memberRef),
+					};
 				case IMethod method2:
 					return DescribeReference(label, opCode, IlOperandKinds.Method, method2);
 				case IField field:
@@ -225,7 +239,9 @@ public sealed partial class WorkspaceManager {
 			handler.HandlerStart is null ? null : LabelOf(handler.HandlerStart),
 			handler.HandlerEnd is null ? null : LabelOf(handler.HandlerEnd),
 			signatures.ToDto(handler.CatchType),
-			$"{handler.HandlerType} {handler.CatchType?.FullName}");
+			$"{handler.HandlerType} {handler.CatchType?.FullName}",
+			// What ExceptionHandlersListHelper's Copy MD Token copies.
+			handler.CatchType is { MDToken.Raw: not 0 } catchType ? TokenText(catchType) : null);
 
 		// Offsets are the labels the instructions were read with, so a handler names the same rows.
 		static string LabelOf(Instruction instruction) => $"IL_{instruction.Offset:X4}";
@@ -408,14 +424,40 @@ public sealed partial class WorkspaceManager {
 
 		object? ResolveMemberOperand(EditContext context, IlBodyInstructionDto source) {
 			if (source.NodeId is { Length: > 0 })
-				return GetNode(source.NodeId).Value;
+				return ImportIntoModule(context, GetNode(source.NodeId).Value);
 			if (source.Token is { Length: > 0 }) {
 				if (!uint.TryParse(source.Token, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rawToken))
 					throw new RpcException(ErrorCodes.EditValidationFailed, "The metadata token operand is invalid.");
-				return context.Module.ResolveToken(rawToken)
-					?? throw new RpcException(ErrorCodes.EditValidationFailed, "The metadata token operand could not be resolved.");
+				// A token is the module's it was read from: the method the instruction was copied out of, when it
+				// came from another one — dnSpy's InstructionVM.Import, which imports what it names.
+				var owner = OwnerModuleOf(source) ?? context.Module;
+				return ImportIntoModule(context, owner.ResolveToken(rawToken)
+					?? throw new RpcException(ErrorCodes.EditValidationFailed, "The metadata token operand could not be resolved."));
 			}
+			// A MemberRef the operand dialog built, which has no row anywhere yet.
+			if (source.MemberRef is not null)
+				return context.MemberRefs.FromDto(source.MemberRef);
 			return null;
+		}
+
+		/// <summary>The module of the method an instruction's token was read in, when the request says.</summary>
+		ModuleDef? OwnerModuleOf(IlBodyInstructionDto source) =>
+			source.TokenOwnerNodeId is { Length: > 0 } && nodes.TryGetValue(source.TokenOwnerNodeId, out var owner) ? owner.AsModuleEntry?.Module : null;
+
+		/// <summary>
+		/// What an operand of another module becomes in this one: dnSpy imports it with TryToUseDefs, so a member
+		/// this module defines is used as it is and anything else becomes a reference of its own.
+		/// </summary>
+		static object? ImportIntoModule(EditContext context, object? value) {
+			if (value is not IOwnerModule { Module: { } module } || module == context.Module)
+				return value;
+			var importer = new Importer(context.Module, ImporterOptions.TryToUseDefs);
+			return value switch {
+				ITypeDefOrRef type => importer.Import(type),
+				IField field => importer.Import(field),
+				IMethod method => importer.Import(method),
+				_ => value,
+			};
 		}
 
 		object ResolveTokenOperand(EditContext context, IlBodyInstructionDto source) {
@@ -428,15 +470,28 @@ public sealed partial class WorkspaceManager {
 		}
 
 		IMethod ResolveMethodOperand(EditContext context, IlBodyInstructionDto source) {
-			IMethodDefOrRef method = source.MethodRef is not null
-				? context.MethodRefs.FromDtoMethod(source.MethodRef)
-				: ResolveMemberOperand(context, source) switch {
-					IMethodDefOrRef resolved => resolved,
-					_ => throw new RpcException(ErrorCodes.EditValidationFailed, "The operand is not a method."),
-				};
-			if (source.MethodSpecArguments is { Count: > 0 }) {
+			IMethodDefOrRef method;
+			if (source.MethodRef is not null)
+				method = context.MethodRefs.FromDtoMethod(source.MethodRef);
+			else {
+				switch (ResolveMemberOperand(context, source)) {
+					// A MethodSpec named by its token, with nothing to rebuild it from, is the operand as it is.
+					case MethodSpec spec when source.MethodSpecArguments is null:
+						return spec;
+					case IMethodDefOrRef resolved:
+						method = resolved;
+						break;
+					default:
+						throw new RpcException(ErrorCodes.EditValidationFailed, "The operand is not a method.");
+				}
+			}
+			if (source.MethodSpecArguments is not null && (source.MethodSpecArguments.Count > 0 || source.MethodSpecCustomAttributes is not null)) {
+				// dnSpy's MethodSpecVM: the method, its instantiation and the spec's own custom attributes.
 				var arguments = source.MethodSpecArguments.Select(argument => context.Signatures.FromDtoRequired(argument)).ToList();
-				return new MethodSpecUser(method, new GenericInstMethodSig(arguments));
+				var methodSpec = new MethodSpecUser(method, new GenericInstMethodSig(arguments));
+				foreach (var attribute in context.Attributes.FromDtoList(source.MethodSpecCustomAttributes))
+					methodSpec.CustomAttributes.Add(attribute);
+				return context.Module.UpdateRowId(methodSpec);
 			}
 			return method;
 		}
@@ -457,7 +512,8 @@ public sealed partial class WorkspaceManager {
 			var resolver = new TransformOperandResolver(
 				moduleEntry.Module,
 				CreateEditContext(moduleEntry).Signatures,
-				nodeId => GetNode(nodeId).Value);
+				nodeId => GetNode(nodeId).Value,
+				nodeId => nodes.TryGetValue(nodeId, out var owner) ? owner.AsModuleEntry?.Module : null);
 			switch (request.Operation) {
 				case IlTransformOperations.SimplifyAll:
 					for (var index = 0; index < instructions.Count; index++)
@@ -927,7 +983,8 @@ static class IlTransform {
 sealed class TransformOperandResolver(
 	ModuleDef module,
 	SignatureCodec signatures,
-	Func<string, object?> resolveNode) {
+	Func<string, object?> resolveNode,
+	Func<string, ModuleDef?> moduleOfNode) {
 	public (int Pops, int Pushes, TypeSigDto? PushType)? CalculateStackUsage(IlBodyInstructionDto instruction) {
 		var opCode = OpCodesByName.TryGetValue(instruction.OpCode, out var found) ? found : OpCodes.Nop;
 		var operand = ResolveOperand(instruction, opCode);
@@ -967,8 +1024,21 @@ sealed class TransformOperandResolver(
 	object? ResolveByNodeOrToken(IlBodyInstructionDto instruction) {
 		if (instruction.NodeId is { Length: > 0 })
 			return resolveNode(instruction.NodeId);
-		if (instruction.Token is { Length: > 0 } && uint.TryParse(instruction.Token, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var token))
-			return module.ResolveToken(token);
+		if (instruction.Token is { Length: > 0 } && uint.TryParse(instruction.Token, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var token)) {
+			// A token copied out of another module's method means what it meant there.
+			var owner = instruction.TokenOwnerNodeId is { Length: > 0 } ? moduleOfNode(instruction.TokenOwnerNodeId) : null;
+			return (owner ?? module).ResolveToken(token);
+		}
+		if (instruction.MemberRef is { } memberRef) {
+			// A scratch module keeps the stack question from creating rows in the module being edited.
+			var scratch = new ModuleDefUser("transform");
+			try {
+				return new EditContext(scratch).MemberRefs.FromDto(memberRef);
+			}
+			catch (RpcException) {
+				return null;
+			}
+		}
 		return null;
 	}
 

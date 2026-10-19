@@ -137,6 +137,57 @@ public sealed class WorkspaceCompilerTests : IDisposable {
 		Assert.DoesNotContain(members, node => node.Id == added.Id);
 	}
 
+	[Fact]
+	public async Task TheCompilerPagesSymbolsReachTheCompilation() {
+		var opened = await OpenAsync();
+		var type = await FindTypeAsync(opened.WorkspaceId, nameof(CompilerFixture));
+		var method = Assert.Single(await ChildrenAsync(opened.WorkspaceId, type.Id), node => node.Kind == "method" && node.Label.StartsWith("Value(", StringComparison.Ordinal));
+		var source = Source("\n#if DNSPY_PAGE\nreturn 7;\n#else\nreturn undefined_symbol;\n#endif\n");
+
+		var without = await manager.CompileSourceAsync(new CompileSourceRequest(opened.WorkspaceId, method.Id, CompilerModes.EditMethod, source), TestContext.Current.CancellationToken);
+		Assert.False(without.Success);
+		var with = await manager.CompileSourceAsync(
+			new CompileSourceRequest(opened.WorkspaceId, method.Id, CompilerModes.EditMethod, source, Settings: new CompilerSettingsDto(PreprocessorSymbols: "TRACE; DNSPY_PAGE")),
+			TestContext.Current.CancellationToken);
+		Assert.True(with.Success, string.Join(Environment.NewLine, with.Diagnostics.Select(diagnostic => diagnostic.Text)));
+	}
+
+	[Fact]
+	public async Task EditsAMethodBodyFromVisualBasicSource() {
+		var opened = await OpenAsync();
+		var type = await FindTypeAsync(opened.WorkspaceId, nameof(CompilerFixture));
+		var method = Assert.Single(await ChildrenAsync(opened.WorkspaceId, type.Id), node => node.Kind == "method" && node.Label.StartsWith("Value(", StringComparison.Ordinal));
+		var source = """
+			Namespace dnSpy.Backend.Tests
+				Public Class CompilerFixture
+					Public Function Value() As Integer
+						Return 4242
+					End Function
+				End Class
+			End Namespace
+			""";
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		var result = await manager.CompileSourceAsync(
+			new CompileSourceRequest(opened.WorkspaceId, method.Id, CompilerModes.EditMethod, source, transaction.TransactionId, CompilerLanguages.VisualBasic),
+			TestContext.Current.CancellationToken);
+		Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Text)));
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var decompiled = await manager.DecompileAsync(new DecompileRequest(opened.WorkspaceId, method.Id, DecompilerLanguage.CSharp), TestContext.Current.CancellationToken);
+		Assert.Contains("4242", decompiled.Text, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task OpensEditAssemblyAttributesInVisualBasic() {
+		var opened = await OpenAsync();
+		var root = Assert.Single((await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes);
+		var source = await manager.GetAssemblyAttributesSourceAsync(new CompilerAssemblyAttributesRequest(opened.WorkspaceId, root.Id, CompilerLanguages.VisualBasic), TestContext.Current.CancellationToken);
+		Assert.True(source.Source.Contains("<Assembly: AssemblyVersion(\"1.0.0.0\")>", StringComparison.Ordinal), source.Source);
+		// A module attribute keeps its target: the converter only ever sees it as an assembly one.
+		Assert.True(source.Source.Contains("<Module: RefSafetyRules(11)>", StringComparison.Ordinal), source.Source);
+		Assert.DoesNotContain("Placeholder", source.Source, StringComparison.Ordinal);
+	}
+
 	static string Source(string body) => $$"""
 		namespace dnSpy.Backend.Tests;
 

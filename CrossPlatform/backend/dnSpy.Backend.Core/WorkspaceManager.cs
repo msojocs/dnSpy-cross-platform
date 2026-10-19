@@ -1164,8 +1164,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					module.Id,
 					module.Module.Assembly?.Name.String ?? module.Module.Name.String,
 					module.Path,
-					File.Exists(Path.ChangeExtension(module.Path, ".pdb")),
-					IsAutoLoaded(module)),
+					!module.InMemory && File.Exists(Path.ChangeExtension(module.Path, ".pdb")),
+					IsAutoLoaded(module),
+					module.InMemory),
 				// A PE-only file and an unknown one have no assembly name to show or symbols to load, so
 				// they are listed under their file name the way the tree lists them.
 				_ => new OpenedModule(entry.Id, Path.GetFileName(entry.Path), entry.Path, false, IsAutoLoaded(entry)),
@@ -1358,6 +1359,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		public TreeNodesResponse GetChildren(string nodeId) {
 			var node = GetNode(nodeId);
+			// Every row of a table is labelled with a name out of the #Strings heap; they share one read of the file.
+			using var rowLabels = node.Kind == NodeKind.MetadataTable && node.AsModuleEntry is { } tableModule ? ShareReader(tableModule) : null;
 			var children = node.Kind switch {
 				NodeKind.Assembly => GetAssemblyChildren(node),
 				NodeKind.Module => GetModuleChildren(node),
@@ -1365,6 +1368,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				// (PEFilePETreeNodeDataProvider), so a native file can be inspected the same way.
 				NodeKind.PEDocument => GetPeDocumentChildren(node),
 				NodeKind.PE => GetPEChildren(node),
+				// The storage stream that holds the metadata tables has the tables stream under it, and that the
+				// tables and their rows (dnSpy's TablesStorageStreamNode, TablesStreamNode, MetadataTableNode).
+				NodeKind.PeStructure => GetPeStructureChildren(node),
+				NodeKind.TablesStream => GetTablesStreamChildren(node),
+				NodeKind.MetadataTable => GetMetadataTableChildren(node),
 				// An ELF image has no PE node to hang its headers off, so it gets nodes of its own.
 				NodeKind.ElfDocument => GetElfDocumentChildren(node),
 				NodeKind.Elf => GetElfChildren(node),
@@ -1407,6 +1415,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// nothing under it to walk down through.
 			if (node.Kind is NodeKind.Assembly or NodeKind.PEDocument or NodeKind.ElfDocument or NodeKind.UnknownDocument)
 				return [node];
+			// A node under the tables stream names the node above it, so its chain is the PE node's and the nodes
+			// between — the one hex structure a client is handed without having listed its parents (Go to MD Table Row).
+			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
+				return GetMetadataNodePath(node);
 			if (node.AsModuleEntry is not { } module)
 				return [];
 			// A type hierarchy node hangs off the type whose chain it lists, and that type is not named by
@@ -1508,7 +1520,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 			// The order dnSpy's tree node groups give a module's children: the PE node, Type References,
 			// References, Resources, then the namespaces — the empty one, "-", first.
-			if (module.Metadata?.PEImage is { } peImage)
+			// dnSpy only hangs a PE node off a document loaded from a file: a new one's offsets would mean nothing.
+			if (module.Metadata?.PEImage is { } peImage && node.Module is not ModuleEntry { InMemory: true })
 				result.Add(GetOrAddNode($"{node.Key}:pe", NodeKind.PE, peImage, node.Module));
 			result.Add(GetOrAddNode($"{node.Key}:typerefs", NodeKind.TypeReferencesGroup, module, node.Module));
 			// dnSpy's two folders check their children, so an empty one is not shown.
@@ -2133,6 +2146,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// A type hierarchy node, a reference and the folders that hold them have no code in any language:
 			// dnSpy's NodeDecompiler writes a comment per row whatever decompiler is chosen, so the language
 			// request only picks how a comment starts.
+			// dnSpy's hex nodes decompile themselves the same way whatever the language (IDecompileSelf).
+			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
+				return DecompileMetadataStructure(node, request.Language);
 			if (CommentDocumentLines(node) is { } lines) {
 				var comment = request.Language == DecompilerLanguage.VisualBasic ? "'" : "//";
 				var text = string.Concat(lines.Select(line => $"{comment} {line}\n"));
@@ -2198,6 +2214,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// are the same thing under a different file format.
 			if (node.Kind is NodeKind.PE or NodeKind.PeStructure)
 				return DecompilePeStructure(node);
+			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
+				return DecompileMetadataStructure(node, DecompilerLanguage.CSharp);
 			if (node.Kind is NodeKind.Elf or NodeKind.ElfStructure)
 				return DecompileElfStructure(node);
 			var moduleEntry = node.AsModuleEntry;
@@ -2438,7 +2456,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		internal static CSharpDecompilerSession CreateCSharpDecompilerSession(ModuleEntry module, DecompilerSettings settings, CancellationToken cancellationToken) {
-			if (!module.IsModified) {
+			if (!module.HasModelEdits && !module.InMemory) {
 				// CSharpDecompiler(string, DecompilerSettings) spelled out, so the resolver it builds can fall back
 				// on the global assembly caches the way dnSpy's does.
 				settings.LoadInMemory = true;
@@ -2609,6 +2627,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		DecompileResponse DecompileILWithCSharp(NodeEntry node, CancellationToken cancellationToken) {
 			if (node.Kind is NodeKind.PE or NodeKind.PeStructure)
 				return DecompilePeStructureIl(node);
+			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
+				return DecompileMetadataStructure(node, DecompilerLanguage.ILWithCSharp);
 			if (node.Kind is NodeKind.Elf or NodeKind.ElfStructure)
 				return DecompileElfStructureIl(node);
 			var moduleEntry = node.AsModuleEntry;
@@ -2694,11 +2714,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
 				throw new RpcException(ErrorCodes.SaveFailed, $"The file could not be read: {ex.Message}");
 			}
-			// The file on disk never holds a patch; the hex tab reads the patched image, like every other
-			// reader of the module does. Only a managed module can carry patches — the other entries are
-			// read-only documents.
-			if (entry is ModuleEntry module)
-				module.OverlayHexPatches(offset, buffer);
+			// The hex tab reads the patched image, like every other reader of the document does — the patches
+			// live beside the file until a save writes them.
+			HexPatchList.Overlay(entry, offset, buffer);
 			return new HexReadResponse(offset, Convert.ToBase64String(buffer), offset + actualCount >= entry.FileLength);
 		}
 
@@ -2709,6 +2727,14 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// the hex editor there.
 		/// </summary>
 		IModuleEntry GetHexEntry(string moduleId) {
+			var found = FindHexEntry(moduleId);
+			// A document that was never saved has no file for the hex editor to show — dnSpy's commands need a file name.
+			if (found is ModuleEntry { InMemory: true })
+				throw new RpcException(ErrorCodes.UnsupportedDocument, "The document has not been saved to a file yet.");
+			return found;
+		}
+
+		IModuleEntry FindHexEntry(string moduleId) {
 			if (modules.TryGetValue(moduleId, out var module))
 				return module;
 			if (nodes.TryGetValue(moduleId, out var node) && node.Module is IModuleEntry entry)
@@ -2876,7 +2902,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			if (length < pattern.Length)
 				return new HexFindResponse(-1);
 			var start = Math.Clamp(request.Start, 0, length - pattern.Length);
-			var module = entry as ModuleEntry;
+			var module = entry;
 			await using var stream = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
 			// Forward: everything from the start offset to the end. Reverse: everything before the start
 			// offset, so a match that already begins there is not answered again.
@@ -2894,7 +2920,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		const int HexFindChunkSize = 1024 * 1024;
 
-		static async Task<long> FindInRangeAsync(FileStream stream, ModuleEntry? module, long from, long to, byte[] pattern, bool reverse, CancellationToken cancellationToken) {
+		static async Task<long> FindInRangeAsync(FileStream stream, IModuleEntry module, long from, long to, byte[] pattern, bool reverse, CancellationToken cancellationToken) {
 			if (from < 0)
 				from = 0;
 			if (to > stream.Length)
@@ -2907,7 +2933,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				var count = (int)Math.Min(buffer.Length, to - pos);
 				stream.Position = pos;
 				await stream.ReadExactlyAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
-				module?.OverlayHexPatches(pos, buffer);
+				HexPatchList.Overlay(module, pos, buffer);
 				if (reverse) {
 					for (var i = count - pattern.Length; i >= 0; i--) {
 						if (buffer.AsSpan(i, pattern.Length).SequenceEqual(pattern))
@@ -2937,9 +2963,14 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// caller has to swallow.
 			var moduleEntry = node.Module as IModuleEntry
 				?? throw new RpcException(ErrorCodes.NodeNotFound, "The selected tree node no longer exists.");
+			if (moduleEntry is ModuleEntry { InMemory: true })
+				throw new RpcException(ErrorCodes.UnsupportedDocument, "The document has not been saved to a file yet.");
 			HexMethodTargetDto? method = null;
 			HexRangeDto? fieldInitialValue = null;
 			HexRangeDto? resource = null;
+			// A hex structure node shows its own bytes (dnSpy's TVShowInHexEditor over HexNode.Span), and a section
+			// or a storage stream header the data it describes too.
+			var (structure, structureData) = GetHexStructureRanges(node);
 			switch (node.Value) {
 			case MethodDef value:
 				method = ResolveMethodTarget(value);
@@ -2951,7 +2982,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				resource = ResolveResourceTarget(value);
 				break;
 			}
-			return new HexTargetResponse(moduleEntry.Id, moduleEntry.FileLength, method, fieldInitialValue, resource);
+			return new HexTargetResponse(moduleEntry.Id, moduleEntry.FileLength, method, fieldInitialValue, resource, structure, structureData);
 		}
 
 		static HexMethodTargetDto? ResolveMethodTarget(MethodDef method) {
@@ -3011,10 +3042,25 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// </summary>
 		public void QueueHexPatch(HexPatchRequest request) {
 			var transaction = GetTransaction(request.TransactionId);
-			var node = GetNode(request.NodeId);
-			// PE-only modules don't support hex patches
-			var moduleEntry = node.AsModuleEntry
-				?? throw new RpcException(ErrorCodes.UnsupportedDocument, "PE-only modules do not support hex patches.");
+			// A native PE image, an ELF image and a file nothing could read are edited byte-wise the way dnSpy's
+			// hex editor edits any file; only a managed module's patches are tied to the member they were aimed at.
+			if (!nodes.TryGetValue(request.NodeId, out var node) || node.AsModuleEntry is null) {
+				var entry = GetHexEntry(request.NodeId);
+				var bytes = DecodeHexPatch(request, entry.FileLength);
+				transaction.Add(request.NodeId, entry, () => HexPatchList.ApplyRaw(entry.HexPatches, request.NodeId, request.Offset, bytes), isHexPatch: true);
+				return;
+			}
+			var moduleEntry = node.AsModuleEntry;
+			var data = DecodeHexPatch(request, moduleEntry.FileLength);
+			// A patch over a member may only cover that member, so the write commands can never spill into
+			// whatever the serializer put next to the body they were aimed at.
+			if (HexTargets.GetPatchRegion(node.Value) is { } region &&
+				(request.Offset < region.Offset || request.Offset + data.Length > region.Offset + region.Size))
+				throw new RpcException(ErrorCodes.EditValidationFailed, "The patch is larger than what it is writing over.");
+			transaction.Add(node.Id, moduleEntry, () => moduleEntry.ApplyHexPatch(node.Id, node.Value, request.Offset, data), isHexPatch: true);
+		}
+
+		static byte[] DecodeHexPatch(HexPatchRequest request, long fileLength) {
 			byte[] data;
 			try {
 				data = Convert.FromBase64String(request.Base64Data);
@@ -3024,14 +3070,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 			if (data.Length == 0)
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The patch is empty.");
-			if (request.Offset < 0 || request.Offset + data.Length > moduleEntry.FileLength)
+			if (request.Offset < 0 || request.Offset + data.Length > fileLength)
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The patch does not fit inside the file.");
-			// A patch over a member may only cover that member, so the write commands can never spill into
-			// whatever the serializer put next to the body they were aimed at.
-			if (HexTargets.GetPatchRegion(node.Value) is { } region &&
-				(request.Offset < region.Offset || request.Offset + data.Length > region.Offset + region.Size))
-				throw new RpcException(ErrorCodes.EditValidationFailed, "The patch is larger than what it is writing over.");
-			transaction.Add(node.Id, moduleEntry, () => moduleEntry.ApplyHexPatch(node.Id, node.Value, request.Offset, data));
+			return data;
 		}
 
 		public ModuleInfoResponse GetModuleInfo(string moduleId) {
@@ -3739,12 +3780,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The edit transaction could not be applied.", null, ex);
 			}
 			transactions.Remove(transactionId);
-			foreach (var module in transaction.Operations.Select(operation => operation.Module).Distinct().OfType<ModuleEntry>())
-				module.IsModified = true;
+			foreach (var module in transaction.Operations.Where(operation => operation.Modifies).Select(operation => operation.Module).Distinct().OfType<ModuleEntry>())
+				module.HasModelEdits = true;
 			var previousStateId = stateId;
 			stateId = Guid.NewGuid().ToString("N");
 			NoteModelChanged();
-			undoHistory.Push(new EditHistoryEntry(transaction.Operations.ToArray(), undo.ToArray(), previousStateId, stateId));
+			undoHistory.Push(new EditHistoryEntry(nextHistoryId++, transaction.Operations.ToArray(), undo.ToArray(), previousStateId, stateId));
 			redoHistory.Clear();
 			version++;
 			return CreateHistoryResponse(transaction.Operations);
@@ -3783,7 +3824,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 			stateId = history.AfterStateId;
 			NoteModelChanged();
-			var reapplied = new EditHistoryEntry(history.Operations, undo.ToArray(), history.BeforeStateId, history.AfterStateId);
+			var reapplied = new EditHistoryEntry(history.Id, history.Operations, undo.ToArray(), history.BeforeStateId, history.AfterStateId);
 			undoHistory.Push(reapplied);
 			version++;
 			return CreateHistoryResponse(history.Operations);
@@ -3795,56 +3836,22 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			operations.Select(operation => operation.NodeId).Distinct(StringComparer.Ordinal).ToArray(),
 			undoHistory.Count > 0,
 			redoHistory.Count > 0,
-			operations.Any(operation => operation.ChangesRoots) ? CreateOpenResponse().Modules : null);
+			operations.Any(operation => operation.ChangesRoots) ? CreateOpenResponse().Modules : null,
+			GetModifiedDocuments());
 
 		public Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, CancellationToken cancellationToken) =>
 			SaveModuleAsync(request, null, cancellationToken);
 
+		/// <summary>
+		/// Writes a module to a file of the user's choosing — dnSpy's Save Module with another file name. The
+		/// document counts as saved afterwards, the way dnSpy marks it once its writer is done.
+		/// </summary>
 		public async Task<SaveModuleResponse> SaveModuleAsync(SaveModuleRequest request, SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
-			var module = GetModule(request.ModuleId);
+			var entry = GetSaveableDocument(request.ModuleId);
 			var destination = Path.GetFullPath(request.DestinationPath);
-			var directory = Path.GetDirectoryName(destination);
-			if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
-				throw new RpcException(ErrorCodes.SaveFailed, "The destination directory does not exist.");
-			if (File.Exists(destination) && !request.Overwrite)
+			if (File.Exists(destination) && !request.Overwrite && !SameFile(destination, entry.Path))
 				throw new RpcException(ErrorCodes.SaveFailed, "The destination already exists.");
-
-			var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
-			try {
-				await Task.Run(() => WriteModule(module.Module, temporaryPath, options), cancellationToken).ConfigureAwait(false);
-				cancellationToken.ThrowIfCancellationRequested();
-				// The reload is what the patches are resolved against: the file dnlib just wrote has a
-				// layout of its own, so where a patch belongs is found through the member it aimed at.
-				IReadOnlyList<(long Offset, byte[] Data)> hexPatches;
-				using (var verificationModule = ModuleDefMD.Load(temporaryPath)) {
-					_ = verificationModule.Mvid;
-					_ = verificationModule.Types.Count;
-					hexPatches = module.ResolveHexPatchOffsets(verificationModule);
-				}
-				// dnlib knows nothing about the hex patches, so they go on last — over the bytes it wrote.
-				await Task.Run(() => {
-					using var stream = new FileStream(temporaryPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-					WriteHexPatches(stream, hexPatches);
-				}, cancellationToken).ConfigureAwait(false);
-				File.Move(temporaryPath, destination, request.Overwrite);
-				await using var savedFile = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-				var hash = await SHA256.HashDataAsync(savedFile, cancellationToken).ConfigureAwait(false);
-				return new SaveModuleResponse(destination, savedFile.Length, Convert.ToHexString(hash).ToLowerInvariant());
-			}
-			catch (OperationCanceledException) {
-				throw;
-			}
-			catch (Exception ex) when (ex is not RpcException) {
-				throw new RpcException(ErrorCodes.SaveFailed, "The module could not be saved.", null, ex);
-			}
-			finally {
-				try {
-					if (File.Exists(temporaryPath))
-						File.Delete(temporaryPath);
-				}
-				catch (IOException) {
-				}
-			}
+			return await SaveDocumentAsync(entry, destination, WriterOptionsFor(entry, options), null, null, cancellationToken).ConfigureAwait(false);
 		}
 
 		/// <summary>
@@ -3856,13 +3863,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			SaveModuleInPlaceAsync(request, null, cancellationToken);
 
 		public async Task<SaveModuleResponse> SaveModuleInPlaceAsync(SaveModuleInPlaceRequest request, SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
-			var module = GetModule(request.ModuleId);
-			var saved = await SaveModuleAsync(
-				new SaveModuleRequest(request.WorkspaceId, request.ModuleId, module.Path, Overwrite: true),
-				options,
-				cancellationToken).ConfigureAwait(false);
-			module.IsModified = false;
-			return saved;
+			var entry = GetSaveableDocument(request.ModuleId);
+			if (IsInMemory(entry))
+				throw new RpcException(ErrorCodes.SaveFailed, "The document has never been saved, so it has no file to be written back to.");
+			return await SaveDocumentAsync(entry, entry.Path, WriterOptionsFor(entry, options), null, null, cancellationToken).ConfigureAwait(false);
 		}
 
 		/// <summary>
@@ -3875,11 +3879,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		public async Task<SaveAllResponse> SaveAllModulesAsync(SaveModuleOptionsDto? options, CancellationToken cancellationToken) {
 			var saved = new List<SaveModuleResponse>();
-			foreach (var module in OrderedModules()) {
-				if (!module.IsModified)
-					continue;
-				saved.Add(await SaveModuleInPlaceAsync(
-					new SaveModuleInPlaceRequest(Id, module.Id), options, cancellationToken).ConfigureAwait(false));
+			foreach (var entry in DocumentEntries().Where(IsModified).ToArray()) {
+				if (IsInMemory(entry))
+					throw new RpcException(ErrorCodes.SaveFailed, "A new document has no file yet; save it with Save Module first.");
+				saved.Add(await SaveDocumentAsync(entry, entry.Path, WriterOptionsFor(entry, options), null, null, cancellationToken).ConfigureAwait(false));
 			}
 			return new SaveAllResponse(saved);
 		}
@@ -4237,6 +4240,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NodeKind.Module => GetModuleLabel((ModuleDefMD)node.Value),
 			NodeKind.PE => "PE",
 			NodeKind.PeStructure => GetPeStructureLabel(node),
+			NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord => GetMetadataNodeLabel(node),
 			NodeKind.Elf => "ELF",
 			NodeKind.ElfStructure => GetElfStructureLabel(node),
 			// dnSpy names these nodes after the file, so the tree says which file could not be read.
@@ -4317,7 +4321,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			NodeKind.Assembly or NodeKind.Module or NodeKind.PEDocument or NodeKind.UnknownDocument or NodeKind.ElfDocument => ((IModuleEntry)node.Module).Path,
 			// dnSpy's hex nodes show the file they read the structure out of as their tooltip, and the ELF
 			// structures do the same.
-			NodeKind.PE or NodeKind.PeStructure or NodeKind.Elf or NodeKind.ElfStructure => ((IModuleEntry)node.Module).Path,
+			NodeKind.PE or NodeKind.PeStructure or NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord
+				or NodeKind.Elf or NodeKind.ElfStructure => ((IModuleEntry)node.Module).Path,
 			NodeKind.AssemblyReference => ((AssemblyRef)node.Value).FullName,
 			NodeKind.ModuleReference => ((ModuleRef)node.Value).FullName,
 			NodeKind.Resource => DescribeResource((Resource)node.Value),
@@ -4345,6 +4350,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// An ELF document has the node its headers hang off, and that node always has the file header.
 			NodeKind.ElfDocument => node.Module is ElfFileEntry,
 			NodeKind.Elf => true,
+			// Only the storage stream that holds the tables expands, into the tables stream and its tables; a row has
+			// nothing under it.
+			NodeKind.PeStructure or NodeKind.TablesStream or NodeKind.MetadataTable => HasMetadataChildren(node),
 			NodeKind.AssemblyReference => HasAssemblyReferenceChildren(node),
 			NodeKind.Resource => ShapeOf((Resource)node.Value) == ResourceShape.ResourceSet,
 			// A referenced type only expands when the module uses something of it; its folders only exist
@@ -4361,6 +4369,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// Every hex structure node dnSpy creates uses DsImages.BinaryFile, and a PE document wears the
 			// image an assembly would. An ELF image is read and shown the same way.
 			NodeKind.PE or NodeKind.PeStructure => DotNetImages.BinaryFile,
+			// The tables stream, a table and a row wear DsImages.Metadata.
+			NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord => DotNetImages.Metadata,
 			NodeKind.PEDocument => node.Module is PeOnlyModuleEntry { PEImage: { } peImage } ? DotNetImages.Of(peImage.ImageNTHeaders.FileHeader.Characteristics) : DotNetImages.BinaryFile,
 			NodeKind.Elf or NodeKind.ElfStructure or NodeKind.ElfDocument => DotNetImages.BinaryFile,
 			// dnSpy shows an unknown document with DsImages.AssemblyError.
@@ -4768,12 +4778,31 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		internal sealed class ModuleEntry(string path, ModuleDefMD module) : IModuleEntry {
+		internal sealed class ModuleEntry(string path, ModuleDefMD module, long? fileLength = null) : IModuleEntry {
 			public string Id { get; set; } = string.Empty;
-			public string Path { get; } = path;
+			/// <summary>The file the module was read from. A module dnSpy's Create Assembly or Create NetModule made
+			/// has none yet: its path is a name of the workspace's own, and <see cref="InMemory"/> says so, until the
+			/// first save gives it a file and the entry takes that file's path.</summary>
+			public string Path { get; set; } = path;
 			public ModuleDefMD Module { get; } = module;
-			public long FileLength { get; } = new FileInfo(path).Length;
-			public bool IsModified { get; set; }
+			public long FileLength { get; set; } = fileLength ?? new FileInfo(path).Length;
+
+			/// <summary>A module that exists only in the workspace — dnSpy's documents with an empty file name.</summary>
+			public bool InMemory { get; set; }
+
+			/// <summary>
+			/// Whether the dnlib model has been edited since the module was read, which is what tells the decompiler
+			/// to read a snapshot of the model rather than the file. It is never reset: the file on disk is only the
+			/// model again after a reload, and a save does not make it so — the writer may lay it out afresh.
+			/// </summary>
+			public bool HasModelEdits { get; set; }
+
+			/// <summary>Whether a save went through dnlib's writer and replaced the file the module was read from,
+			/// after which the file's bytes are no longer the ones the hex patches were measured against.</summary>
+			public bool FileRewritten { get; set; }
+
+			/// <inheritdoc/>
+			public long SavedHistoryId { get; set; }
 
 			/// <summary>
 			/// True for a module the debuggee loaded but the user never opened. It has no tree node, so
@@ -4787,6 +4816,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			/// plus these, and a save replays them onto what dnlib writes.
 			/// </summary>
 			public List<HexPatch> HexPatches { get; } = [];
+
+			/// <inheritdoc/>
+			public List<HexPatch> HexBase { get; } = [];
 
 			/// <summary>
 			/// Records a patch and hands back the undo. The offset is the one the reader saw, measured in
@@ -4814,14 +4846,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			};
 
 			/// <summary>Copies the patches that fall inside the range into <paramref name="buffer"/>.</summary>
-			public void OverlayHexPatches(long offset, byte[] buffer) {
-				foreach (var patch in HexPatches) {
-					var start = Math.Max(patch.Offset, offset);
-					var end = Math.Min(patch.Offset + patch.After.Length, offset + buffer.Length);
-					for (var i = start; i < end; i++)
-						buffer[i - offset] = patch.After[i - patch.Offset];
-				}
-			}
+			public void OverlayHexPatches(long offset, byte[] buffer) => HexPatchList.Overlay(this, offset, buffer);
 
 			/// <summary>
 			/// Where each patch belongs in a module that has just been serialized. The offsets are resolved
@@ -4853,35 +4878,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		/// <summary>
-		/// One in-place byte patch: the bytes written at <paramref name="Offset"/> in the file the reader
-		/// saw, and what that offset is measured from. It never changes the file's length.
-		/// </summary>
-		internal sealed record HexPatch(string NodeId, long Offset, byte[] After, HexPatchTarget Target);
-
-		/// <summary>
-		/// What a hex patch is aimed at. dnSpy keeps a hex-edited file in a document of its own, so its
-		/// patches never have to survive a rewrite of the module that produced it; here the two share a
-		/// document, and keeping the member alongside the offset is what lets a patch be written to the
-		/// right place in a file dnlib laid out afresh.
-		/// </summary>
-		internal abstract record HexPatchTarget {
-			public static readonly HexPatchTarget Raw = new RawTarget();
-
-			/// <summary>A patch on nothing in particular, whose offset only means anything against the layout it was read with.</summary>
-			public sealed record RawTarget : HexPatchTarget;
-
-			/// <summary>Relative to the start of a method's body, header included.</summary>
-			public sealed record MethodBody(uint Token, long Delta) : HexPatchTarget;
-
-			/// <summary>Relative to the start of a field's initial value.</summary>
-			public sealed record FieldInitialValue(uint Token, long Delta) : HexPatchTarget;
-
-			/// <summary>Relative to the start of an embedded resource's data.</summary>
-			public sealed record Resource(string Name, long Delta) : HexPatchTarget;
-		}
-
-		/// <summary>
 		sealed record NamespaceValue(string Name, IReadOnlyList<TypeDef> Types);
 		sealed record NamespaceIndex(string StateId, IReadOnlyDictionary<string, IReadOnlyList<TypeDef>> Groups);
 		/// <summary>A module's types by full name, for resolving a base type reference the workspace holds.</summary>
@@ -4921,13 +4917,22 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			public int BaseVersion { get; } = baseVersion;
 			public List<EditOperation> Operations { get; } = [];
 
-			public void Add(string nodeId, IModuleEntry module, Func<Action> apply) => Operations.Add(new EditOperation(nodeId, module, apply));
+			public void Add(string nodeId, IModuleEntry module, Func<Action> apply, bool isHexPatch = false) =>
+				Operations.Add(new EditOperation(nodeId, module, apply, IsHexPatch: isHexPatch));
 		}
 
 		/// <summary>One step of an edit. <paramref name="ChangesRoots"/> marks one that adds or takes away a root —
-		/// a removal recorded in the history — after which the client reads the module list again.</summary>
-		sealed record EditOperation(string NodeId, IModuleEntry Module, Func<Action> Apply, bool ChangesRoots = false);
-		sealed record EditHistoryEntry(IReadOnlyList<EditOperation> Operations, IReadOnlyList<Action> UndoActions, string BeforeStateId, string AfterStateId);
+		/// a removal recorded in the history — after which the client reads the module list again.
+		/// <paramref name="Modifies"/> is dnSpy's split between an undo command's ModifiedObjects and its
+		/// NonModifiedObjects: a step that takes part in an edit without changing the document it names — a
+		/// removal — leaves that document's saved state alone. <paramref name="IsHexPatch"/> marks a step that only
+		/// wrote bytes over the file, which is what lets such a document be saved the way dnSpy saves a hex
+		/// buffer: the file's own bytes with the patches on them.</summary>
+		sealed record EditOperation(string NodeId, IModuleEntry Module, Func<Action> Apply, bool ChangesRoots = false, bool Modifies = true, bool IsHexPatch = false);
+
+		/// <summary>One undo step. <paramref name="Id"/> is dnSpy's command counter: it is handed out when the step is
+		/// first made and kept through undo and redo, so a document's saved state can name the step it was saved at.</summary>
+		sealed record EditHistoryEntry(long Id, IReadOnlyList<EditOperation> Operations, IReadOnlyList<Action> UndoActions, string BeforeStateId, string AfterStateId);
 
 		enum NodeKind {
 			Assembly,
@@ -4936,6 +4941,11 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			PE,
 			// One field of that PE structure — a header, a section, a metadata stream.
 			PeStructure,
+			// The tables stream under the storage stream that holds it, a node per metadata table that has rows, and a
+			// node per row — dnSpy's TablesStreamNode, MetadataTableNode and MetadataTableRecordNode.
+			TablesStream,
+			MetadataTable,
+			MetadataRecord,
 			// The ELF node under an ELF document and one field of it — the file header, a program header or
 			// a section header. dnSpy has no ELF reader, so these follow the PE node's shape instead.
 			Elf,
@@ -5021,7 +5031,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			void FormatNode(NodeEntry node) {
 				// A PE node and its structures are headers of the image, not code, so the node's own name is
 				// all there is to say about them. The ELF structures are the same thing.
-				if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.Elf or NodeKind.ElfStructure) {
+				if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord
+					or NodeKind.Elf or NodeKind.ElfStructure) {
 					WriteLine($"// {workspace.GetLabel(node)}");
 					return;
 				}
@@ -5282,5 +5293,23 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		string Id { get; }
 		string Path { get; }
 		long FileLength { get; }
+
+		/// <summary>
+		/// dnSpy's UndoObject.SavedCommand: the undo step the document was last saved at — the newest step of the
+		/// history that changed it, at the time of the save — 0 for the state it was read in, and -1 for a document
+		/// that has never been saved at all. The document is modified while the newest step that changed it is
+		/// any other one, so undoing back to where it was saved makes it unmodified again.
+		/// </summary>
+		long SavedHistoryId { get; set; }
+
+		/// <summary>The bytes the hex editor wrote over the file, which every reader of it sees and a save writes.</summary>
+		List<HexPatch> HexPatches { get; }
+
+		/// <summary>
+		/// What the file held, before a save wrote patches into it, at the places it did: laid over the file under the
+		/// patches, so the bytes read are always the ones the document was opened with plus the patches undo has
+		/// left — the file having been saved does not keep an undone patch's bytes on screen.
+		/// </summary>
+		List<HexPatch> HexBase { get; }
 	}
 }

@@ -195,6 +195,69 @@ public sealed class WorkspaceResourceEditingTests : IDisposable {
 	/// Creates a .resources file with one string entry, the way the Create Multi File Resource command
 	/// does, and answers the row it ends up on.
 	/// </summary>
+	// A 1×1 PNG and the header of an icon file — enough for the serialized forms, which only carry the bytes.
+	static readonly byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
+	static readonly byte[] icon = [0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 22, 0, 0, 0];
+
+	[Fact]
+	public async Task CreatesSerializedBitmapsAndIconsFromImageFilesAndEditsThemAsImages() {
+		var opened = await OpenAsync();
+		var resources = await FindResourcesFolderAsync(opened.WorkspaceId);
+		var created = await CreateResourcesFileAsync(opened.WorkspaceId, resources.Id, "images.resources");
+
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueCreateResourceElementAsync(
+			new CreateResourceElementRequest(opened.WorkspaceId, transaction.TransactionId, created.NodeId, ResourceElementKinds.ImageFiles, string.Empty,
+				Images: [new ResourceImageFileDto("dot.png", Convert.ToBase64String(png)), new ResourceImageFileDto("app.ico", Convert.ToBase64String(icon))]),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var entries = await ChildrenAsync(opened.WorkspaceId, created.NodeId);
+		Assert.Equal(["app.ico", "dot.png"], entries.Select(entry => entry.Label).Order());
+		var bitmap = await manager.GetResourceElementOptionsAsync(new ResourceElementOptionsRequest(opened.WorkspaceId, entries.Single(entry => entry.Label == "dot.png").Id), TestContext.Current.CancellationToken);
+		Assert.Equal(ResourceElementKinds.SerializedImage, bitmap.Kind);
+		Assert.Equal(png, Convert.FromBase64String(bitmap.Base64Data!));
+		Assert.StartsWith("System.Drawing.Bitmap, System.Drawing", bitmap.TypeName, StringComparison.Ordinal);
+		Assert.Equal("BinaryFormatter", bitmap.SerializationFormat);
+		var iconOptions = await manager.GetResourceElementOptionsAsync(new ResourceElementOptionsRequest(opened.WorkspaceId, entries.Single(entry => entry.Label == "app.ico").Id), TestContext.Current.CancellationToken);
+		Assert.StartsWith("System.Drawing.Icon, System.Drawing", iconOptions.TypeName, StringComparison.Ordinal);
+		Assert.Equal(icon, Convert.FromBase64String(iconOptions.Base64Data!));
+
+		// The image window hands back an icon's bytes, and the entry becomes an icon in the format it had.
+		transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueResourceElementOptionsAsync(
+			new SetResourceElementOptionsRequest(opened.WorkspaceId, transaction.TransactionId, entries.Single(entry => entry.Label == "dot.png").Id, bitmap with { Base64Data = Convert.ToBase64String(icon) }),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+		var changed = await manager.GetResourceElementOptionsAsync(new ResourceElementOptionsRequest(opened.WorkspaceId, (await ChildrenAsync(opened.WorkspaceId, created.NodeId)).Single(entry => entry.Label == "dot.png").Id), TestContext.Current.CancellationToken);
+		Assert.StartsWith("System.Drawing.Icon", changed.TypeName, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task KeepsAnImageListStreamersDataAndSaysAByteArrayHoldsAnImage() {
+		var opened = await OpenAsync();
+		var resources = await FindResourcesFolderAsync(opened.WorkspaceId);
+		var created = await CreateResourcesFileAsync(opened.WorkspaceId, resources.Id, "lists.resources");
+		var data = new byte[] { (byte)'M', (byte)'S', (byte)'F', (byte)'t', 3, 0x49 };
+
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueCreateResourceElementAsync(
+			new CreateResourceElementRequest(opened.WorkspaceId, transaction.TransactionId, created.NodeId, ResourceElementKinds.ImageListStreamer, "my.ImageStream", Base64Data: Convert.ToBase64String(data)),
+			TestContext.Current.CancellationToken);
+		await manager.QueueCreateResourceElementAsync(
+			new CreateResourceElementRequest(opened.WorkspaceId, transaction.TransactionId, created.NodeId, ResourceElementKinds.ByteArray, "logo.png", Base64Data: Convert.ToBase64String(png)),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		var entries = await ChildrenAsync(opened.WorkspaceId, created.NodeId);
+		var list = await manager.GetResourceElementOptionsAsync(new ResourceElementOptionsRequest(opened.WorkspaceId, entries.Single(entry => entry.Label == "my.ImageStream").Id), TestContext.Current.CancellationToken);
+		Assert.Equal(ResourceElementKinds.ImageListStreamer, list.Kind);
+		Assert.Equal(data, Convert.FromBase64String(list.Base64Data!));
+		var bytes = await manager.GetResourceElementOptionsAsync(new ResourceElementOptionsRequest(opened.WorkspaceId, entries.Single(entry => entry.Label == "logo.png").Id), TestContext.Current.CancellationToken);
+		Assert.Equal(ResourceElementKinds.ByteArray, bytes.Kind);
+		Assert.True(bytes.IsImage);
+	}
+
 	async Task<CreateResourceResponse> CreateResourcesFileAsync(string workspaceId, string resourcesNodeId, string name, params (string Name, string Text)[] entries) {
 		var transaction = await manager.BeginEditAsync(new BeginEditRequest(workspaceId), TestContext.Current.CancellationToken);
 		var created = await manager.CreateResourceAsync(

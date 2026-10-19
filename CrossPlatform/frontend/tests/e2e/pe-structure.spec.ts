@@ -58,10 +58,14 @@ test.describe('the PE node of an opened assembly', () => {
     // A structure is not code, so the row expands to nothing — the fields live in its document.
     await expect(structures.filter({ hasText: 'File Header' }).locator('.tree-expander')).toBeDisabled()
 
+    // dnSpy shows a structure as a form of its fields rather than as text: offset, name and value, with the
+    // flags of a field under it.
     await structures.filter({ hasText: 'File Header' }).dblclick()
     await expect(page.getByRole('tab', { name: 'File Header' })).toBeVisible()
-    await expect.poll(async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll('\u00a0', ' '))
-      .toContain('Machine:')
+    const form = page.locator('.hex-structure-view')
+    await expect(form.getByRole('textbox', { name: 'Machine', exact: true })).toHaveValue(/^0x/)
+    await expect(form.getByRole('combobox', { name: 'Machine' })).toBeVisible()
+    await expect(form.getByRole('checkbox', { name: 'Dll', exact: true })).toBeChecked()
   })
 
   test('opens the whole image as one document from the PE node', async () => {
@@ -78,20 +82,61 @@ test.describe('the PE node of an opened assembly', () => {
       .toContain('DOS Header')
   })
 
-  test('says why a structure has no IL instead of failing', async () => {
+  test('edits a header field as a patch that undo takes back', async () => {
     await expandRow('assembly')
     await expandRow('module')
     await expandRow('pe')
 
-    const dosHeader = page.locator('.tree-row[data-kind="pestructure"]').filter({ hasText: 'DOS Header' })
-    await dosHeader.dblclick()
-    await expect(page.getByRole('tab', { name: 'DOS Header' })).toBeVisible()
+    await page.locator('.tree-row[data-kind="pestructure"]').filter({ hasText: 'DOS Header' }).dblclick()
+    const form = page.locator('.hex-structure-view')
+    const magic = form.getByRole('textbox', { name: 'e_magic', exact: true })
+    await expect(magic).toHaveValue('0x5A4D')
+    // e_ovno is a field nothing reads, so writing it leaves the module as readable as it was.
+    const overlay = form.getByRole('textbox', { name: 'e_ovno', exact: true })
+    await overlay.fill('0x1234')
+    await overlay.press('Enter')
+    await expect(page.getByText('Modified', { exact: true })).toBeVisible()
+    await expect(overlay).toHaveValue('0x1234')
 
-    // The IL view of the same node: a header of the image has no IL, and the document says so rather than
-    // showing the IL of whatever method the node would otherwise be mistaken for.
-    await page.getByRole('combobox', { name: 'Decompiler language' }).selectOption('ilWithCSharp')
-    await expect.poll(async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll('\u00a0', ' '))
-      .toBe('// DOS Header')
-    await expect(page.locator('.document-diagnostic')).toHaveAttribute('title', /no IL/)
+    await page.getByRole('menuitem', { name: 'Edit' }).click()
+    await page.getByRole('menuitem', { name: /^Undo/ }).click()
+    await expect(overlay).toHaveValue('0')
+    await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
+  })
+
+  test('shows a metadata table as a grid and goes to the row of a token', async () => {
+    await expandRow('assembly')
+    await expandRow('module')
+    await expandRow('pe')
+    await page.locator('.tree-row[data-kind="pestructure"]').filter({ hasText: /#~/ }).locator('.tree-expander').click()
+    await expandRow('tablesstream')
+
+    const typeDef = page.locator('.tree-row[data-kind="metadatatable"]').filter({ hasText: /^02 TypeDef \(\d+\)$/ })
+    await typeDef.dblclick()
+    const grid = page.getByRole('grid', { name: '02 TypeDef' })
+    await expect(grid.getByRole('columnheader', { name: 'Flags' })).toBeVisible()
+    await expect(grid.getByRole('textbox', { name: 'Token 2', exact: true })).toHaveValue('0x02000002')
+
+    // Go to RID selects the row it was asked for.
+    await grid.click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('Control+g')
+    const ask = page.getByRole('dialog', { name: 'Go to RID' })
+    await ask.getByRole('textbox', { name: 'RID' }).fill('2')
+    await ask.getByRole('button', { name: 'OK' }).click()
+    await expect(grid.locator('tr[aria-rowindex="2"]')).toHaveAttribute('aria-selected', 'true')
+
+    // Go to MD Table Row asks for a token and shows its record as a form.
+    await page.getByRole('menuitem', { name: 'Edit' }).click()
+    await page.getByRole('menuitem', { name: /^Go to MD Table Row\.\.\./ }).click()
+    const goTo = page.getByRole('dialog', { name: 'Go to MD Table Row' })
+    await goTo.getByRole('textbox', { name: 'Metadata token' }).fill('0x02FFFFFF')
+    await goTo.getByRole('button', { name: 'OK' }).click()
+    await expect(goTo.getByRole('alert')).toBeVisible()
+    await goTo.getByRole('textbox', { name: 'Metadata token' }).fill('0x02000002')
+    await goTo.getByRole('button', { name: 'OK' }).click()
+    await expect(goTo).toBeHidden()
+    const record = page.locator('.tree-row[data-kind="metadatarecord"][aria-selected="true"]')
+    await expect(record).toHaveText(/^2/)
+    await expect(page.locator('.hex-structure-view').getByRole('textbox', { name: 'Flags', exact: true })).toBeVisible()
   })
 })

@@ -533,3 +533,18 @@ describe('hasEmptyNamespaceSibling', () => {
     expect(hasEmptyNamespaceSibling(undefined, tree.children, tree.parents)).toBe(false)
   })
 })
+
+describe('the tree\'s Go to MD Table Row commands', () => {
+  it('show for a row of a managed module read from a file, the second one for a row with a token', () => {
+    const onGoToMdTableRow = vi.fn()
+    const ctx = context({ node: methodNode, onGoToMdTableRow, mdTableRowAvailable: true })
+    expect(labelOf(ctx, 'go-to-md-table-row-token')).toBe('Go to MD Table Row ({token})')
+    runEntry(ctx, 'go-to-md-table-row')
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith(methodNode)
+    runEntry(ctx, 'go-to-md-table-row-token')
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith(methodNode, 0x06000001)
+    expect(menuKeys(context({ node: namespaceNode, onGoToMdTableRow, mdTableRowAvailable: true }))).not.toContain('go-to-md-table-row-token')
+    expect(menuKeys(context({ node: methodNode, onGoToMdTableRow, mdTableRowAvailable: false }))).not.toContain('go-to-md-table-row')
+  })
+})
+

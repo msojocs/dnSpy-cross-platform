@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setSystemHighContrast } from '../theme-service'
 import { MenuBar } from './MenuBar'
+import { useMetadataTableCommands } from '../metadata-table'
 
 type DebugState = 'inactive' | 'starting' | 'running' | 'stopped'
 type MenuBarProps = ComponentProps<typeof MenuBar>
@@ -55,6 +56,8 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   onMergeAssembly: vi.fn(),
   onCreateResource: vi.fn(),
   onCreateResourceElement: vi.fn(),
+  onCreateImageResources: vi.fn(),
+  onCreateImageList: vi.fn(),
   onDelete: vi.fn(),
   onRenameNamespace: vi.fn(),
   onMoveTypesToEmptyNamespace: vi.fn(),
@@ -613,6 +616,8 @@ describe('MenuBar', () => {
       onMergeAssembly={vi.fn()}
       onCreateResource={vi.fn()}
       onCreateResourceElement={vi.fn()}
+      onCreateImageResources={vi.fn()}
+      onCreateImageList={vi.fn()}
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
@@ -771,6 +776,8 @@ describe('MenuBar', () => {
       onMergeAssembly={vi.fn()}
       onCreateResource={vi.fn()}
       onCreateResourceElement={vi.fn()}
+      onCreateImageResources={vi.fn()}
+      onCreateImageList={vi.fn()}
       onDelete={vi.fn()}
       onRenameNamespace={vi.fn()}
       onMoveTypesToEmptyNamespace={vi.fn()}
@@ -988,16 +995,41 @@ describe('MenuBar', () => {
 
   it('drops the Edit entries that have nothing to act on', () => {
     renderMenu()
-    // Nothing selected: only Undo/Redo, the find commands and Create Assembly survive. The Create
-    // group's other entries need a node, so the group still shows but keeps only its first entry.
+    // Nothing selected: only Undo/Redo, the find commands, Create Assembly and Create NetModule survive —
+    // dnSpy's two create commands that need no node. The rest of the Create group needs one.
     expect(openMenu('Edit')).toEqual([
       'UndoCtrl+Z',
       'RedoCtrl+Y',
       'FindCtrl+F',
       'Search AssembliesCtrl+Shift+K',
       'Create Assembly...',
+      'Create NetModule...',
     ])
     expect(screen.getAllByRole('separator')).toHaveLength(2)
+  })
+
+  it('offers the net module commands on an assembly\'s module rows, the manifest one not removable', () => {
+    const onRemoveNetModule = vi.fn()
+    const onAddNewNetModule = vi.fn()
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Extra.netmodule', selectionParentKind: 'assembly', selectionParentIcon: 'AssemblyFile', selectionIndexInParent: 1, onRemoveNetModule, onAddNewNetModule })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Remove NetModule from Assembly/ }))
+    expect(onRemoveNetModule).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Add New NetModule to Assembly\.\.\./ }))
+    expect(onAddNewNetModule).toHaveBeenCalled()
+    cleanup()
+
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Host.dll', selectionParentKind: 'assembly', selectionParentIcon: 'AssemblyFile', selectionIndexInParent: 0, onRemoveNetModule })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByRole('menuitem', { name: /^Remove NetModule from Assembly/ })).toBeDisabled()
+    cleanup()
+
+    // A module standing on its own has no assembly to add a net module to.
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Alone.netmodule', selectionParentKind: 'assembly', selectionParentIcon: 'ModulePublic' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Add New NetModule to Assembly/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /^Remove NetModule from Assembly/ })).not.toBeInTheDocument()
   })
 
   it('lists the Edit commands the port has not implemented yet as disabled', () => {
@@ -1197,12 +1229,45 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Sort Table/ })).not.toBeInTheDocument()
 
+    // The port's Module Information tab is not a metadata table.
     cleanup()
     renderMenuWith({ activeDocument: 'module-info' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-    expect(screen.getByRole('menuitem', { name: /^Sort Table/ })).toBeDisabled()
-    expect(screen.getByRole('menuitem', { name: /^Copy as Text/ })).toBeDisabled()
+    expect(screen.queryByRole('menuitem', { name: /^Sort Table/ })).not.toBeInTheDocument()
+
+    // A metadata table runs the commands of the table view that last had the focus.
+    cleanup()
+    const commands = {
+      canSort: true, canSortSelection: false, hasSelection: true, canShowInHex: true,
+      sortTable: vi.fn(), sortSelection: vi.fn(), goToRid: vi.fn(), showInHex: vi.fn(), copyAsText: vi.fn(), copy: vi.fn(), paste: vi.fn(),
+    }
+    useMetadataTableCommands.setState({ active: { viewId: 'v', commands } })
+    renderMenuWith({ activeDocument: 'md-table' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByRole('menuitem', { name: /^Sort Selection/ })).toBeDisabled()
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Sort Table/ }))
+    expect(commands.sortTable).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Copy as Text/ }))
+    expect(commands.copyAsText).toHaveBeenCalledTimes(1)
+    useMetadataTableCommands.setState({ active: undefined })
+  })
+
+  it('goes to a metadata table row asked for, or to the selected row\'s own', () => {
+    const onGoToMdTableRow = vi.fn()
+    renderMenuWith({ selectionKind: 'method', canGoToMdTableRow: true, mdTableRowToken: 0x06000002, onGoToMdTableRow })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Go to MD Table Row\.\.\./ }))
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Go to MD Table Row (06000002)' }))
+    expect(onGoToMdTableRow).toHaveBeenLastCalledWith(0x06000002)
+
+    cleanup()
+    renderMenuWith({ selectionKind: 'method', canGoToMdTableRow: false, onGoToMdTableRow })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.queryByRole('menuitem', { name: /^Go to MD Table Row/ })).not.toBeInTheDocument()
   })
 
   it('opens the hex editor for the file the selection names, or for the open document', () => {

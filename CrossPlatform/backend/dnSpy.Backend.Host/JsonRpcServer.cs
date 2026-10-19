@@ -298,6 +298,44 @@ internal sealed class JsonRpcServer {
 				return await workspaces.SaveModuleInPlaceWithOptionsAsync(DeserializeParams<SaveModuleInPlaceWithOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleSaveAllWithOptions:
 				return await workspaces.SaveAllModulesWithOptionsAsync(DeserializeParams<SaveAllWithOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceGetModifiedDocuments:
+				return await workspaces.GetModifiedDocumentsAsync(DeserializeParams<WorkspaceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleGetSaveOptions:
+				return await workspaces.GetSaveOptionsAsync(DeserializeParams<SaveOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleSaveDocuments: {
+				var save = DeserializeParams<SaveDocumentsRequest>(request);
+				return await workspaces.SaveDocumentsAsync(
+					save,
+					save.ProgressToken is null ? null : progress => WriteNotificationAsync(RpcMethods.ModuleSaveProgress, progress),
+					cancellationToken).ConfigureAwait(false);
+			}
+			case RpcMethods.DocumentGetIlBytes:
+				return await workspaces.GetIlBytesAsync(DeserializeParams<IlBytesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.WorkspaceCreate:
+				return workspaces.CreateWorkspace();
+			case RpcMethods.AssemblyCreate:
+				return await workspaces.QueueCreateAssemblyAsync(DeserializeParams<CreateAssemblyRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleCreateNetModule:
+				return await workspaces.QueueCreateNetModuleAsync(DeserializeParams<CreateNetModuleRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleAddNetModule:
+				return await workspaces.QueueAddNetModuleAsync(DeserializeParams<AddNetModuleRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ModuleRemoveNetModule:
+				await workspaces.QueueRemoveNetModuleAsync(DeserializeParams<RemoveNetModuleRequest>(request), cancellationToken).ConfigureAwait(false);
+				return new { queued = true };
+			case RpcMethods.ModuleGetNetModuleDefaults:
+				return await workspaces.GetNetModuleDefaultsAsync(DeserializeParams<NetModuleDefaultsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.HexGetStructure:
+				return await workspaces.GetHexStructureAsync(DeserializeParams<HexStructureRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.MetadataGetTable:
+				return await workspaces.GetMetadataTableAsync(DeserializeParams<MetadataTableRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.MetadataGetTableRows:
+				return await workspaces.GetMetadataTableRowsAsync(DeserializeParams<MetadataTableRowsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.MetadataSortTable:
+				return await workspaces.SortMetadataTableAsync(DeserializeParams<MetadataSortRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.MetadataFindRecord:
+				return await workspaces.FindMetadataRecordAsync(DeserializeParams<MetadataFindRecordRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.MetadataTableText:
+				return await workspaces.GetMetadataTableTextAsync(DeserializeParams<MetadataTableTextRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleSaveAs:
 				return await workspaces.SaveModuleAsync(DeserializeParams<SaveModuleRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.ModuleSave:

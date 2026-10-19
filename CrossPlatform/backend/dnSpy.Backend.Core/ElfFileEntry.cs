@@ -11,6 +11,15 @@ internal sealed class ElfFileEntry : WorkspaceManager.IModuleEntry {
 	public ElfImage Elf { get; }
 	public long FileLength => Elf.FileLength;
 
+	/// <inheritdoc/>
+	public long SavedHistoryId { get; set; }
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexPatches { get; } = [];
+
+	/// <inheritdoc/>
+	public List<HexPatch> HexBase { get; } = [];
+
 	public ElfFileEntry(string path, ElfImage elf) {
 		Path = path;
 		Elf = elf;

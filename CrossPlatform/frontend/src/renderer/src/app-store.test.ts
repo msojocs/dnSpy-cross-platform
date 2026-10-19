@@ -1,9 +1,10 @@
 import { Actions, DockLocation, Model, TabSetNode } from 'flexlayout-react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, TextSpan, TreeNode } from '../../shared/protocol'
+import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, SaveDocumentsResponse, TextSpan, TreeNode } from '../../shared/protocol'
 import { isNavigableSpan } from '../../shared/protocol'
 import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadRecentFiles, loadSession, methodBreakpointName, rememberRecentFiles, orderedDocumentKeys, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
 import type { Bookmark, DocumentState, LineBreakpoint, SessionSource } from './app-store'
+import { moduleSaveOptions } from './components/save-options-fixtures'
 import { translate } from './localization'
 
 describe('suggestCodeFilename', () => {
@@ -2611,8 +2612,8 @@ describe('syncDockTabStrips', () => {
 describe('file commands', () => {
   const rootA = moduleNode('n1', '/A.dll')
   const rootB = moduleNode('n2', '/B.dll')
-  const saveModule = vi.fn()
-  const saveAllModules = vi.fn()
+  const getSaveOptions = vi.fn()
+  const getModifiedDocuments = vi.fn()
   const reloadWorkspace = vi.fn()
   const sortAssemblies = vi.fn()
   const getRoots = vi.fn()
@@ -2626,82 +2627,108 @@ describe('file commands', () => {
     expanded: {},
     loadingNodes: {},
     selectedNode: undefined,
+    selectedNodes: [],
     documents: {},
     documentOrder: [],
     activeDocumentId: undefined,
     assemblyListRevision: 0,
     output: [],
     dirty: false,
+    modifiedDocuments: [],
+    saveRequest: undefined,
     workspaceStateId: undefined,
     savedStateId: undefined,
     canUndo: false,
     canRedo: false,
   })
 
+  /** The answer of a save run that wrote every document it was handed. */
+  const savedAll = (ids: string[]): SaveDocumentsResponse => ({
+    canceled: false,
+    modifiedDocuments: [],
+    results: ids.map((id) => ({ documentId: id, fileName: `/${id}.dll`, saved: true, length: 10, sha256: 'aa', log: [], errorCount: 0 })),
+  })
+
   beforeEach(() => {
-    saveModule.mockReset().mockResolvedValue({ path: '/A.dll', length: 10, sha256: 'aa' })
-    saveAllModules.mockReset().mockResolvedValue({ saved: [{ path: '/A.dll', length: 10, sha256: 'aa' }] })
+    // Every row stands for the document it is in, which the backend answers with its own id.
+    getSaveOptions.mockReset().mockImplementation(async (_workspaceId: string, id: string) => moduleSaveOptions({ documentId: id === 'nm' ? 'n2' : id, fileName: `/${id}.dll` }))
+    getModifiedDocuments.mockReset().mockResolvedValue([])
     reloadWorkspace.mockReset().mockResolvedValue({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll')], stateId: 's9' })
     sortAssemblies.mockReset().mockResolvedValue({ nodes: [rootA, rootB] })
     getRoots.mockReset().mockResolvedValue({ nodes: [rootA, rootB] })
     Object.defineProperty(window, 'dnSpy', {
       configurable: true,
-      value: { ...window.dnSpy, saveModule, saveAllModules, reloadWorkspace, sortAssemblies, getRoots },
+      value: { ...window.dnSpy, getSaveOptions, getModifiedDocuments, reloadWorkspace, sortAssemblies, getRoots },
     })
     reset()
   })
 
-  it('saves the selected module back over its own file', async () => {
+  it('saves the selected module through the Save Module window and the window that writes it', async () => {
     useAppStore.setState({
       workspaceId: 'w1',
       modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')],
       roots: [rootA, rootB],
       selectedNode: rootB,
+      selectedNodes: [rootB],
       dirty: true,
-      workspaceStateId: 's2',
-      savedStateId: 's1',
+      modifiedDocuments: [{ id: 'n2', name: 'B', path: '/B.dll', inMemory: false, isHexDocument: false }],
     })
 
-    await expect(useAppStore.getState().saveModule()).resolves.toBe(true)
-    expect(saveModule).toHaveBeenCalledWith('w1', 'n2', undefined)
+    const saved = useAppStore.getState().saveModule()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest?.phase).toBe('options'))
+    expect(getSaveOptions).toHaveBeenCalledWith('w1', 'n2')
+    const options = useAppStore.getState().saveRequest!.documents[0]
+    useAppStore.getState().acceptSaveOptions({ ...options, fileName: '/elsewhere.dll' })
+    expect(useAppStore.getState().saveRequest).toMatchObject({ phase: 'run', mode: 'single', documents: [{ fileName: '/elsewhere.dll' }] })
+    await useAppStore.getState().finishSave(savedAll(['n2']))
+    await expect(saved).resolves.toBe(true)
+    expect(useAppStore.getState().saveRequest).toBeUndefined()
     expect(useAppStore.getState().dirty).toBe(false)
-    expect(useAppStore.getState().savedStateId).toBe('s2')
   })
 
-  it('saves the module a selected member belongs to, not the first one', async () => {
-    const moduleRowB = { id: 'nb', label: 'B', kind: 'module', hasChildren: true, description: '/B.dll' }
+  it('names the selected row and lets the backend find its document', async () => {
     const method = { id: 'nm', label: 'M()', kind: 'method', hasChildren: false }
-    useAppStore.setState({
-      workspaceId: 'w1',
-      modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')],
-      roots: [rootA],
-      children: { n2: [moduleRowB], nb: [method] },
-      parents: { nb: 'n2', nm: 'nb' },
-      selectedNode: method,
-      dirty: true,
-      workspaceStateId: 's2',
-      savedStateId: 's1',
-    })
+    useAppStore.setState({ workspaceId: 'w1', modules: [openedModule('n1', '/A.dll'), openedModule('n2', '/B.dll')], roots: [rootA], selectedNode: method, selectedNodes: [method] })
 
-    await expect(useAppStore.getState().saveModule()).resolves.toBe(true)
-    expect(saveModule).toHaveBeenCalledWith('w1', 'n2', undefined)
+    void useAppStore.getState().saveModule()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    expect(getSaveOptions).toHaveBeenCalledWith('w1', 'nm')
+    expect(useAppStore.getState().saveRequest?.documents.map((document) => document.documentId)).toEqual(['n2'])
+    await useAppStore.getState().finishSave(undefined)
   })
 
-  it('saves every module the backend reports modified', async () => {
+  it('saves only the modified documents of a selection that has any', async () => {
     useAppStore.setState({
       workspaceId: 'w1',
-      modules: [openedModule('n1', '/A.dll')],
-      roots: [rootA],
+      roots: [rootA, rootB],
       selectedNode: rootA,
-      dirty: true,
-      workspaceStateId: 's2',
-      savedStateId: 's1',
+      selectedNodes: [rootA, rootB],
+      modifiedDocuments: [{ id: 'n2', name: 'B', path: '/B.dll', inMemory: false, isHexDocument: false }],
     })
 
-    await expect(useAppStore.getState().saveAllModules()).resolves.toBe(true)
-    expect(saveAllModules).toHaveBeenCalledWith('w1', undefined)
+    void useAppStore.getState().saveModule()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    expect(useAppStore.getState().saveRequest?.documents.map((document) => document.documentId)).toEqual(['n2'])
+    await useAppStore.getState().finishSave(undefined)
+  })
+
+  it('saves every modified document through the Save Modules window', async () => {
+    getModifiedDocuments.mockResolvedValue([
+      { id: 'n1', name: 'A', path: '/A.dll', inMemory: false, isHexDocument: false },
+      { id: 'n2', name: 'B', path: '/B.dll', inMemory: false, isHexDocument: false },
+    ])
+    useAppStore.setState({ workspaceId: 'w1', roots: [rootA, rootB], dirty: true })
+
+    const saved = useAppStore.getState().saveAllModules()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toMatchObject({ mode: 'multiple', phase: 'run' }))
+    expect(useAppStore.getState().saveRequest?.documents.map((document) => document.documentId)).toEqual(['n1', 'n2'])
+    await useAppStore.getState().finishSave(savedAll(['n1', 'n2']))
+    await expect(saved).resolves.toBe(true)
     expect(useAppStore.getState().dirty).toBe(false)
-    expect(useAppStore.getState().savedStateId).toBe('s2')
+    expect(useAppStore.getState().output.map((line) => line.text)).toEqual([
+      'Saved /n1.dll (10 bytes, SHA-256 aa).',
+      'Saved /n2.dll (10 bytes, SHA-256 aa).',
+    ])
   })
 
   it('drops every node-backed part of the workspace when the assemblies are reloaded', async () => {
@@ -2752,19 +2779,28 @@ describe('file commands', () => {
   })
 
   it('reports a failed save without clearing the modified state', async () => {
-    saveModule.mockRejectedValue(new Error('disk full'))
-    useAppStore.setState({
-      workspaceId: 'w1',
-      modules: [openedModule('n1', '/A.dll')],
-      roots: [rootA],
-      dirty: true,
-      workspaceStateId: 's2',
-      savedStateId: 's1',
-    })
+    const modified = [{ id: 'n1', name: 'A', path: '/A.dll', inMemory: false, isHexDocument: false }]
+    useAppStore.setState({ workspaceId: 'w1', roots: [rootA], selectedNode: rootA, selectedNodes: [rootA], dirty: true, modifiedDocuments: modified })
 
-    await expect(useAppStore.getState().saveModule()).resolves.toBe(false)
+    const saved = useAppStore.getState().saveModule()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    useAppStore.getState().acceptSaveOptions(useAppStore.getState().saveRequest!.documents[0])
+    await useAppStore.getState().finishSave({
+      canceled: false,
+      modifiedDocuments: modified,
+      results: [{ documentId: 'n1', fileName: '/A.dll', saved: false, length: 0, log: ['File error: disk full'], errorCount: 1, error: 'disk full' }],
+    })
+    await expect(saved).resolves.toBe(false)
     expect(useAppStore.getState().dirty).toBe(true)
-    expect(useAppStore.getState().error).toBe('disk full')
+    expect(useAppStore.getState().output.at(-1)?.text).toBe('Save failed: disk full')
+  })
+
+  it('answers not saved when the window is closed before it writes anything', async () => {
+    useAppStore.setState({ workspaceId: 'w1', roots: [rootA], selectedNode: rootA, selectedNodes: [rootA] })
+    const saved = useAppStore.getState().saveModule()
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    await useAppStore.getState().finishSave(undefined)
+    await expect(saved).resolves.toBe(false)
   })
 })
 
@@ -2916,39 +2952,42 @@ describe('Remove Assembly and the edit history', () => {
 })
 
 describe('saving the modules a command lets go of', () => {
-  const saveModule = vi.fn()
-  const getModifiedModules = vi.fn()
+  const getSaveOptions = vi.fn()
+  const getModifiedDocuments = vi.fn()
 
   beforeEach(() => {
-    saveModule.mockReset().mockImplementation(async (_workspaceId: string, moduleId: string) => ({ path: `/${moduleId}.dll`, length: 1, sha256: 'aa' }))
-    getModifiedModules.mockReset()
-    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, saveModule, getModifiedModules } })
-    useAppStore.setState({
-      workspaceId: 'w1',
-      modules: [openedModule('a', '/a.dll'), openedModule('b', '/b.dll')],
-      dirty: true,
-      workspaceStateId: 's2',
-      savedStateId: 's1',
-      output: [],
-    })
+    getSaveOptions.mockReset().mockImplementation(async (_workspaceId: string, id: string) => moduleSaveOptions({ documentId: id, fileName: `/${id}.dll` }))
+    getModifiedDocuments.mockReset().mockResolvedValue([
+      { id: 'a', name: 'a', path: '/a.dll', inMemory: false, isHexDocument: false },
+      { id: 'b', name: 'b', path: '/b.dll', inMemory: false, isHexDocument: false },
+    ])
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, getSaveOptions, getModifiedDocuments } })
+    useAppStore.setState({ workspaceId: 'w1', modules: [openedModule('a', '/a.dll'), openedModule('b', '/b.dll')], dirty: true, saveRequest: undefined, output: [] })
   })
 
-  it('writes each one, and leaves the workspace modified while another module still is', async () => {
-    getModifiedModules.mockResolvedValue({ paths: ['/b.dll'] })
-    await expect(useAppStore.getState().saveModules(['/a.dll'])).resolves.toBe(true)
-    expect(saveModule).toHaveBeenCalledWith('w1', 'a')
+  it('saves the modified documents among the files, and leaves the workspace modified while another one still is', async () => {
+    const saved = useAppStore.getState().saveModules(['/a.dll'])
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    expect(useAppStore.getState().saveRequest?.documents.map((document) => document.documentId)).toEqual(['a'])
+    useAppStore.getState().acceptSaveOptions(useAppStore.getState().saveRequest!.documents[0])
+    await useAppStore.getState().finishSave({
+      canceled: false,
+      modifiedDocuments: [{ id: 'b', name: 'b', path: '/b.dll', inMemory: false, isHexDocument: false }],
+      results: [{ documentId: 'a', fileName: '/a.dll', saved: true, length: 1, sha256: 'aa', log: [], errorCount: 0 }],
+    })
+    await expect(saved).resolves.toBe(true)
     expect(useAppStore.getState().dirty).toBe(true)
-
-    getModifiedModules.mockResolvedValue({ paths: [] })
-    await useAppStore.getState().saveModules(['/b.dll'])
-    expect(useAppStore.getState().dirty).toBe(false)
-    expect(useAppStore.getState().savedStateId).toBe('s2')
   })
 
   it('answers false when a write fails, which calls the command off', async () => {
-    saveModule.mockRejectedValue(new Error('disk full'))
-    await expect(useAppStore.getState().saveModules(['/a.dll'])).resolves.toBe(false)
-    expect(useAppStore.getState().dirty).toBe(true)
+    const saved = useAppStore.getState().saveModules(['/a.dll'])
+    await vi.waitFor(() => expect(useAppStore.getState().saveRequest).toBeDefined())
+    await useAppStore.getState().finishSave({
+      canceled: true,
+      modifiedDocuments: [],
+      results: [],
+    })
+    await expect(saved).resolves.toBe(false)
   })
 })
 

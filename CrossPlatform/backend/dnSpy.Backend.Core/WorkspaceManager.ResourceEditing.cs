@@ -238,12 +238,22 @@ public sealed partial class WorkspaceManager {
 			var node = GetNode(nodeId);
 			if (node.Value is not ResourceEntryValue entry)
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The selected item is not a resource entry.");
+			// dnSpy picks the window by the node a provider made for the entry: a byte array or stream holding an image
+			// file, a serialized Bitmap or Icon whose image can be read, and an ImageListStreamer get windows of their own.
+			if (entry.Element.ResourceData is BinaryResourceData serialized) {
+				if (ImageResources.GetImageData(serialized) is { } image)
+					return new ResourceElementOptionsDto(ResourceElementKinds.SerializedImage, UnescapeName(entry.Name), null, Convert.ToBase64String(image), (int)ResourceTypeCode.UserTypes, serialized.TypeName, DescribeResourceEntry(entry), SerializationFormat: serialized.Format.ToString());
+				if (ImageResources.GetImageListStreamerData(serialized) is { } imageList)
+					return new ResourceElementOptionsDto(ResourceElementKinds.ImageListStreamer, UnescapeName(entry.Name), null, Convert.ToBase64String(imageList), (int)ResourceTypeCode.UserTypes, serialized.TypeName, DescribeResourceEntry(entry), SerializationFormat: serialized.Format.ToString());
+			}
 			var (kind, text, bytes, code, typeName) = entry.Element.ResourceData switch {
 				BuiltInResourceData builtIn => (KindOf(builtIn.Code), ValueText(builtIn), BytesOf(builtIn), (int)builtIn.Code, (string?)null),
 				BinaryResourceData binary => (ResourceElementKinds.Binary, null, Convert.ToBase64String(binary.Data), (int)ResourceTypeCode.UserTypes, binary.TypeName),
 				_ => (ResourceElementKinds.Binary, null, (string?)null, (int)ResourceTypeCode.UserTypes, (string?)null),
 			};
-			return new ResourceElementOptionsDto(kind, UnescapeName(entry.Name), text, bytes, code, typeName, DescribeResourceEntry(entry));
+			var isImage = entry.Element.ResourceData is BuiltInResourceData { Code: ResourceTypeCode.ByteArray or ResourceTypeCode.Stream, Data: byte[] data }
+				&& ImageResources.CouldBeImage(entry.Name, data);
+			return new ResourceElementOptionsDto(kind, UnescapeName(entry.Name), text, bytes, code, typeName, DescribeResourceEntry(entry), isImage);
 		}
 
 		static string KindOf(ResourceTypeCode code) => code switch {
@@ -295,12 +305,15 @@ public sealed partial class WorkspaceManager {
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The resource entry needs a name.");
 			var replacement = CreateElement(request.Options);
 			var resource = FindCurrentResource(moduleEntry, entry);
-			var elements = ResourceReader.Read(moduleEntry.Module, resource.CreateReader()).ResourceElements.ToList();
-			var index = elements.FindIndex(element => element.Name == entry.Name);
-			if (index < 0)
+			if (!ResourceReader.Read(moduleEntry.Module, resource.CreateReader()).ResourceElements.Any(element => element.Name == entry.Name))
 				throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer holds this entry.");
-			elements[index] = replacement;
-			QueueReplaceResourceFile(transaction, node, moduleEntry, resource, elements, replacement);
+			QueueReplaceResourceFile(transaction, node, moduleEntry, resource, elements => {
+				var index = elements.FindIndex(element => element.Name == entry.Name);
+				if (index < 0)
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer holds this entry.");
+				elements[index] = replacement;
+				return replacement;
+			});
 		}
 
 		public void QueueCreateResourceElement(CreateResourceElementRequest request) {
@@ -310,17 +323,37 @@ public sealed partial class WorkspaceManager {
 				throw new RpcException(ErrorCodes.EditValidationFailed, "Only a .resources file can hold entries.");
 			var moduleEntry = node.AsModuleEntry
 				?? throw new RpcException(ErrorCodes.EditValidationFailed, "PE-only modules do not support resource editing.");
-			if (string.IsNullOrWhiteSpace(request.Name))
-				throw new RpcException(ErrorCodes.EditValidationFailed, "The resource entry needs a name.");
 			var elements = ResourceReader.Read(moduleEntry.Module, resource.CreateReader()).ResourceElements.ToList();
-			if (elements.Any(existing => existing.Name == request.Name))
-				throw new RpcException(ErrorCodes.EditValidationFailed, $"The .resources file already holds an entry named '{request.Name}'.");
-			var element = CreateElement(new ResourceElementOptionsDto(request.Kind, request.Name, request.Text, request.Base64Data, 0, null));
-			elements.Add(element);
-			QueueReplaceResourceFile(transaction, node, moduleEntry, resource, elements, element);
+			// dnSpy's Create System.Data.Bitmap/Icon Resource: every file picked becomes an entry, in one step.
+			var created = request.Kind == ResourceElementKinds.ImageFiles
+				? (request.Images ?? []).Select(image => ImageResources.CreateSerializedImage(image.Name, Decode(image.Base64Data, "An image file is not valid base64."))).ToList()
+				: [CreateElement(new ResourceElementOptionsDto(request.Kind, request.Name, request.Text, request.Base64Data, 0, null))];
+			if (created.Count == 0)
+				throw new RpcException(ErrorCodes.EditValidationFailed, "Pick at least one image file.");
+			void Check(IEnumerable<ResourceElement> existing) {
+				foreach (var element in created) {
+					if (string.IsNullOrWhiteSpace(element.Name))
+						throw new RpcException(ErrorCodes.EditValidationFailed, "The resource entry needs a name.");
+					if (existing.Any(other => other.Name == element.Name) || created.Count(other => other.Name == element.Name) > 1)
+						throw new RpcException(ErrorCodes.EditValidationFailed, $"The .resources file already holds an entry named '{element.Name}'.");
+				}
+			}
+			Check(elements);
+			QueueReplaceResourceFile(transaction, node, moduleEntry, resource, current => {
+				Check(current);
+				current.AddRange(created);
+				return created[0];
+			});
 		}
 
 		static ResourceElement CreateElement(ResourceElementOptionsDto options) {
+			// An image goes back as what it was: serialized in its own format — dnSpy's SerializedImageUtilities.Serialize.
+			if (options.Kind == ResourceElementKinds.SerializedImage) {
+				var format = Enum.TryParse<SerializationFormat>(options.SerializationFormat, out var parsed) ? parsed : SerializationFormat.BinaryFormatter;
+				return ImageResources.Serialize(options.Name, Decode(options.Base64Data, "The image is not valid base64."), format);
+			}
+			if (options.Kind == ResourceElementKinds.ImageListStreamer)
+				return ImageResources.SerializeImageListStreamer(options.Name, Decode(options.Base64Data, "The image list is not valid base64."));
 			IResourceData data = options.Kind switch {
 				ResourceElementKinds.Null => new BuiltInResourceData(ResourceTypeCode.Null, null),
 				ResourceElementKinds.String => new BuiltInResourceData(ResourceTypeCode.String, options.Text ?? string.Empty),
@@ -359,32 +392,35 @@ public sealed partial class WorkspaceManager {
 		}
 
 		/// <summary>
-		/// Queues a rewrite of a .resources file: the file the node stands for is replaced by one written
-		/// from <paramref name="elements"/>, and the node's own value is updated to the entry that was
-		/// edited or added. Undo puts the old file and the old value back.
+		/// Queues a rewrite of a .resources file: when the step runs, the entries the file holds then are read, changed
+		/// by <paramref name="edit"/> — which answers the entry it edited or added — and written into a file that takes
+		/// the old one's place. Reading them when the step runs is what lets several steps of one transaction edit the
+		/// same file, each over what the one before it left. The node's own value follows the entry; undo puts the old
+		/// file and the old value back.
 		/// </summary>
-		void QueueReplaceResourceFile(EditTransaction transaction, NodeEntry node, ModuleEntry moduleEntry, EmbeddedResource resource, IReadOnlyList<ResourceElement> elements, ResourceElement element) {
-			var index = moduleEntry.Module.Resources.IndexOf(resource);
-			if (index < 0)
-				throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer belongs to the module.");
-			var replacement = new EmbeddedResource(resource.Name, WriteResourceFile(elements), resource.Attributes);
-			moduleEntry.Module.UpdateRowId(replacement);
-			var oldOwner = node.Value is ResourceEntryValue current ? current.Owner : null;
-			var oldElement = node.Value is ResourceEntryValue value ? value.Element : null;
-			// The resource row above the entries, when the tree already holds it, names the same file.
-			var resourceNode = nodes.Values.FirstOrDefault(candidate =>
-				ReferenceEquals(candidate.Module, moduleEntry) && candidate.Value is EmbeddedResource embedded && ReferenceEquals(embedded, resource));
+		void QueueReplaceResourceFile(EditTransaction transaction, NodeEntry node, ModuleEntry moduleEntry, EmbeddedResource resource, Func<List<ResourceElement>, ResourceElement> edit) {
+			var name = resource.Name;
 			transaction.Add(node.Id, moduleEntry, () => {
+				var current = moduleEntry.Module.Resources.FirstOrDefault(candidate => candidate.Name == name) as EmbeddedResource
+					?? throw new RpcException(ErrorCodes.EditValidationFailed, "The .resources file no longer belongs to the module.");
+				var index = moduleEntry.Module.Resources.IndexOf(current);
+				var elements = ResourceReader.Read(moduleEntry.Module, current.CreateReader()).ResourceElements.ToList();
+				var element = edit(elements);
+				var replacement = new EmbeddedResource(current.Name, WriteResourceFile(elements), current.Attributes);
+				moduleEntry.Module.UpdateRowId(replacement);
+				var oldNodeValue = node.Value;
+				// The resource row above the entries, when the tree already holds it, names the same file.
+				var resourceNode = nodes.Values.FirstOrDefault(candidate =>
+					ReferenceEquals(candidate.Module, moduleEntry) && candidate.Value is EmbeddedResource embedded && ReferenceEquals(embedded, current));
 				var oldResourceNodeValue = resourceNode?.Value;
 				moduleEntry.Module.Resources[index] = replacement;
-				if (oldOwner is not null && oldElement is not null)
+				if (node.Value is ResourceEntryValue)
 					node.Value = new ResourceEntryValue(replacement, element);
 				if (resourceNode is not null)
 					resourceNode.Value = replacement;
 				return () => {
-					moduleEntry.Module.Resources[index] = resource;
-					if (oldOwner is not null && oldElement is not null)
-						node.Value = new ResourceEntryValue(oldOwner, oldElement);
+					moduleEntry.Module.Resources[index] = current;
+					node.Value = oldNodeValue;
 					if (resourceNode is not null)
 						resourceNode.Value = oldResourceNodeValue!;
 				};

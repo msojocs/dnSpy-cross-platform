@@ -5,6 +5,7 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
 import { isLocalSpan, isNavigableSpan, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { ilSelectionOf } from './il-selection'
 import { bookmarkMarkers, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
 import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
 import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '../app-store'
@@ -119,6 +120,7 @@ const referenceNodeOf = async (nodeId: string): Promise<TreeNode | undefined> =>
 /** The document's node, which the Go to commands of the context menu act on: its module is the one they search. */
 const documentNodeOf = async (nodeId: string): Promise<TreeNode | undefined> => referenceNodeOf(nodeId)
 
+
 /**
  * The context menu commands only the shell can run: everything that opens a tab, a dialog or a tool
  * window, plus the hex commands, which are the same ones the Edit menu carries. The viewer answers the
@@ -160,6 +162,8 @@ export interface DocumentViewCommands {
   onGoToEntryPoint(node: TreeNode): void
   onGoToGlobalCctor(node: TreeNode): void
   onGoToToken(node: TreeNode): void
+  /** dnSpy's Go to MD Table Row, asking for a token in the node's module, or going to the one given. */
+  onGoToMdTableRow?(node: TreeNode, token?: number): void
   onOpenHex(): void
   onShowHexAt(kind: HexShowKind): void
   onHexWriteBody(kind: HexBodyKind): void
@@ -629,11 +633,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       onGoToEntryPoint: (node) => commandsRef.current.onGoToEntryPoint(node),
       onGoToGlobalCctor: (node) => commandsRef.current.onGoToGlobalCctor(node),
       onGoToToken: (node) => commandsRef.current.onGoToToken(node),
+      onGoToMdTableRow: commandsRef.current.onGoToMdTableRow && ((node, token) => commandsRef.current.onGoToMdTableRow?.(node, token)),
       copyText,
       onCopy: () => {
         if (editor)
           void copyWithFormatting(editor, spansRef.current, tRef.current)
       },
+      ilSelection: ilSelectionOf(documentRef.current, selection),
+      onCopyIlBytes: () => void useAppStore.getState().copyIlBytes(ilSelectionOf(documentRef.current, selection)),
       onFind: () => void editor?.getAction('actions.find')?.run(),
       onIncrementalSearch: () => startIncrementalSearchRef.current(true),
       onOpenHex: () => commandsRef.current.onOpenHex(),
@@ -1085,6 +1092,12 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               const copy = (): void => void copyWithFormatting(editor, spansRef.current, tRef.current)
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copy)
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Insert, copy)
+              // dnSpy's Copy IL Bytes, Ctrl+B, over the instructions an IL view's selection covers.
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+                const instructions = ilSelectionOf(documentRef.current, editor.getSelection())
+                if (instructions.length > 0)
+                  void useAppStore.getState().copyIlBytes(instructions)
+              })
               // The zoom keys of dnSpy's text editor: Ctrl+Shift+. Ctrl+= and Ctrl+NumPad+ in, their opposites out,
               // Ctrl+0 back to 100%.
               const zoomBy = (step: (current: number) => number) => (): void => setDocumentViewerZoom(step)

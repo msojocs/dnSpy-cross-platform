@@ -37,6 +37,11 @@ const en = {
   yes: 'Yes',
   no: 'No',
   cancel: 'Cancel',
+  dotNetExecutables: '.NET Executables',
+  dotNetNetModules: '.NET NetModules',
+  images: 'Images',
+  askExitUnsavedFile: 'There is an unsaved file. Do you want to save it before exiting?',
+  askExitUnsavedFiles: 'There are {0} unsaved files. Do you want to save them before exiting?',
 }
 
 export type NativeMessages = { readonly [Key in keyof typeof en]: string }
@@ -72,6 +77,11 @@ const zhCN: NativeMessages = {
   yes: '是',
   no: '否',
   cancel: '取消',
+  dotNetExecutables: '.NET 可执行文件',
+  dotNetNetModules: '.NET NetModules',
+  images: '图像',
+  askExitUnsavedFile: '有一个文件尚未被保存。是否要在退出之前保存？',
+  askExitUnsavedFiles: '有 {0} 个文件尚未被保存。是否要在退出前保存它们？',
 }
 
 /** The native strings in a language, English where it has no translation for one. */

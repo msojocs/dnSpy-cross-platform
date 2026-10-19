@@ -34,10 +34,12 @@ import type {
   ScriptOutputNotification,
   SpecialNodeKind,
   TextSpan,
-  AssemblyOptions, CompilerDiagnostic, CompilerMode, ModuleOptions, SaveModuleOptions, TreeNode, CreateResourceEntry, CreateResourceOptions, CreateResourceElementOptions, ResourceElementOptions, ResourceOptions} from '../../shared/protocol'
+  AssemblyOptions, CompilerDiagnostic, CompilerLanguage, CompilerMode, CompilerSettings, ModuleOptions, SaveModuleOptions, TreeNode, CreateResourceEntry, CreateResourceOptions, CreateResourceElementOptions, ResourceElementOptions, ResourceOptions,
+  DocumentSaveOptions, ModifiedDocument, SaveDocumentsResponse} from '../../shared/protocol'
 import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
 import { getActiveLocale, translate as t } from './localization'
 import { formatDateTime } from './dotnet-date-format'
+import { askIgnorableMessage } from './message-box'
 import { loadAppOptions } from './components/app-options'
 import { spansOfTrimmed } from './roslyn-classification'
 
@@ -212,6 +214,15 @@ export interface BookmarkEntry {
   enabled: boolean
 }
 
+/** The save windows a `requestSave` put up: `options` is the Save Module window of a single document, `run` the
+ *  window that writes — one document (`single`) or the Save Modules list (`multiple`). */
+export interface SaveRequest {
+  id: number
+  documents: DocumentSaveOptions[]
+  mode: 'single' | 'multiple'
+  phase: 'options' | 'run'
+}
+
 /** How `openPaths` treats the files it opens. */
 export interface OpenPathsOptions {
   /** Put each file on the Recent Files list. */
@@ -263,7 +274,13 @@ interface AppState {
   /** The pane "Show output from" has selected. */
   outputPane: OutputPaneId
   busy: boolean
+  /** Whether any document has unsaved changes — `modifiedDocuments` is not empty. */
   dirty: boolean
+  /** dnSpy's modified documents: undoing back to where one was saved takes it off, the way its undo service does. */
+  modifiedDocuments: ModifiedDocument[]
+  /** The save windows on screen: the Save Module window for one document, then the window that writes it, or the
+   *  Save Modules window for several. `requestSave` puts one up and answers once it is gone. */
+  saveRequest?: SaveRequest
   workspaceStateId?: string
   savedStateId?: string
   canUndo: boolean
@@ -392,6 +409,10 @@ interface AppState {
   revealNode(nodeId: string): Promise<void>
   /** Removes the node from its owner — a type, member, resource, or every type of a namespace. */
   deleteNode(node: TreeNode): Promise<boolean>
+  /** dnSpy's Copy IL Bytes: the instructions' bytes as hex on the clipboard, and why some of them are "??". */
+  copyIlBytes(instructions: { modulePath: string; metadataToken: number; ilOffset: number }[]): Promise<void>
+  /** Deletes the rows as one undo step — dnSpy's delete commands over a selection of one kind. */
+  deleteNodes(nodes: TreeNode[]): Promise<boolean>
   /** Renames a namespace; an empty name moves its types to the empty namespace. */
   renameNamespace(node: TreeNode, newName: string): Promise<boolean>
   moveTypesToEmptyNamespace(node: TreeNode): Promise<boolean>
@@ -418,11 +439,22 @@ interface AppState {
   replaceResource(node: TreeNode): Promise<boolean>
   /** Compiles C# source and, when it is free of errors, imports it into the module as one undoable edit.
    *  Answers the diagnostics either way, so the editor can show why it failed. */
-  compileCode(node: TreeNode, mode: CompilerMode, source: string): Promise<{ ok: boolean, diagnostics: CompilerDiagnostic[] }>
+  compileCode(node: TreeNode, mode: CompilerMode, source: string, language?: CompilerLanguage): Promise<{ ok: boolean, diagnostics: CompilerDiagnostic[] }>
   /** Merges an assembly the user picks into the module, as one undoable edit. */
   mergeAssembly(node: TreeNode): Promise<boolean>
   /** Writes the Edit Assembly model over the assembly the node belongs to. */
   applyAssemblyOptions(node: TreeNode, options: AssemblyOptions): Promise<boolean>
+  /** A workspace to make a document in: the open one, or a new empty one when nothing is open — dnSpy's Create
+   *  Assembly works with no document loaded. */
+  ensureWorkspace(): Promise<string | undefined>
+  /** dnSpy's Create Assembly: an assembly with no file, at the end of the tree, selected. */
+  createAssembly(options: AssemblyOptions, clrVersion: string): Promise<boolean>
+  /** dnSpy's Create NetModule: a net module of its own with no file. */
+  createNetModule(name: string, mvid: string, clrVersion: string): Promise<boolean>
+  /** dnSpy's Add New / Add Existing NetModule to Assembly, for the assembly a node is in. */
+  addNetModule(node: TreeNode, module: { name: string; mvid: string; clrVersion: string } | { path: string }): Promise<boolean>
+  /** dnSpy's Remove NetModule from Assembly. */
+  removeNetModule(node: TreeNode): Promise<boolean>
   /** Writes the Edit Module model over the module the node stands for. */
   applyModuleOptions(node: TreeNode, options: ModuleOptions): Promise<boolean>
   /** Writes the Edit Resource model over the resource the node stands for. */
@@ -433,17 +465,32 @@ interface AppState {
   applyResourceElementOptions(node: TreeNode, options: ResourceElementOptions): Promise<boolean>
   /** Adds an entry to a .resources file. */
   createResourceElement(resourceNode: TreeNode, options: CreateResourceElementOptions): Promise<boolean>
-  saveModuleAs(options?: SaveModuleOptions): Promise<boolean>
-  /** Writes the selected module back over its own file — dnSpy's Save. */
-  saveModule(options?: SaveModuleOptions): Promise<boolean>
-  /** Writes every modified module back over its own file — dnSpy's Save All. */
-  saveAllModules(options?: SaveModuleOptions): Promise<boolean>
+  /** dnSpy's Create System.Data.Bitmap/Icon Resource: the image files picked, each an entry named after it, in one step. */
+  createImageResources(resourceNode: TreeNode): Promise<boolean>
+  /** The same as `saveModule`: dnSpy's Save Module window is where the file is picked. */
+  saveModuleAs(): Promise<boolean>
+  /** dnSpy's Save Module...: the selection's documents — its modified ones when it has any — through the save windows. */
+  saveModule(): Promise<boolean>
+  /** dnSpy's Save All...: every modified document through the save windows. */
+  saveAllModules(): Promise<boolean>
   /**
    * Writes the modules at `paths` back over their own files — dnSpy's DocumentSaver.Save for the documents a
    * command is about to let go of. The workspace stays modified while any other module still is. Answers whether
    * every one of them was written.
    */
   saveModules(paths: string[]): Promise<boolean>
+  /**
+   * dnSpy's DocumentSaver.Save over the documents the ids name — any node inside a document names it: one
+   * document gets its Save Module window and then the window that writes it, several get the Save Modules window.
+   * Answers whether every one of them was written.
+   */
+  requestSave(ids: string[]): Promise<boolean>
+  /** The Save Module window's OK: its options are what the document is written with. */
+  acceptSaveOptions(options: DocumentSaveOptions): void
+  /** A save window went away — after a run, or before one started (`response` undefined). */
+  finishSave(response: SaveDocumentsResponse | undefined): Promise<void>
+  /** Reads the modified documents again — after something only the backend saw changed them. */
+  refreshModifiedDocuments(): Promise<void>
   /**
    * Drops every assembly and reopens the files the user opened, discarding edits — dnSpy's Reload All
    * Assemblies. Of the files the workspace opened by itself only `autoLoadedPaths` come back: the ones a tab
@@ -499,6 +546,9 @@ interface AppState {
   /** Brings the node a metadata token names into view — dnSpy's "Go to Token". Answers false when the
    *  token names no row the tree shows. */
   goToToken(node: TreeNode, token: string): Promise<boolean>
+  /** dnSpy's Go to MD Table Row: the row of the metadata table a token names, in the PE tree of the module a node
+   *  is in. Answers why there is none — dnSpy's message — or nothing once the row is shown. */
+  goToMetadataRecord(node: TreeNode, token: number): Promise<string | undefined>
   /**
    * Writes one resource node's bytes to a file the user picks — dnSpy's Save Resource. `raw` picks the
    * command that was run; both write the bytes the workspace holds. Answers false when the dialog was
@@ -856,6 +906,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   scriptGeneration: 0,
   busy: false,
   dirty: false,
+  modifiedDocuments: [],
   canUndo: false,
   canRedo: false,
   recentFiles: loadRecentFiles(),
@@ -956,6 +1007,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         documentOrder: [],
         activeDocumentId: undefined,
         dirty: false,
+        modifiedDocuments: [],
         workspaceStateId: opened.stateId,
         savedStateId: opened.stateId,
         canUndo: false,
@@ -1003,6 +1055,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       busy: false,
       error: undefined,
       dirty: false,
+      modifiedDocuments: [],
       workspaceStateId: undefined,
       savedStateId: undefined,
       canUndo: false,
@@ -1312,7 +1365,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => ({ children: { ...state.children, [parentId]: refreshed.nodes } }))
       }
       set((state) => ({
-        dirty: committed.stateId !== state.savedStateId,
+        ...modifiedFrom(committed, state),
         workspaceStateId: committed.stateId,
         canUndo: committed.canUndo,
         canRedo: committed.canRedo,
@@ -1453,24 +1506,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  deleteNode: async (node) => {
+  copyIlBytes: async (instructions) => {
     const workspaceId = get().workspaceId
-    if (!workspaceId)
+    const modulePath = instructions[0]?.modulePath
+    if (!workspaceId || !modulePath)
+      return
+    try {
+      const bytes = await window.dnSpy.getIlBytes(workspaceId, modulePath, instructions.filter((instruction) => instruction.modulePath === modulePath))
+      await navigator.clipboard.writeText(bytes.hex).catch(() => undefined)
+      if (bytes.hasUnknownBytes)
+        await askIgnorableMessage(UNKNOWN_IL_BYTES_ID, t('Some of the copied bytes are unknown because the method has been edited. New tokens and string offsets are only known once the file has been saved to disk and re-opened.'), [t('OK')])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      get().appendOutput(t('Copy failed: {message}', { message }))
+    }
+  },
+
+  deleteNode: async (node) => get().deleteNodes([node]),
+
+  deleteNodes: async (nodes) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId || nodes.length === 0)
       return false
     set({ busy: true, error: undefined })
     let transactionId: string | undefined
     try {
       transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
-      await window.dnSpy.queueDelete(workspaceId, transactionId, node.id)
+      for (const node of nodes)
+        await window.dnSpy.queueDelete(workspaceId, transactionId, node.id)
       const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
       await refreshAfterEdit(get, set, committed)
       // A removed node has no view model left, so refreshAfterEdit leaves the selection as it was;
       // dropping it here is what stops the shell from acting on a node that is gone.
+      const removed = new Set(nodes.map((node) => node.id))
       set((state) => ({
-        selectedNode: state.selectedNode?.id === node.id ? undefined : state.selectedNode,
-        selectedNodes: state.selectedNodes.filter((n) => n.id !== node.id),
+        selectedNode: state.selectedNode && removed.has(state.selectedNode.id) ? undefined : state.selectedNode,
+        selectedNodes: state.selectedNodes.filter((n) => !removed.has(n.id)),
       }))
-      get().appendOutput(t('Deleted {name}.', { name: node.label }))
+      for (const node of nodes)
+        get().appendOutput(t('Deleted {name}.', { name: node.label }))
       return true
     } catch (error) {
       if (transactionId) {
@@ -1645,7 +1719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => ({ children: { ...state.children, [parentId]: refreshed.nodes } }))
       }
       set((state) => ({
-        dirty: committed.stateId !== state.savedStateId,
+        ...modifiedFrom(committed, state),
         workspaceStateId: committed.stateId,
         canUndo: committed.canUndo,
         canRedo: committed.canRedo,
@@ -1695,7 +1769,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  compileCode: async (node, mode, source) => {
+  compileCode: async (node, mode, source, language = 'csharp') => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
       return { ok: false, diagnostics: [] }
@@ -1703,7 +1777,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let transactionId: string | undefined
     try {
       transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
-      const result = await window.dnSpy.compileSource(workspaceId, node.id, mode, source, transactionId)
+      const result = await window.dnSpy.compileSource(workspaceId, node.id, mode, source, transactionId, language, compilerSettingsFor(language))
       if (!result.success) {
         await window.dnSpy.rollbackEdit(workspaceId, transactionId)
         return { ok: false, diagnostics: result.diagnostics }
@@ -1729,6 +1803,74 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       set({ busy: false })
     }
+  },
+
+  ensureWorkspace: async () => {
+    const existing = get().workspaceId
+    if (existing)
+      return existing
+    try {
+      const created = await window.dnSpy.createWorkspace()
+      set({
+        workspaceId: created.workspaceId,
+        modules: created.modules,
+        roots: [],
+        children: {},
+        parents: {},
+        expanded: {},
+        dirty: false,
+        modifiedDocuments: [],
+        workspaceStateId: created.stateId,
+        savedStateId: created.stateId,
+        canUndo: false,
+        canRedo: false,
+      })
+      return created.workspaceId
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      set({ error: message })
+      return undefined
+    }
+  },
+
+  createAssembly: async (options, clrVersion) => {
+    const workspaceId = await get().ensureWorkspace()
+    if (!workspaceId)
+      return false
+    return queueDocumentEdit(get, set, workspaceId, (transactionId) => window.dnSpy.createAssembly(workspaceId, transactionId, options, clrVersion), t('Create Assembly'))
+  },
+
+  createNetModule: async (name, mvid, clrVersion) => {
+    const workspaceId = await get().ensureWorkspace()
+    if (!workspaceId)
+      return false
+    return queueDocumentEdit(get, set, workspaceId, (transactionId) => window.dnSpy.createNetModule(workspaceId, transactionId, name, mvid, clrVersion), t('Create NetModule'))
+  },
+
+  addNetModule: async (node, module) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    const assemblyId = rootIdOf(get(), node.id)
+    return queueDocumentEdit(get, set, workspaceId, (transactionId) => window.dnSpy.addNetModule(workspaceId, transactionId, node.id, module),
+      'path' in module ? t('Add Existing NetModule to Assembly') : t('Add New NetModule to Assembly'), assemblyId)
+  },
+
+  removeNetModule: async (node) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return false
+    const assemblyId = rootIdOf(get(), node.id)
+    const removed = await queueDocumentEdit(get, set, workspaceId, async (transactionId) => {
+      await window.dnSpy.removeNetModule(workspaceId, transactionId, node.id)
+      return undefined
+    }, t('Remove NetModule from Assembly'), assemblyId)
+    if (removed)
+      set((state) => ({
+        selectedNode: state.selectedNode?.id === node.id ? undefined : state.selectedNode,
+        selectedNodes: state.selectedNodes.filter((selected) => selected.id !== node.id),
+      }))
+    return removed
   },
 
   applyAssemblyOptions: async (node, options) => {
@@ -1865,6 +2007,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  createImageResources: async (resourceNode) => {
+    const images = await window.dnSpy.pickImageFiles(true, true)
+    if (images.length === 0)
+      return false
+    return get().createResourceElement(resourceNode, { kind: 'imageFiles', name: images.map((image) => image.name).join(', '), images })
+  },
   createResourceElement: async (resourceNode, options) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
@@ -1892,96 +2040,90 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  saveModuleAs: async (options) => {
-    const { workspaceId } = get()
+  // dnSpy's File > Save Module...: the documents of the selected rows, the modified ones among them when any are,
+  // and every one of them otherwise — the same command saves an unmodified module when it is asked to.
+  saveModuleAs: async () => get().saveModule(),
+
+  saveModule: async () => {
+    const { workspaceId, selectedNodes, selectedNode, modifiedDocuments } = get()
     const module = currentModule(get())
-    if (!workspaceId || !module)
+    const nodeIds = selectedNodes.length > 0 ? selectedNodes.map((node) => node.id) : selectedNode ? [selectedNode.id] : module ? [module.id] : []
+    if (!workspaceId || nodeIds.length === 0)
       return false
-    set({ busy: true, error: undefined })
-    try {
-      const saved = await window.dnSpy.saveModuleAs(workspaceId, module.id, module.name.endsWith('.dll') || module.name.endsWith('.exe') ? module.name : `${module.name}.dll`, options)
-      if (!saved)
-        return false
-      set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
-      get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Save failed: {message}', { message }))
+    const documents = await resolveSaveDocuments(get, set, nodeIds)
+    if (documents === undefined)
       return false
-    } finally {
-      set({ busy: false })
-    }
+    const modified = new Set(modifiedDocuments.map((document) => document.id))
+    const chosen = documents.some((document) => modified.has(document.documentId)) ? documents.filter((document) => modified.has(document.documentId)) : documents
+    return showSave(get, set, chosen)
   },
 
-  saveModule: async (options) => {
-    const { workspaceId } = get()
-    const module = currentModule(get())
-    if (!workspaceId || !module)
+  // dnSpy's Save All: every modified document.
+  saveAllModules: async () => {
+    if (!get().workspaceId)
       return false
-    set({ busy: true, error: undefined })
-    try {
-      const saved = await window.dnSpy.saveModule(workspaceId, module.id, options)
-      set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
-      get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Save failed: {message}', { message }))
-      return false
-    } finally {
-      set({ busy: false })
-    }
+    await get().refreshModifiedDocuments()
+    return get().requestSave(get().modifiedDocuments.map((document) => document.id))
   },
 
-  saveAllModules: async (options) => {
-    const { workspaceId } = get()
-    if (!workspaceId)
-      return false
-    set({ busy: true, error: undefined })
-    try {
-      const result = await window.dnSpy.saveAllModules(workspaceId, options)
-      set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
-      for (const saved of result.saved)
-        get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
-      get().appendOutput(t('Saved {count} module(s).', { count: result.saved.length }))
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Save failed: {message}', { message }))
-      return false
-    } finally {
-      set({ busy: false })
-    }
-  },
-
+  // The documents a command is about to let go of, named by their files.
   saveModules: async (paths) => {
-    const { workspaceId, modules } = get()
-    if (!workspaceId)
+    if (!get().workspaceId)
       return false
-    set({ busy: true, error: undefined })
-    try {
-      for (const path of paths) {
-        const module = modules.find((candidate) => candidate.path === path)
-        if (!module)
-          continue
-        const saved = await window.dnSpy.saveModule(workspaceId, module.id)
-        get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: saved.path, length: saved.length.toLocaleString(getActiveLocale()), sha256: saved.sha256 }))
-      }
-      const stillModified = await window.dnSpy.getModifiedModules(workspaceId)
-      if (stillModified.paths.length === 0)
-        set((state) => ({ dirty: false, savedStateId: state.workspaceStateId }))
+    await get().refreshModifiedDocuments()
+    const wanted = new Set(paths)
+    return get().requestSave(get().modifiedDocuments.filter((document) => wanted.has(document.path)).map((document) => document.id))
+  },
+
+  requestSave: async (ids) => {
+    if (!get().workspaceId || ids.length === 0)
       return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      set({ error: message })
-      get().appendOutput(t('Save failed: {message}', { message }))
-      return false
-    } finally {
-      set({ busy: false })
+    const documents = await resolveSaveDocuments(get, set, ids)
+    return documents === undefined ? false : showSave(get, set, documents)
+  },
+
+  acceptSaveOptions: (options) => set((state) => state.saveRequest
+    ? { saveRequest: { ...state.saveRequest, documents: [options], phase: 'run' } }
+    : {}),
+
+  finishSave: async (response) => {
+    const request = get().saveRequest
+    set({ saveRequest: undefined })
+    if (!request)
+      return
+    let savedAll = false
+    if (response) {
+      for (const result of response.results) {
+        if (result.saved)
+          get().appendOutput(t('Saved {path} ({length} bytes, SHA-256 {sha256}).', { path: result.fileName, length: result.length.toLocaleString(getActiveLocale()), sha256: result.sha256 ?? '' }))
+        else if (result.error)
+          get().appendOutput(t('Save failed: {message}', { message: result.error }))
+      }
+      set({ modifiedDocuments: response.modifiedDocuments, dirty: response.modifiedDocuments.length > 0 })
+      // A new document saved for the first time has a file now, and the module list and the root's label say so.
+      if (response.modules) {
+        const workspaceId = get().workspaceId
+        const roots = workspaceId ? await window.dnSpy.getRoots(workspaceId) : undefined
+        set({ modules: response.modules, ...(roots ? { roots: roots.nodes } : {}) })
+      }
+      savedAll = !response.canceled
+        && response.results.length === request.documents.length
+        && response.results.every((result) => result.saved)
+    }
+    saveResolvers.get(request.id)?.(savedAll)
+    saveResolvers.delete(request.id)
+  },
+
+  refreshModifiedDocuments: async () => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return
+    try {
+      const modifiedDocuments = await window.dnSpy.getModifiedDocuments(workspaceId)
+      if (get().workspaceId === workspaceId)
+        set({ modifiedDocuments, dirty: modifiedDocuments.length > 0 })
+    } catch {
+      // A workspace that went away has nothing modified left to report.
     }
   },
 
@@ -2010,6 +2152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeDocumentId: undefined,
         hexTarget: undefined,
         dirty: false,
+        modifiedDocuments: [],
         workspaceStateId: reloaded.stateId,
         savedStateId: reloaded.stateId,
         canUndo: false,
@@ -2067,6 +2210,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const response = await window.dnSpy.removeModules(workspaceId, nodeIds)
       set((state) => ({ ...withoutRemovedRoots(state, response), assemblyListRevision: state.assemblyListRevision + 1 }))
+      // A document that goes takes its unsaved changes with it.
+      await get().refreshModifiedDocuments()
       return response.removedNodeIds
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -2196,6 +2341,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = error instanceof Error ? error.message : String(error)
       set({ error: message })
       return false
+    }
+  },
+
+  goToMetadataRecord: async (node, token) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return undefined
+    try {
+      const response = await window.dnSpy.findMetadataRecord(workspaceId, node.id, token)
+      if (!response.nodeId)
+        return response.error ?? t("Token {token} doesn't exist in the metadata", { token: (token >>> 0).toString(16).toUpperCase().padStart(8, '0') })
+      await showOrReveal(get, response.nodeId)
+      return undefined
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
     }
   },
 
@@ -2415,7 +2575,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   methodBodyChanged: async (node, result) => {
     set((state) => ({
-      dirty: result.stateId !== state.savedStateId,
+      ...modifiedFrom(result, state),
       workspaceStateId: result.stateId,
       canUndo: result.canUndo,
       canRedo: result.canRedo,
@@ -4603,7 +4763,8 @@ export function buildSession(state: SessionSource): SavedSession {
   const activeNode = state.activeDocumentId ? nodesById.get(state.activeDocumentId) : undefined
   return {
     version: 1,
-    paths: state.modules.map((module) => module.path),
+    // A document with no file has nothing to be opened from next time.
+    paths: state.modules.filter((module) => !module.inMemory).map((module) => module.path),
     nodes: [...wanted.values()]
       .sort((left, right) => left.depth - right.depth)
       .map((entry) => ({ key: entry.node.key as string, expanded: entry.expanded })),
@@ -5347,12 +5508,22 @@ const refreshChildren = async (get: StoreGet, set: StoreSet, nodeId: string): Pr
   set((state) => ({ children: { ...state.children, [nodeId]: refreshed.nodes } }))
 }
 
+/**
+ * What an edit, undo or redo leaves modified: the documents the backend names, which an undo back to where a
+ * document was saved takes off again. An answer without them — a step that never reached the backend's history —
+ * keeps the workspace-wide comparison the port had before documents were tracked one by one.
+ */
+const modifiedFrom = (result: Pick<EditCommitResponse, 'stateId' | 'modifiedDocuments'>, state: Pick<AppState, 'savedStateId' | 'modifiedDocuments'>): Pick<AppState, 'dirty' | 'modifiedDocuments'> =>
+  result.modifiedDocuments
+    ? { modifiedDocuments: result.modifiedDocuments, dirty: result.modifiedDocuments.length > 0 }
+    : { modifiedDocuments: state.modifiedDocuments, dirty: result.stateId !== state.savedStateId }
+
 const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommitResponse): Promise<string[]> => {
-  const { workspaceId, savedStateId } = get()
+  const { workspaceId } = get()
   if (!workspaceId) return []
   set({
     workspaceStateId: result.stateId,
-    dirty: result.stateId !== savedStateId,
+    ...modifiedFrom(result, get()),
     canUndo: result.canUndo,
     canRedo: result.canRedo,
   })
@@ -5397,6 +5568,117 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
     assemblyListRevision: state.assemblyListRevision + 1,
   }))
   return removed
+}
+
+/**
+ * The Compiler options page's values for a language, as the backend's compiler takes them. dnSpy reads them when an
+ * Edit Code window builds its compiler, so a change on the page applies to the next window opened.
+ */
+export const compilerSettingsFor = (language: CompilerLanguage): CompilerSettings => {
+  const page = loadAppOptions().compiler[language === 'visualBasic' ? 'visualBasic' : 'cSharp']
+  return {
+    preprocessorSymbols: page.preprocessorSymbols,
+    optimize: page.optimize,
+    checkOverflow: page.checkOverflow,
+    allowUnsafe: page.allowUnsafe,
+    optionExplicit: page.optionExplicit,
+    optionInfer: page.optionInfer,
+    optionStrict: page.optionStrict,
+    optionCompareBinary: page.optionCompareBinary,
+    embedVisualBasicRuntime: page.embedVBRuntime,
+  }
+}
+
+/** The language dnSpy's compiler commands use: the decompiler's when it has a compiler, C# otherwise —
+ *  EditCodeVMCreator.TryGetUsedLanguage. */
+export const compilerLanguageFor = (language: DecompilerLanguage): CompilerLanguage => language === 'visualBasic' ? 'visualBasic' : 'csharp'
+
+/** The id dnSpy's Copy IL Bytes gives its "some bytes are unknown" message, which "don't show again" silences. */
+const UNKNOWN_IL_BYTES_ID = '141A1744-13CD-4835-A804-08D93D8E0D2B'
+
+/** The root a node hangs under, by the parent links the tree has read. */
+const rootIdOf = (state: Pick<AppState, 'parents'>, nodeId: string): string => {
+  let current = nodeId
+  for (let parent = state.parents[current]; parent !== undefined; parent = state.parents[current])
+    current = parent
+  return current
+}
+
+/**
+ * One of the commands that make a document or change an assembly's modules, run as one undoable step: queued,
+ * committed, the tree read again — the roots, and the children of `refreshId` when a row was added under it — and the
+ * new row, when there is one, selected the way dnSpy's FollowReference selects it.
+ */
+const queueDocumentEdit = async (
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  queue: (transactionId: string) => Promise<{ nodeId: string; label: string } | undefined>,
+  description: string,
+  refreshId?: string,
+): Promise<boolean> => {
+  set({ busy: true, error: undefined })
+  let transactionId: string | undefined
+  try {
+    transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
+    const created = await queue(transactionId)
+    const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+    await refreshAfterEdit(get, set, committed)
+    if (refreshId)
+      await refreshChildren(get, set, refreshId)
+    if (created) {
+      await get().revealNode(created.nodeId)
+    }
+    get().appendOutput(t('{command}: {name}.', { command: description, name: created?.label ?? '' }))
+    return true
+  } catch (error) {
+    if (transactionId) {
+      try { await window.dnSpy.rollbackEdit(workspaceId, transactionId) } catch { /* already committed or invalidated */ }
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    set({ error: message })
+    get().appendOutput(t('{command} failed: {message}', { command: description, message }))
+    return false
+  } finally {
+    set({ busy: false })
+  }
+}
+
+/** Who is waiting for a save window to go, by the request it put up. */
+const saveResolvers = new Map<number, (savedAll: boolean) => void>()
+let nextSaveRequestId = 0
+
+/** The save options of the documents the ids name, each document once however many of its rows were named. */
+const resolveSaveDocuments = async (get: StoreGet, set: StoreSet, ids: string[]): Promise<DocumentSaveOptions[] | undefined> => {
+  const workspaceId = get().workspaceId
+  if (!workspaceId)
+    return undefined
+  try {
+    const resolved = await Promise.all(ids.map((id) => window.dnSpy.getSaveOptions(workspaceId, id)))
+    const seen = new Set<string>()
+    return resolved.filter((document) => !seen.has(document.documentId) && seen.add(document.documentId) !== undefined)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    set({ error: message })
+    get().appendOutput(t('Save failed: {message}', { message }))
+    return undefined
+  }
+}
+
+/** Puts the save windows up for the documents and answers once they are gone: dnSpy's DocumentSaver.Save. */
+const showSave = (get: StoreGet, set: StoreSet, documents: DocumentSaveOptions[]): Promise<boolean> => {
+  if (documents.length === 0)
+    return Promise.resolve(true)
+  // One window at a time, as dnSpy's are modal: a second request is answered as not saved.
+  if (get().saveRequest)
+    return Promise.resolve(false)
+  const id = ++nextSaveRequestId
+  return new Promise((resolve) => {
+    saveResolvers.set(id, resolve)
+    set({ saveRequest: documents.length === 1
+      ? { id, documents, mode: 'single', phase: 'options' }
+      : { id, documents, mode: 'multiple', phase: 'run' } })
+  })
 }
 
 /** The roots and every node the client has listed under them. */

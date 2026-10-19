@@ -36,6 +36,7 @@ import { loadAppOptions, useAppOptions, type MemberKind } from './app-options'
 import { ColoredText } from './ColoredText'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { hasEmptyNamespaceSibling, resourceTargets, showAssemblyExplorerContextMenu, type AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
+import { hasMetadataTables } from '../metadata-table'
 
 interface AssemblyExplorerProps {
   /**
@@ -660,8 +661,13 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         node,
         selection: keepsSelection ? state.selectedNodes : [node],
         parentKind: state.parents[node.id] ? findNode(state, state.parents[node.id])?.kind : undefined,
+        parentIcon: state.parents[node.id] ? findNode(state, state.parents[node.id])?.icon : undefined,
+        indexInParent: state.parents[node.id] ? (state.children[state.parents[node.id]] ?? []).findIndex((child) => child.id === node.id) : undefined,
+        siblingCount: state.parents[node.id] ? (state.children[state.parents[node.id]] ?? []).length : undefined,
+        parents: state.parents,
         readsResource,
         resourceNames,
+        mdTableRowAvailable: hasMetadataTables(state, node.id),
         hexTarget: state.hexTarget,
         hasEmptyNamespaceSibling: hasEmptyNamespaceSibling(node, state.children, state.parents),
         analyzeTargets,

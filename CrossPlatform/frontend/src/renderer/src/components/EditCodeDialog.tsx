@@ -1,29 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CompilerDiagnostic, CompilerMode, TreeNode } from '../../../shared/protocol'
-import { useAppStore } from '../app-store'
+import type { CompilerDiagnostic, CompilerLanguage, CompilerMode, TreeNode } from '../../../shared/protocol'
+import { compilerLanguageFor, compilerSettingsFor, useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import CodeEditor from './CodeEditor'
 import { CloseGlyph } from './DsGlyphs'
 import { useModalLayer } from './modal-stack'
 
+/** dnSpy's headers for the compiler commands, each naming the language — EditCodeVMCreator.GetHeader. */
 const TITLES: Record<CompilerMode, string> = {
-  editMethod: 'Edit Method (C#)',
-  editClass: 'Edit Class (C#)',
-  addMembers: 'Add Class Members (C#)',
-  addClass: 'Add Class (C#)',
-  editAssembly: 'Edit Assembly Attributes (C#)',
+  editMethod: 'Edit Method ({language})',
+  editClass: 'Edit Class ({language})',
+  addMembers: 'Add Class Members ({language})',
+  addClass: 'Add Class ({language})',
+  editAssembly: 'Edit Assembly Attributes ({language})',
 }
 
-/** What the Add Class and Edit Assembly Attributes windows open with. */
-const TEMPLATES: Partial<Record<CompilerMode, string>> = {
-  addClass: `namespace MyNamespace
-{
-    public class MyClass
-    {
-    }
-}
-`,
-}
+/** The name dnSpy gives each compiler language in the headers: the decompiler's GenericNameUI. */
+export const COMPILER_LANGUAGE_NAMES: Record<CompilerLanguage, string> = { csharp: 'C#', visualBasic: 'Visual Basic' }
 
 interface EditCodeDialogProps {
   node: TreeNode
@@ -35,7 +28,9 @@ interface EditCodeDialogProps {
 }
 
 /**
- * dnSpy's Edit Code window: one Monaco document of C#, a Compile button and the diagnostics it reports.
+ * dnSpy's Edit Code window: one Monaco document in the language the decompiler is in when it has a compiler — C#
+ * or Visual Basic, C# otherwise — a Compile button and the diagnostics it reports. Add Class starts from an empty
+ * document, as dnSpy's AddClassVM does.
  * The source is compiled against the module and its references; accepting it imports the generated
  * assembly through dnSpy's ModuleImporter as one undoable edit.
  */
@@ -48,6 +43,9 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
   const [failure, setFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [compiled, setCompiled] = useState(false)
+  // The language is the decompiler's when the window opens, as dnSpy picks it when it builds the window's compiler.
+  const [language] = useState<CompilerLanguage>(() => compilerLanguageFor(useAppStore.getState().defaultLanguage))
+  const title = t(TITLES[mode], { language: COMPILER_LANGUAGE_NAMES[language] })
   const editor = useRef<{ setPosition(position: { lineNumber: number, column: number }): void, revealLineInCenter(lineNumber: number): void, focus(): void } | undefined>(undefined)
   const depth = useModalLayer(onClose)
 
@@ -56,20 +54,20 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
       return
     let cancelled = false
     if (mode === 'editAssembly') {
-      void window.dnSpy.getAssemblyAttributesSource(workspaceId, node.id)
+      void window.dnSpy.getAssemblyAttributesSource(workspaceId, node.id, language)
         .then((result) => { if (!cancelled) setSource(result.source) })
         .catch((reason: unknown) => { if (!cancelled) setFailure(reason instanceof Error ? reason.message : String(reason)) })
     }
     else if (sourceNodeId) {
-      void window.dnSpy.decompile(workspaceId, sourceNodeId, 'cSharp')
+      void window.dnSpy.decompile(workspaceId, sourceNodeId, language === 'visualBasic' ? 'visualBasic' : 'cSharp')
         .then((document) => { if (!cancelled) setSource(document.text) })
         .catch((reason: unknown) => { if (!cancelled) setFailure(reason instanceof Error ? reason.message : String(reason)) })
     }
     else {
-      setSource(TEMPLATES[mode] ?? '')
+      setSource('')
     }
     return () => { cancelled = true }
-  }, [workspaceId, sourceNodeId, mode, node.id])
+  }, [workspaceId, sourceNodeId, mode, node.id, language])
 
   const compile = async (apply: boolean): Promise<void> => {
     if (!source)
@@ -78,7 +76,7 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
     setFailure(undefined)
     if (!apply) {
       try {
-        const result = await window.dnSpy.compileSource(workspaceId ?? '', node.id, mode, source)
+        const result = await window.dnSpy.compileSource(workspaceId ?? '', node.id, mode, source, undefined, language, compilerSettingsFor(language))
         setDiagnostics(result.diagnostics)
         setCompiled(result.success)
       }
@@ -90,7 +88,7 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
       }
       return
     }
-    const result = await compileCode(node, mode, source)
+    const result = await compileCode(node, mode, source, language)
     setBusy(false)
     setDiagnostics(result.diagnostics)
     if (result.ok)
@@ -109,8 +107,8 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
 
   return (
     <div className="modal-backdrop" role="presentation" style={{ zIndex: 100 + depth * 10 }}>
-      <div className="modal edit-code-dialog" role="dialog" aria-modal="true" aria-label={t(TITLES[mode])}>
-        <div className="modal-title"><span>{t(TITLES[mode])}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
+      <div className="modal edit-code-dialog" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-title"><span>{title}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="edit-code-toolbar">
           <button type="button" disabled={busy || source === undefined} onClick={() => void compile(false)}>{t('Compile')}</button>
           <span className={errorCount > 0 ? 'edit-code-summary error' : 'edit-code-summary'}>
@@ -124,7 +122,7 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
             ? <div className="il-loading">{failure ?? t('Loading...')}</div>
             : (
               <CodeEditor
-                language="csharp"
+                language={language === 'visualBasic' ? 'vb' : 'csharp'}
                 theme={theme}
                 value={source}
                 onChange={(value) => setSource(value ?? '')}
@@ -145,7 +143,7 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
               <span className="edit-code-severity">{diagnostic.severity}</span>
               <span className="edit-code-id">{diagnostic.id}</span>
               <span className="edit-code-text">{diagnostic.text}</span>
-              <span className="edit-code-position">{diagnostic.fileName ?? 'main.cs'}({diagnostic.startLine + 1},{diagnostic.startColumn + 1})</span>
+              <span className="edit-code-position">{diagnostic.fileName ?? (language === 'visualBasic' ? 'main.vb' : 'main.cs')}({diagnostic.startLine + 1},{diagnostic.startColumn + 1})</span>
             </button>
           ))}
         </div>

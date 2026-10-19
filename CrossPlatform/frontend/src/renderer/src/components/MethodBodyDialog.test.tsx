@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IlMethodBody, TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
+import { clearIlClipboard } from './il-body-clipboard'
 import { MethodBodyDialog } from './MethodBodyDialog'
 
 const node: TreeNode = { id: 'n1', label: 'Run(int) : void', kind: 'method', hasChildren: false }
@@ -45,6 +46,7 @@ const renderDialog = (loaded = body(), selection?: { start: number; end: number 
     value: {
       ...window.dnSpy,
       getIlBody: vi.fn(async () => loaded),
+      getNodePath: vi.fn(async () => ({ nodes: [{ id: 'root', label: 'A', kind: 'assembly', hasChildren: true }] })),
       transformIlBody,
       beginEdit: vi.fn(async () => ({ transactionId: 't1', baseVersion: 0 })),
       queueIlBody,
@@ -58,11 +60,14 @@ const renderDialog = (loaded = body(), selection?: { start: number; end: number 
 }
 
 const row = (index: number): HTMLElement => screen.getAllByRole('row')[index] as HTMLElement
+const grid = (name: string): HTMLElement => screen.getByRole('grid', { name })
+const newLocalNamed = (name: string): IlMethodBody['locals'][number] => ({ name, type: { kind: 'type', type: { scope: '', namespace: 'System', name: 'Int32' }, valueType: true }, isPinned: false, attributes: 0, display: `System.Int32 ${name}` })
 const openTab = (name: string): void => { fireEvent.click(screen.getByRole('tab', { name })) }
 const accept = (): void => { fireEvent.click(screen.getByRole('button', { name: 'OK' })) }
 
 beforeEach(() => {
   useAppStore.setState({ workspaceId: undefined })
+  clearIlClipboard()
 })
 
 afterEach(cleanup)
@@ -79,24 +84,72 @@ describe('MethodBodyDialog', () => {
     expect(screen.getByDisplayValue('0x100')).toBeInTheDocument()
   })
 
-  it('appends and removes an instruction', async () => {
+  it('appends and removes an instruction with the list\'s gestures', async () => {
     renderDialog()
-    fireEvent.click(await screen.findByRole('button', { name: 'Append New Instruction' }))
+    await screen.findByLabelText('OpCode 0')
+    const list = grid('Instructions')
+    fireEvent.keyDown(list, { key: 'a' })
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(3))
     expect(screen.getByLabelText('OpCode 2')).toHaveValue('nop')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Instruction 2' }))
+    // The new row is the selection, which Del takes away again.
+    expect(row(2)).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(list, { key: 'Delete' })
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(2))
   })
 
-  it('runs a command over the selected instructions through the backend', async () => {
+  it('runs a command through the backend from its gesture', async () => {
     const harness = renderDialog()
     await screen.findByLabelText('OpCode 0')
     fireEvent.mouseDown(row(0))
-    fireEvent.click(screen.getByRole('button', { name: 'Simplify All Instructions' }))
+    fireEvent.keyDown(grid('Instructions'), { key: 's' })
 
     await waitFor(() => expect(harness.transformIlBody).toHaveBeenCalledTimes(1))
-    expect(harness.transformIlBody.mock.calls[0].slice(1)).toEqual(['n1', 'simplifyAll', body().locals, body().instructions, [0], ['value']])
+    // Simplify All acts on every instruction, whatever is selected.
+    expect(harness.transformIlBody.mock.calls[0].slice(1)).toEqual(['n1', 'simplifyAll', body().locals, body().instructions, [0, 1], ['value']])
+  })
+
+  it('leaves a letter typed into an operand box to the box', async () => {
+    renderDialog(body({ instructions: [{ label: 'IL_0000', opCode: 'ldstr', operandKind: 'string', operand: 'x' }, { label: 'IL_0005', opCode: 'ret', operandKind: 'none' }] }))
+    const operand = await screen.findByLabelText('Operand 0')
+    fireEvent.keyDown(operand, { key: 'a' })
+    expect(screen.getAllByRole('row')).toHaveLength(2)
+  })
+
+  it('copies instructions and pastes them with labels of their own before the selection', async () => {
+    renderDialog()
+    await screen.findByLabelText('OpCode 0')
+    const list = grid('Instructions')
+    fireEvent.mouseDown(row(0))
+    fireEvent.keyDown(list, { key: 'c', ctrlKey: true })
+    fireEvent.mouseDown(row(1))
+    fireEvent.keyDown(list, { key: 'v', ctrlKey: true })
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(3))
+    expect(screen.getByLabelText('OpCode 1')).toHaveValue('ldarg.0')
+    expect(screen.getByLabelText('Operand 1')).toHaveValue('0')
+    expect(screen.getByLabelText('OpCode 2')).toHaveValue('ret')
+  })
+
+  it('writes the selected instructions as text, with their offsets', async () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, readText: async () => '' } })
+    renderDialog()
+    await screen.findByLabelText('OpCode 0')
+    fireEvent.mouseDown(row(0))
+    fireEvent.mouseDown(row(1), { shiftKey: true })
+    fireEvent.keyDown(grid('Instructions'), { key: 't', ctrlKey: true })
+    expect(writeText).toHaveBeenCalledWith('0\t0000\tldarg.0\tvalue (0)\n1\t0001\tret\n')
+  })
+
+  it('shows dnSpy\'s commands in the list\'s context menu', async () => {
+    renderDialog()
+    await screen.findByLabelText('OpCode 0')
+    fireEvent.mouseDown(row(0))
+    fireEvent.contextMenu(grid('Instructions'))
+    expect(await screen.findByText('NOP Instruction')).toBeInTheDocument()
+    expect(screen.getByText('Add New Instruction Before Selection')).toBeInTheDocument()
+    expect(screen.getByText('Paste After Selection')).toBeInTheDocument()
+    expect(screen.getByText('Copy File Offset')).toBeInTheDocument()
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
   })
 
   it('selects the instructions the statement covered when the editor was opened on one', async () => {
@@ -110,19 +163,38 @@ describe('MethodBodyDialog', () => {
     renderDialog()
     await screen.findByLabelText('OpCode 0')
     openTab('Locals')
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.keyDown(grid('Locals'), { key: 'a' })
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(2))
     fireEvent.change(screen.getByLabelText('Name 1'), { target: { value: 'total' } })
     expect(screen.getByLabelText('Name 1')).toHaveValue('total')
-    fireEvent.click(screen.getByRole('button', { name: 'Remove local 1' }))
+    fireEvent.keyDown(grid('Locals'), { key: 'Delete' })
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(1))
+  })
+
+  it('points the instructions at where their locals went', async () => {
+    const harness = renderDialog(body({
+      locals: [newLocalNamed('first'), newLocalNamed('second')],
+      instructions: [
+        { label: 'IL_0000', opCode: 'ldloc.s', operandKind: 'local', operand: '1', operandDisplay: 'V_1' },
+        { label: 'IL_0002', opCode: 'ret', operandKind: 'none' },
+      ],
+    }))
+    await screen.findByLabelText('OpCode 0')
+    openTab('Locals')
+    fireEvent.mouseDown(screen.getAllByRole('row')[0])
+    fireEvent.keyDown(grid('Locals'), { key: 'd' })
+    await waitFor(() => expect(screen.getByLabelText('Name 0')).toHaveValue('second'))
+    accept()
+    await waitFor(() => expect(harness.queueIlBody).toHaveBeenCalled())
+    const written = harness.queueIlBody.mock.calls[0][3] as IlMethodBody
+    expect(written.instructions[0].operand).toBe('0')
   })
 
   it('adds an exception handler and keeps OK disabled until it has a catch type', async () => {
     renderDialog()
     await screen.findByLabelText('OpCode 0')
     openTab('Exception Handlers')
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.keyDown(grid('Exception Handlers'), { key: 'a' })
     await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(1))
 
     expect(screen.getByLabelText('Handler Type 0')).toHaveValue('catch')

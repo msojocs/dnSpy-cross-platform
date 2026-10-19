@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import { isLocalSpan, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SaveModuleOptions, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
+import { isLocalSpan, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
 import { buildSession, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
 import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
+import { DELETE_COMMANDS, DELETE_QUESTION_ID, deletionTargets } from './components/delete-commands'
 import { normalizeZoom, zoomIn, zoomOut } from './zoom'
 import { CloseGlyph } from './components/DsGlyphs'
 import { DsIcon } from './components/DsIcon'
@@ -26,12 +27,18 @@ import { useStringReferencesStore } from './string-references-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
 import { GoToTokenDialog, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { MethodBodyDialog } from './components/MethodBodyDialog'
-import { CreateResourceDialog, CreateResourceElementDialog, ResourceElementDialog, ResourceOptionsDialog } from './components/ResourceDialogs'
+import { CreateResourceDialog, CreateImageListDialog, CreateResourceElementDialog, ResourceElementDialog, ResourceOptionsDialog } from './components/ResourceDialogs'
 import { AssemblyOptionsDialog, ModuleOptionsDialog } from './components/AssemblyModuleDialogs'
-import { SaveModuleOptionsDialog, defaultSaveModuleOptions } from './components/SaveModuleOptionsDialog'
+import { SaveModuleOptionsDialog } from './components/SaveModuleOptionsDialog'
+import { SaveModulesDialog } from './components/SaveModulesDialog'
+import { NetModuleOptionsDialog } from './components/NetModuleOptionsDialog'
 import { EditCodeDialog } from './components/EditCodeDialog'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
+import { HEX_STRUCTURE_KINDS, HexStructureView } from './components/HexStructureView'
+import { MetadataTableView } from './components/MetadataTableView'
+import { AskDialog } from './components/AskDialog'
+import { hasMetadataTables } from './metadata-table'
 import { AutosPane, BreakpointsPane, CallStackPane, LocalsPane, ModuleBreakpointsPane, ModulesPane, ProcessesPane, StaticFieldsPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
 import { DisassemblyPane, MemoryPane } from './components/DebugNativeWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
@@ -57,6 +64,29 @@ import { caretPosition, documentEditorScrollTop, findInActiveDocumentEditor, foc
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './components/document-viewer-options'
 import { positionAt } from './document-viewer'
 import { translate, useLanguage } from './localization'
+
+/**
+ * What a document tab draws for the node it shows: dnSpy's AsmEditor hex nodes are not text — a PE header, the
+ * tables stream header and a metadata row are forms of fields, and a metadata table is a grid — while every other
+ * node is decompiled into the code viewer.
+ */
+const DocumentPane = ({ documentId, zoomStyle, onShowHex, renderCode }: {
+  documentId: string
+  zoomStyle: React.CSSProperties
+  onShowHex(moduleId: string, offset: number, length: number): void
+  renderCode(): React.ReactNode
+}): React.ReactNode => {
+  const nodeId = useAppStore((state) => state.documents[documentId]?.nodeId)
+  const kind = useAppStore((state) => {
+    const id = state.documents[documentId]?.nodeId
+    return id ? findNode(state, id)?.kind : undefined
+  })
+  if (nodeId && kind && HEX_STRUCTURE_KINDS.has(kind))
+    return <div className="tab-zoom" style={zoomStyle}><HexStructureView key={nodeId} nodeId={nodeId} /></div>
+  if (nodeId && kind === 'metadatatable')
+    return <div className="tab-zoom" style={zoomStyle}><MetadataTableView key={nodeId} nodeId={nodeId} onShowHex={onShowHex} /></div>
+  return renderCode()
+}
 
 const DocumentView = lazy(async () => {
   const module = await import('./components/DocumentView')
@@ -234,14 +264,8 @@ const getTargetDocumentTabSet = (model: Model): TabSetNode | undefined => {
 
 // The kinds dnSpy confirms before deleting, with its own wording (`AskDeleteType` and friends). Every
 // other deletable kind — property, event, resource, namespace — is removed without a prompt.
-const DELETE_CONFIRMATIONS: Record<string, string> = {
-  type: 'There could be code in some assembly that references this type. Are you sure you want to delete the type?',
-  method: 'There could be code in some assembly that references this method. Are you sure you want to delete the method?',
-  field: 'There could be code in some assembly that references this field. Are you sure you want to delete the field?',
-}
-
 // The node kinds the Edit menu offers a Delete command for, and which the Del key therefore removes.
-const DELETABLE_KINDS = ['type', 'method', 'field', 'property', 'event', 'namespace', 'resource', 'assembly', 'pedocument', 'elfdocument', 'unknowndocument']
+const DELETABLE_KINDS = ['type', 'method', 'field', 'property', 'event', 'namespace', 'resource', 'resourceentry', 'module', 'assembly', 'pedocument', 'elfdocument', 'unknowndocument']
 
 // The rows that stand for a whole file: the tree's roots, which Remove Assembly takes out of it.
 const DOCUMENT_ROOT_KINDS = ['assembly', 'pedocument', 'elfdocument', 'unknowndocument']
@@ -350,17 +374,20 @@ export const App = (): React.JSX.Element => {
   const [renameNamespaceNode, setRenameNamespaceNode] = useState<TreeNode>()
   const [editMethodBody, setEditMethodBody] = useState<{ node: TreeNode; selection?: { start: number; end: number } }>()
   const [resourceDialog, setResourceDialog] = useState<
-    | { mode: 'options' | 'element' | 'createElement'; node: TreeNode }
+    | { mode: 'options' | 'element' | 'createElement' | 'createImageList'; node: TreeNode }
     | { mode: 'create'; node: TreeNode; kind: ResourceCreateKind }
   >()
   const [assemblyModuleDialog, setAssemblyModuleDialog] = useState<{ mode: 'assembly' | 'module'; node: TreeNode }>()
+  // dnSpy's Create Assembly window, and its NetModuleOptionsDlg for Create NetModule and Add New NetModule.
+  const [createAssemblyOpen, setCreateAssemblyOpen] = useState(false)
+  const [netModuleDialog, setNetModuleDialog] = useState<{ assemblyNode?: TreeNode }>()
   // dnSpy remembers the writer options between saves; the Save Module window edits this copy.
-  const [saveModuleOptions, setSaveModuleOptions] = useState<SaveModuleOptions>(defaultSaveModuleOptions)
-  const [saveOptionsOpen, setSaveOptionsOpen] = useState(false)
   const [codeDialog, setCodeDialog] = useState<{ node: TreeNode; mode: CompilerMode; sourceNodeId?: string }>()
   // dnSpy's Go to Token box. It is opened from the tree, and the node it was opened over is what names
   // the module the token is looked up in.
   const [tokenNode, setTokenNode] = useState<TreeNode>()
+  // dnSpy's Go to MD Table Row window, and the node whose module it looks in.
+  const [mdRowNode, setMdRowNode] = useState<TreeNode>()
   // The type "Add Class Tracepoint" asked for, while the breakpoint settings dialog it opens is up.
   const [classTracepointNode, setClassTracepointNode] = useState<TreeNode>()
   // The create or edit dialog the Edit menu opened, over the node it acts on: `nodeId` is what is being
@@ -399,7 +426,14 @@ export const App = (): React.JSX.Element => {
     if (!(tab instanceof TabNode))
       return null
     const component = tab.getComponent()
-    return component === 'document' ? 'code' : component === 'hex' || component === 'module-info' ? component : null
+    if (component === 'document') {
+      // A metadata table is a document of its own kind, whose commands the Edit menu's metadata groups run.
+      const state = useAppStore.getState()
+      const documentId = (tab.getConfig() as { documentId?: string } | undefined)?.documentId
+      const nodeId = documentId ? state.documents[documentId]?.nodeId : undefined
+      return nodeId && findNode(state, nodeId)?.kind === 'metadatatable' ? 'md-table' : 'code'
+    }
+    return component === 'hex' || component === 'module-info' ? component : null
   }, [model, layoutVersion])
   // dnSpy's Show Code is there whenever a tab is: it only puts the focus in the one in front.
   const canShowCode = useMemo(() => {
@@ -417,6 +451,7 @@ export const App = (): React.JSX.Element => {
   const busy = useAppStore((state) => state.busy)
   const error = useAppStore((state) => state.error)
   const selectedNode = useAppStore((state) => state.selectedNode)
+  const selectedNodes = useAppStore((state) => state.selectedNodes)
   const modules = useAppStore((state) => state.modules)
   const chooseAndOpen = useAppStore((state) => state.chooseAndOpen)
   const closeWorkspace = useAppStore((state) => state.closeWorkspace)
@@ -432,7 +467,9 @@ export const App = (): React.JSX.Element => {
   // dnSpy's language box names the one decompiler every document is shown in.
   const defaultLanguage = useAppStore((state) => state.defaultLanguage)
   const changeLanguage = useAppStore((state) => state.changeLanguage)
-  const saveModuleAs = useAppStore((state) => state.saveModuleAs)
+  const saveRequest = useAppStore((state) => state.saveRequest)
+  const acceptSaveOptions = useAppStore((state) => state.acceptSaveOptions)
+  const finishSave = useAppStore((state) => state.finishSave)
   const saveModule = useAppStore((state) => state.saveModule)
   const saveAllModules = useAppStore((state) => state.saveAllModules)
   const reloadAllAssemblies = useAppStore((state) => state.reloadAllAssemblies)
@@ -451,18 +488,36 @@ export const App = (): React.JSX.Element => {
   // document's Save button, which is where dnSpy writes a resource out.
   const editResource = (node: TreeNode): void => setResourceDialog({ mode: node.kind === 'resourceentry' ? 'element' : 'options', node })
   const createResource = (kind: ResourceCreateKind, node: TreeNode): void => setResourceDialog({ mode: 'create', node, kind })
-  const createResourceElement = (node: TreeNode): void => {
+  // The .resources file a resource entry is in, which is where dnSpy's Create ... commands add theirs.
+  const resourcesFileOf = (node: TreeNode): TreeNode | undefined => {
     const parentId = node.kind === 'resourceentry' ? useAppStore.getState().parents[node.id] : undefined
-    const resourceNode = parentId ? findNode(useAppStore.getState(), parentId) : node
+    return parentId ? findNode(useAppStore.getState(), parentId) : node
+  }
+  const createResourceElement = (node: TreeNode): void => {
+    const resourceNode = resourcesFileOf(node)
     if (resourceNode)
       setResourceDialog({ mode: 'createElement', node: resourceNode })
+  }
+  const createImageResourcesAction = useAppStore((state) => state.createImageResources)
+  const createImageResources = (node: TreeNode): void => {
+    const resourceNode = resourcesFileOf(node)
+    if (resourceNode)
+      void createImageResourcesAction(resourceNode)
+  }
+  const createImageList = (node: TreeNode): void => {
+    const resourceNode = resourcesFileOf(node)
+    if (resourceNode)
+      setResourceDialog({ mode: 'createImageList', node: resourceNode })
   }
   const saveResource = useAppStore((state) => state.saveResource)
   const loadDependencies = useAppStore((state) => state.loadDependencies)
   const convertModule = useAppStore((state) => state.convertModule)
+  const ensureWorkspace = useAppStore((state) => state.ensureWorkspace)
+  const addNetModule = useAppStore((state) => state.addNetModule)
+  const removeNetModule = useAppStore((state) => state.removeNetModule)
   const addClassBreakpoint = useAppStore((state) => state.addClassBreakpoint)
   const addMethodBreakpoints = useAppStore((state) => state.addMethodBreakpoints)
-  const deleteNode = useAppStore((state) => state.deleteNode)
+  const deleteNodes = useAppStore((state) => state.deleteNodes)
   const renameNamespace = useAppStore((state) => state.renameNamespace)
   const moveTypesToEmptyNamespace = useAppStore((state) => state.moveTypesToEmptyNamespace)
   const replaceMethodBodyWithStub = useAppStore((state) => state.replaceMethodBodyWithStub)
@@ -541,6 +596,42 @@ export const App = (): React.JSX.Element => {
     [selectedNode, treeChildren, treeParents],
   )
 
+  /** dnSpy's Create Assembly: the window's type and attribute pickers need a workspace, which nothing open means
+   *  there is none of yet. */
+  const createAssemblyCommand = async (): Promise<void> => {
+    if (await ensureWorkspace())
+      setCreateAssemblyOpen(true)
+  }
+
+  /** dnSpy's Add Existing NetModule to Assembly: a file picked, and a box saying so when it is no net module. */
+  const addExistingNetModule = async (node: TreeNode): Promise<void> => {
+    const path = await window.dnSpy.pickNetModuleFile()
+    if (!path)
+      return
+    if (!await addNetModule(node, { path }))
+      await window.dnSpy.showMessage(useAppStore.getState().error ?? t('{path} is not a NetModule', { path }))
+  }
+
+  /** dnSpy's Remove NetModule from Assembly, which asks about the net module's unsaved changes first. */
+  const removeNetModuleCommand = async (node: TreeNode): Promise<void> => {
+    const modified = await getModifiedModules([node.id])
+    if (modified.length > 0) {
+      const answer = await window.dnSpy.askSaveModified(modified.length)
+      if (answer === 'cancel' || (answer === 'save' && !await useAppStore.getState().saveModules(modified)))
+        return
+    }
+    if (await removeNetModule(node))
+      closeDocumentTabsFor(model, node.id)
+  }
+
+  /** Where a row is among its parent's rows, which tells an assembly's manifest module from its net modules. */
+  const indexInParent = (nodeId: string): number | undefined => {
+    const state = useAppStore.getState()
+    const parentId = state.parents[nodeId]
+    const index = parentId ? (state.children[parentId] ?? []).findIndex((child) => child.id === nodeId) : -1
+    return index < 0 ? undefined : index
+  }
+
   /** Removes a node, defaulting to the selected one. A menu that carries its own node — the code
    *  viewer's context menu, whose selection is the reference under the caret — hands that one over. */
   const deleteSelected = (node = selectedNode): void => {
@@ -548,21 +639,39 @@ export const App = (): React.JSX.Element => {
       return
     // A root row is a document, and Del or Edit > Remove takes it out of the tree — with every other
     // selected root, the way RemoveAssemblyCommand acts on the whole selection.
+    // A net module of an assembly is taken out of it — dnSpy binds Del to Remove NetModule from Assembly there.
+    if (node.kind === 'module') {
+      const state = useAppStore.getState()
+      const parent = state.parents[node.id] ? findNode(state, state.parents[node.id]) : undefined
+      if (parent?.kind === 'assembly' && parent.icon !== 'ModulePublic' && (indexInParent(node.id) ?? 0) > 0)
+        void removeNetModuleCommand(node)
+      return
+    }
     if (DOCUMENT_ROOT_KINDS.includes(node.kind)) {
       const selection = useAppStore.getState().selectedNodes
       const roots = selection.some((selected) => selected.id === node.id) && selection.every((selected) => DOCUMENT_ROOT_KINDS.includes(selected.kind)) ? selection : [node]
       void removeDocuments(roots.map((root) => root.id), () => removeModules(roots.map((root) => root.id)))
       return
     }
-    // dnSpy asks before removing a type, method or field — each of those can be referenced from code
-    // that this edit cannot see. Property, event, resource and namespace removals go through unasked.
-    const question = DELETE_CONFIRMATIONS[node.kind]
-    if (question && !window.confirm(t(question)))
+    // dnSpy's delete commands take the whole selection when it is all of the node's kind, as one undo step. A
+    // type, method or field can be referenced from code this edit cannot see, so dnSpy asks first — once for the
+    // command, and not again once its "don't show again" was ticked. The others go through unasked.
+    const state = useAppStore.getState()
+    const targets = deletionTargets(node, state.selectedNodes, state.parents)
+    if (targets.length === 0)
       return
-    void deleteNode(node).then((deleted) => {
-      if (deleted)
-        closeDocumentTabsFor(model, node.id)
-    })
+    void (async () => {
+      const question = DELETE_COMMANDS[node.kind]?.question
+      if (question) {
+        const answer = await askIgnorableMessage(DELETE_QUESTION_ID, t(question), [t('Yes'), t('No')])
+        if (answer !== undefined && answer !== t('Yes'))
+          return
+      }
+      if (await deleteNodes(targets)) {
+        for (const target of targets)
+          closeDocumentTabsFor(model, target.id)
+      }
+    })()
   }
   /** Undo and Redo, which can take a whole document out of the tree again — a removal dnSpy recorded in the
    *  history — and then the tabs that showed anything of it go with it, the way the removal closed them. */
@@ -1185,7 +1294,7 @@ export const App = (): React.JSX.Element => {
           void saveCode(config.documentId)
         } else if (!editingText) {
           event.preventDefault()
-          void saveModule()
+          void saveActiveDocument()
         }
       } else if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === 't') {
         const tab = model.getActiveTabset()?.getSelectedNode()
@@ -1215,7 +1324,20 @@ export const App = (): React.JSX.Element => {
       } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'p') {
         event.preventDefault()
         collapseTreeViewNodes()
-      } else if (event.ctrlKey && event.key.toLowerCase() === 'd' && !editingText) {
+      } else if (event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd' && !editingText) {
+        // dnSpy's Go to MD Table Row, in the module of the open code document or of the selection.
+        const target = mdTableRowTarget()
+        if (target) {
+          event.preventDefault()
+          setMdRowNode(target)
+        }
+      } else if (event.shiftKey && event.altKey && !event.ctrlKey && event.code === 'KeyR' && !editingText) {
+        // dnSpy's Go to MD Table Row for the selected row's own token.
+        if (selectedNode?.metadataToken !== undefined && hasMetadataTables(useAppStore.getState(), selectedNode.id)) {
+          event.preventDefault()
+          goToMdTableRow(selectedNode, selectedNode.metadataToken)
+        }
+      } else if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === 'd' && !editingText) {
         // dnSpy's Go to Token, which its tree and its document viewer both bind to Ctrl+D.
         event.preventDefault()
         setTokenNode(selectedNode)
@@ -1338,7 +1460,7 @@ export const App = (): React.JSX.Element => {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [activeDocument, canRedo, canUndo, chooseAndOpen, collapseTreeViewNodes, continueDebug, debugState, deleteAllBreakpoints, deleteSelected, model, openEditNode, pauseDebug, redoEdit, saveAllModules, saveCode, saveModule, saveModuleAs, selectedNode, showToolWindow, showCode, stepDebug, stopDebug, toggleBreakpointHere, undoEdit, workspaceId])
+  }, [activeDocument, canRedo, canUndo, chooseAndOpen, collapseTreeViewNodes, continueDebug, debugState, deleteAllBreakpoints, deleteSelected, model, openEditNode, pauseDebug, redoEdit, saveAllModules, saveCode, saveModule, selectedNode, showToolWindow, showCode, stepDebug, stopDebug, toggleBreakpointHere, undoEdit, workspaceId])
 
   // Closing the workspace's documents is also the first thing a restore does, so the two share it.
   const closeDocumentTabs = (): void => {
@@ -1372,20 +1494,24 @@ export const App = (): React.JSX.Element => {
     forceLayoutUpdate((value) => value + 1)
   }, [model, workspaceId, t])
 
-  // dnSpy's DocumentSaver.AskUserToSaveIfModified, put to the window as it closes: unsaved files are offered
-  // to be saved first, "No" lets them go unsaved, and "Cancel" — or a save that was itself called off —
-  // keeps the window open. The Open List is written last, as dnSpy writes the files that are open on exit.
+  // dnSpy's exit question, put to the window as it closes: unsaved files are offered to be saved first, "No" lets
+  // them go unsaved, and closing the box — or a save that did not write every file — keeps the window open. The
+  // Open List is written last, as dnSpy writes the files that are open on exit.
   const closeRequested = async (): Promise<void> => {
     const state = useAppStore.getState()
-    const modified = state.workspaceId ? await getModifiedModules() : []
+    if (state.workspaceId)
+      await state.refreshModifiedDocuments()
+    const modified = useAppStore.getState().modifiedDocuments
     if (modified.length > 0) {
-      const answer = await window.dnSpy.askSaveModified(modified.length)
-      if (answer === 'cancel' || (answer === 'save' && !await state.saveModules(modified))) {
+      // dnSpy's AppWindow_MainWindowClosing: Yes goes through the save windows — one document's Save Module
+      // window, several documents' Save Modules window — and the exit only happens when every file was written.
+      const answer = await window.dnSpy.askExitUnsaved(modified.length)
+      if (answer === 'cancel' || (answer === 'save' && !await state.requestSave(modified.map((document) => document.id)))) {
         await window.dnSpy.respondToClose(false)
         return
       }
     }
-    rememberCurrentDocuments(useAppStore.getState().modules.map((module) => module.path))
+    rememberCurrentDocuments(useAppStore.getState().modules.filter((module) => !module.inMemory).map((module) => module.path))
     await window.dnSpy.respondToClose(true)
   }
 
@@ -2040,6 +2166,18 @@ export const App = (): React.JSX.Element => {
 
   // A module node and the module a hex command names are the same node id, but a command only has the
   // id, so the tab builder takes the two fields it needs rather than the whole tree node.
+  // dnSpy's Save saves the active tab's document: a hex tab's is its file, saved the way a hex buffer is — under
+  // a file name and nothing else. Any other tab falls to the selected module.
+  const saveActiveDocument = (): Promise<boolean> => {
+    const tab = model.getActiveTabset()?.getSelectedNode()
+    if (tab instanceof TabNode && tab.getComponent() === 'hex') {
+      const moduleId = (tab.getConfig() as { moduleId?: string } | undefined)?.moduleId
+      if (moduleId)
+        return useAppStore.getState().requestSave([moduleId])
+    }
+    return saveModule()
+  }
+
   const addSpecialTab = (component: 'hex' | 'module-info', module: { id: string; label: string }): void => {
     const tabId = `${component}:${module.id}`
     if (model.getNodeById(tabId)) {
@@ -2067,6 +2205,35 @@ export const App = (): React.JSX.Element => {
     return node ? { id: node.id, label: node.label } : undefined
   }
 
+  /** Opens the hex tab of a document on a range — what the metadata table's Show in Hex Editor does. */
+  const showHexRange = (moduleId: string, offset: number, length: number): void => {
+    const target = moduleTabTarget(moduleId)
+    if (!target)
+      return
+    showHexAt(moduleId, offset, length)
+    addSpecialTab('hex', target)
+  }
+
+  /** The node whose module Go to MD Table Row looks in: the open code document's, else the selection's. */
+  const mdTableRowTarget = (): TreeNode | undefined => {
+    const state = useAppStore.getState()
+    const documentNodeId = activeDocument === 'code' && state.activeDocumentId ? state.documents[state.activeDocumentId]?.nodeId : undefined
+    const node = (documentNodeId ? findNode(state, documentNodeId) : undefined) ?? state.selectedNode
+    return node && hasMetadataTables(state, node.id) ? node : undefined
+  }
+
+  /** dnSpy's two Go to MD Table Row commands: the window that asks for a token, or the row of the one given. */
+  const goToMdTableRow = (node: TreeNode, token?: number): void => {
+    if (token === undefined) {
+      setMdRowNode(node)
+      return
+    }
+    void useAppStore.getState().goToMetadataRecord(node, token).then((error) => {
+      if (error)
+        appendOutput(error)
+    })
+  }
+
   const openHex = (): void => {
     const target = useAppStore.getState().hexTarget
     const tab = target ? moduleTabTarget(target.moduleId) : undefined
@@ -2089,6 +2256,8 @@ export const App = (): React.JSX.Element => {
       : kind === 'instructions' ? hexTarget.method && { offset: hexTarget.method.codeOffset, length: hexTarget.method.codeSize }
       : kind === 'body' ? hexTarget.method && { offset: hexTarget.method.bodyOffset, length: hexTarget.method.bodySize }
       : kind === 'fieldInitialValue' ? hexTarget.fieldInitialValue
+      : kind === 'structure' ? hexTarget.structure
+      : kind === 'structureData' ? hexTarget.structureData
       : hexTarget.resource
     const target = hexTarget ? moduleTabTarget(hexTarget.moduleId) : undefined
     if (!hexTarget || !target || !range) return
@@ -2134,7 +2303,7 @@ export const App = (): React.JSX.Element => {
   // dnSpy's Open List keeps the open files in the selected list, so they are written into it before the
   // dialog reads the lists — DocumentListLoader.SaveCurrentDocumentsToList.
   const showOpenList = (): void => {
-    rememberCurrentDocuments(modules.map((module) => module.path))
+    rememberCurrentDocuments(modules.filter((module) => !module.inMemory).map((module) => module.path))
     setOpenListDialogOpen(true)
   }
 
@@ -2228,9 +2397,16 @@ export const App = (): React.JSX.Element => {
     onEditAssemblyAttributesCode: (node) => openCodeDialog(node, 'editAssembly'),
     onCreateResource: (kind, node) => createResource(kind, node),
     onCreateResourceElement: (node) => createResourceElement(node),
+    onCreateImageResources: (node) => createImageResources(node),
+    onCreateImageList: (node) => createImageList(node),
     onSaveResource: (nodes, raw, useSubDirs) => { void saveResource(nodes, raw, useSubDirs) },
     onLoadDependencies: (node, recursive) => { void loadDependencies(node, recursive) },
     onConvertModule: (node, toAssembly) => { void convertModule(node, toAssembly) },
+    onCreateAssembly: () => void createAssemblyCommand(),
+    onCreateNetModule: () => setNetModuleDialog({}),
+    onAddNewNetModule: (node) => setNetModuleDialog({ assemblyNode: node }),
+    onAddExistingNetModule: (node) => void addExistingNetModule(node),
+    onRemoveNetModule: (node) => void removeNetModuleCommand(node),
     onRenameNamespace: (node) => setRenameNamespaceNode(node),
     onMoveTypesToEmptyNamespace: (node) => { void moveTypesToEmptyNamespace(node) },
     onSortAssemblies: () => { void sortAssemblies() },
@@ -2241,6 +2417,7 @@ export const App = (): React.JSX.Element => {
     onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
     onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
     onGoToToken: (node) => { setTokenNode(node) },
+    onGoToMdTableRow: (node, token) => goToMdTableRow(node, token),
     onAddMethodBreakpoints: (targets) => { void addMethodBreakpoints(targets) },
     onAddClassBreakpoint: (node) => { void addClassBreakpoint(node) },
     onAddClassTracepoint: (node) => setClassTracepointNode(node),
@@ -2298,6 +2475,7 @@ export const App = (): React.JSX.Element => {
     onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
     onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
     onGoToToken: (node) => setTokenNode(node),
+    onGoToMdTableRow: (node, token) => goToMdTableRow(node, token),
     onStartDebug: () => setDebugProgramDialogOpen(true),
     canStartDebug: backendStatus.capabilities?.['debug.coreclr.launch'] === true,
     onShowDisassembly: () => showToolWindow('disassembly'),
@@ -2388,7 +2566,14 @@ export const App = (): React.JSX.Element => {
       // new view rather than the old one reloading in place.
       case 'document': {
         const documentId = (node.getConfig() as { documentId: string }).documentId
-        return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView key={documentId} documentId={documentId} viewId={node.getId()} theme={theme} transparentBackground={backgroundImageOn} commands={documentViewCommands(node.getId())} /></Suspense>
+        return (
+          <DocumentPane
+            documentId={documentId}
+            zoomStyle={tabZoomStyle}
+            onShowHex={showHexRange}
+            renderCode={() => <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView key={documentId} documentId={documentId} viewId={node.getId()} theme={theme} transparentBackground={backgroundImageOn} commands={documentViewCommands(node.getId())} /></Suspense>}
+          />
+        )
       }
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} transparentBackground={backgroundImageOn} />
@@ -2442,6 +2627,8 @@ export const App = (): React.JSX.Element => {
         hasModule={modules.length > 0}
         selectionKind={selectedNode?.kind}
         selectionLabel={selectedNode?.label}
+        selection={selectedNodes}
+        parents={treeParents}
         hasEmptyNamespaceSibling={hasEmptyNamespaceSibling}
         activeDocument={activeDocument}
         canShowCode={canShowCode}
@@ -2459,9 +2646,9 @@ export const App = (): React.JSX.Element => {
         onCloseAllFramework={() => void closeAllFrameworkAssemblies()}
         onCloseAllMissing={() => void closeAllMissingFiles()}
         dirty={dirty}
-        onSave={() => void saveModule(saveModuleOptions)}
-        onSaveModule={() => setSaveOptionsOpen(true)}
-        onSaveAll={() => void saveAllModules(saveModuleOptions)}
+        onSave={() => void saveActiveDocument()}
+        onSaveModule={() => void saveModule()}
+        onSaveAll={() => void saveAllModules()}
         onReloadAll={() => void reloadAll()}
         onSortAssemblies={() => void sortAssemblies()}
         onFind={() => { findInActiveDocumentEditor() }}
@@ -2481,16 +2668,32 @@ export const App = (): React.JSX.Element => {
         onMergeAssembly={() => { if (selectedNode) void mergeAssembly(selectedNode) }}
         onCreateResource={(kind) => { if (selectedNode) createResource(kind, selectedNode) }}
         onCreateResourceElement={() => { if (selectedNode) createResourceElement(selectedNode) }}
+        onCreateImageResources={() => { if (selectedNode) createImageResources(selectedNode) }}
+        onCreateImageList={() => { if (selectedNode) createImageList(selectedNode) }}
         selectionIcon={selectedNode?.icon}
         onDelete={deleteSelected}
         onRenameNamespace={() => { if (selectedNode?.kind === 'namespace') setRenameNamespaceNode(selectedNode) }}
         onMoveTypesToEmptyNamespace={() => { if (selectedNode?.kind === 'namespace') void moveTypesToEmptyNamespace(selectedNode) }}
         onConvertModule={(toAssembly) => { if (selectedNode?.kind === 'module') void convertModule(selectedNode, toAssembly) }}
+        onCreateAssembly={() => void createAssemblyCommand()}
+        onCreateNetModule={() => setNetModuleDialog({})}
+        onAddNewNetModule={() => { if (selectedNode) setNetModuleDialog({ assemblyNode: selectedNode }) }}
+        onAddExistingNetModule={() => { if (selectedNode) void addExistingNetModule(selectedNode) }}
+        onRemoveNetModule={() => { if (selectedNode) void removeNetModuleCommand(selectedNode) }}
+        selectionParentIcon={selectedNode && useAppStore.getState().parents[selectedNode.id] ? findNode(useAppStore.getState(), useAppStore.getState().parents[selectedNode.id])?.icon : undefined}
+        selectionIndexInParent={selectedNode ? indexInParent(selectedNode.id) : undefined}
         selectionParentKind={selectedNode && useAppStore.getState().parents[selectedNode.id] ? findNode(useAppStore.getState(), useAppStore.getState().parents[selectedNode.id])?.kind : undefined}
         onLoadDependencies={(recursive) => { if (selectedNode) void loadDependencies(selectedNode, recursive) }}
         onReplaceMethodBodyWithStub={() => { if (selectedNode?.kind === 'method') void replaceMethodBodyWithStub(selectedNode) }}
         hexTarget={hexTarget}
         hexStatement={hexStatement}
+        canGoToMdTableRow={mdTableRowTarget() !== undefined}
+        mdTableRowToken={selectedNodes.length <= 1 && selectedNode && hasMetadataTables(useAppStore.getState(), selectedNode.id) ? selectedNode.metadataToken : undefined}
+        onGoToMdTableRow={(token) => {
+          const node = token === undefined ? mdTableRowTarget() : selectedNode
+          if (node)
+            goToMdTableRow(node, token)
+        }}
         onOpenHex={openHex}
         onShowHexAt={showSelectionInHex}
         onHexWriteBody={(kind) => void hexWriteMethodBody(kind)}
@@ -2705,14 +2908,60 @@ export const App = (): React.JSX.Element => {
       {renameNamespaceNode && <RenameNamespaceDialog node={renameNamespaceNode} onClose={() => setRenameNamespaceNode(undefined)} />}
       {editMethodBody && <MethodBodyDialog node={editMethodBody.node} selection={editMethodBody.selection} onClose={() => setEditMethodBody(undefined)} />}
       {codeDialog && <EditCodeDialog node={codeDialog.node} mode={codeDialog.mode} sourceNodeId={codeDialog.sourceNodeId} theme={theme} onClose={() => setCodeDialog(undefined)} />}
-      {saveOptionsOpen && <SaveModuleOptionsDialog initial={saveModuleOptions} onClose={() => setSaveOptionsOpen(false)} onAccept={(options) => { setSaveModuleOptions(options); setSaveOptionsOpen(false); void saveModuleAs(options) }} />}
+      {saveRequest && workspaceId && saveRequest.phase === 'options' && saveRequest.documents[0] && (
+        <SaveModuleOptionsDialog
+          key={saveRequest.id}
+          workspaceId={workspaceId}
+          options={saveRequest.documents[0]}
+          onAccept={acceptSaveOptions}
+          onClose={() => void finishSave(undefined)}
+        />
+      )}
+      {saveRequest && workspaceId && saveRequest.phase === 'run' && (
+        <SaveModulesDialog
+          key={saveRequest.id}
+          workspaceId={workspaceId}
+          documents={saveRequest.documents}
+          mode={saveRequest.mode}
+          onClose={(response) => void finishSave(response)}
+        />
+      )}
       {assemblyModuleDialog?.mode === 'assembly' && <AssemblyOptionsDialog node={assemblyModuleDialog.node} onClose={() => setAssemblyModuleDialog(undefined)} />}
+      {createAssemblyOpen && <AssemblyOptionsDialog create onClose={() => setCreateAssemblyOpen(false)} />}
+      {netModuleDialog && <NetModuleOptionsDialog assemblyNode={netModuleDialog.assemblyNode} onClose={() => setNetModuleDialog(undefined)} />}
       {assemblyModuleDialog?.mode === 'module' && <ModuleOptionsDialog node={assemblyModuleDialog.node} onClose={() => setAssemblyModuleDialog(undefined)} />}
       {resourceDialog?.mode === 'options' && <ResourceOptionsDialog node={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
       {resourceDialog?.mode === 'element' && <ResourceElementDialog node={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
       {resourceDialog?.mode === 'create' && <CreateResourceDialog owner={resourceDialog.node} kind={resourceDialog.kind} onClose={() => setResourceDialog(undefined)} />}
       {resourceDialog?.mode === 'createElement' && <CreateResourceElementDialog resourceNode={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
+      {resourceDialog?.mode === 'createImageList' && <CreateImageListDialog resourceNode={resourceDialog.node} onClose={() => setResourceDialog(undefined)} />}
       {tokenNode && <GoToTokenDialog node={tokenNode} onClose={() => setTokenNode(undefined)} />}
+      {mdRowNode && (
+        <AskDialog
+          title="Go to MD Table Row"
+          label={t('Metadata token')}
+          validate={(text) => {
+            const trimmed = text.trim()
+            const hexadecimal = /^(0x|&h)/i.test(trimmed)
+            const digits = hexadecimal ? trimmed.slice(2) : trimmed
+            if (!(hexadecimal ? /^[0-9a-f]+$/i : /^\d+$/).test(digits))
+              return t('The value is not a hexadecimal or decimal integer')
+            return parseInt(digits, hexadecimal ? 16 : 10) > 0xFFFFFFFF
+              ? t('Value must be between {min} and {max} (0x{maxHex}) inclusive', { min: 0, max: 0xFFFFFFFF, maxHex: 'FFFFFFFF' })
+              : undefined
+          }}
+          onAccept={(text) => {
+            const trimmed = text.trim()
+            const token = /^(0x|&h)/i.test(trimmed) ? parseInt(trimmed.slice(2), 16) : parseInt(trimmed, 10)
+            return useAppStore.getState().goToMetadataRecord(mdRowNode, token).then((error) => {
+              if (!error)
+                setMdRowNode(undefined)
+              return error
+            })
+          }}
+          onClose={() => setMdRowNode(undefined)}
+        />
+      )}
       {/* dnSpy's Add Class Tracepoint asks for the settings first, with the trace already switched on, and only
           then puts a breakpoint on every method of the type — each carrying what the dialog said. */}
       {classTracepointNode && (

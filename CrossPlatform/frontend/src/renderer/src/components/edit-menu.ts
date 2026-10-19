@@ -1,7 +1,11 @@
 import type { HexBodyKind } from '../app-store'
 import type { HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
 import type { TranslationValues } from '../localization'
+import type { TreeNode } from '../../../shared/protocol'
+import { compilerCommandLanguage } from './compiler-language'
+import { deleteHeader, deletionTargets } from './delete-commands'
 import { hexMenuEntries, type HexShowKind } from './hex-menu'
+import type { MetadataTableCommands } from '../metadata-table'
 
 export type { HexShowKind }
 
@@ -19,7 +23,7 @@ export interface MenuItem {
 }
 
 /** The tab component the Edit menu's hex groups key off, mirroring dnSpy's hex/metadata-table documents. */
-export type ActiveDocument = 'code' | 'hex' | 'module-info' | null
+export type ActiveDocument = 'code' | 'hex' | 'module-info' | 'md-table' | null
 
 export interface EditMenuContext {
   t(message: string, values?: TranslationValues): string
@@ -28,10 +32,19 @@ export interface EditMenuContext {
   selectionKind?: string
   /** `selectedNode.label`, used by the dynamic "Delete {name}" / "Remove {name}" headers. */
   selectionLabel?: string
+  /** Every selected row and the tree's parent links: a delete command takes the whole selection when it is all of
+   *  the command's kind, and is headed by how many rows that is. */
+  selection?: TreeNode[]
+  parents?: Record<string, string>
   /** `selectedNode.icon`, which tells a .resources file from any other resource. */
   selectionIcon?: string
   /** The kind of the row above the selection, which tells a net module from a module. */
   selectionParentKind?: string
+  /** The image of the row above the selection: an assembly root wears an assembly's, a module that stands on its
+   *  own — a net module with no assembly — a module's. */
+  selectionParentIcon?: string
+  /** Where the selection is among its parent's rows; an assembly's manifest module is the first. */
+  selectionIndexInParent?: number
   activeDocument: ActiveDocument
   /**
    * Whether a code document is open in a viewer. dnSpy's Edit-menu hex commands fall back to the file the
@@ -68,11 +81,21 @@ export interface EditMenuContext {
   onCreateResource(kind: ResourceCreateKind): void
   /** Opens the New Resource command of a .resources file — dnSpy's "Create Resource...". */
   onCreateResourceElement(): void
+  /** dnSpy's Create System.Data.Bitmap/Icon Resource and Create System.Windows.Forms.ImageListStreamer Resource. */
+  onCreateImageResources(): void
+  onCreateImageList(): void
   onDelete(): void
   onRenameNamespace(): void
   onMoveTypesToEmptyNamespace(): void
   /** Converts the selected module into a net module, dropping the assembly around it. */
   onConvertModule(toAssembly?: boolean): void
+  /** dnSpy's Create Assembly, Create NetModule and the commands that add a net module to the selected assembly or
+   *  take the selected one out of it. */
+  onCreateAssembly?(): void
+  onCreateNetModule?(): void
+  onAddNewNetModule?(): void
+  onAddExistingNetModule?(): void
+  onRemoveNetModule?(): void
   /** Opens the assemblies the selected node's module references name. The recursive form walks the whole
    *  closure instead of stopping at the module's own references; dnSpy registers both on this menu as
    *  well as on the tree's. */
@@ -99,6 +122,14 @@ export interface EditMenuContext {
   onHexWriteBody(kind: HexBodyKind): void
   onHexCopyBody(): void
   onHexPasteBody(): void
+  /** The commands of the metadata table document that last had the focus — dnSpy's MDTableContext. */
+  mdTable?: MetadataTableCommands
+  /** Whether Go to MD Table Row has a module to look in: the open code document's or the selection's, read from a
+   *  file. */
+  canGoToMdTableRow?: boolean
+  /** The token of the selected row, which the second Go to MD Table Row entry goes to without asking. */
+  mdTableRowToken?: number
+  onGoToMdTableRow?(token?: number): void
 }
 
 /** The kinds a create command produces — one entry per command of dnSpy's New group. */
@@ -107,8 +138,9 @@ export type CreatedKind = 'type' | 'method' | 'field' | 'property' | 'event'
 interface EditEntry {
   group: number
   order: number
-  /** dnSpy's image for the entry, or none where its ExportMenuItem has no Icon. */
-  icon?: string
+  /** dnSpy's image for the entry, or none where its ExportMenuItem has no Icon; the compiler commands' depends on
+   *  the language they are in. */
+  icon?: string | ((ctx: EditMenuContext) => string)
   label(ctx: EditMenuContext): string
   shortcut?: string
   visible(ctx: EditMenuContext): boolean
@@ -132,9 +164,21 @@ const GROUP_HEX_GOTO_MD = 8000
 const GROUP_HEX_COPY = 9000
 
 const always = (): boolean => true
-// Items dnSpy shows only for node types this port has no equivalent of (nested netmodules, address
-// references into a hex editor). They stay in the table so the menu keeps WPF's shape, but never show.
-const never = (): boolean => false
+
+/** The rows dnSpy calls DsDocumentNodes: a document root, and a module row. */
+const DOCUMENT_KINDS = ['assembly', 'module', 'pedocument', 'elfdocument', 'unknowndocument']
+
+/** An assembly root, as opposed to a root that is a module standing on its own. */
+const isAssemblyRoot = (kind: string | undefined, icon: string | undefined): boolean => kind === 'assembly' && icon !== 'ModulePublic'
+
+/** dnSpy's AddNetModuleToAssemblyCommand.CanExecute: one assembly row, or one module row under an assembly. */
+const inAssembly = (ctx: EditMenuContext): boolean =>
+  (ctx.selection?.length ?? 1) === 1 && (isAssemblyRoot(ctx.selectionKind, ctx.selectionIcon)
+    || (ctx.selectionKind === 'module' && isAssemblyRoot(ctx.selectionParentKind, ctx.selectionParentIcon)))
+
+/** RemoveNetModuleFromAssemblyCommand.IsVisible: one module row under an assembly. */
+const isNetModuleRow = (ctx: EditMenuContext): boolean =>
+  (ctx.selection?.length ?? 1) === 1 && ctx.selectionKind === 'module' && isAssemblyRoot(ctx.selectionParentKind, ctx.selectionParentIcon)
 
 const kindIs = (...kinds: string[]) => (ctx: EditMenuContext): boolean =>
   ctx.selectionKind !== undefined && kinds.includes(ctx.selectionKind)
@@ -170,8 +214,18 @@ const inModule = kindIs('assembly', 'module', 'namespace', 'type', 'method', 'fi
  */
 const isMember = kindIs('type', 'method', 'field', 'property', 'event')
 
+/** The selected row as the tree knows it, for the menus that only carry its kind and label. */
+const selectedRow = (ctx: EditMenuContext): TreeNode =>
+  ctx.selection?.[0] ?? { id: '', kind: ctx.selectionKind ?? '', label: ctx.selectionLabel ?? '', hasChildren: false }
+
+/** The rows a delete command takes: the whole selection when it is all of the command's kind. */
+const deleteTargets = (ctx: EditMenuContext): TreeNode[] => deletionTargets(selectedRow(ctx), ctx.selection ?? [selectedRow(ctx)], ctx.parents ?? {})
+
 /** The header of dnSpy's "Delete X" commands: one node shows its name, several show a count. */
-const deleteLabel = (ctx: EditMenuContext): string => ctx.t('Delete {name}', { name: ctx.selectionLabel ?? '' })
+const deleteLabel = (ctx: EditMenuContext): string => deleteHeader(ctx.t, ctx.selectionKind ?? '', deleteTargets(ctx), selectedRow(ctx))
+
+/** A delete command shows on its own kind, when the selection gives it something to delete. */
+const canDelete = (kind: string) => (ctx: EditMenuContext): boolean => ctx.selectionKind === kind && deleteTargets(ctx).length > 0
 
 /** dnSpy removes each deletable node type through its own command; this port acts on the selection. */
 const deleteSelected = (ctx: EditMenuContext): void => ctx.onDelete()
@@ -205,15 +259,16 @@ const EDIT_ENTRIES: EditEntry[] = [
   // 2000 — AsmEditor: Delete
   // RemoveAssemblyCommand.EditMenuCommand: the selection's documents, which are the tree's root rows.
   { group: GROUP_DELETE, order: 0, icon: 'Cancel', label: (ctx) => ctx.t('Remove {name}', { name: ctx.selectionLabel ?? '' }), shortcut: 'Del', visible: kindIs('assembly', 'pedocument', 'elfdocument', 'unknowndocument'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 10, icon: 'Cancel', label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: never },
-  { group: GROUP_DELETE, order: 20, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('type'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 30, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('method'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 40, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('field'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 50, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('property'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 60, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('event'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 70, icon: 'Cancel', label: (ctx) => ctx.t('Delete Namespace'), shortcut: 'Del', visible: kindIs('namespace'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 80, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('resource'), action: deleteSelected },
-  { group: GROUP_DELETE, order: 90, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: kindIs('resourceentry') },
+  // The manifest module is the assembly's first row, and it is the one module that cannot leave it.
+  { group: GROUP_DELETE, order: 10, icon: 'Cancel', label: (ctx) => ctx.t('Remove NetModule from Assembly'), shortcut: 'Del', visible: isNetModuleRow, enabled: (ctx) => (ctx.selectionIndexInParent ?? 0) > 0, action: (ctx) => ctx.onRemoveNetModule?.() },
+  { group: GROUP_DELETE, order: 20, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('type'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 30, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('method'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 40, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('field'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 50, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('property'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 60, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('event'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 70, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('namespace'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 80, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('resource'), action: deleteSelected },
+  { group: GROUP_DELETE, order: 90, icon: 'Cancel', label: deleteLabel, shortcut: 'Del', visible: canDelete('resourceentry'), action: deleteSelected },
 
   // 3000 — AsmEditor: Misc
   { group: GROUP_MISC, order: 0, icon: 'Namespace', label: (ctx) => ctx.t('Move Types to Empty Namespace'), visible: (ctx) => ctx.selectionKind === 'namespace' && ctx.selectionLabel !== '-' && ctx.hasEmptyNamespaceSibling, action: (ctx) => ctx.onMoveTypesToEmptyNamespace() },
@@ -226,10 +281,11 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_MISC, order: 30, label: (ctx) => ctx.t('Convert Assembly to NetModule'), visible: (ctx) => ctx.selectionKind === 'module' && ctx.selectionParentKind === 'assembly', action: (ctx) => ctx.onConvertModule(false) },
 
   // 4000 — AsmEditor: New
-  { group: GROUP_NEW, order: 0, label: (ctx) => ctx.t('Create Assembly...'), visible: (ctx) => ctx.selectionKind === undefined || ctx.selectionKind === 'module' },
-  { group: GROUP_NEW, order: 10, label: (ctx) => ctx.t('Add New NetModule to Assembly...'), visible: never },
-  { group: GROUP_NEW, order: 20, label: (ctx) => ctx.t('Add Existing NetModule to Assembly...'), visible: never },
-  { group: GROUP_NEW, order: 30, label: (ctx) => ctx.t('Create NetModule...'), visible: never },
+  // CreateAssemblyCommand: nothing selected, or a document row first; CreateNetModuleCommand: any document row.
+  { group: GROUP_NEW, order: 0, label: (ctx) => ctx.t('Create Assembly...'), visible: (ctx) => ctx.selectionKind === undefined || DOCUMENT_KINDS.includes(ctx.selectionKind), action: (ctx) => ctx.onCreateAssembly?.() },
+  { group: GROUP_NEW, order: 10, label: (ctx) => ctx.t('Add New NetModule to Assembly...'), visible: inAssembly, action: (ctx) => ctx.onAddNewNetModule?.() },
+  { group: GROUP_NEW, order: 20, label: (ctx) => ctx.t('Add Existing NetModule to Assembly...'), visible: inAssembly, action: (ctx) => ctx.onAddExistingNetModule?.() },
+  { group: GROUP_NEW, order: 30, label: (ctx) => ctx.t('Create NetModule...'), visible: (ctx) => ctx.selectionKind === undefined || (ctx.selection ?? []).some((node) => DOCUMENT_KINDS.includes(node.kind)) || DOCUMENT_KINDS.includes(ctx.selectionKind), action: (ctx) => ctx.onCreateNetModule?.() },
   { group: GROUP_NEW, order: 40, icon: 'NewClass', label: (ctx) => ctx.t('Create Type...'), visible: kindIs('type', 'namespace', 'module'), action: (ctx) => ctx.onCreateMember('type') },
   { group: GROUP_NEW, order: 50, icon: 'NewClass', label: (ctx) => ctx.t('Create Nested Type...'), visible: isMember, action: (ctx) => ctx.onCreateMember('type', true) },
   { group: GROUP_NEW, order: 60, icon: 'NewMethod', label: (ctx) => ctx.t('Create Method...'), visible: isMember, action: (ctx) => ctx.onCreateMember('method') },
@@ -240,8 +296,8 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_NEW, order: 110, label: (ctx) => ctx.t('Create Multi File Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('multiFile') },
   { group: GROUP_NEW, order: 120, label: (ctx) => ctx.t('Create Assembly Linked Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('assemblyLinked') },
   { group: GROUP_NEW, order: 130, label: (ctx) => ctx.t('Create File Linked Resource...'), visible: canCreateResource, action: (ctx) => ctx.onCreateResource('fileLinked') },
-  { group: GROUP_NEW, order: 140, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: canCreateResource },
-  { group: GROUP_NEW, order: 150, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: canCreateResource },
+  { group: GROUP_NEW, order: 140, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Data.Bitmap/Icon Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateImageResources() },
+  { group: GROUP_NEW, order: 150, icon: 'NewImage', label: (ctx) => ctx.t('Create System.Windows.Forms.ImageListStreamer Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateImageList() },
   { group: GROUP_NEW, order: 170, label: (ctx) => ctx.t('Create Byte Array Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResource('byteArray') },
   { group: GROUP_NEW, order: 180, label: (ctx) => ctx.t('Create System.IO.Stream Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResource('stream') },
   { group: GROUP_NEW, order: 190, label: (ctx) => ctx.t('Create Resource...'), visible: inResourcesFile, action: (ctx) => ctx.onCreateResourceElement() },
@@ -251,11 +307,11 @@ const EDIT_ENTRIES: EditEntry[] = [
   { group: GROUP_SETTINGS, order: 10, icon: 'Settings', label: (ctx) => ctx.t('Edit Module...'), shortcut: 'Alt+Enter', visible: kindIs('module'), action: (ctx) => ctx.onEditModule() },
   { group: GROUP_SETTINGS, order: 20, icon: 'Settings', label: (ctx) => ctx.t('Edit Type...'), shortcut: 'Alt+Enter', visible: kindIs('type'), action: (ctx) => ctx.onEditNode() },
   { group: GROUP_SETTINGS, order: 30, icon: 'Settings', label: (ctx) => ctx.t('Edit Method...'), shortcut: 'Alt+Enter', visible: kindIs('method'), action: (ctx) => ctx.onEditNode() },
-  { group: GROUP_SETTINGS, order: 40, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Method ({language})...', { language: 'C#' }), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodCode() },
-  { group: GROUP_SETTINGS, order: 41, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: 'C#' }), visible: kindIs('module'), action: (ctx) => ctx.onEditAssemblyAttributesCode() },
-  { group: GROUP_SETTINGS, order: 42, icon: 'CSFileNode', label: (ctx) => ctx.t('Edit Class ({language})...', { language: 'C#' }), visible: isMember, action: (ctx) => ctx.onEditClassCode() },
-  { group: GROUP_SETTINGS, order: 43, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class Members ({language})...', { language: 'C#' }), visible: isMember, action: (ctx) => ctx.onAddClassMembersCode() },
-  { group: GROUP_SETTINGS, order: 44, icon: 'CSFileNode', label: (ctx) => ctx.t('Add Class ({language})...', { language: 'C#' }), visible: inModule, action: (ctx) => ctx.onAddClassCode() },
+  { group: GROUP_SETTINGS, order: 40, icon: () => compilerCommandLanguage().icon, label: (ctx) => ctx.t('Edit Method ({language})...', { language: compilerCommandLanguage().name }), visible: kindIs('method'), action: (ctx) => ctx.onEditMethodCode() },
+  { group: GROUP_SETTINGS, order: 41, icon: () => compilerCommandLanguage().icon, label: (ctx) => ctx.t('Edit Assembly Attributes ({language})...', { language: compilerCommandLanguage().name }), visible: kindIs('module'), action: (ctx) => ctx.onEditAssemblyAttributesCode() },
+  { group: GROUP_SETTINGS, order: 42, icon: () => compilerCommandLanguage().icon, label: (ctx) => ctx.t('Edit Class ({language})...', { language: compilerCommandLanguage().name }), visible: isMember, action: (ctx) => ctx.onEditClassCode() },
+  { group: GROUP_SETTINGS, order: 43, icon: () => compilerCommandLanguage().icon, label: (ctx) => ctx.t('Add Class Members ({language})...', { language: compilerCommandLanguage().name }), visible: isMember, action: (ctx) => ctx.onAddClassMembersCode() },
+  { group: GROUP_SETTINGS, order: 44, icon: () => compilerCommandLanguage().icon, label: (ctx) => ctx.t('Add Class ({language})...', { language: compilerCommandLanguage().name }), visible: inModule, action: (ctx) => ctx.onAddClassCode() },
   // dnSpy's merge runs its compiled-module importer over a picked DLL, merging every type it holds into
   // this module. That importer is the machinery behind the C# compile commands and the port has neither
   // it nor a dnlib merger to stand in for it, so the entry keeps its place and stays disabled rather than
@@ -275,20 +331,20 @@ const EDIT_ENTRIES: EditEntry[] = [
   // which shows the same group.
   ...HEX_ENTRIES,
 
-  // 7000 — Metadata table document
-  { group: GROUP_HEX_MD, order: 0, label: (ctx) => ctx.t('Sort Table'), shortcut: 'Ctrl+Shift+T', visible: documentIs('module-info') },
-  { group: GROUP_HEX_MD, order: 10, label: (ctx) => ctx.t('Sort Selection'), visible: documentIs('module-info') },
-  { group: GROUP_HEX_MD, order: 20, label: (ctx) => ctx.t('Go to RID...'), shortcut: 'Ctrl+G', visible: documentIs('module-info') },
-  { group: GROUP_HEX_MD, order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: documentIs('module-info') },
+  // 7000 — Metadata table document: dnSpy's MDTableContextMenuCommands, on the table that last had the focus.
+  { group: GROUP_HEX_MD, order: 0, label: (ctx) => ctx.t('Sort Table'), shortcut: 'Ctrl+Shift+T', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.canSort === true, action: (ctx) => ctx.mdTable?.sortTable() },
+  { group: GROUP_HEX_MD, order: 10, label: (ctx) => ctx.t('Sort Selection'), visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.canSortSelection === true, action: (ctx) => ctx.mdTable?.sortSelection() },
+  { group: GROUP_HEX_MD, order: 20, label: (ctx) => ctx.t('Go to RID...'), shortcut: 'Ctrl+G', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable !== undefined, action: (ctx) => ctx.mdTable?.goToRid() },
+  { group: GROUP_HEX_MD, order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.canShowInHex === true, action: (ctx) => ctx.mdTable?.showInHex() },
 
-  // 8000 — Go to metadata table row. dnSpy's second entry embeds the token under the caret in its
-  // header (`Go to MD Table Row (06000001)`); with no token model here only the plain one is kept.
-  { group: GROUP_HEX_GOTO_MD, order: 0, label: (ctx) => ctx.t('Go to MD Table Row...'), shortcut: 'Ctrl+Shift+D', visible: documentIs('hex') },
+  // 8000 — Go to metadata table row: the one that asks for a token, and the one that goes to the selected row's.
+  { group: GROUP_HEX_GOTO_MD, order: 0, label: (ctx) => ctx.t('Go to MD Table Row...'), shortcut: 'Ctrl+Shift+D', visible: (ctx) => ctx.canGoToMdTableRow === true && ctx.onGoToMdTableRow !== undefined, action: (ctx) => ctx.onGoToMdTableRow?.() },
+  { group: GROUP_HEX_GOTO_MD, order: 10, label: (ctx) => ctx.t('Go to MD Table Row ({token})', { token: (ctx.mdTableRowToken ?? 0).toString(16).toUpperCase().padStart(8, '0') }), visible: (ctx) => ctx.mdTableRowToken !== undefined && ctx.onGoToMdTableRow !== undefined, action: (ctx) => ctx.onGoToMdTableRow?.(ctx.mdTableRowToken) },
 
   // 9000 — Metadata table copy/paste
-  { group: GROUP_HEX_COPY, order: 0, label: (ctx) => ctx.t('Copy as Text'), shortcut: 'Ctrl+Shift+C', visible: documentIs('module-info') },
-  { group: GROUP_HEX_COPY, order: 10, icon: 'Copy', label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: documentIs('module-info') },
-  { group: GROUP_HEX_COPY, order: 20, icon: 'Paste', label: (ctx) => ctx.t('Paste'), shortcut: 'Ctrl+V', visible: documentIs('module-info') },
+  { group: GROUP_HEX_COPY, order: 0, label: (ctx) => ctx.t('Copy as Text'), shortcut: 'Ctrl+Shift+C', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.hasSelection === true, action: (ctx) => ctx.mdTable?.copyAsText() },
+  { group: GROUP_HEX_COPY, order: 10, icon: 'Copy', label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.hasSelection === true, action: (ctx) => ctx.mdTable?.copy() },
+  { group: GROUP_HEX_COPY, order: 20, icon: 'Paste', label: (ctx) => ctx.t('Paste'), shortcut: 'Ctrl+V', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.hasSelection === true, action: (ctx) => ctx.mdTable?.paste() },
 ]
 
 /**
@@ -318,7 +374,7 @@ export const buildEditMenu = (ctx: EditMenuContext): MenuItem[] => {
       items.push({
         label: entry.label(ctx),
         shortcut: entry.shortcut,
-        icon: entry.icon,
+        icon: typeof entry.icon === 'function' ? entry.icon(ctx) : entry.icon,
         disabled: action ? entry.enabled?.(ctx) === false : true,
         action: action ? () => action(ctx) : undefined,
       })

@@ -19,7 +19,7 @@ const launchApp = async (args: string[] = []): Promise<void> => {
     args: ['.', '--no-sandbox', `--user-data-dir=${userDataDirectory}`, ...args],
     cwd: path.resolve(import.meta.dirname, '../..'),
     // dnSpy's "save before continuing?" is a native box no test can press; the edits are let go.
-    env: { ...process.env, DNSPY_E2E_ASSEMBLY: analyzerTargetPath, DNSPY_E2E_SAVE_PROMPT: 'discard' },
+    env: { ...process.env, DNSPY_E2E_ASSEMBLY: analyzerTargetPath, DNSPY_E2E_SAVE_PROMPT: 'discard', DNSPY_E2E_ASK_ANSWER: 'first' },
   })
   page = await application.firstWindow()
   page.on('dialog', (dialog) => void dialog.accept())

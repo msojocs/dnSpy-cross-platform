@@ -54,7 +54,8 @@ describe('EditCodeDialog', () => {
     expect(await screen.findByText("The name 'x' does not exist")).toBeInTheDocument()
     expect(screen.getByText('CS0103')).toBeInTheDocument()
     expect(screen.getByText('1 diagnostic(s), 1 error(s).')).toBeInTheDocument()
-    expect(harness.compileSource).toHaveBeenCalledWith('ws', 'm1', 'editMethod', expect.stringContaining('CompilerFixture'))
+    // The Compiler options page's C# values go along: TRACE, optimized, unsafe allowed — dnSpy's defaults.
+    expect(harness.compileSource).toHaveBeenCalledWith('ws', 'm1', 'editMethod', expect.stringContaining('CompilerFixture'), undefined, 'csharp', expect.objectContaining({ preprocessorSymbols: 'TRACE', optimize: true, allowUnsafe: true }))
   })
 
   it('imports the source through the store when accepted', async () => {
@@ -65,7 +66,7 @@ describe('EditCodeDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'OK' }))
 
     await waitFor(() => expect(harness.compileCode).toHaveBeenCalledTimes(1))
-    expect(harness.compileCode).toHaveBeenCalledWith(node, 'editMethod', 'public class CompilerFixture { public int Value() { return 2; } }')
+    expect(harness.compileCode).toHaveBeenCalledWith(node, 'editMethod', 'public class CompilerFixture { public int Value() { return 2; } }', 'csharp')
   })
 
   it('opens Edit Assembly Attributes on the attributes the module already has', async () => {
@@ -75,10 +76,22 @@ describe('EditCodeDialog', () => {
     await waitFor(() => expect((screen.getByLabelText('Source') as HTMLTextAreaElement).value).toContain('AssemblyTitle'))
   })
 
-  it('starts Add Class on an empty class the user fills in', async () => {
+  it('starts Add Class on an empty document, as dnSpy\'s AddClassVM does', async () => {
     stub()
     render(<EditCodeDialog node={node} mode="addClass" theme="dark" onClose={() => undefined} />)
-    expect((screen.getByLabelText('Source') as HTMLTextAreaElement).value).toContain('class MyClass')
+    expect((screen.getByLabelText('Source') as HTMLTextAreaElement).value).toBe('')
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Add Class (C#)')
+  })
+
+  it('edits in Visual Basic when that is the decompiler\'s language', async () => {
+    const harness = stub()
+    useAppStore.setState({ defaultLanguage: 'visualBasic' })
+    render(<EditCodeDialog node={node} mode="editMethod" sourceNodeId={typeNode.id} theme="dark" onClose={() => undefined} />)
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Edit Method (Visual Basic)')
+    await screen.findByLabelText('Source')
+    expect(window.dnSpy.decompile).toHaveBeenCalledWith('ws', 't1', 'visualBasic')
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }))
+    await waitFor(() => expect(harness.compileSource).toHaveBeenCalledWith('ws', 'm1', 'editMethod', expect.any(String), undefined, 'visualBasic', expect.objectContaining({ optionExplicit: true, optionInfer: true })))
+    useAppStore.setState({ defaultLanguage: 'cSharp' })
   })
 })

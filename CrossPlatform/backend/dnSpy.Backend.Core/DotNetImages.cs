@@ -19,6 +19,7 @@ static class DotNetImages {
 	public const string Reference = "Reference";
 	public const string FolderClosed = "FolderClosed";
 	public const string BinaryFile = "BinaryFile";
+	public const string Metadata = "Metadata";
 	public const string Type = "Type";
 	public const string Template = "Template";
 	public const string ClassPublic = "ClassPublic";

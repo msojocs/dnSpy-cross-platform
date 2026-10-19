@@ -56,6 +56,8 @@ const launchApp = async (assemblies: string, options: LaunchOptions = {}): Promi
       DNSPY_E2E_SAVE_RESOURCE_PATH: saveResourcePath,
       // dnSpy's "save before continuing?" is a native box no test can press; the edits are let go.
       DNSPY_E2E_SAVE_PROMPT: 'discard',
+      // dnSpy asks before deleting a type or a member; the tests say yes.
+      DNSPY_E2E_ASK_ANSWER: 'first',
     },
   })
   page = await application.firstWindow()
@@ -432,7 +434,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -671,7 +673,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -684,7 +686,11 @@ test.describe('the workspace shell', () => {
     await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
     await page.getByRole('menuitem', { name: 'File', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Save Module...' }).click()
-    await page.getByRole('dialog', { name: 'Save Module' }).getByRole('button', { name: 'OK' }).click()
+    // dnSpy's window opens on the module's own file; "..." picks the copy the test writes instead.
+    const saveDialog = page.getByRole('dialog', { name: 'Save Module' })
+    await saveDialog.getByRole('button', { name: 'Pick a file name' }).click()
+    await expect(saveDialog.getByLabel('Filename', { exact: true })).toHaveValue(savePath)
+    await saveDialog.getByRole('button', { name: 'OK' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
   })
@@ -720,6 +726,8 @@ test.describe('the workspace shell', () => {
       'Go to Token...',
       'Copy MD Token',
       'Copy Full Name',
+      'Go to MD Table Row...',
+      'Go to MD Table Row (02000005)',
       'Add Class Breakpoint',
       'Add Class Tracepoint',
       'Find String References in Module',
@@ -735,7 +743,8 @@ test.describe('the workspace shell', () => {
     await page.keyboard.press('Escape')
     await expect(editType).not.toBeVisible()
 
-    // A module swaps the member commands for its own: the one create, the two "Go to ..." navigations, the
+    // A module swaps the member commands for its own: the document and net module creates, the type create, the
+    // two "Go to ..." navigations, the
     // module's own token and name (dnSpy's Copy Full Name writes a module's name), and the three documents and
     // folders it can open. "Open Hex Editor" is back — a
     // module row is a file, so it is one of the rows the hex editor opens. Remove is not: dnSpy's
@@ -743,7 +752,13 @@ test.describe('the workspace shell', () => {
     await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label')).toHaveText([
       'Open in New Tab',
+      // dnSpy shows Remove NetModule for any module of an assembly, greyed for the manifest module.
+      'Remove NetModule from Assembly',
       'Convert Assembly to NetModule',
+      'Create Assembly...',
+      'Add New NetModule to Assembly...',
+      'Add Existing NetModule to Assembly...',
+      'Create NetModule...',
       'Create Type...',
       'Edit Assembly...',
       'Edit Module...',
@@ -757,6 +772,8 @@ test.describe('the workspace shell', () => {
       'Go to Token...',
       'Copy MD Token',
       'Copy Full Name',
+      'Go to MD Table Row...',
+      'Go to MD Table Row (00000001)',
       'Open Hex Editor',
       'Module Information',
       'Find String References in Module',
@@ -768,7 +785,7 @@ test.describe('the workspace shell', () => {
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -835,7 +852,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ }).click({ button: 'right' })
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ }).click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expect(getter).toHaveCount(1)
   })
@@ -885,10 +902,10 @@ test.describe('the workspace shell', () => {
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // The token the method row is pinned with selects that row, opening the type above it on the way.
-    await tokenDialog.getByLabel('Token').fill('0x06000AB2')
+    await tokenDialog.getByLabel('Token').fill('0x06000ABA')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
-    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ })).toHaveAttribute('aria-selected', 'true')
 
     // Remove Assembly takes the root and every row under it, and the tree is left with nothing on it.
     await page.locator('.tree-row[data-kind="assembly"]').first().click({ button: 'right' })
@@ -923,7 +940,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -1068,7 +1085,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -1100,7 +1117,11 @@ test.describe('the workspace shell', () => {
     await expect(page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Save All' })).toBeVisible()
     await page.getByRole('menuitem', { name: 'File', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Save Module...' }).click()
-    await page.getByRole('dialog', { name: 'Save Module' }).getByRole('button', { name: 'OK' }).click()
+    // dnSpy's window opens on the module's own file; "..." picks the copy the test writes instead.
+    const saveDialog = page.getByRole('dialog', { name: 'Save Module' })
+    await saveDialog.getByRole('button', { name: 'Pick a file name' }).click()
+    await expect(saveDialog.getByLabel('Filename', { exact: true })).toHaveValue(savePath)
+    await saveDialog.getByRole('button', { name: 'OK' }).click()
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
     expect(existsSync(savePath)).toBe(true)
 
@@ -1185,7 +1206,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -1505,7 +1526,7 @@ test.describe('the workspace shell', () => {
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
     // The tree row keeps focus, so the F9 handler is not suppressed by the editor guard.
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AB2$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ }).click()
 
     const breakpointRows = page.locator('.breakpoint-row')
     await page.keyboard.press('F9')

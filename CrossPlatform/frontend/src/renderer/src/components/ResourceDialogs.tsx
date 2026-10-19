@@ -4,6 +4,7 @@ import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { CustomAttributeListEditor } from './widgets/CustomAttributeListEditor'
 import { customAttributeDraft, customAttributeDto, type CustomAttributeDraft } from './widgets/custom-attribute'
+import { ImageListDialog, ImageResourceElementDialog } from './ImageResourceDialogs'
 import { OptionsShell, type OptionsTab } from './OptionsShell'
 
 /** dnlib's ManifestResourceAttributes.Public/Private, which are the low two bits of the row's flags. */
@@ -160,6 +161,22 @@ export const ResourceElementDialog = ({ node, onClose }: ResourceElementDialogPr
         invalid={failure !== undefined}
         error={failure}
         onAccept={onClose}
+        onClose={onClose}
+      />
+    )
+  }
+
+  // dnSpy opens its image windows for an image resource: ImageResourceElementDlg for a Bitmap, an Icon or a byte array
+  // or stream that holds an image file, and ImageListDlg for an ImageListStreamer.
+  if (options.kind === 'serializedImage' || options.isImage)
+    return <ImageResourceElementDialog options={options} onSubmit={(next) => applyResourceElementOptions(node, next)} onClose={onClose} />
+  if (options.kind === 'imageListStreamer') {
+    return (
+      <ImageListDialog
+        title="Edit Resource"
+        name={options.name}
+        base64Data={options.base64Data}
+        onSubmit={(name, data) => applyResourceElementOptions(node, { ...options, name, base64Data: data })}
         onClose={onClose}
       />
     )
@@ -365,6 +382,24 @@ export const CreateResourceElementDialog = ({ resourceNode, onClose }: CreateRes
           else setFailure(useAppStore.getState().error)
         })
       }}
+      onClose={onClose}
+    />
+  )
+}
+
+interface CreateImageListDialogProps {
+  resourceNode: TreeNode
+  onClose(): void
+}
+
+/** dnSpy's Create System.Windows.Forms.ImageListStreamer Resource: an empty image list named "my.ImageStream". */
+export const CreateImageListDialog = ({ resourceNode, onClose }: CreateImageListDialogProps): React.JSX.Element => {
+  const createResourceElement = useAppStore((state) => state.createResourceElement)
+  return (
+    <ImageListDialog
+      title="Create System.Windows.Forms.ImageListStreamer Resource"
+      name="my.ImageStream"
+      onSubmit={(name, base64Data) => createResourceElement(resourceNode, { kind: 'imageListStreamer', name, base64Data })}
       onClose={onClose}
     />
   )

@@ -556,6 +556,9 @@ const registerIpc = (): void => {
   ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string, settings?: unknown) =>
     requireBackend().invoke('document/decompile', { workspaceId, nodeId, language, settings }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
+  // Quick Info is asked for on hover, so it takes the short interactive deadline the tree's own calls do.
+  ipcMain.handle('document:quickInfo', (_event, workspaceId: string, request: Record<string, unknown>) =>
+    requireBackend().invoke('document/quickInfo', { ...request, workspaceId }))
   // The Bookmarks window's Location column, and dnSpy's bookmark files. None of them needs a workspace: a
   // module the workspace does not hold — or a bookmark restored before anything was opened — is read from
   // its file.

@@ -176,6 +176,16 @@ export interface CaretReveal {
   line: number
   column: number
   token: number
+  /** Where the view is scrolled to, which going back in a tab's history restores along with the caret. */
+  scrollTop?: number
+  /**
+   * The member whose definition the caret goes to — dnSpy's MoveCaretToReference after a followed reference:
+   * the view finds it among the spans of the document it shows, and `line`/`column` is where the caret goes
+   * when the document has no definition of it.
+   */
+  definitionNodeId?: string
+  /** Whether the view scrolls the place to its middle, which dnSpy does when the document is new to the tab. */
+  center?: boolean
 }
 
 /** Where the caret is, for "next bookmark" to mean "the next one after where I am". */
@@ -295,6 +305,8 @@ interface AppState {
   caretReveal?: CaretReveal
   /** Moves the caret of the editor showing `documentId` — of the tab `viewId`, when one is named. */
   revealCaret(documentId: string, line: number, column: number, viewId?: string): void
+  /** Asks the view of a document for a caret request carrying more than a place — a scroll, a definition. */
+  requestCaret(request: Omit<CaretReveal, 'token'>): void
   /**
    * The exception list as the engine has it, refreshed whenever it changes. The engine owns the
    * list — the client stores only `exceptionDiff`, and replays it to get here.
@@ -331,10 +343,6 @@ interface AppState {
    * the range and highlights it; `nonce` makes asking for the same range twice work. */
   hexNavigation?: { moduleId: string; offset: number; length: number; nonce: number }
   error?: string
-  wordWrap: boolean
-  highlightCurrentLine: boolean
-  setWordWrap(value: boolean): void
-  setHighlightCurrentLine(value: boolean): void
   setBackendStatus(status: BackendStatus): void
   chooseAndOpen(): Promise<void>
   /**
@@ -809,6 +817,14 @@ const breakpointsStorageKey = 'dnspy.breakpoints.v1'
 let bookmarkSequence = 0
 let bookmarkOrder = 0
 let caretRevealToken = 0
+
+/** Shows a node in the active tab when the shell can — which selects it in the tree too — and only selects it otherwise. */
+const showOrReveal = async (get: () => AppState, nodeId: string): Promise<void> => {
+  const open = get().openNodeById
+  if (open && await open(nodeId))
+    return
+  await get().revealNode(nodeId)
+}
 // Each stop, step and frame switch asks the editor to show a line; the token tells a second request for
 // the same line apart from a re-render of the first, which is what keeps the caret from being reset.
 let stoppedRevealToken = 0
@@ -825,8 +841,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   expanded: {},
   loadingNodes: {},
   selectedNodes: [],
-  wordWrap: typeof localStorage === 'undefined' ? false : localStorage.getItem('dnspy.wordWrap') === 'true',
-  highlightCurrentLine: typeof localStorage === 'undefined' ? true : localStorage.getItem('dnspy.highlightCurrentLine') !== 'false',
   documents: {},
   documentOrder: [],
   restoringSession: false,
@@ -2175,7 +2189,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const response = await window.dnSpy.getSpecialNode(workspaceId, node.id, kind)
       if (!response.nodeId)
         return false
-      await get().revealNode(response.nodeId)
+      // dnSpy follows the member in the active tab, which brings the tree's selection along.
+      await showOrReveal(get, response.nodeId)
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -2191,7 +2206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const response = await window.dnSpy.findByToken(workspaceId, node.id, token)
     if (!response.nodeId)
       return false
-    await get().revealNode(response.nodeId)
+    await showOrReveal(get, response.nodeId)
     return true
   },
 
@@ -3247,6 +3262,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ caretReveal: { documentId, viewId, line, column, token: ++caretRevealToken } })
   },
 
+  requestCaret: (request) => {
+    set({ caretReveal: { ...request, token: ++caretRevealToken } })
+  },
+
   selectNextBookmark: async (position) => { await stepBookmark(get, 1, { position }) },
   selectPreviousBookmark: async (position) => { await stepBookmark(get, -1, { position }) },
   selectNextBookmarkInDocument: async (documentId, line) => { await stepBookmark(get, 1, { documentId, position: { documentId, line: line ?? 0 } }) },
@@ -3396,17 +3415,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearScriptOutput: () => set({ scriptEntries: [] }),
 
   showScriptHelp: () => appendScriptEntries(set, scriptHelpEntries()),
-
-  setWordWrap: (value) => {
-    if (typeof localStorage !== 'undefined')
-      localStorage.setItem('dnspy.wordWrap', String(value))
-    set({ wordWrap: value })
-  },
-  setHighlightCurrentLine: (value) => {
-    if (typeof localStorage !== 'undefined')
-      localStorage.setItem('dnspy.highlightCurrentLine', String(value))
-    set({ highlightCurrentLine: value })
-  },
 }))
 
 /**

@@ -1,12 +1,12 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
 > 对照对象：WPF 版 `dnSpy/dnSpy/`、`Extensions/*`、`dnSpy/Roslyn/`、`dnSpy/dnSpy.Console/`；跨平台版 `CrossPlatform/`
 
-本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.7（Hex 编辑器浏览）、4.12（程序集编辑）、4.13（调试器）、4.15（Roslyn 语言服务）与 4.17（命令行版 dnSpy.Console）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
+本文按模块逐项对照 WPF 版用户可见功能，记录跨平台版（Electron/React 前端 + .NET 10 后端）的移植状态。结论来自只读代码审计，没有运行构建或测试；标「代码推断」的条目没有实测。4.1（应用壳）、4.3（程序集树）、4.5（代码编辑器与文档标签）、4.9（搜索窗口）、4.10（分析器）、4.11（字符串引用窗口）、4.7（Hex 编辑器浏览）、4.12（程序集编辑）、4.13（调试器）、4.15（Roslyn 语言服务）与 4.17（命令行版 dnSpy.Console）另有按实现与测试复核的一轮，这几节的结论以本机跑过的单测与 e2e 为准，见表内备注。
 
 ## 0. 约定
 
@@ -49,7 +49,7 @@
 | C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
 | 元数据/PE 视图与本机反汇编 | ~38% | 7 | 2 | 12 | 0 | PE 头只读文本可看；元数据表子树完全缺失，反汇编未实现 |
 | 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；GUI 无导出项目（命令行版已支持，见 4.17） |
-| 代码编辑器与文档标签 | ~35% | 4 | 13 | 13 | 0 | F12、标签组可用；Monaco contrib 未打包，查找/悬停/折叠都不可用 |
+| 代码编辑器与文档标签 | ~98% | 29 | 1 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；只差虚拟空格、独立选择边距与行压缩三项选项 |
 | Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
 | 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
@@ -58,14 +58,14 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，完成度约 **82%**（2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，完成度约 **86%**（2026-10-19 代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
 | 工作流 | 可用程度 | 说明 |
 |---|---|---|
-| 打开程序集、浏览树、看 C# 代码、F12 跳转 | 日常可用 | 交互模型与 WPF 不同：双击才打开，每个节点一个标签 |
-| 看 IL / VB | 能看，不好用 | IL 是简化格式，指令的操作数可以跳转，但不能下断点；VB 不能跳转 |
+| 打开程序集、浏览树、看 C# 代码、F12 跳转 | 日常可用 | 与 WPF 相同：树的选中显示在前面的标签，单击引用跟随、Ctrl+单击开新标签，每个标签有自己的后退/前进 |
+| 看 IL / VB | 能看，可跳转 | IL 是简化格式，操作码与操作数都可跟随，但不能下断点；VB 的成员与局部变量可跳转、高亮，仍不能下断点 |
 | 搜索、分析引用 | 日常可用 | 两块是移植最完整的部分 |
 | 改名、改元数据、增删成员 | 日常可用 | 五类成员的选项对话框与 WPF 逐页对齐 |
 | 改方法体 | 日常可用 | C# 源码编辑（方法、类、类成员、程序集特性、合并）与方法体三页编辑器都在；IL 编辑器可增删局部变量与异常处理器，撤销覆盖导入 |
@@ -79,16 +79,16 @@
 这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
 
 1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。注意：由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，某些 WPF dnSpy 特有的选项（如 `ShowTokenAndRvaComments`、`SortMembers` 等）在基础 ILSpy 中不存在，暂时被忽略。仍改了没效果的是：
-   - 文本编辑器、Hex 编辑器的部分选项（Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
+   - Hex 编辑器的部分选项（文本编辑器的 Text Viewer 页已在 2026-10-19 全部由文档视图读取，只余虚拟空格、选择边距与行压缩，见 4.5；Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
    - General 的版本号与 PublicKeyToken 等程序集树页选项。
 
    Output 页的自动换行、行号、时间戳与时间格式（2026-10-17 起）、Environment › Font 页，以及调试器页与 Disassembler / Code Style 页（2026-10-17 起，经 `debug/setOptions` 交给引擎）已生效。
 
    此外 General 页的 `CheckForUpdatesOnStartup` 没有对应功能（⛔）。
 
-2. **Monaco 的 contrib 没有打包。** `FE/monaco.ts` 只导入 `monaco-editor/editor/editor.api`，构建产物里也找不到 find、hover、folding、wordHighlighter、gotoLine、bracketMatching 等模块。因此所有 Monaco 实例（代码视图、C# Interactive）都没有查找替换、悬停、折叠、括号匹配、转到行、缩放。Edit→Find 已经接线，但 `getAction('actions.find')` 返回 undefined，什么也不做。修法是改为导入 `editor.main`，或按需导入 `contrib/*`。
+2. ~~**Monaco 的 contrib 没有打包。**~~ 2026-10-19 已修：`FE/monaco.ts` 仍只导入 `editor.api`（整包导入曾让右键光标定位回归），按需加入 find、hover、bracketMatching 三个 contrib，Edit→Find、F3 与悬停都可用。折叠、单词高亮、Monaco 的缩放与 Go to Line 面板有意不加载：dnSpy 的文档视图没有折叠，高亮的是引用而不是单词，缩放与转到行另有照 WPF 的实现（见 4.5）。
 
-3. **VB 文档没有 span 与语句表，IL 的只有一部分。** C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。IL 视图（含 IL with C#）有逐指令的语句表、成员声明处的定义 span，以及（2026-10-16 起）每条指令操作数所指成员的引用 span，所以 IL 里可以跳转、书签可以挂到指令上、分析器的「显示方法内的引用」会落到操作数上；但断点仍只按 C# 的语句表下。VB 是 C# 文本的转换，没有任何 span 与语句表（方法文档还会变成空壳类），因此 VB 视图里不能跳转、不能下断点，搜索和分析器结果只打开方法。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决格式。
+3. **VB 文档没有语句表，IL 的断点仍按 C# 下。** C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。IL 视图（含 IL with C#）有逐指令的语句表、成员声明处的定义 span、每条指令操作数所指成员的引用 span，以及（2026-10-19 起）操作码与局部变量/参数操作数的引用，所以 IL 里可以跳转、书签可以挂到指令上、分析器的「显示方法内的引用」会落到操作数上；但断点仍只按 C# 的语句表下。VB 是 C# 文本的转换；2026-10-19 起转换结果经 Roslyn 重新绑定，成员与局部变量有了引用 span（见 4.5），但仍没有语句表（方法文档还会变成空壳类），因此 VB 视图里不能下断点，搜索和分析器结果只打开方法。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决格式。
 
 4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。十六进制视图后来补了自己的快捷键（Ctrl+G/M/L/F、F5、Ctrl+D/Ctrl+Shift+D、Ctrl+Alt+S 等，见 4.7）。主菜单现在可以用键盘操作。
 
@@ -113,7 +113,7 @@
 | 7 | 不属于任何成员的 Raw hex 补丁，保存时仍用原文件偏移；dnlib 重写文件后可能写错位置 | `BE/WorkspaceManager.cs` 保存时的补丁重定位 | 代码推断 |
 | 8 | ~~C# Interactive 的 Reset 不能恢复不响应取消的脚本：`ResetAsync` 不释放执行信号量，后续提交排队到 600 秒 IPC 超时；被重置会话的旧输出仍会追加到日志~~ 已修复（2026-10-18）：会话各自持有执行锁、取消源与 generation；Reset 取消旧令牌并触发 `ScriptResetting` 后立即建立新会话，排队中的提交随旧令牌取消，旧会话的输出按 generation 丢弃。另：输出帧改为同步写入管道，避免单核机器上同步等待异步写造成的死锁 | `BE/Scripting/CSharpScriptService.cs`、`BE/JsonRpcServer.cs` | 已核实 |
 | 9 | ~~基类型行不能分析：前端 `isAnalyzableNode` 不含 `basetype`，而后端已支持~~ 已修复（2026-10-16）：基类型行可分析，菜单打开前向后端确认引用能解析（WPF 的 CanAnalyze），解析不了的不显示「分析」 | `FE/components/CodeEditorContextMenu.tsx`、`FE/components/AssemblyExplorer.tsx` | 已核实 |
-| 10 | 编辑器里单击引用时光标显示为手形，但只有 Ctrl+单击才跳转，而且在同一标签里跳（WPF 单击跳转，Ctrl+单击开新标签） | `FE/components/DocumentView.tsx` 的 `onMouseDown` | 代码推断 |
+| 10 | ~~编辑器里单击引用时光标显示为手形，但只有 Ctrl+单击才跳转，而且在同一标签里跳（WPF 单击跳转，Ctrl+单击开新标签）~~ 已修复（2026-10-19）：照 `DocumentViewerMouseProcessor`，抬起时在同一字符上的单击在本标签跟随，Ctrl+单击开新标签，定义与局部变量要按住 Ctrl；e2e 覆盖 | `FE/components/DocumentView.tsx` 的 `onMouseUp` | 已核实 |
 
 ## 4. 各模块明细
 
@@ -156,14 +156,14 @@
 | 文档标签右键菜单 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | ✅ | 补上移动/整组移动/关闭组/合并/排列等组命令；不能执行的不出现，整节为空则不出现（照搬 `TabGroupService` 的 CanExecute） |
 | Windows 对话框 | `Documents/Tabs/Dialogs/TabsDlg.xaml` | `WindowsDialog.tsx` | ✅ | |
 | 标签快捷键 | `Documents/Tabs/TabCommands.cs` | `FE/App.tsx` | ✅ | Ctrl+T、Ctrl+F4、Ctrl+Tab、Ctrl+Shift+Tab（在活动组内循环，两端回绕） |
-| 标签内容缩放 | `Tabs/TabElementZoomer.cs` | `FE/zoom.ts`、`FE/App.tsx` | ✅ | 档位表照搬 `ZoomSelector`（20%~400%），Ctrl+=/Ctrl+-/Ctrl+0 与 Ctrl+滚轮；缩放的是编辑器区域整体，dnSpy 是每个标签视图各记一份 |
+| 标签内容缩放 | `Tabs/TabElementZoomer.cs` | `FE/zoom.ts`、`FE/App.tsx` | ✅ | 档位表照搬 `ZoomSelector`（20%~400%），Ctrl+=/Ctrl+-/Ctrl+0 与 Ctrl+滚轮；作用于非文本标签（Hex、模块信息）的内容，文档视图按 Text Viewer 的 ZoomLevel 缩放文字（所有文档视图共用一份，见 4.5） |
 | 会话恢复 | `Documents/Tabs/DocumentTabSerializer.cs` | `FE/app-store.ts` 的 `loadSession` | ✅ | RestoreTabs 选项已生效；光标与滚动位置已恢复 |
 | 最近文件 | `Documents/Tabs/Commands.cs` | `file-menu.ts`、`rememberRecentFiles` | ✅ | 每个文件一条，见 4.3 |
 | 打开列表 / 文件列表 | `Documents/Tabs/Dialogs/OpenDocumentListDlg.xaml`、`FileLists/*` | `OpenListDialog.tsx` | ✅ | 见 4.3 |
 | 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
 | 主题 | `Themes/ThemeService.cs`、`Theme.cs`、`ColorInfos.cs`、`*.dntheme` | `FE/theme-service.ts`、`FE/themes.generated.ts`、`FE/monaco-theme.ts`、`MAIN/theme-files.ts`、`styles.css` | ✅ | 读 dnSpy 自带的四个 `.dntheme` 与 `Themes` 目录里的用户主题，颜色继承与默认值同 `Theme.cs`；界面按 WPF 资源键着色，代码视图的 Monaco 主题由主题生成；菜单与 General 页列出 `VisibleThemes`（高对比度主题只在系统高对比度时出现），系统高对比度切换时自动换主题并记下 |
 | 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx`、`FE/locales/*`、`FE/locales.generated.ts`、`shared/ui-locales.ts` | ✅ | 15 种，与 WPF 的 resx 相同；译文由 resx 生成，resx 没有的条目回落英文；View → Language 为「System」加各语言本族语名称；原生对话框的字符串同样按语言 |
-| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；Output 页的自动换行、行号与时间戳生效；仍有页面不生效的是文本编辑器、Hex 编辑器等 |
+| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；Output 页的自动换行、行号与时间戳生效；Text Viewer 页（2026-10-19 起）由文档视图读取；仍有页面不生效的是 Hex 编辑器等 |
 | Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ✅ | Theme（列出所有可见主题）、Allow more than one instance、RestoreTabs、DecompileFullType、UseMemoryMappedIO 均已生效，「Enable all warning messages」按钮立即恢复被「不再提示」的消息；CheckForUpdates 没有对应功能，选项仍在（⛔） |
 | Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs`、`Settings/Fonts/*` | `FE/components/FontOptions.tsx`、`FE/fonts.ts`、`MAIN/system-fonts.ts` | ✅ | 三个用户可见的外观类别（Hex Editor、Output Window、Text Editor）各配字体与字号，按主题分别保存；字体列表来自系统（Chromium 的本地字体接口，取不到时用 fontconfig），等宽加粗，Hex Editor 只列等宽；字号以磅显示、像素保存，范围同 `FilterFontSize` |
 | 背景图片 | `BackgroundImage/*` | `FE/components/BackgroundImage.tsx`、`MAIN/background-images.ts` | ✅ | 图片与文件夹路径、九个位置、四边百分比边距、偏移、不透明度、Stretch 与 StretchDirection、最大尺寸、缩放、随机轮播与间隔；主进程展开文件夹并把图片读成 data URL。图片开启时编辑器背景透明，图片显示在代码后面（dnSpy 画在每个文本视图里）；Hex 视图仍是不透明的 |
@@ -203,7 +203,7 @@
 
 完成度 100%（✅ 30 / 🟡 0 / ❌ 0 / ⛔ 1）。WPF 范围：`WPF/Documents/TreeView/`、`WPF/TreeView/`、`WPF/Documents/Tabs/` 中的打开与列表命令，以及 `Libraries/ICSharpCode.TreeView`（SharpTreeView）的键盘行为。
 
-与 WPF 仍有的差别都是本文其他模块记录的整体设计差异，不单独计入本节：单击只选中、双击才在标签中打开（4.5「打开节点的标签模型」）；不做单实例转发（4.1）；不建模内存模块（下表 ⛔ 行）。
+与 WPF 仍有的差别都是本文其他模块记录的整体设计差异，不单独计入本节：多选时不在标签里合并显示（4.5「打开节点的标签模型」，2026-10-19 起单个选中已与 WPF 一样显示在前面的标签）；不做单实例转发（4.1）；不建模内存模块（下表 ⛔ 行）。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -281,42 +281,55 @@
 
 ### 4.5 代码编辑器与文档标签
 
-完成度约 35%（✅ 4 / 🟡 13 / ❌ 13）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
+完成度约 98%（✅ 29 / 🟡 1 / ❌ 0 / ⛔ 1）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
+
+2026-10-19 补齐后按实现与测试复核。此前这一节是 ✅ 4 / 🟡 13 / ❌ 13，补上的部分：
+
+- **标签模型照 `DocumentTabService`**：树的选中（单击、键盘、右键）显示在前面的标签里，替换它的内容并记入这个标签的历史；双击/Enter 只把焦点交给标签（`NodeActivated`）。新标签只来自 Ctrl+T、标签菜单的 New Tab、树和代码视图的 Open in New Tab、Ctrl+单击、Ctrl+F12/Ctrl+Enter。文档一换进标签就显示为加载中，同一节点的第二次请求直接复用；启动页、Hex 标签也会被换成文档。
+- **每个标签自己的导航历史**（`TabHistory`）：记文档、语言、光标与滚动位置；同一文档内的跳转（局部变量、文档里已有定义的成员）也入历史；Alt+←/Backspace 后退，Alt+→/Shift+Backspace 前进，工具栏按钮跟随前面的标签。
+- **引用的跟随**（`DocumentViewerMouseProcessor`、`DocumentViewerControl.GoTo`）：左键在同一字符上抬起才算单击；无修饰键时单击成员引用在本标签跟随，定义与局部变量只放光标；Ctrl+单击一律开新标签（局部变量是复制当前文档并把光标放到声明上）；Shift/Alt 不算单击；Ctrl 按下时定义与局部变量也显示手形。跟随时先找本文档里的定义，有就只移光标；否则打开目标，DecompileFullType（默认开）时打开最外层类型，光标选中定义名（`MoveCaretToSpan` 的规则：落在尾部，尾部紧接另一引用时落在头部）。IL 的操作码引用打开 MS Docs 页面（`OpCodeReferenceHandler`）。
+- **快捷键**（`DocumentViewerCommandInfoProvider`、`TextReferenceCommandInfoProvider`）：F12/Enter 跟随、Ctrl+F12/Ctrl+Enter 新标签、Tab/Shift+Tab 与 Ctrl+Shift+↓/↑ 在同一引用（或同组关键字）间循环、Alt+↓/↑ 在成员定义间移动、Esc 清掉高亮与选区。
+- **后端补齐 dnSpy 输出写在文本旁边的数据**（`BE/WorkspaceManager.DocumentText.cs`）：每个引用的颜色类（静态/实例方法、字段、属性、事件、各类类型、泛型参数，`TextColors`）、局部变量与参数的身份（按 ILVariable 对象）和 Quick Info、写入标记（赋值左边、自增自减、out/ref）、块结构（照 `CodeBracesRangeFlags` 的块类型：命名空间、类型、值类型、接口、方法、构造、访问器、属性、事件、条件、循环、try/catch/finally、lock、using、fixed、switch、case、匿名方法、局部函数）、过程分隔线（多行成员体的结束括号所在行）与相关关键字组（if/else 链、循环与它的 break/continue、switch 与 case/default/goto case、try/catch/finally、一个函数的 return/yield）。IL 视图有类型与方法的块、方法结束与最后一个字段后的分隔线、操作码引用和局部变量/参数操作数的引用。
+- **VB 文档有了引用**（`BE/WorkspaceManager.VisualBasic.cs`）：VB 是 C# 文本的转换，转换器不保留引用，于是把转换结果用 Roslyn 对模块及其引用的程序集编译一遍：外部成员按文档 ID 回到元数据（工作区外的模块给出文件与 token），文本自己声明的成员按所在类型链、名称与参数类型对回模块里的成员；局部变量/参数按符号身份相连，并有 VB 写法的 Quick Info（“(local variable) sum As Integer”）；块结构、过程分隔线与相关关键字（If/ElseIf/Else/End If、For/Next、Do/Loop、Select/Case、Try/Catch/Finally、Exit/Continue/Return）来自 VB 语法树；名字的颜色来自 dnSpy 的 Roslyn 分类器。
+- **Monaco contrib**：`FE/monaco.ts` 仍只导入 `editor.api`，按需加入查找、悬停、括号匹配三个 contrib；折叠、单词高亮、Monaco 自己的缩放与 Go to Line 面板不加载（dnSpy 没有或另有实现）。
+- **其余编辑器能力**：引用高亮（定义、写入、读取三种主题色）与相关关键字高亮、Quick Info 悬停、Go to Line（Ctrl+G，dnSpy 的“行 [, 列]”与提示文字）、增量搜索（Ctrl+I/Ctrl+Shift+I）、块结构线（按主题的 BlockStructure* 颜色与选项里的虚线样式）、过程分隔线、所有文档视图共用并持久化的缩放（缩放框、Ctrl+滚轮、Ctrl+Shift+./Ctrl+=/Ctrl+小键盘+ 等）、显示空白（Ctrl+Shift+8、Ctrl+R Ctrl+W、Ctrl+E S）、带 HTML 的复制（无选区时复制整行，超过 1 MiB 只写纯文本）。
+- **Text Viewer 选项页的设置都由 `DocumentView` 读取**：自动换行（默认开，与 WPF 相同，View 菜单与 Ctrl+E W 改的就是它）、行号、高亮当前行、滚动条、制表符宽度、引用高亮、相关关键字、括号高亮、过程分隔线、块结构线与样式、行距、指示器边距、鼠标滚轮缩放、缩放框。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| 打开节点的标签模型 | `Documents/Tabs/DocumentTabService.cs` | `FE/App.tsx` 的 `addDocumentTab` | 🟡 | WPF 在活动标签里替换内容；这里每节点一个标签 |
-| 单击 / Ctrl+单击引用 | `DocViewer/DocumentViewerMouseProcessor.cs` | `DocumentView.tsx` 的 `onMouseDown` | 🟡 | 见缺陷 #10 |
-| F12 / Ctrl+F12 / Enter | `Text/Editor/TextReferenceCommandInfoProvider.cs` | `DocumentView.tsx` | 🟡 | 只绑了 F12 |
-| 跳转落点 | `Documents/Tabs/TreeNodeReferenceDocumentTabContentProvider.cs` | `openReferenceTarget` | ❌ | 总是打开成员自己的文档，光标在顶部；同文档内不移动光标 |
+| 打开节点的标签模型 | `Documents/Tabs/DocumentTabService.cs` | `FE/App.tsx` 的 `addDocumentTab`、`showSelectedNode` | ✅ | 树的选中显示在前面的标签；多选时不显示（WPF 合并显示多个节点，见第 2 节第 5 条） |
+| 单击 / Ctrl+单击引用 | `DocViewer/DocumentViewerMouseProcessor.cs` | `DocumentView.tsx` 的 `onMouseDown`/`onMouseUp` | ✅ | 缺陷 #10 已修 |
+| F12 / Ctrl+F12 / Enter | `Text/Editor/TextReferenceCommandInfoProvider.cs`、`DocViewer/DocumentViewerCommandInfoProvider.cs` | `DocumentView.tsx` | ✅ | 含 Ctrl+Enter |
+| 跳转落点 | `Documents/Tabs/TreeNodeReferenceDocumentTabContentProvider.cs`、`DocViewer/DocumentViewerControl.cs` | `App.tsx` 的 `followReference`、`CaretReveal.definitionNodeId` | ✅ | DecompileFullType 打开最外层类型；文本里没有写出的成员（如自动属性的后备字段）光标留在开头，与 WPF 相同 |
 | 引用指向未加载模块时按需打开 | `Documents/Tabs/DocTabReferenceNavigator.cs` | RPC `document/findMember` | ✅ | |
-| IL/VB 引用、局部变量与参数引用 | `DocViewer/DocumentViewerDotNetSpanMap.cs` | `SpanTextOutput` | ❌ | 见第 2 节 |
-| 引用高亮、相关关键字高亮 | `DocViewer/DocumentViewerHighlightReferencesTagger.cs` | 无 | ❌ | |
-| 在引用间移动（Tab、Ctrl+Shift+↑↓） | `DocViewer/DocumentViewerCommandTargetFilter.cs` | 无 | ❌ | |
-| Quick Info 悬停 | `Documents/Tabs/DocViewer/ToolTips/*` | 固定文本 "Go to definition (F12)" | ❌ | hover contrib 也没打包 |
-| 后退 / 前进 | `Documents/Tabs/NavigationCommands.cs`、`TabHistory.cs` | `goBack`、`goForward` | 🟡 | 只有工具栏按钮；历史是全局的，不记光标 |
-| 查找 / 替换 / F3 | `Text/Editor/Search/SearchService.cs` | `editor-registry.ts` | ❌ | 已接线但无效，见第 2 节 |
-| 转到行 | `Text/Editor/GoToCommand.cs` | 无 | ❌ | |
-| 折叠 / 大纲 | `Text/Editor/BlockStructureService.cs` | 无 | ❌ | 后端 `MarkFoldStart/End` 是空实现 |
-| 块结构线 | 同上 | Monaco 缩进参考线 | 🟡 | 按缩进画线 |
-| 括号匹配 | `DocViewer/BracePairService.cs` | 无 | ❌ | |
-| 方法分隔线 | `DocViewer/LineSeparator*` | 无 | ❌ | |
-| 缩放 | `Text/Editor/ZoomControlMargin.cs` | 无 | ❌ | |
-| 行号 | `Text/Editor/LineNumberMargin.cs` | Monaco 默认 | 🟡 | 选项开关不生效 |
-| 高亮当前行 | `DocViewer/Commands.cs` | `highlightCurrentLine` | ✅ | |
-| 自动换行 | `DocViewer/Commands.cs` | `DocumentView.tsx` | 🟡 | 快捷键未绑定，与选项页不同步 |
-| 显示空白 | `Text/Editor/DefaultTextEditorCommandInfoProvider.cs` | 写死 | ❌ | |
-| 带格式复制 | `Text/Editor/CopyWpfTextViewCreationListener.cs` | `DocumentView.tsx` 的 `onCopy` | 🟡 | 右键 Copy 只写纯文本 |
-| 语法着色 | `DocViewer/DecompilerTabContentClassifierContext.cs` | `csharp-highlighting.ts`（Shiki）、`il-language.ts` | 🟡 | 只有词法着色，没有语义着色 |
-| 文本编辑器选项与字体 | `Text/Settings/*` | `options-pages.ts` | ❌ | `DocumentView` 不读任何字段 |
-| 右键 Open in New Tab / Copy Token / Full Name / MSDN | `TabCommands.cs` 等 | `CodeEditorContextMenu.tsx` | ✅ | |
-| 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs`、`ResourceCommands.cs` | `CodeEditorContextMenu.tsx` | 🟡 | Go to Resource 已接入；Go to Token、Go to Entry Point 仍只在树菜单里有 |
-| 标签右键与快捷键 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | 🟡 | 见 4.1 |
+| IL/VB 引用、局部变量与参数引用 | `DocViewer/DocumentViewerDotNetSpanMap.cs` | `SpanTextOutput`、`ILFormatter`、`WorkspaceManager.VisualBasic.cs` | ✅ | VB 中被转换器改名的成员（只差大小写而改名的字段等）对不回元数据，没有引用 |
+| 引用高亮、相关关键字高亮 | `DocViewer/DocumentViewerHighlightReferencesTagger.cs` | `FE/document-viewer.ts`、`DocumentView.tsx` | ✅ | |
+| 在引用间移动（Tab、Ctrl+Shift+↑↓、Alt+↑↓） | `DocViewer/DocumentViewerCommandTargetFilter.cs` | `document-viewer.ts` 的 `nextReference`、`nextDefinition` | ✅ | |
+| Quick Info 悬停 | `Documents/Tabs/DocViewer/ToolTips/*` | `FE/document-editor.ts`、RPC `document/quickInfo` | ✅ | 成员按文档语言（C#/VB/IL）写签名并附 XML 文档摘要（找模块旁、文化子目录与 .NET 参考包）；局部变量、操作码、数字（四种进制）。WPF 提示里的图标没有画 |
+| 后退 / 前进 | `Documents/Tabs/NavigationCommands.cs`、`TabHistory.cs` | `App.tsx` 的 `stepHistory` | ✅ | 每个标签一份，记光标与滚动 |
+| 查找 / F3 | `Text/Editor/Search/SearchService.cs` | Monaco find contrib、`editor-registry.ts` | ✅ | 文档只读，与 WPF 一样没有替换 |
+| 增量搜索 | `Text/Editor/Search/SearchService.cs`（IncrementalSearch） | `DocumentView.tsx` 的 `startIncrementalSearch` | ✅ | 键入的文字显示在视图上方一行，WPF 显示在查找框里 |
+| 转到行 | `Text/Editor/GoToCommand.cs` | `EditDialogs.tsx` 的 `GoToLineDialog` | ✅ | “, 列”在 WPF 因正则判断失误不可用，这里按其本意可用 |
+| 折叠 / 大纲 | — | Monaco 折叠关闭 | ⛔ | WPF 的文档视图没有折叠（无 outlining 边距），此前列在 `BlockStructureService` 名下是误列 |
+| 块结构线 | `Text/Editor/BlockStructureService.cs` | `DocumentView.tsx` 的 `drawBlockStructure` | ✅ | |
+| 括号匹配 | `DocViewer/BracePairService.cs` | Monaco bracketMatching | ✅ | 按词法配对；“Highlight braces”选项控制 |
+| 方法分隔线 | `DocViewer/LineSeparator*` | `line-separator` 整行装饰 | ✅ | |
+| 缩放 | `Text/Editor/ZoomControlMargin.cs` | `DocumentView.tsx` 的 `ZoomControl`、`document-viewer-options.ts` | ✅ | 缩放框在视图上方一行的右端（WPF 在底部边距），以免占用文字区高度；非文本标签仍按 `TabElementZoomer` 整体缩放 |
+| 行号 | `Text/Editor/LineNumberMargin.cs` | Monaco `lineNumbers` | ✅ | |
+| 高亮当前行 | `DocViewer/Commands.cs` | `renderLineHighlight` | ✅ | |
+| 自动换行 | `DocViewer/Commands.cs` | `documentViewer.general.wordWrap` | ✅ | 与选项页同一个设置 |
+| 显示空白 | `Text/Editor/DefaultTextEditorCommandInfoProvider.cs` | `useVisibleWhitespace` | ✅ | |
+| 带格式复制 | `Text/Editor/CopyWpfTextViewCreationListener.cs` | `FE/document-clipboard.ts` | ✅ | 纯文本 + HTML，颜色取视图显示的颜色 |
+| 语法着色 | `DocViewer/DecompilerTabContentClassifierContext.cs` | 引用的 `tc-*` 装饰叠在 Shiki/Monarch 词法着色上 | ✅ | |
+| 文本编辑器选项与字体 | `Text/Settings/*`、`DocViewer/Settings/*` | `DocumentView.tsx` | 🟡 | 差三项：Monaco 没有虚拟空格（Use virtual space）与独立的选择边距（行号区可点选整行）；行压缩（Compress blank lines / non-alphanumeric lines，`LineCompressor`）试过用 Monaco 的逐行行高装饰实现，但它让鼠标命中测试错行，已撤下 |
+| 右键 Open in New Tab / Copy Token / Full Name / MSDN | `TabCommands.cs` 等 | `CodeEditorContextMenu.tsx` | ✅ | Open in New Tab 的手势文字照 WPF 写 Ctrl+Click |
+| 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs`、`ResourceCommands.cs` | `CodeEditorContextMenu.tsx` | ✅ | 入口点与 `<Module>` 构造只在模块有它们时出现；Go to 命令在前面的标签里跟随，树的选中随之而动 |
+| 标签右键与快捷键 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | ✅ | 与 4.1 重复计入 |
 | 标签组与 Window 菜单 | `Tabs/TabGroupService.cs` | `FE/App.tsx` | ✅ | 与 4.1 重复计入 |
-| 会话恢复标签 | `Documents/Tabs/DocumentTabSerializer.cs` | `buildSession`、`loadSession` | 🟡 | 与 4.1 重复计入 |
-| Show Code | `Documents/Tabs/Commands.cs` | `showCode` | 🟡 | 会把语言切回 C# |
+| 会话恢复标签 | `Documents/Tabs/DocumentTabSerializer.cs` | `buildSession`、`loadSession` | ✅ | 每个标签恢复成自己的标签，含语言、光标与滚动；与 4.1 重复计入 |
+| Show Code | `Documents/Tabs/Commands.cs` | `showCode` | ✅ | 只把焦点交给前面的标签（F7、Esc、Ctrl+Alt+0），不再切换语言 |
 
-测试：`CodeEditorContextMenu.test.tsx`、`csharp-highlighting.test.ts`、`il-language.test.ts`；e2e `app.spec.ts`（F12 与历史、外部引用、编辑器右键）、`csharp-highlighting.spec.ts`。查找、悬停、折叠、缩放没有测试，这也是 contrib 缺失一直没被发现的原因。
+测试：后端 `DocumentViewerDataTests.cs`（C# 的局部变量身份、写入、颜色、块、分隔线与关键字组，IL 的操作码与块，VB 的成员与局部变量引用、块与关键字，Quick Info 的三种语言写法与操作码）；前端 `document-viewer.test.ts`（命中测试、同一引用、高亮种类、Tab/Alt 移动、光标落点、Go to Line 解析、块结构线、数字提示、操作码地址、复制 HTML）、`CodeEditorContextMenu.test.tsx`（Open in New Tab 手势、令牌组的三个 Go to、增量搜索）；e2e `app.spec.ts`（引用高亮与 Tab、单击/Ctrl+单击跟随与 Alt+← 后退、Quick Info 与数字提示、Go to Line、缩放框、块结构线与分隔线、增量搜索、F12 与标签历史、Ctrl+T 后树的选中进入新标签）。
 
 ### 4.6 书签
 
@@ -893,7 +906,7 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 - 后端：`BE/LanguageService/RoslynClassifier.cs`（`RoslynClassifier` 的移植）、`RoslynTextParts.cs`（`TextTagsHelper`、符号显示部件着色、`GlyphHelper` 的图标名）、`RoslynLanguageService.cs`（文档、补全、Quick Info、诊断、缩进、结构导航）、`SignatureHelpProvider.cs`、`LanguageServiceHost.cs`（MEF 宿主、引用程序集与 XML 文档）、`DocumentationText.cs`；`BE/Scripting/CSharpScriptService.cs` 的 `ClassifyAsync`
 - RPC：`script/classify`；`languageService/open`、`update`、`close`、`classify`、`completion`、`completionDescription`、`quickInfo`、`signatureHelp`、`diagnostics`、`indentation`、`selectionRanges`
-- 前端：`FE/roslyn-classification.ts`（分类结果画成 `tc-*` 内联装饰，供 REPL 与代码编辑器共用）、`FE/roslyn-language-service.ts`（各 provider 与 `attachRoslynDocument`，连同它要的 Monaco contrib：`FE/roslyn-editor-contribs.ts`；`FE/monaco.ts` 仍只导入 `editor.api`，之前那版改成整包导入后代码视图的右键光标定位回归了，已改回）、`FE/components/CSharpInteractive.tsx`、`FE/components/ColoredText.tsx` 的 `ClassifiedText`；`tc-*` 的颜色、加粗与斜体由主题服务（`FE/theme-service.ts`）按当前 `.dntheme` 写出
+- 前端：`FE/roslyn-classification.ts`（分类结果画成 `tc-*` 内联装饰，供 REPL 与代码编辑器共用）、`FE/roslyn-language-service.ts`（各 provider 与 `attachRoslynDocument`，连同它要的 Monaco contrib：`FE/roslyn-editor-contribs.ts`；`FE/monaco.ts` 仍只导入 `editor.api` 并按需加入 find、hover、bracketMatching，之前那版改成整包导入后代码视图的右键光标定位回归了，已改回）、`FE/components/CSharpInteractive.tsx`、`FE/components/ColoredText.tsx` 的 `ClassifiedText`；`tc-*` 的颜色、加粗与斜体由主题服务（`FE/theme-service.ts`）按当前 `.dntheme` 写出
 
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|

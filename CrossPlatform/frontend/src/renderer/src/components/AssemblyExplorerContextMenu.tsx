@@ -14,8 +14,12 @@ import { MenuEntryIcon } from './DsIcon'
  * tree shows that group exactly as the Edit menu and the code viewer do.
  */
 export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'selectionKind' | 'hexTarget' | 'hexStatement'> {
-  /** Opens the node in the code viewer, which is what a double click on the same row does. */
+  /** Opens the node in the code viewer and gives the viewer the focus — dnSpy's NodeActivated, which a double
+   *  click or Enter on the row runs. */
   onOpenNode(node: TreeNode): void
+  /** Shows a row the user selected in the active tab — dnSpy's DocumentTabService following the tree's
+   *  selection. Only a selection of one row is shown. */
+  onShowNode?(node: TreeNode): void
   /** Follows the node in a tab of its own — dnSpy's `OpenNewTabInternal`. */
   onOpenInNewTab?(node: TreeNode): void
   /** Removes whole documents from the tree — dnSpy's `RemoveAssemblyCommand`, over the selected roots. */

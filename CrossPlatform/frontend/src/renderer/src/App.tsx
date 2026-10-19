@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import type { AppCommandLine, CompilerMode, DecompilerLanguage, ResourceCreateKind, SaveModuleOptions, SearchLocation, SearchType, TextSpan, TreeNode } from '../../shared/protocol'
+import { isLocalSpan, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SaveModuleOptions, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
 import { buildSession, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
@@ -53,7 +53,9 @@ import { DockPane } from './components/DockPane'
 // Only the interface: the component itself is loaded lazily, when a document tab first draws one.
 import type { DocumentViewCommands } from './components/DocumentView'
 import type { ActiveDocument, CreatedKind, HexShowKind } from './components/edit-menu'
-import { findInActiveDocumentEditor, focusDocumentEditor } from './editor-registry'
+import { caretPosition, documentEditorScrollTop, findInActiveDocumentEditor, focusDocumentEditor } from './editor-registry'
+import { setDocumentViewerZoom, toggleDocumentViewerOption } from './components/document-viewer-options'
+import { positionAt } from './document-viewer'
 import { translate, useLanguage } from './localization'
 
 const DocumentView = lazy(async () => {
@@ -287,15 +289,35 @@ export const migrateLegacyTheme = (): void => {
  * like the bookmark chords it is armed by the first key and run by the second, so it is listed beside them.
  */
 const viewChords = [
-  { prefix: 'e', key: 'w', plain: false, run: () => useAppStore.getState().setWordWrap(!useAppStore.getState().wordWrap) },
+  { prefix: 'e', key: 'w', plain: true, run: () => toggleDocumentViewerOption('wordWrap') },
 ]
+
+/** One step of a tab's history — dnSpy's TabHistory entry: the document the tab showed, in which language, and
+ *  where its caret and its scroll were. */
+interface TabHistoryEntry {
+  documentId: string
+  language?: DecompilerLanguage
+  line?: number
+  column?: number
+  scrollTop?: number
+}
+
+interface TabHistory {
+  back: TabHistoryEntry[]
+  forward: TabHistoryEntry[]
+}
+
+// The id a new document tab gets. Tabs show one document after another, so an id names the tab and not what
+// it shows; the counter keeps two tabs opened in the same millisecond apart.
+let documentTabCounter = 0
+const newDocumentTabId = (): string => `doc:${Date.now().toString(36)}:${++documentTabCounter}`
+
+/** The document a tab shows, when it is a document tab. */
+const documentIdOfTab = (tab: TabNode | undefined): string | undefined =>
+  tab?.getComponent() === 'document' ? (tab.getConfig() as { documentId?: string } | undefined)?.documentId : undefined
 
 export const App = (): React.JSX.Element => {
   const [model] = useState(loadLayout)
-  const wordWrap = useAppStore((state) => state.wordWrap)
-  const setWordWrap = useAppStore((state) => state.setWordWrap)
-  const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
-  const setHighlightCurrentLine = useAppStore((state) => state.setHighlightCurrentLine)
   const [fullScreen, setFullScreen] = useState<boolean>(false)
   const [documentZoom, setDocumentZoom] = useState<number>(loadDocumentZoom)
   // dnSpy reads this once at startup and never again; elevation can't change under a running app.
@@ -303,6 +325,9 @@ export const App = (): React.JSX.Element => {
   // The saved options, subscribed to so a save in the Options dialog reaches the parts of the shell that
   // read them — the theme, the main process's few settings, and the tool windows' widths among others.
   const options = useAppOptions()
+  // The View menu's Word Wrap and Highlight Current Line are the Text Viewer's options, as they are in dnSpy.
+  const wordWrap = options.documentViewer.general.wordWrap
+  const highlightCurrentLine = options.documentViewer.general.highlightCurrentLine
   // The debugger's settings reach the engine when they change — in the Options dialog or from a debugger
   // window's context menu — and a stopped process is read again in the new format, as dnSpy's windows redraw.
   const debuggerOptionsKey = JSON.stringify([options.debugger, options.callStack])
@@ -350,7 +375,10 @@ export const App = (): React.JSX.Element => {
   const [openListDialogOpen, setOpenListDialogOpen] = useState(false)
   const [windowsDialogOpen, setWindowsDialogOpen] = useState(false)
   const [optionsDialogCategory, setOptionsDialogCategory] = useState<'environment' | 'decompiler' | 'debugger' | undefined>(undefined)
-  const [navigation, setNavigation] = useState<{ items: TreeNode[]; index: number }>({ items: [], index: -1 })
+  // dnSpy's TabHistory, one per tab, by tab id; the version is what tells React the Back and Forward buttons
+  // may have changed, since the histories themselves are kept outside its state.
+  const tabHistories = useRef(new Map<string, TabHistory>())
+  const [historyVersion, setHistoryVersion] = useState(0)
   const [layoutVersion, forceLayoutUpdate] = useState(0)
   const previousWorkspaceId = useRef<string | undefined | null>(null)
   // The tabs from the saved layout name document ids from the run that wrote it, so they are torn down
@@ -373,7 +401,11 @@ export const App = (): React.JSX.Element => {
     const component = tab.getComponent()
     return component === 'document' ? 'code' : component === 'hex' || component === 'module-info' ? component : null
   }, [model, layoutVersion])
-  const canShowCode = activeDocument === 'code'
+  // dnSpy's Show Code is there whenever a tab is: it only puts the focus in the one in front.
+  const canShowCode = useMemo(() => {
+    const selected = getTargetDocumentTabSet(model)?.getSelectedNode()
+    return selected instanceof TabNode && DOCUMENT_COMPONENTS.includes(selected.getComponent() ?? '')
+  }, [model, layoutVersion])
   // The bookmark chord waiting for its second key — Ctrl+K or Ctrl+B — and, as a timestamp so it needs no
   // timer, when it stops waiting.
   const bookmarkChord = useRef<{ prefix: string; until: number } | undefined>(undefined)
@@ -596,21 +628,20 @@ export const App = (): React.JSX.Element => {
       saveThemeOption(theme)
   }, [activeTheme, options.environmentGeneral.theme, theme, systemHighContrast])
 
-  // dnSpy's TabElementZoomer scales the tab's content: the whole editor area is scaled here, which is what
-  // carries the code view, the hex dump and everything else a document tab shows at the same size.
+  // dnSpy's TabElementZoomer scales the content of a tab that is not a text view — the hex dump, the module's
+  // information, the start page; a document viewer zooms its own text instead (its ZoomLevel option).
   useEffect(() => {
     localStorage.setItem('dnspy.zoom', String(documentZoom))
-    const element = model.getNodeById(DOCUMENT_TABSET_ID)?.getLayoutRef()
-    element?.style.setProperty('zoom', String(documentZoom / 100))
-  }, [documentZoom, layoutVersion, model])
+  }, [documentZoom])
 
-  // Ctrl+wheel over the editor steps the zoom, one level per notch, in both directions.
+  // Ctrl+wheel over a tab steps its zoom, one level per notch, in both directions. A document viewer takes the
+  // wheel itself, so what reaches here is over any other tab.
   useEffect(() => {
     const onWheel = (event: WheelEvent): void => {
       if (!event.ctrlKey || event.deltaY === 0)
         return
       const target = event.target as HTMLElement | null
-      if (!target?.closest('.workspace-host'))
+      if (!target?.closest('.workspace-host') || target.closest('.document-view'))
         return
       event.preventDefault()
       setDocumentZoom((current) => normalizeZoom(event.deltaY < 0 ? zoomIn(current) : zoomOut(current)))
@@ -953,12 +984,13 @@ export const App = (): React.JSX.Element => {
     id: tab.getId(),
     label: tab.getName(),
     checked: tab.isSelected(),
+    documentId: documentIdOfTab(tab),
   })), [model, layoutVersion])
   // The Windows dialog's rows: the module column walks the tree up from the document's node, which
   // works for the members documents usually show; special tabs fall back to the single loaded module.
   const windowsDialogTabs = useMemo<WindowTabEntry[]>(() => windowTabs.map((tab) => {
     let moduleId: string | undefined
-    let ancestor = tab.id
+    let ancestor = tab.documentId ?? tab.id
     const seen = new Set<string>()
     while (!seen.has(ancestor)) {
       seen.add(ancestor)
@@ -995,17 +1027,21 @@ export const App = (): React.JSX.Element => {
   const windowGroupsAreSideBySide = commonWindowGroupParent instanceof RowNode
     && commonWindowGroupParent.getOrientation() === Orientation.HORZ
 
+  /** The tab in front of the editor area — dnSpy's DocumentTabService.ActiveTab — whatever has the focus now. */
+  const frontDocumentTab = (): TabNode | undefined => {
+    const selected = getTargetDocumentTabSet(model)?.getSelectedNode()
+    return selected instanceof TabNode && DOCUMENT_COMPONENTS.includes(selected.getComponent() ?? '') ? selected : undefined
+  }
+
+  // dnSpy's Show Code (View › Code, F7, Esc, Ctrl+Alt+0): the focus goes to the tab in front, which is all it does.
   const showCode = async (): Promise<void> => {
-    const tab = model.getActiveTabset()?.getSelectedNode()
-    if (!(tab instanceof TabNode) || tab.getComponent() !== 'document')
+    const tab = frontDocumentTab()
+    if (!tab)
       return
-    const documentId = (tab.getConfig() as { documentId?: string } | undefined)?.documentId
-    if (!documentId)
-      return
-    const state = useAppStore.getState()
-    if (state.documents[documentId]?.requestedLanguage !== 'cSharp')
-      await state.changeDocumentLanguage(documentId, 'cSharp')
-    focusDocumentEditor(tab.getId())
+    if (tab.getComponent() === 'document')
+      focusDocumentEditor(tab.getId())
+    else
+      model.doAction(Actions.selectTab(tab.getId()))
   }
 
   const collapseTreeViewNodes = (): void => useAppStore.getState().collapseTreeViewNodes()
@@ -1085,17 +1121,39 @@ export const App = (): React.JSX.Element => {
       }
       if (!['Control', 'Shift', 'Alt', 'Meta'].includes(event.key))
         bookmarkChord.current = undefined
+      // The zoom keys act on the tab in front: a document viewer's text zoom, or the zoom of any other tab's content.
+      const zoomTab = (step: (current: number) => number): void => {
+        if (documentIdOfTab(activeDocumentTab()))
+          setDocumentViewerZoom(step)
+        else
+          setDocumentZoom((current) => normalizeZoom(step(current)))
+      }
       if (event.ctrlKey && !event.altKey && (event.code === 'Equal' || event.code === 'NumpadAdd')) {
         // dnSpy's Zoom In, which its ZoomSelector steps through a list of levels rather than by a fixed step.
         event.preventDefault()
-        setDocumentZoom((current) => normalizeZoom(zoomIn(current)))
+        zoomTab(zoomIn)
       } else if (event.ctrlKey && !event.altKey && (event.code === 'Minus' || event.code === 'NumpadSubtract')) {
         event.preventDefault()
-        setDocumentZoom((current) => normalizeZoom(zoomOut(current)))
+        zoomTab(zoomOut)
       } else if (event.ctrlKey && !event.altKey && !event.shiftKey && (event.code === 'Digit0' || event.code === 'Numpad0')) {
         // dnSpy's Zoom Reset. Ctrl+Alt+0 is "Show Code" and is read further down, so the two do not meet.
         event.preventDefault()
-        setDocumentZoom(100)
+        zoomTab(() => 100)
+      } else if (event.altKey && !event.ctrlKey && !event.shiftKey && event.key === 'ArrowLeft' && !editingText) {
+        // dnSpy's Back and Forward: Alt+Left and Backspace, Alt+Right and Shift+Backspace.
+        event.preventDefault()
+        void goBack()
+      } else if (event.altKey && !event.ctrlKey && !event.shiftKey && event.key === 'ArrowRight' && !editingText) {
+        event.preventDefault()
+        void goForward()
+      } else if (event.key === 'Backspace' && !event.ctrlKey && !event.altKey && !editingText) {
+        event.preventDefault()
+        if (event.shiftKey) void goForward()
+        else void goBack()
+      } else if ((event.key === 'F7' || (event.key === 'Escape' && !editingText && !target?.closest('[role="dialog"], [role="menu"]'))) && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        // dnSpy's Show Code: F7 and Esc, which put the focus in the tab in front.
+        event.preventDefault()
+        void showCode()
       } else if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
         // dnSpy's Select Previous Tab: the tab before the active one in its own group, wrapping round.
         event.preventDefault()
@@ -1303,7 +1361,8 @@ export const App = (): React.JSX.Element => {
     if (previousWorkspaceId.current === workspaceId)
       return
     previousWorkspaceId.current = workspaceId
-    setNavigation({ items: [], index: -1 })
+    tabHistories.current.clear()
+    setHistoryVersion((value) => value + 1)
     // A restore opens the workspace itself, and the tabs it puts back are the ones this would otherwise
     // delete a moment later; it clears the stale ones and adds Start where it needs them.
     if (useAppStore.getState().restoringSession)
@@ -1344,51 +1403,195 @@ export const App = (): React.JSX.Element => {
     void window.dnSpy.setUnsavedChanges(dirty)
   }, [dirty])
 
-  // Answers with the id of the tab the document ended up selected in — the clone a new tab is, or the one
-  // the document already had — which is the view a caret placed afterwards has to land in.
-  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false): Promise<string | undefined> => {
-    const { workspaceId, workspaceGeneration } = useAppStore.getState()
-    if (recordHistory) {
-      setNavigation((current) => {
-        if (current.items[current.index]?.id === node.id)
-          return current
-        const items = [...current.items.slice(0, current.index + 1), node].slice(-100)
-        return { items, index: items.length - 1 }
-      })
+  /** A tab's history, made the first time it is asked for. */
+  const historyOf = (tabId: string): TabHistory => {
+    let history = tabHistories.current.get(tabId)
+    if (!history) {
+      history = { back: [], forward: [] }
+      tabHistories.current.set(tabId, history)
     }
-    const documentId = await openDocument(node, language)
-    const current = useAppStore.getState()
-    if (current.workspaceId !== workspaceId || current.workspaceGeneration !== workspaceGeneration)
+    return history
+  }
+
+  /** Where a document tab is now: the document, its language, and the caret and scroll of its view. */
+  const currentHistoryEntry = (tab: TabNode): TabHistoryEntry | undefined => {
+    const documentId = documentIdOfTab(tab)
+    if (!documentId)
       return undefined
-    const tabId = `doc:${documentId}`
-    let viewId = tabId
-    // A method's tab shows the title the backend decompiled it under — "name(params) : return" — not
-    // the tree label, which drops the return type. Anything else already labels the two the same way.
-    const tabName = current.documents[documentId]?.title ?? node.label
-    if (model.getNodeById(tabId)) {
-      model.doAction(Actions.selectTab(tabId))
-      const existing = model.getNodeById(tabId)
-      if (existing instanceof TabNode && existing.getName() !== tabName)
-        model.doAction(Actions.renameTab(tabId, tabName))
-      // "Open in New Tab" keeps the tab the document already had and adds a second one beside it, which
-      // is what cloneDocumentTab draws — the same document under a new tab id.
-      if (newTab && existing instanceof TabNode)
-        viewId = cloneDocumentTab(existing)?.getId() ?? tabId
+    const document = useAppStore.getState().documents[documentId]
+    const caret = caretPosition(tab.getId())
+    return {
+      documentId,
+      language: document?.requestedLanguage,
+      line: caret?.line ?? document?.cursorLine,
+      column: caret?.column ?? document?.cursorColumn,
+      scrollTop: documentEditorScrollTop(tab.getId()) ?? document?.scrollTop,
+    }
+  }
+
+  /** dnSpy's TabHistory.SetCurrent with saveCurrent: where the tab is goes on its back list, and its forward
+   *  list is dropped, the way a new navigation drops it. */
+  const recordTabHistory = (tab: TabNode): void => {
+    const entry = currentHistoryEntry(tab)
+    if (!entry)
+      return
+    const history = historyOf(tab.getId())
+    history.back.push(entry)
+    history.forward = []
+    setHistoryVersion((value) => value + 1)
+  }
+
+  /**
+   * dnSpy's DocumentTabService.ShowNodes / FollowReference: a node is shown in the tab in front — its content
+   * replaced, and where it was kept in its history — or, with `newTab`, in a tab of its own. A tab that shows
+   * no document (the start page, a hex view) takes the document in its place. Answers with the id of the tab
+   * the document ended up in, which is the view a caret placed afterwards has to land in.
+   */
+  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false, intoTab?: TabNode): Promise<string | undefined> => {
+    const { workspaceId, workspaceGeneration } = useAppStore.getState()
+    const front = intoTab ?? (newTab ? undefined : frontDocumentTab())
+    const target = front && DOCUMENT_COMPONENTS.includes(front.getComponent() ?? '') && front.getComponent() !== 'start' ? front : undefined
+    const shown = documentIdOfTab(target)
+    const shownDocument = shown ? useAppStore.getState().documents[shown] : undefined
+    // The node the tab already shows, in the language asked for, is not decompiled again: there is nothing to
+    // show that it does not show already, or will once the decompilation under way is done.
+    const alreadyShown = shown === node.id && shownDocument !== undefined
+      && (language === undefined || shownDocument.requestedLanguage === language)
+      && (shownDocument.loading === true || shownDocument.diagnostics.every((diagnostic) => diagnostic.severity !== 'error'))
+    if (target && recordHistory && shown && shown !== node.id)
+      recordTabHistory(target)
+    // The document goes into its tab at once, loading — dnSpy shows a tab decompiling — so whatever asks for it
+    // next finds it there rather than opening it a second time.
+    const opening = alreadyShown ? Promise.resolve(node.id) : openDocument(node, language)
+    const documentId = node.id
+    const titleOf = (): string => useAppStore.getState().documents[documentId]?.title || node.label
+    let tabId: string
+    if (target) {
+      tabId = target.getId()
+      if (shown !== documentId || target.getComponent() !== 'document')
+        model.doAction(Actions.updateNodeAttributes(tabId, { name: titleOf(), component: 'document', config: { documentId } }))
+      if (!target.isSelected())
+        model.doAction(Actions.selectTab(tabId))
     } else {
-      const targetTabSet = getTargetDocumentTabSet(model)
+      // A new tab goes beside the one in front — or in place of the start page that was in front.
+      const targetTabSet = (front?.getParent() instanceof TabSetNode ? front.getParent() as TabSetNode : undefined) ?? getTargetDocumentTabSet(model)
       if (!targetTabSet) return undefined
+      tabId = newDocumentTabId()
       model.doAction(Actions.addNode({
         type: 'tab',
         id: tabId,
-        name: tabName,
+        name: titleOf(),
         component: 'document',
         config: { documentId },
       }, targetTabSet.getId(), DockLocation.CENTER, -1, true))
+      if (front?.getComponent() === 'start' && front.isCloseable() && model.getNodeById(front.getId()))
+        model.doAction(Actions.deleteTab(front.getId()))
       if (model.getNodeById('start'))
         model.doAction(Actions.deleteTab('start'))
     }
     forceLayoutUpdate((value) => value + 1)
-    return viewId
+    await opening
+    const current = useAppStore.getState()
+    if (current.workspaceId !== workspaceId || current.workspaceGeneration !== workspaceGeneration)
+      return undefined
+    // A method's tab shows the title the backend decompiled it under — "name(params) : return" — not
+    // the tree label, which drops the return type. Anything else already labels the two the same way.
+    const tab = model.getNodeById(tabId)
+    if (!(tab instanceof TabNode) || documentIdOfTab(tab) !== documentId)
+      return undefined
+    if (tab.getName() !== titleOf()) {
+      model.doAction(Actions.renameTab(tabId, titleOf()))
+      forceLayoutUpdate((value) => value + 1)
+    }
+    return tabId
+  }
+
+  /** The document tab that shows a node, the one in front first — where a step of the debugger lands. */
+  const tabShowing = (documentId: string): TabNode | undefined => {
+    const tabs = getDocumentTabs(model).filter((tab) => documentIdOfTab(tab) === documentId)
+    return tabs.find((tab) => tab.isSelected()) ?? tabs[0]
+  }
+
+  /**
+   * dnSpy's FollowReference from a document viewer. A local goes to a copy of the document in a new tab, with
+   * the caret on its declaration. A member is shown in the viewer's own tab — or a new one — and the caret is
+   * put on its definition; with DecompileFullType on, the document is the whole type the member is in, the
+   * outermost one, which is what dnSpy decompiles for a reference.
+   */
+  const followReference = async (span: TextSpan, newTab: boolean, viewId: string): Promise<void> => {
+    const sourceTab = model.getNodeById(viewId)
+    const source = sourceTab instanceof TabNode ? sourceTab : undefined
+    if (isLocalSpan(span)) {
+      const documentId = documentIdOfTab(source)
+      const document = documentId ? useAppStore.getState().documents[documentId] : undefined
+      if (!source || !documentId || !document)
+        return
+      const definition = document.spans.find((candidate) => candidate.localId === span.localId && candidate.kind === 'definition') ?? span
+      const clone = cloneDocumentTab(source)
+      if (!clone)
+        return
+      const { line, column } = positionAt(document.text, definition.start + definition.length)
+      useAppStore.getState().requestCaret({ documentId, viewId: clone.getId(), line, column })
+      forceLayoutUpdate((value) => value + 1)
+      return
+    }
+    const state = useAppStore.getState()
+    const workspaceId = state.workspaceId
+    if (!workspaceId)
+      return
+    try {
+      const nodeId = await state.resolveReferenceTarget(span)
+      if (!nodeId)
+        return
+      let shownId = nodeId
+      if (loadAppOptions().environmentGeneral.decompileFullType) {
+        const path = await window.dnSpy.getNodePath(workspaceId, nodeId).catch(() => undefined)
+        shownId = path?.nodes.find((candidate) => candidate.kind === 'type')?.id ?? nodeId
+      }
+      const node = findNode(useAppStore.getState(), shownId) ?? await window.dnSpy.getNode(workspaceId, shownId)
+      const tabId = await addDocumentTab(node, true, undefined, newTab, newTab ? undefined : source)
+      if (tabId)
+        useAppStore.getState().requestCaret({ documentId: node.id, viewId: tabId, line: 1, column: 1, definitionNodeId: nodeId, center: true })
+    } catch (reason) {
+      appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+    }
+  }
+
+  /** Records where a viewer's caret is before it moves the caret within its document — a step dnSpy's history keeps. */
+  const recordViewHistory = (viewId: string): void => {
+    const tab = model.getNodeById(viewId)
+    if (tab instanceof TabNode)
+      recordTabHistory(tab)
+  }
+
+  /**
+   * dnSpy's Back and Forward (NavigationCommands.BrowseBack/BrowseForward) over the history of the tab in front:
+   * the tab shows the document it showed then, in the language it was in, with the caret and the scroll where
+   * they were — and where it was until now goes on the other list.
+   */
+  const stepHistory = async (back: boolean): Promise<void> => {
+    const tab = frontDocumentTab()
+    if (!tab)
+      return
+    const history = historyOf(tab.getId())
+    const entry = back ? history.back.pop() : history.forward.pop()
+    if (!entry)
+      return
+    const current = currentHistoryEntry(tab)
+    if (current)
+      (back ? history.forward : history.back).push(current)
+    setHistoryVersion((value) => value + 1)
+    const workspaceId = useAppStore.getState().workspaceId
+    if (!workspaceId)
+      return
+    try {
+      const node = findNode(useAppStore.getState(), entry.documentId) ?? await window.dnSpy.getNode(workspaceId, entry.documentId)
+      const viewId = await addDocumentTab(node, false, entry.language, false, tab)
+      if (viewId)
+        useAppStore.getState().requestCaret({ documentId: node.id, viewId, line: entry.line ?? 1, column: entry.column ?? 1, scrollTop: entry.scrollTop })
+    } catch (reason) {
+      appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
+    }
   }
 
   /**
@@ -1429,13 +1632,15 @@ export const App = (): React.JSX.Element => {
       const node = byKey.get(document.key)
       if (!node)
         continue
-      await addDocumentTab(node, false, document.language)
+      // Each document the session held comes back in a tab of its own, in the order they were in.
+      await addDocumentTab(node, false, document.language, true)
       if (!isCurrent()) return undefined
       restoredDocuments++
     }
     const active = session.activeDocument ? byKey.get(session.activeDocument) : undefined
-    if (active) {
-      model.doAction(Actions.selectTab(`doc:${active.id}`))
+    const activeTab = active ? tabShowing(active.id) : undefined
+    if (activeTab) {
+      model.doAction(Actions.selectTab(activeTab.getId()))
       forceLayoutUpdate((value) => value + 1)
     }
     return restoredDocuments
@@ -1706,13 +1911,12 @@ export const App = (): React.JSX.Element => {
   // store to the front without decompiling it again, which is what a step cannot afford. Only a node
   // with no tab at all pays for the lookup and the tab the bookmark path builds.
   const revealDocumentTarget = async (nodeId: string): Promise<void> => {
-    const tabId = `doc:${nodeId}`
-    const tab = model.getNodeById(tabId)
-    if (tab instanceof TabNode) {
+    const tab = tabShowing(nodeId)
+    if (tab) {
       // Selecting the tab that is already selected would still count as a layout change, and a step
       // asks for this on every stop.
       if (!tab.isSelected()) {
-        model.doAction(Actions.selectTab(tabId))
+        model.doAction(Actions.selectTab(tab.getId()))
         forceLayoutUpdate((value) => value + 1)
       }
       return
@@ -1799,21 +2003,15 @@ export const App = (): React.JSX.Element => {
     })()
   }, [backendStatus.state, openPaths])
 
-  const goBack = (): void => {
-    if (navigation.index <= 0) return
-    const index = navigation.index - 1
-    const node = navigation.items[index]
-    setNavigation((current) => ({ ...current, index }))
-    void addDocumentTab(node, false)
-  }
-
-  const goForward = (): void => {
-    if (navigation.index >= navigation.items.length - 1) return
-    const index = navigation.index + 1
-    const node = navigation.items[index]
-    setNavigation((current) => ({ ...current, index }))
-    void addDocumentTab(node, false)
-  }
+  const goBack = (): Promise<void> => stepHistory(true)
+  const goForward = (): Promise<void> => stepHistory(false)
+  // The Back and Forward buttons follow the tab in front.
+  const frontHistory = useMemo(() => {
+    const tab = frontDocumentTab()
+    const history = tab ? tabHistories.current.get(tab.getId()) : undefined
+    return { canGoBack: (history?.back.length ?? 0) > 0, canGoForward: (history?.forward.length ?? 0) > 0 }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyVersion, layoutVersion, model])
 
   // dnSpy shows its analyzer before it adds the member, so the row lands in a window that is already there.
   const openAnalysis = async (node: TreeNode): Promise<void> => {
@@ -1996,8 +2194,23 @@ export const App = (): React.JSX.Element => {
     setCodeDialog({ node, mode, sourceNodeId })
   }
 
+  // The tree's selection, shown in the tab in front — dnSpy's DocumentTabService.ShowNodes. A key held down walks
+  // the rows faster than they decompile, so the row the selection settles on is the one shown.
+  const showSelectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const showSelectedNode = (node: TreeNode): void => {
+    clearTimeout(showSelectionTimer.current)
+    showSelectionTimer.current = setTimeout(() => {
+      const selected = useAppStore.getState().selectedNode
+      if (selected?.id === node.id)
+        void addDocumentTab(node)
+    }, 30)
+  }
+
   const explorerCommands: AssemblyExplorerCommands = {
-    onOpenNode: (node) => { void addDocumentTab(node) },
+    // dnSpy's NodeActivated: the node is in the tab in front already — the selection put it there — and the
+    // focus goes to it.
+    onOpenNode: (node) => { void addDocumentTab(node).then((tabId) => { if (tabId) focusDocumentEditor(tabId) }) },
+    onShowNode: (node) => showSelectedNode(node),
     onOpenInNewTab: (node) => { void openNodeInNewTab(node.id) },
     onDeleteNode: (node) => deleteSelected(node),
     onEditNode: (node) => openEditNode(node),
@@ -2077,10 +2290,14 @@ export const App = (): React.JSX.Element => {
     }
   }
 
-  const documentViewCommands = (): DocumentViewCommands => ({
-    // dnSpy's document viewer "Open in New Tab" follows the reference under the caret, and the reference
-    // goes to a tab of its own rather than the one a plain follow would reuse.
-    onOpenInNewTab: (target) => { void useAppStore.getState().openReferenceTarget(target, true) },
+  const documentViewCommands = (viewId: string): DocumentViewCommands => ({
+    // dnSpy's document viewer follows a reference into its own tab, or — Ctrl, Ctrl+F12, "Open in New Tab" —
+    // into a tab of its own.
+    onFollowReference: (target, newTab) => { void followReference(target, newTab, viewId) },
+    onRecordHistory: () => recordViewHistory(viewId),
+    onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
+    onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
+    onGoToToken: (node) => setTokenNode(node),
     onStartDebug: () => setDebugProgramDialogOpen(true),
     canStartDebug: backendStatus.capabilities?.['debug.coreclr.launch'] === true,
     onShowDisassembly: () => showToolWindow('disassembly'),
@@ -2159,18 +2376,28 @@ export const App = (): React.JSX.Element => {
     copyText: (text) => explorerCommands.copyText?.(text),
   }
 
+  // A zoomed element is laid out at its own size and drawn scaled, so it is made as much smaller as it is scaled
+  // up — which leaves it filling the tab at any zoom.
+  const tabZoomStyle: React.CSSProperties = { zoom: documentZoom / 100, width: `${10000 / documentZoom}%`, height: `${10000 / documentZoom}%` }
+
   /** What a tab's component draws, before the caption a docked pane wears is put round it. */
   const paneContent = (node: TabNode): React.ReactNode => {
     switch (node.getComponent()) {
       case 'explorer': return <AssemblyExplorer commands={explorerCommands} />
-      case 'document': return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView documentId={(node.getConfig() as { documentId: string }).documentId} viewId={node.getId()} theme={theme} transparentBackground={backgroundImageOn} onNavigate={(target) => void useAppStore.getState().openReferenceTarget(target)} commands={documentViewCommands()} /></Suspense>
+      // A tab shows one document after another, and each gets a view of its own: the key makes the switch a
+      // new view rather than the old one reloading in place.
+      case 'document': {
+        const documentId = (node.getConfig() as { documentId: string }).documentId
+        return <Suspense fallback={<div className="loading-state">{t('Loading')}</div>}><DocumentView key={documentId} documentId={documentId} viewId={node.getId()} theme={theme} transparentBackground={backgroundImageOn} commands={documentViewCommands(node.getId())} /></Suspense>
+      }
       case 'output': return <OutputPane />
       case 'csharp-interactive': return <CSharpInteractive theme={theme} transparentBackground={backgroundImageOn} />
       case 'search': return <SearchPane commands={searchCommands} />
       case 'analysis': return <AnalyzerPane commands={analyzerCommands} />
       case 'string-references': return <StringReferencesPane commands={stringReferencesCommands} />
-      case 'hex': return <HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
-      case 'module-info': return <ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} />
+      // dnSpy's TabElementZoomer: a tab that is not a text view is scaled as a whole.
+      case 'hex': return <div className="tab-zoom" style={tabZoomStyle}><HexView moduleId={(node.getConfig() as { moduleId: string }).moduleId} /></div>
+      case 'module-info': return <div className="tab-zoom" style={tabZoomStyle}><ModuleInfoView moduleId={(node.getConfig() as { moduleId: string }).moduleId} /></div>
       case 'locals': return <LocalsPane />
       case 'exception-settings': return <ExceptionSettingsPane />
       case 'watch': return <WatchPane window={node.getId().startsWith('watch-') ? Number(node.getId().slice('watch-'.length)) : 1} />
@@ -2375,8 +2602,8 @@ export const App = (): React.JSX.Element => {
         highlightCurrentLine={highlightCurrentLine}
         fullScreen={fullScreen}
         elevated={elevated}
-        onToggleWordWrap={() => setWordWrap(!wordWrap)}
-        onToggleHighlightCurrentLine={() => setHighlightCurrentLine(!highlightCurrentLine)}
+        onToggleWordWrap={() => toggleDocumentViewerOption('wordWrap')}
+        onToggleHighlightCurrentLine={() => toggleDocumentViewerOption('highlightCurrentLine')}
         onToggleFullScreen={() => void window.dnSpy.toggleFullScreen()}
         onSetLanguage={setLanguage}
         onAbout={() => setAboutDialogOpen(true)}
@@ -2387,7 +2614,7 @@ export const App = (): React.JSX.Element => {
       <ToolBar
         hasWorkspace={Boolean(workspaceId)} busy={busy} onOpen={() => void chooseAndOpen()} onSaveAll={() => void saveAllModules()} onSearch={showSearch}
         fullScreen={fullScreen} onToggleFullScreen={() => void window.dnSpy.toggleFullScreen()}
-        canGoBack={navigation.index > 0} canGoForward={navigation.index >= 0 && navigation.index < navigation.items.length - 1} onBack={goBack} onForward={goForward}
+        canGoBack={frontHistory.canGoBack} canGoForward={frontHistory.canGoForward} onBack={() => void goBack()} onForward={() => void goForward()}
         canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo}
         decompilerLanguage={defaultLanguage} onLanguageChange={(language) => { void changeLanguage(language, orderedDocumentKeys(model).order) }}
         debugAvailable={backendStatus.capabilities?.['debug.coreclr.launch'] === true} debugState={debugState}

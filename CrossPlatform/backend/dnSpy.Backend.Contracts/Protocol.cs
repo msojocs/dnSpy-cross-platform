@@ -28,6 +28,8 @@ public static class RpcMethods {
 	public const string TreeGetNodePath = "tree/getNodePath";
 	public const string DocumentDecompile = "document/decompile";
 	public const string DocumentFindMember = "document/findMember";
+	/// <summary>A member's Quick Info — signature and XML documentation — for the viewer's hover tooltip.</summary>
+	public const string DocumentQuickInfo = "document/quickInfo";
 	public const string Search = "search/run";
 	/// <summary>A notification: the results a search found since the last one, sent while it still runs
 	/// when the request named a progress token.</summary>
@@ -397,7 +399,40 @@ public sealed record TextSpanDto(
 	string Kind,
 	string? TargetNodeId = null,
 	string? TargetModulePath = null,
-	int? TargetMetadataToken = null);
+	int? TargetMetadataToken = null) {
+	/// <summary>
+	/// The text color class the span is written in — one of <see cref="TextColors"/> — which is what
+	/// dnSpy's decompiler writer records beside every reference it emits. Absent for a span that only
+	/// names a place and has no color of its own.
+	/// </summary>
+	public string? Color { get; init; }
+
+	/// <summary>
+	/// For a local or a parameter, the identity that ties its uses to its declaration. It is stable
+	/// within one decompiled document, which is all that local navigation and highlighting need.
+	/// </summary>
+	public string? LocalId { get; init; }
+
+	/// <summary>
+	/// The Quick Info of a local or parameter — dnSpy's <c>WriteToolTip(ISourceVariable)</c>: its kind, type
+	/// and name. Only the first span of a local carries it; the others find it there through <see cref="LocalId"/>, so the
+	/// response does not repeat it for every use. Member references get theirs from the
+	/// <see cref="DocumentQuickInfoRequest"/> round trip instead.
+	/// </summary>
+	public IReadOnlyList<TextPartDto>? ToolTip { get; init; }
+
+	/// <summary>
+	/// Whether the reference writes what it names — an assignment's target, an increment, an <c>out</c> or
+	/// <c>ref</c> argument — which dnSpy's reference highlighter marks in a color of its own.
+	/// </summary>
+	public bool IsWrite { get; init; }
+
+	/// <summary>
+	/// An IL instruction's opcode — dnSpy's disassembler writes every opcode as a reference to it. Following
+	/// one opens the opcode's documentation page and its Quick Info describes it.
+	/// </summary>
+	public string? OpCode { get; init; }
+}
 
 /// <summary>
 /// One sequence point of the decompiled text: the line(s) it covers and the IL range it maps to.
@@ -443,7 +478,55 @@ public sealed record DecompileResponse(
 	/// Save button under a resource's line. Each sits between two lines of the text.
 	/// </summary>
 	public IReadOnlyList<DocumentAttachmentDto>? Attachments { get; init; }
+
+	/// <summary>
+	/// The blocks the writer opened and closed — dnSpy's <c>CodeBracesRange</c> with a block kind — which the
+	/// viewer draws its block structure lines (the "indent guides") from.
+	/// </summary>
+	public IReadOnlyList<BlockStructureDto>? BlockStructures { get; init; }
+
+	/// <summary>
+	/// dnSpy's <c>AddLineSeparator</c> positions: a member's end, below whose line the viewer draws a
+	/// procedure line separator when the Text Viewer option asks for one.
+	/// </summary>
+	public IReadOnlyList<int>? LineSeparators { get; init; }
+
+	/// <summary>
+	/// The keywords dnSpy ties together for its "Highlight related keywords" option — <c>if</c> and its
+	/// <c>else</c>, a loop and its <c>break</c> and <c>continue</c>, the <c>return</c>s of one method.
+	/// </summary>
+	public IReadOnlyList<KeywordReferenceDto>? RelatedKeywords { get; init; }
 }
+
+/// <summary>
+/// One block of a document, in text offsets: <paramref name="Start"/> lies in the line that opens it and
+/// <paramref name="End"/> in the line that closes it — the braces of a C# block, the first and last
+/// statement of a Visual Basic one. <paramref name="Kind"/> is dnSpy's <c>BlockStructureKind</c> in camel
+/// case, which picks the line's color.
+/// </summary>
+public sealed record BlockStructureDto(int Start, int End, string Kind);
+
+/// <summary>A keyword of a group of related keywords; the keywords of one group share <paramref name="Group"/>.</summary>
+public sealed record KeywordReferenceDto(int Start, int Length, int Group);
+
+/// <summary>
+/// The Quick Info asked for over a reference: the member it names, the way the language the document is
+/// written in writes the member's tooltip.
+/// </summary>
+public sealed record DocumentQuickInfoRequest(
+	string WorkspaceId,
+	string? TargetNodeId = null,
+	string? ModulePath = null,
+	int? MetadataToken = null,
+	DecompilerLanguage Language = DecompilerLanguage.CSharp,
+	string? OpCode = null);
+
+/// <summary>
+/// dnSpy's tooltip for a reference: the member written the way the document's language writes it, then the
+/// summary of its XML documentation when the module has one. An empty <paramref name="Parts"/> means
+/// there is nothing to show.
+/// </summary>
+public sealed record DocumentQuickInfoResponse(IReadOnlyList<TextPartDto> Parts, string? Documentation);
 
 /// <summary>
 /// Something a document shows between its lines — dnSpy's <c>AddUIElement</c> and <c>AddButton</c>.

@@ -39,6 +39,15 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   canStartDebug: boolean
   /** Follows the reference under the caret in a tab of its own — dnSpy's `FollowReferenceNewTab`. */
   onOpenInNewTab?(target: TextSpan): void
+  /** Whether the menu was opened from the keyboard, which is what picks the gesture "Open in New Tab" shows. */
+  openInNewTabFromKeyboard?: boolean
+  /** Whether the document's module has an entry point and a global constructor — the token group's two Go to
+   *  commands show only when it does — and the commands that go there, and to a token, in that module. */
+  hasEntryPoint?: boolean
+  hasGlobalCctor?: boolean
+  onGoToEntryPoint?(node: TreeNode): void
+  onGoToGlobalCctor?(node: TreeNode): void
+  onGoToToken?(node: TreeNode): void
   onStartDebug?(): void
   onToggleBreakpoint?(): void
   /** Enables or disables `breakpoint`, which is what Ctrl+F9 does. */
@@ -75,6 +84,8 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   copyText?(text: string): void
   onCopy?(): void
   onFind?(): void
+  /** dnSpy's Incremental Search, Ctrl+I: what is typed next is looked for from the caret as it is typed. */
+  onIncrementalSearch?(): void
 }
 
 type CodeMenuIcon = (ctx: CodeEditorMenuContext) => ReactNode
@@ -86,7 +97,7 @@ interface CodeMenuEntry {
   key: string
   icon: CodeMenuIcon
   label(ctx: CodeEditorMenuContext): string
-  shortcut?: string
+  shortcut?: string | ((ctx: CodeEditorMenuContext) => string)
   visible(ctx: CodeEditorMenuContext): boolean
   /** Only consulted for entries that have a run; entries without one render disabled. */
   enabled?(ctx: CodeEditorMenuContext): boolean
@@ -264,7 +275,7 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // 0 — Tab commands (GROUP_CTX_DOCVIEWER_TABS). dnSpy's entry follows the TextReference under the
   // caret — `OpenReferenceInNewTabCtxMenuCommand` is visible only when the caret names one — so it
   // shows on a reference and nowhere else.
-  { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: noImage, label: (ctx) => ctx.t('Open in New Tab'), visible: (ctx) => ctx.referenceTarget !== undefined && isNavigableSpan(ctx.referenceTarget) && ctx.onOpenInNewTab !== undefined, run: (ctx) => { const target = ctx.referenceTarget; if (target) ctx.onOpenInNewTab?.(target) } },
+  { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: noImage, label: (ctx) => ctx.t('Open in New Tab'), shortcut: (ctx) => (ctx.openInNewTabFromKeyboard ? 'Ctrl+F12' : ctx.t('Ctrl+Click')), visible: (ctx) => ctx.referenceTarget !== undefined && isNavigableSpan(ctx.referenceTarget) && ctx.onOpenInNewTab !== undefined, run: (ctx) => { const target = ctx.referenceTarget; if (target) ctx.onOpenInNewTab?.(target) } },
 
   // 1000 — Debugger (GROUP_CTX_DOCVIEWER_DEBUG)
   // dnSpy's first entry debugs the exe of the document's module ("Debug <module.exe>"). This port has a
@@ -315,9 +326,9 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_ASMED_ILED, order: 21, key: 'replace-method-body-with-stub', icon: noImage, label: (ctx) => ctx.t('Replace Method Body with stub...'), visible: (ctx) => methodTarget(ctx) !== undefined && ctx.onReplaceMethodBodyWithStub !== undefined, run: (ctx) => { const node = methodTarget(ctx); if (node) ctx.onReplaceMethodBodyWithStub?.(node) } },
 
   // 7000 — Tokens (GROUP_CTX_DOCVIEWER_TOKENS): where to go, then what to copy.
-  { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: image('EntryPoint'), label: (ctx) => ctx.t('Go to Entry Point'), visible: never },
-  { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: noImage, label: (ctx) => ctx.t('Go to Global Cctor'), visible: never },
-  { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: noImage, label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+Shift+D', visible: never },
+  { group: GROUP_TOKENS, order: 0, key: 'go-to-entry-point', icon: image('EntryPoint'), label: (ctx) => ctx.t('Go to Entry Point'), visible: (ctx) => ctx.hasEntryPoint === true && ctx.documentNode !== undefined && ctx.onGoToEntryPoint !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToEntryPoint?.(ctx.documentNode) } },
+  { group: GROUP_TOKENS, order: 10, key: 'go-to-global-cctor', icon: noImage, label: (ctx) => ctx.t('Go to Global Cctor'), visible: (ctx) => ctx.hasGlobalCctor === true && ctx.documentNode !== undefined && ctx.onGoToGlobalCctor !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToGlobalCctor?.(ctx.documentNode) } },
+  { group: GROUP_TOKENS, order: 20, key: 'go-to-token', icon: noImage, label: (ctx) => ctx.t('Go to Token...'), shortcut: 'Ctrl+D', visible: (ctx) => ctx.documentNode !== undefined && ctx.onGoToToken !== undefined, run: (ctx) => { if (ctx.documentNode) ctx.onGoToToken?.(ctx.documentNode) } },
   { group: GROUP_TOKENS, order: 50, key: 'copy-md-token', icon: noImage, label: (ctx) => ctx.t('Copy MD Token'), visible: (ctx) => metadataTokenOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const token = metadataTokenOf(ctx); if (token !== undefined) ctx.copyText?.(formatToken(token)) } },
   { group: GROUP_TOKENS, order: 60, key: 'copy-full-name', icon: noImage, label: (ctx) => ctx.t('Copy Full Name'), visible: (ctx) => fullNameOf(ctx) !== undefined && ctx.copyText !== undefined, run: (ctx) => { const name = fullNameOf(ctx); if (name) ctx.copyText?.(name) } },
 
@@ -340,7 +351,7 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // nothing to do; Copy is still needed, since the menu replaces Monaco's own.
   { group: GROUP_EDITOR, order: 0, key: 'copy', icon: image('Copy'), label: (ctx) => ctx.t('Copy'), shortcut: 'Ctrl+C', visible: (ctx) => ctx.hasSelection && ctx.onCopy !== undefined, run: (ctx) => ctx.onCopy?.() },
   { group: GROUP_EDITOR, order: 10, key: 'find', icon: image('Search'), label: (ctx) => ctx.t('Find'), shortcut: 'Ctrl+F', visible: (ctx) => ctx.onFind !== undefined, run: (ctx) => ctx.onFind?.() },
-  { group: GROUP_EDITOR, order: 20, key: 'incremental-search', icon: image('Search'), label: (ctx) => ctx.t('Incremental Search'), shortcut: 'Ctrl+I', visible: never },
+  { group: GROUP_EDITOR, order: 20, key: 'incremental-search', icon: image('Search'), label: (ctx) => ctx.t('Incremental Search'), shortcut: 'Ctrl+I', visible: (ctx) => ctx.onIncrementalSearch !== undefined, run: (ctx) => ctx.onIncrementalSearch?.() },
 ]
 
 /**
@@ -370,7 +381,7 @@ export const buildCodeEditorMenuItems = (ctx: CodeEditorMenuContext): PopupMenuE
       const run = entry.run
       items.push({
         key: entry.key,
-        content: menuContent(entry.icon(ctx), entry.label(ctx), entry.shortcut),
+        content: menuContent(entry.icon(ctx), entry.label(ctx), typeof entry.shortcut === 'function' ? entry.shortcut(ctx) : entry.shortcut),
         disabled: run ? entry.enabled?.(ctx) === false : true,
         onSelect: run ? () => run(ctx) : undefined,
       })

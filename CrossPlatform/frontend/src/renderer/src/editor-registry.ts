@@ -77,6 +77,9 @@ export const caretPosition = (viewId: string): { line: number; column: number } 
   return position ? { line: position.lineNumber, column: position.column } : undefined
 }
 
+/** How far the editor of `viewId` is scrolled, or undefined when that view is not open. */
+export const documentEditorScrollTop = (viewId: string): number | undefined => editors.get(viewId)?.editor.getScrollTop()
+
 /**
  * Puts the caret on `line` and shows it, the way a "go to" command does. Returns false when the view
  * is closed, so the caller can fall back instead of silently doing nothing.

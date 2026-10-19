@@ -56,6 +56,7 @@ const api: DnSpyApi = {
   getNodePath: (workspaceId, nodeId) => ipcRenderer.invoke('tree:nodePath', workspaceId, nodeId),
   decompile: (workspaceId, nodeId, language: DecompilerLanguage, settings?: unknown) => ipcRenderer.invoke('document:decompile', workspaceId, nodeId, language, settings),
   findMember: (workspaceId, modulePath, metadataToken) => ipcRenderer.invoke('document:findMember', workspaceId, modulePath, metadataToken),
+  quickInfo: (workspaceId, request) => ipcRenderer.invoke('document:quickInfo', workspaceId, request),
   formatBookmarkLocations: (workspaceId, locations, format) => ipcRenderer.invoke('bookmarks:formatLocations', workspaceId, locations, format),
   exportBookmarks: (workspaceId, bookmarks) => ipcRenderer.invoke('bookmarks:export', workspaceId, bookmarks),
   importBookmarks: (workspaceId, xml) => ipcRenderer.invoke('bookmarks:import', workspaceId, xml),

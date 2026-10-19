@@ -6,6 +6,8 @@ using System.Reflection.PortableExecutable;
 using System.Resources;
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using dnlib.DotNet.Writer;
@@ -2077,9 +2079,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					cancellationToken.ThrowIfCancellationRequested();
 					return w.FinishCSharpDecompilation(GetNode(request.NodeId), session.Decompiler, syntaxTree, prepared.Settings, cancellationToken);
 				}, cancellationToken).ConfigureAwait(false);
-				return request.Language == DecompilerLanguage.VisualBasic
-					? await ConvertToVisualBasicAsync(csharp, cancellationToken).ConfigureAwait(false)
-					: csharp;
+				if (request.Language != DecompilerLanguage.VisualBasic)
+					return csharp;
+				var visualBasic = await ConvertToVisualBasicAsync(csharp, cancellationToken).ConfigureAwait(false);
+				return await AnalyzeVisualBasicAsync(visualBasic, request.NodeId, cancellationToken).ConfigureAwait(false);
 			}
 			catch (OperationCanceledException) {
 				throw;
@@ -2106,13 +2109,18 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		DecompileResponse FinishCSharpDecompilation(NodeEntry node, CSharpDecompiler decompiler, SyntaxTree syntaxTree, DecompilerSettings settings, CancellationToken cancellationToken) {
 			var module = node.AsModuleEntry!;
-			var output = new SpanTextOutput(reference => ResolveDecompilerReference(reference, module));
+			var output = new SpanTextOutput(reference => ResolveDecompilerReference(reference, module), SpanColorOf, LocalToolTipOf);
 			RenderWithLocations(syntaxTree, output, settings);
 			var statements = BuildCodeStatements(syntaxTree, decompiler, module, cancellationToken);
 			RefreshStatementCache();
 			codeStatementsByNode[$"{node.Id}:{stateId}"] = statements;
 			return new DecompileResponse(GetDocumentTitle(node), "csharp", output.ToString(), output.Spans,
-				decompiler.Errors.Select(e => new DiagnosticDto("warning", e.ToString())).ToArray()) { CodeStatements = statements };
+				decompiler.Errors.Select(e => new DiagnosticDto("warning", e.ToString())).ToArray()) {
+				CodeStatements = statements,
+				BlockStructures = output.BlockStructures,
+				LineSeparators = output.LineSeparators,
+				RelatedKeywords = output.RelatedKeywords,
+			};
 		}
 
 		sealed record CSharpDecompilation(string StateId, bool WholeModule, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
@@ -2570,6 +2578,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var document = ILFormatter.Format(node, this, ResolveILDefinition(node));
 			return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, Array.Empty<DiagnosticDto>()) {
 				CodeStatements = document.Statements,
+				BlockStructures = document.BlockStructures,
+				LineSeparators = document.LineSeparators,
 			};
 		}
 
@@ -2628,6 +2638,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					.ToArray();
 				return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, diagnostics) {
 					CodeStatements = document.Statements,
+					BlockStructures = document.BlockStructures,
+					LineSeparators = document.LineSeparators,
 				};
 			}
 			catch (OperationCanceledException) {
@@ -4917,98 +4929,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		sealed record EditOperation(string NodeId, IModuleEntry Module, Func<Action> Apply, bool ChangesRoots = false);
 		sealed record EditHistoryEntry(IReadOnlyList<EditOperation> Operations, IReadOnlyList<Action> UndoActions, string BeforeStateId, string AfterStateId);
 
-		internal sealed class SpanTextOutput(Func<object, SpanTarget?> resolveTarget) : ITextOutput {
-			readonly StringBuilder builder = new();
-			readonly List<TextSpanDto> spans = [];
-			int indentation;
-			int line = 1;
-			int column = 1;
-			bool needsIndentation = true;
-
-			public string IndentationString { get; set; } = "\t";
-			public IReadOnlyList<TextSpanDto> Spans => spans;
-			public int Position => builder.Length;
-
-			/// <summary>Where the next character will land. ILSpy reads this to label the syntax tree.</summary>
-			public TextLocation Location => new(line, column);
-
-			public void Indent() => indentation++;
-			public void Unindent() => indentation = Math.Max(0, indentation - 1);
-			public void Write(char ch) => Write(ch.ToString());
-			public void Write(string text) {
-				EnsureIndentation();
-				Append(text);
-			}
-			public void WriteLine() {
-				Append(Environment.NewLine);
-				needsIndentation = true;
-			}
-			public void WriteReference(OpCodeInfo opCode, bool omitSuffix = false) => Write(omitSuffix ? opCode.Name ?? string.Empty : opCode.ToString() ?? string.Empty);
-			public void WriteReference(DecompilerMetadataFile metadata, System.Reflection.Metadata.Handle handle, string text, string protocol = "decompile", bool isDefinition = false) =>
-				WriteReferenceCore(new MetadataReference(metadata, handle), text, isDefinition);
-			public void WriteReference(DecompilerIType type, string text, bool isDefinition = false) => WriteReferenceCore(type, text, isDefinition);
-			public void WriteReference(DecompilerIMember member, string text, bool isDefinition = false) => WriteReferenceCore(member, text, isDefinition);
-			public void WriteLocalReference(string text, object reference, bool isDefinition = false, bool isHoverOnly = false) => Write(text);
-			public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false, bool isDefinition = false) { }
-			public void MarkDefinitionStart() { }
-			public void MarkFoldEnd() { }
-
-			void WriteReferenceCore(object reference, string text, bool isDefinition) {
-				EnsureIndentation();
-				var start = builder.Length;
-				Append(text);
-				// A reference the resolver could not place has no span: the text still renders, but a click
-				// on it has nowhere to go — dnSpy's own output writer skips the reference the same way.
-				if (text.Length == 0 || resolveTarget(reference) is not { } target)
-					return;
-				// A definition is where dnSpy's token bookmark sits, and a bookmark is written down as module and
-				// token — so a definition keeps both beside its node id. A reference into the workspace only
-				// needs the node; the module and token are what a reference outside it is followed by.
-				if (!isDefinition && target.NodeId is not null)
-					target = target with { ModulePath = null, MetadataToken = null };
-				spans.Add(new TextSpanDto(start, text.Length, isDefinition ? "definition" : "reference", target.NodeId, target.ModulePath, target.MetadataToken));
-			}
-
-			// Every append goes through here so the line/column the syntax tree is labelled with stays in step
-			// with the text the editor will show.
-			void Append(string text) {
-				for (var i = 0; i < text.Length; i++) {
-					var ch = text[i];
-					if (ch == '\r') {
-						if (i + 1 < text.Length && text[i + 1] == '\n')
-							i++;
-					}
-					else if (ch != '\n') {
-						column++;
-						continue;
-					}
-					line++;
-					column = 1;
-				}
-				builder.Append(text);
-			}
-
-			void EnsureIndentation() {
-				if (!needsIndentation)
-					return;
-				for (var i = 0; i < indentation; i++)
-					Append(IndentationString);
-				needsIndentation = false;
-			}
-
-			public override string ToString() => builder.ToString();
-		}
-
-		// ILSpy only writes line/column information into the syntax tree while a writer that reports its own
-		// position (ILocatable) prints it; CreateSequencePoints has nothing to work with otherwise. The writer
-		// that turns identifiers into the reference spans the editor navigates with — TextTokenWriter — is not
-		// ILocatable, so this one reports the position of the output buffer instead of tracking its own.
-		internal sealed class LocationTokenWriter(SpanTextOutput output, DecompilerSettings settings) : TextTokenWriter(output, settings), ILocatable {
-			public TextLocation Location => output.Location;
-
-			public int Length => output.Position;
-		}
-
 		enum NodeKind {
 			Assembly,
 			Module,
@@ -5060,7 +4980,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		/// <summary>The IL view's text and what dnSpy's IL disassembler records beside it.</summary>
-		internal sealed record ILDocument(string Text, IReadOnlyList<TextSpanDto> Spans, IReadOnlyList<CodeStatementDto> Statements);
+		internal sealed record ILDocument(string Text, IReadOnlyList<TextSpanDto> Spans, IReadOnlyList<CodeStatementDto> Statements, IReadOnlyList<BlockStructureDto> BlockStructures, IReadOnlyList<int> LineSeparators);
 
 		/// <summary>
 		/// The IL view. Beside the text it records what dnSpy's disassembler does: a statement per instruction —
@@ -5074,6 +4994,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			readonly StringBuilder builder = new();
 			readonly List<TextSpanDto> spans = [];
 			readonly List<CodeStatementDto> statements = [];
+			readonly List<BlockStructureDto> blockStructures = [];
+			readonly List<int> lineSeparators = [];
 			readonly string? modulePath;
 			readonly Workspace workspace;
 			readonly Func<IMemberDef, SpanTarget?>? resolveDefinition;
@@ -5093,7 +5015,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			public static ILDocument Format(NodeEntry node, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition = null, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
 				var formatter = new ILFormatter(node.AsModuleEntry?.Path, workspace, resolveDefinition, sourceProvider);
 				formatter.FormatNode(node);
-				return new ILDocument(formatter.builder.ToString(), formatter.spans, formatter.statements);
+				return new ILDocument(formatter.builder.ToString(), formatter.spans, formatter.statements, formatter.blockStructures, formatter.lineSeparators);
 			}
 
 			void FormatNode(NodeEntry node) {
@@ -5158,7 +5080,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			/// <summary>A line declaring a member: the definition span covers the name, as dnSpy's disassembler writes it.</summary>
 			void WriteDefinitionLine(string prefix, string name, string suffix, IMemberDef member) {
 				if (name.Length > 0 && resolveDefinition?.Invoke(member) is { } target)
-					spans.Add(new TextSpanDto(builder.Length + prefix.Length, name.Length, "definition", target.NodeId, target.ModulePath, target.MetadataToken));
+					spans.Add(new TextSpanDto(builder.Length + prefix.Length, name.Length, "definition", target.NodeId, target.ModulePath, target.MetadataToken) {
+						Color = MetadataTextColors.Of(member),
+					});
 				WriteLine(prefix + name + suffix);
 			}
 
@@ -5166,14 +5090,20 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 			void FormatType(TypeDef type) {
 				FormatTypeHeader(type);
+				var blockStart = builder.Length;
 				WriteLine("{");
 				foreach (var field in type.Fields)
 					FormatField(field, "  ");
+				// dnSpy's disassembler puts a separator under the last field, and under every method's end.
+				if (type.HasFields)
+					lineSeparators.Add(builder.Length - Environment.NewLine.Length);
 				foreach (var method in type.Methods) {
 					WriteLine(string.Empty);
 					FormatMethod(method, "  ");
 				}
+				var blockEnd = builder.Length;
 				WriteLine("}");
+				blockStructures.Add(new BlockStructureDto(blockStart, blockEnd, type.IsInterface ? "interface" : type.IsValueType || type.IsEnum ? "valueType" : "type"));
 			}
 
 			void FormatField(FieldDef field, string indent) =>
@@ -5197,6 +5127,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 			void FormatMethod(MethodDef method, string indent = "") {
 				WriteDefinitionLine($"{indent}.method {method.Attributes} {method.ReturnType.FullName} ", method.Name, FormatParameterList(method), method);
+				var blockStart = builder.Length + indent.Length;
 				WriteLine($"{indent}{{");
 				if (method.HasBody) {
 					WriteLine($"{indent}  .maxstack {method.Body.MaxStack}");
@@ -5216,10 +5147,15 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 								AppendSourceComment(prefix, sources[sourceIndex].Text);
 							sourceIndex++;
 						}
-						var head = $"{prefix}IL_{instruction.Offset:X4}: {instruction.OpCode.Name,-12} ";
+						var label = $"{prefix}IL_{instruction.Offset:X4}: ";
+						var head = $"{label}{instruction.OpCode.Name,-12} ";
 						var operand = FormatOperand(instruction.Operand);
 						var text = (head + operand).TrimEnd();
-						AddOperandReference(builder.Length + head.Length, operand, instruction.Operand);
+						spans.Add(new TextSpanDto(builder.Length + label.Length, instruction.OpCode.Name.Length, "reference") {
+							Color = TextColors.OpCode,
+							OpCode = instruction.OpCode.Name,
+						});
+						AddOperandReference(builder.Length + head.Length, operand, instruction.Operand, method.MDToken.Raw);
 						// dnSpy's IL view has a statement per instruction: the line covers the instruction's bytes
 						// and nothing else, from its offset to the next one's.
 						if (modulePath is not null) {
@@ -5241,7 +5177,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 						WriteLine(text);
 					}
 				}
+				var blockEnd = builder.Length + indent.Length;
 				WriteLine($"{indent}}}");
+				blockStructures.Add(new BlockStructureDto(blockStart, blockEnd, "method"));
+				lineSeparators.Add(blockEnd);
 			}
 
 			/// <summary>
@@ -5249,7 +5188,17 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			/// whole name — the stretch dnSpy's disassembler writes as a reference to it. An operand that names
 			/// nothing the workspace can place gets none.
 			/// </summary>
-			void AddOperandReference(int start, string text, object? operand) {
+			void AddOperandReference(int start, string text, object? operand, uint methodToken = 0) {
+				// dnSpy's disassembler writes a local and a parameter operand as a reference to it too, which is what
+				// ties the instructions that use one together for the highlighter.
+				if (operand is Local or Parameter && text.Length > 0) {
+					var (kind, index, color) = operand is Local local ? ("V", local.Index, TextColors.Local) : ("A", ((Parameter)operand).Index, TextColors.Parameter);
+					spans.Add(new TextSpanDto(start, text.Length, "reference") {
+						Color = color,
+						LocalId = $"{methodToken:X8}:{kind}{index.ToString(CultureInfo.InvariantCulture)}",
+					});
+					return;
+				}
 				if (operand is not IMDTokenProvider || text.Length == 0)
 					return;
 				referenceHost ??= new AnalyzerHost(workspace, null, loadOnDemand: false);
@@ -5262,8 +5211,22 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					if (name.Length > 0 && at >= 0)
 						(offset, length) = (at + 2, name.Length);
 				}
-				spans.Add(new TextSpanDto(start + offset, length, "reference", target.NodeId, target.ModulePath, target.MetadataToken));
+				spans.Add(new TextSpanDto(start + offset, length, "reference", target.NodeId, target.ModulePath, target.MetadataToken) {
+					Color = OperandColor(operand),
+				});
 			}
+
+			/// <summary>The color an operand's name is written in: its definition's when it is one, and what its
+			/// signature tells of it when it is a reference — the disassembler colors without loading anything.</summary>
+			string OperandColor(object operand) => operand switch {
+				IMemberDef definition => MetadataTextColors.Of(definition),
+				ITypeDefOrRef type => workspace.TypeColor(type),
+				IMethod { MethodSig: { } signature } method => method.Name == ".ctor" || method.Name == ".cctor"
+					? workspace.TypeColor(method.DeclaringType)
+					: signature.HasThis ? TextColors.InstanceMethod : TextColors.StaticMethod,
+				IField => TextColors.InstanceField,
+				_ => TextColors.Text,
+			};
 
 			void AppendSourceComment(string indent, string source) {
 				WriteLine(string.Empty);

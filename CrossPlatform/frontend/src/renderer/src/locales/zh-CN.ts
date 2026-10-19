@@ -203,6 +203,14 @@ export const zhCN: Readonly<Record<string, string>> = {
   // The Go to Token box's own title, and the line it shows when the token names nothing.
   'Go to Token': '转到元数据标记',
   'The token {token} does not name a row in {module}.': '标记 {token} 在 {module} 中不对应任何行。',
+  // dnSpy.Resources: the Go to Line box (GoToLine_*) and the mouse gesture "Open in New Tab" shows (OpenInNewTabKey3).
+  'Go to Line': '转到行',
+  'Line [, column]': '行 [, 列]',
+  'Enter a line number': '输入行号',
+  'Invalid line: {0}': '行无效: {0}',
+  'Ctrl+Click': 'Ctrl+单击',
+  // The port's label for Incremental Search going backwards (Ctrl+Shift+I), beside dnSpy's own for going forwards.
+  'Reverse Incremental Search': '反向渐进式搜索',
   'Copy MD Token': '复制元数据标记',
   'Copy Full Name': '复制全名',
   'Analyze': '分析',

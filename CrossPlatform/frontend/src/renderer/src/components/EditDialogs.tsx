@@ -4,6 +4,7 @@ import { useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { CloseGlyph } from './DsGlyphs'
 import { DsIcon } from './DsIcon'
+import { parseGoToLine } from '../document-viewer'
 
 interface RenameDialogProps {
   node: TreeNode
@@ -105,6 +106,43 @@ export const GoToTokenDialog = ({ node, onClose }: GoToTokenDialogProps): React.
           {error && <div className="modal-error">{error}</div>}
         </div>
         <div className="modal-actions"><button type="button" onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary" disabled={!token.trim()}>{t('OK')}</button></div>
+      </form>
+    </div>
+  )
+}
+
+interface GoToLineDialogProps {
+  /** The line the caret is on, which ", column" goes to. */
+  currentLine: number
+  lineCount: number
+  onGo(line: number, column?: number): void
+  onClose(): void
+}
+
+/**
+ * dnSpy's Go to Line box (GoToCommand): "line" or "line, column", counted from 1. What cannot be gone to is
+ * said under the box as it is typed, and OK waits until there is something it can go to — dnSpy's Ask box.
+ */
+export const GoToLineDialog = ({ currentLine, lineCount, onGo, onClose }: GoToLineDialogProps): React.JSX.Element => {
+  const [text, setText] = useState('')
+  const input = useRef<HTMLInputElement>(null)
+  const { t } = useLanguage()
+  useEffect(() => input.current?.focus(), [])
+  const result = parseGoToLine(text, currentLine, lineCount, t)
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="modal rename-dialog" role="dialog" aria-modal="true" aria-labelledby="go-to-line-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onClose() } }} onSubmit={(event) => {
+        event.preventDefault()
+        if ('line' in result)
+          onGo(result.line, result.column)
+      }}>
+        <div className="modal-title"><span id="go-to-line-title">{t('Go to Line')}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
+        <div className="modal-content">
+          <label>{t('Line [, column]')}<input ref={input} aria-label={t('Line [, column]')} value={text} onChange={(event) => setText(event.target.value)} /></label>
+          {'error' in result && <div className="modal-error">{result.error}</div>}
+        </div>
+        <div className="modal-actions"><button type="button" onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary" disabled={!('line' in result)}>{t('OK')}</button></div>
       </form>
     </div>
   )

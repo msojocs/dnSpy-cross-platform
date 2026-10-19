@@ -632,16 +632,74 @@ select:focus-visible,
   min-height: 0;
 }
 
+/* dnSpy's viewer writes references in their own colors and nothing more; what tells a reference from plain text
+   under the mouse is the hand. A plain click follows a reference, so the hand shows over one; a definition and a
+   local are only followed with Ctrl down, so the hand shows over them then. */
 .code-reference {
   cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 65%, transparent);
-  text-underline-offset: 2px;
 }
 
-.code-definition {
-  text-decoration: underline dotted color-mix(in srgb, var(--accent) 45%, transparent);
-  text-underline-offset: 2px;
+.editor-host.ctrl-down .code-definition,
+.editor-host.ctrl-down .code-local {
+  cursor: pointer;
+}
+
+/* dnSpy's reference highlighter (DocumentViewerHighlightReferencesTagger): the same reference everywhere it is
+   written, a definition and a write each in a color of their own, in the theme's marker colors. */
+.monaco-editor .highlighted-reference {
+  background: var(--tcbg-highlightedreference, rgba(219, 224, 204, 0.8));
+}
+
+.monaco-editor .highlighted-written-reference {
+  background: var(--tcbg-highlightedwrittenreference, var(--tcbg-highlightedreference, rgba(219, 224, 204, 0.8)));
+}
+
+.monaco-editor .highlighted-definition {
+  background: var(--tcbg-highlighteddefinition, var(--tcbg-highlightedreference, rgba(219, 224, 204, 0.8)));
+}
+
+/* dnSpy's procedure line separator: a one-pixel line under the line a member ends on, across the whole view. */
+.monaco-editor .view-overlays .line-separator {
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--tc-lineseparator, #a5a5a5);
+}
+
+/* dnSpy's block structure lines, drawn by DocumentView into a layer over the text. */
+.block-structure-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.block-structure-line {
+  position: absolute;
+  width: 1px;
+  pointer-events: none;
+}
+
+/* What Incremental Search has been typed so far, in the view's own row. */
+.document-incremental-search {
+  color: var(--text-muted);
+  white-space: pre;
+}
+
+/* dnSpy's ZoomControl: an editable box with the zoom in percent, at the right end of the view's own row. */
+.document-zoom-control {
+  margin-left: auto;
+}
+
+.document-zoom-control input {
+  width: 60px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
 }
 
 /* The context menu takes the focus, and Monaco hides the caret of an editor without it by setting `visibility`

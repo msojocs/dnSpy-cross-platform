@@ -289,14 +289,31 @@ export interface TextSpan {
    */
   targetModulePath?: string
   targetMetadataToken?: number
+  /** The dnSpy text color class the span is written in, e.g. `staticType` or `instanceMethod`. */
+  color?: string | null
+  /**
+   * A local or parameter's identity, tying its uses to its declaration. It is stable within the one
+   * decompiled document, which is all a click or the reference highlighter needs.
+   */
+  localId?: string | null
+  /** A local's or parameter's Quick Info — "(local variable) int num" — carried by the first span of the local. */
+  toolTip?: TextPart[] | null
+  /** Whether the reference writes what it names, which the reference highlighter marks in a color of its own. */
+  isWrite?: boolean
+  /** An IL opcode: following it opens the opcode's documentation, and its Quick Info describes it. */
+  opCode?: string | null
 }
 
 /**
  * Whether a span names somewhere to go. A reference inside the workspace carries the node; a reference
  * into a module the workspace does not hold carries that module's file and token instead, which the
- * backend follows on demand — so it is a target just the same, and the editor draws it as one.
+ * backend follows on demand — so it is a target just the same, and the editor draws it as one. A local
+ * or parameter names a place in this same document through its `localId`, and an opcode its page.
  */
-export const isNavigableSpan = (span: TextSpan): boolean => Boolean(span.targetNodeId ?? span.targetModulePath)
+export const isNavigableSpan = (span: TextSpan): boolean => Boolean(span.targetNodeId || span.targetModulePath || span.localId || span.opCode)
+
+/** Whether the span is a local variable or a parameter rather than a metadata member. */
+export const isLocalSpan = (span: TextSpan): boolean => Boolean(span.localId)
 
 export interface Diagnostic {
   severity: string
@@ -337,6 +354,44 @@ export interface DecompileResponse {
   spans: TextSpan[]
   diagnostics: Diagnostic[]
   codeStatements?: CodeStatement[]
+  /** The blocks dnSpy draws its block structure lines for. */
+  blockStructures?: BlockStructure[] | null
+  /** Where the procedure line separators go: each offset's line gets one below it. */
+  lineSeparators?: number[] | null
+  /** The keywords "Highlight related keywords" ties together. */
+  relatedKeywords?: KeywordReference[] | null
+}
+
+/**
+ * A block of a document: `start` lies in the line that opens it and `end` in the line that closes it. `kind`
+ * is dnSpy's BlockStructureKind in camel case — `method`, `loop`, `conditional` — which picks its color.
+ */
+export interface BlockStructure {
+  start: number
+  end: number
+  kind: string
+}
+
+/** A keyword of a group of related keywords; the keywords of one group share `group`. */
+export interface KeywordReference {
+  start: number
+  length: number
+  group: number
+}
+
+/** A reference's Quick Info: the member written the way the document's language writes it, and its documentation. */
+export interface DocumentQuickInfoResponse {
+  parts: TextPart[]
+  documentation?: string | null
+}
+
+/** What a hover asks Quick Info for: the reference's target, or an IL opcode, in the document's language. */
+export interface DocumentQuickInfoRequest {
+  targetNodeId?: string | null
+  modulePath?: string | null
+  metadataToken?: number | null
+  language: DecompilerLanguage
+  opCode?: string | null
 }
 
 /**
@@ -1836,6 +1891,8 @@ export interface DnSpyApi {
   decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage, settings?: DecompilerSettings): Promise<DecompileResponse>
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
+  /** The Quick Info for a reference under the cursor: the member as the document's language writes it, and its XML documentation. */
+  quickInfo(workspaceId: string, request: DocumentQuickInfoRequest): Promise<DocumentQuickInfoResponse>
   /**
    * The Bookmarks window's Location cells, written the way dnSpy's C# formatter writes them with the display
    * options given. A module the workspace does not hold is read from its file, so no workspace is needed.

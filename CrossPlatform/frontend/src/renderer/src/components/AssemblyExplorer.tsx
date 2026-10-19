@@ -53,6 +53,8 @@ interface ExplorerRowProps {
   display: TreeRowDisplay
   /** dnSpy's ActivateItem — a double click, Enter or Space: open the row, or go where it points. */
   onActivate(node: TreeNode): void
+  /** Shows the row the user just selected, which is what the active tab follows. */
+  onShow(node: TreeNode): void
   onContextMenu(node: TreeNode, position: { x: number; y: number }, returnFocusTo?: HTMLElement): void
 }
 
@@ -441,7 +443,7 @@ export class TreeTextSearch {
   }
 }
 
-const TreeRow = memo(({ node, depth, display, onActivate, onContextMenu }: ExplorerRowProps): React.JSX.Element => {
+const TreeRow = memo(({ node, depth, display, onActivate, onShow, onContextMenu }: ExplorerRowProps): React.JSX.Element => {
   const children = useAppStore((state) => state.children[node.id])
   const expanded = useAppStore((state) => state.expanded[node.id] ?? false)
   const loading = useAppStore((state) => state.loadingNodes[node.id] ?? false)
@@ -491,6 +493,9 @@ const TreeRow = memo(({ node, depth, display, onActivate, onContextMenu }: Explo
             selectNode(node, { range: true, rows: visibleRows(useAppStore.getState(), display) })
           } else {
             selectNode(node)
+            // The tab follows the tree's selection, which the first click of a double click has already made.
+            if (event.detail === 1)
+              onShow(node)
             // dnSpy's "Single-click expands nodes": the first click of a double click only, since the
             // second one is the double click's own.
             if (event.detail === 1 && display.singleClickExpandsChildren && node.hasChildren)
@@ -523,7 +528,7 @@ const TreeRow = memo(({ node, depth, display, onActivate, onContextMenu }: Explo
         <span className="tree-label">{display.syntaxHighlight && node.labelParts ? <ColoredText parts={composeTreeRowParts(label, node, display)} /> : composeTreeRowText(label, node, display)}</span>
       </div>
       {expanded && shownChildren?.map((child) => (
-        <TreeRow key={child.id} node={child} depth={depth + 1} display={display} onActivate={onActivate} onContextMenu={onContextMenu} />
+        <TreeRow key={child.id} node={child} depth={depth + 1} display={display} onActivate={onActivate} onShow={onShow} onContextMenu={onContextMenu} />
       ))}
     </>
   )
@@ -596,6 +601,16 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
    * opens. A row that names a definition the workspace cannot reach — a type in an assembly nothing on this
    * machine provides — has nowhere to go, and opens as the row it is.
    */
+  /** dnSpy's DocumentTabService follows the tree: a row the user selects alone is shown in the active tab.
+   *  A group folder is a heading with nothing to show. */
+  const show = useCallback((node: TreeNode): void => {
+    if (GROUP_FOLDER_KINDS.has(node.kind))
+      return
+    const store = useAppStore.getState()
+    if (store.selectedNodes.length === 1 && store.selectedNode?.id === node.id)
+      commandsRef.current.onShowNode?.(node)
+  }, [])
+
   const activate = useCallback((node: TreeNode): void => {
     const store = useAppStore.getState()
     store.selectNode(node)
@@ -623,8 +638,10 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       // A right click into the selection keeps it, so a command can act on every selected row; one
       // outside it selects that row alone, the way dnSpy's tree does.
       const keepsSelection = store.selectedNodes.length > 1 && store.selectedNodes.some((selected) => selected.id === node.id)
-      if (!keepsSelection)
+      if (!keepsSelection) {
         store.selectNode(node)
+        show(node)
+      }
       const selection = keepsSelection ? store.selectedNodes : [node]
       const resources = resourceTargets({ node, selection })
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can
@@ -650,7 +667,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         analyzeTargets,
       }, position, { returnFocusTo })
     })()
-  }, [t])
+  }, [t, show])
 
   /**
    * dnSpy's tree keys — SharpTreeView over a ListBox in Extended selection mode. The arrows, Home, End and the
@@ -661,6 +678,16 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
    * typing the first letters of a row selects it.
    */
   const onTreeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const before = useAppStore.getState().selectedNode?.id
+    onTreeKeyDownCore(event)
+    // A key that moved the selection to another row moves the active tab along with it.
+    const after = useAppStore.getState().selectedNode
+    if (after && after.id !== before)
+      show(after)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activate, show])
+
+  const onTreeKeyDownCore = (event: React.KeyboardEvent<HTMLDivElement>): void => {
     const target = event.target as HTMLElement
     const rowElement = target.closest<HTMLElement>('.tree-row')
     if (!rowElement || event.altKey || event.metaKey)
@@ -773,7 +800,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       event.preventDefault()
       event.stopPropagation()
     }
-  }, [activate])
+  }
 
   /**
    * dnSpy's DocumentTreeView drop: files from the desktop open in front of the root they were dropped on —
@@ -809,7 +836,7 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
   return (
     <div ref={treeRef} className="assembly-tree" role="tree" aria-label={t('Assembly Explorer')} aria-multiselectable="true" onDragOver={allowFileDrop} onDrop={dropOnTree} onKeyDown={onTreeKeyDown}>
       {roots.map((root) => (
-        <TreeRow key={root.id} node={root} depth={0} display={display} onActivate={activate} onContextMenu={openMenu} />
+        <TreeRow key={root.id} node={root} depth={0} display={display} onActivate={activate} onShow={show} onContextMenu={openMenu} />
       ))}
     </div>
   )

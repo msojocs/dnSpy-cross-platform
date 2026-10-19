@@ -238,6 +238,20 @@ export interface EditorPaneOptions<A = EditorAdvancedSettings> {
   advanced: A
 }
 
+/**
+ * The Text Viewer's options beyond the four shared pages: dnSpy's UseVisibleWhitespace, which its View White
+ * Space commands switch and no page shows, and the ZoomLevel all its document viewers share and remember.
+ */
+export interface TextViewerGeneralSettings extends EditorGeneralSettings {
+  useVisibleWhitespace: boolean
+}
+
+export interface TextViewerOptions extends EditorPaneOptions<TextViewerAdvancedSettings> {
+  general: TextViewerGeneralSettings
+  /** The zoom, in percent, of every document viewer. */
+  zoomLevel: number
+}
+
 export interface OutputGeneralSettings extends EditorGeneralSettings {
   showTimestamps: boolean
   /** .NET custom date/time format string, e.g. "HH:mm:ss.fff". */
@@ -432,7 +446,7 @@ export interface AppOptions {
   disassembler: DisassemblerSettings
   disassemblerCodeStyle: Record<X86Disassembler, CodeStyleSettings>
   compiler: Record<EditorLanguageKey, CompilerLanguageSettings>
-  documentViewer: EditorPaneOptions<TextViewerAdvancedSettings>
+  documentViewer: TextViewerOptions
   output: OutputPaneOptions
   codeEditor: Record<EditorLanguageKey, EditorPaneOptions>
   repl: Record<EditorLanguageKey, EditorPaneOptions>
@@ -684,6 +698,8 @@ export const defaultAppOptions: AppOptions = {
   },
   documentViewer: {
     ...defaultPane(true),
+    general: { ...defaultEditorGeneral(), useVisibleWhitespace: false },
+    zoomLevel: 100,
     advanced: {
       ...defaultAdvanced(true),
       referenceHighlighting: true,

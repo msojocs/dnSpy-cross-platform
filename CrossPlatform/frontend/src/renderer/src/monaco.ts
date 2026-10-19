@@ -1,10 +1,19 @@
 import { loader } from '@monaco-editor/react'
 import * as monacoApi from 'monaco-editor/editor/editor.api'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
+// The editor contributions dnSpy's text views have and the bare editor API leaves out: the find widget (Ctrl+F,
+// F3), the hover that shows Quick Info, and brace matching. They have to be loaded before any editor is
+// created, which is why they come with the shared Monaco module rather than with a particular view. Folding,
+// Monaco's word highlighter, its font zoom and its Go to Line palette stay out: dnSpy's viewer has no folding,
+// highlights references rather than words, and zooms and goes to a line its own way (document-viewer.ts).
+import 'monaco-editor/editor/contrib/find/browser/findController'
+import 'monaco-editor/editor/contrib/hover/browser/hoverContribution'
+import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching'
 import 'monaco-editor/languages/definitions/csharp/register'
 import 'monaco-editor/languages/definitions/vb/register'
 import 'monaco-editor/languages/definitions/xml/register'
 import { ilLanguage, ilLanguageConfiguration } from './il-language'
+import { registerDocumentEditorProviders } from './document-editor'
 import { monacoThemeData } from './monaco-theme'
 import { resolveTheme } from './theme-service'
 
@@ -47,6 +56,8 @@ export function initializeMonaco(): Promise<void> {
       console.error('Unable to initialize C# highlighting; using Monaco highlighting.', error)
     })
     .then(() => {
+      // The decompiled documents' Quick Info comes from the data each view records for its model.
+      registerDocumentEditorProviders(monaco, { languages: ['csharp', 'vb', 'il', 'plaintext', 'xml'] })
       loader.config({ monaco })
     })
 }

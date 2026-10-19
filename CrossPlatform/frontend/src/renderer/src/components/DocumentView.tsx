@@ -1,10 +1,10 @@
 import Editor from './CodeEditor'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
-import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { isLocalSpan, isNavigableSpan, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { bookmarkMarkers, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
 import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
 import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '../app-store'
@@ -12,8 +12,18 @@ import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEdito
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
 import { useCategoryFont } from '../fonts'
+import { setDocumentEditorData } from '../document-editor'
+import {
+  blockLines, blockStructureColor, caretForSpan, definitionForNode, definitionOf, keywordAtCaret, keywordHighlights, nextDefinition,
+  nextReference, opCodeUrl, referenceHighlights, spanAtCaret, spanAtClick, type ReferenceHighlight, type TextRange,
+} from '../document-viewer'
+import { copyWithFormatting } from '../document-clipboard'
+import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
 import { DsIcon } from './DsIcon'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
+import { GoToLineDialog } from './EditDialogs'
+import { useAppOptions, type BlockStructureLineKind } from './app-options'
+import { setDocumentViewerZoom, toggleDocumentViewerOption } from './document-viewer-options'
 import type { CreatedKind, HexShowKind } from './edit-menu'
 
 // One decoration per breakpoint that has a line in this document. A disabled breakpoint keeps its dot but draws it
@@ -57,6 +67,41 @@ const bookmarkDecorations = (
     },
   }))
 
+type TextModel = MonacoEditor.ITextModel
+
+const rangeOf = (model: TextModel, start: number, length: number): { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } => {
+  const from = model.getPositionAt(start)
+  const to = model.getPositionAt(start + length)
+  return { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column }
+}
+
+/**
+ * The spans as the viewer draws them: each in the color class dnSpy's decompiler wrote it in — the semantic
+ * colors on top of the editor's lexical ones — and marked by what a click does to it, which is what the mouse
+ * pointer shows: a reference is followed by a plain click, a definition or a local only with Ctrl down.
+ */
+const spanDecorations = (model: TextModel, spans: readonly TextSpan[]): MonacoEditor.IModelDeltaDecoration[] =>
+  spans.flatMap((span) => {
+    const classes: string[] = []
+    if (span.color)
+      classes.push(`tc-${span.color}`)
+    if (isNavigableSpan(span))
+      classes.push(isLocalSpan(span) ? 'code-local' : span.kind === 'definition' ? 'code-definition' : 'code-reference')
+    if (classes.length === 0 || span.length === 0)
+      return []
+    return [{ range: rangeOf(model, span.start, span.length), options: { inlineClassName: classes.join(' ') } }]
+  })
+
+// dnSpy's reference highlighter marks a definition, a write and a read each in its own color.
+const highlightClass: Record<ReferenceHighlight['kind'], string> = {
+  definition: 'highlighted-definition',
+  write: 'highlighted-written-reference',
+  reference: 'highlighted-reference',
+}
+
+/** The pixel pattern of each BlockStructureLineKind: solid, or dashes and gaps of one to four pixels. */
+const dashLength: Record<BlockStructureLineKind, number> = { solid: 0, dashed1: 1, dashed2: 2, dashed3: 3, dashed4: 4 }
+
 // The node a reference names. The tree lists a member only once its type has been expanded, so one it has not
 // loaded yet is asked of the backend; a node that cannot be had leaves the menu without the commands that need it.
 const referenceNodeOf = async (nodeId: string): Promise<TreeNode | undefined> => {
@@ -71,14 +116,22 @@ const referenceNodeOf = async (nodeId: string): Promise<TreeNode | undefined> =>
   }
 }
 
+/** The document's node, which the Go to commands of the context menu act on: its module is the one they search. */
+const documentNodeOf = async (nodeId: string): Promise<TreeNode | undefined> => referenceNodeOf(nodeId)
+
 /**
  * The context menu commands only the shell can run: everything that opens a tab, a dialog or a tool
  * window, plus the hex commands, which are the same ones the Edit menu carries. The viewer answers the
  * rest itself, from the caret, the document on screen and the breakpoints on it.
  */
 export interface DocumentViewCommands {
-  /** Follows a reference in a new tab — dnSpy's document viewer "Open in New Tab". */
-  onOpenInNewTab(target: TextSpan): void
+  /**
+   * Follows a member reference — dnSpy's FollowReference: into this tab, or with `newTab` into a new one. A
+   * local is followed by the viewer itself unless it goes to a new tab, which only the shell can open.
+   */
+  onFollowReference(target: TextSpan, newTab: boolean): void
+  /** Records where the caret is in this tab's history, before the viewer moves it somewhere else in the document. */
+  onRecordHistory(): void
   onStartDebug(): void
   /** Whether a debug target is configured, so "Start Debugging..." has something to run. */
   canStartDebug: boolean
@@ -102,6 +155,11 @@ export interface DocumentViewCommands {
   onOpenUrl(url: string): void
   /** dnSpy's Go to Resource for the member the reference names: selects and opens the entry it reads. */
   onGoToResource(node: TreeNode): void
+  /** The document viewer's token group: the entry point and the global constructor of the document's
+   *  module, and Go to MD Token in it. */
+  onGoToEntryPoint(node: TreeNode): void
+  onGoToGlobalCctor(node: TreeNode): void
+  onGoToToken(node: TreeNode): void
   onOpenHex(): void
   onShowHexAt(kind: HexShowKind): void
   onHexWriteBody(kind: HexBodyKind): void
@@ -109,10 +167,52 @@ export interface DocumentViewCommands {
   onHexPasteBody(): void
 }
 
-export const DocumentView = ({ documentId, viewId, theme, transparentBackground, onNavigate, commands }: { documentId: string; viewId: string; theme: string; transparentBackground: boolean; onNavigate(target: TextSpan): void; commands: DocumentViewCommands }): React.JSX.Element => {
-  const wordWrap = useAppStore((state) => state.wordWrap)
-  const highlightCurrentLine = useAppStore((state) => state.highlightCurrentLine)
+/** The language a document's Quick Info is asked in: the one it was decompiled in. */
+const quickInfoLanguage = (language: DecompilerLanguage | undefined): DecompilerLanguage => language ?? 'cSharp'
+
+/** dnSpy's ZoomControl box: the zoom as "100 %", which typing a number and Enter changes. */
+const ZoomControl = ({ zoom, onZoom }: { zoom: number; onZoom(value: number): void }): React.JSX.Element => {
+  const { t } = useLanguage()
+  const [text, setText] = useState(`${zoom} %`)
+  useEffect(() => setText(`${zoom} %`), [zoom])
+  const apply = (): void => {
+    const value = Number.parseFloat(text.replace('%', '').trim())
+    if (Number.isFinite(value) && value >= zoomLevels[0] && value <= zoomLevels[zoomLevels.length - 1])
+      onZoom(normalizeZoom(value))
+    else
+      setText(`${zoom} %`)
+  }
+  return (
+    <div className="document-zoom-control">
+      <input
+        aria-label={t('Zoom')}
+        list="document-zoom-levels"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={() => setText(`${zoom} %`)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            apply()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            setText(`${zoom} %`)
+          }
+        }}
+      />
+      <datalist id="document-zoom-levels">
+        {[...zoomLevels].reverse().map((level) => <option key={level} value={`${level} %`} />)}
+      </datalist>
+    </div>
+  )
+}
+
+export const DocumentView = ({ documentId, viewId, theme, transparentBackground, commands }: { documentId: string; viewId: string; theme: string; transparentBackground: boolean; commands: DocumentViewCommands }): React.JSX.Element => {
+  const viewerOptions = useAppOptions().documentViewer
+  const { general, scrollBars, tabs, advanced } = viewerOptions
+  const zoom = viewerOptions.zoomLevel
   const document = useAppStore((state) => state.documents[documentId])
+  const workspaceId = useAppStore((state) => state.workspaceId)
   const lineBreakpoints = useAppStore((state) => state.lineBreakpoints)
   const bookmarks = useAppStore((state) => state.bookmarks)
   const caretReveal = useAppStore((state) => state.caretReveal)
@@ -120,6 +220,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const stoppedLocation = useAppStore((state) => state.stoppedLocation)
   const activeDocumentId = useAppStore((state) => state.activeDocumentId)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | undefined>(undefined)
+  const monacoRef = useRef<typeof import('monaco-editor') | undefined>(undefined)
   // Monaco is created asynchronously, so the effects below can find no editor on their first run. This
   // makes the mount a dependency of theirs: a document that arrives already decompiled — which is what a
   // frame navigation produces — has no later store change to run them again on.
@@ -127,6 +228,13 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   // Whether this view's context menu is open, which styles.css reads to keep the caret drawn while the menu has
   // the focus. It marks the host rather than Monaco's own node, whose class list Monaco rewrites on every blur.
   const [menuOpen, setMenuOpen] = useState(false)
+  // Ctrl held down: dnSpy's viewer shows the hand over every reference then, definitions and locals included.
+  const [ctrlDown, setCtrlDown] = useState(false)
+  // dnSpy's Incremental Search: the direction it looks in and what has been typed so far, while it is on.
+  const [incrementalSearch, setIncrementalSearch] = useState<{ forward: boolean; text: string } | undefined>(undefined)
+  const incrementalRef = useRef<{ forward: boolean; text: string; start: number } | undefined>(undefined)
+  // dnSpy's Go to Line box, with the line the caret was on when it was asked for.
+  const [goToLine, setGoToLine] = useState<{ currentLine: number; lineCount: number } | undefined>(undefined)
   // The stopped-location request whose line this view already moved the caret to.
   const revealedTokenRef = useRef(0)
   // The caret request — a bookmark's, the analyzer's — this view already carried out.
@@ -136,26 +244,36 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   // request until the line is really on screen is what makes the second attempt (on a layout change) work.
   const pendingRevealRef = useRef<{ line: number; column?: number } | undefined>(undefined)
   const decorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
+  // Where the caret was when Esc cleared the reference marks, which stay away until it moves.
+  const highlightsClearedAtRef = useRef<number | undefined>(undefined)
+  const highlightDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
+  const separatorDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const breakpointDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const bookmarkDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const stoppedDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
+  // The block structure lines are drawn into a layer of their own over the text, redrawn as the view scrolls.
+  const blockLayerRef = useRef<HTMLDivElement | undefined>(undefined)
   // onMount registers the mouse handler once, so it reads the current values through refs instead of the closure.
   const spansRef = useRef(document?.spans ?? [])
+  const keywordsRef = useRef(document?.relatedKeywords ?? [])
   const documentRef = useRef(document)
   // The statements the breakpoint commands work off — the C# view's alone, see `breakpointStatementsOf`.
   const statementsRef = useRef(breakpointStatementsOf(document))
   const breakpointsRef = useRef(lineBreakpoints)
   const bookmarksRef = useRef(bookmarks)
   const toggleLineBreakpointRef = useRef(toggleLineBreakpoint)
+  const advancedRef = useRef(advanced)
   const { locale, t } = useLanguage()
   const tRef = useRef(t)
   tRef.current = t
   spansRef.current = document?.spans ?? []
+  keywordsRef.current = document?.relatedKeywords ?? []
   documentRef.current = document
   statementsRef.current = breakpointStatementsOf(document)
   breakpointsRef.current = lineBreakpoints
   bookmarksRef.current = bookmarks
   toggleLineBreakpointRef.current = toggleLineBreakpoint
+  advancedRef.current = advanced
 
   // Puts the caret on the stopped line and scrolls it into view. This lives apart from the effect below
   // because the layout change that gives the scroll somewhere to go arrives after the effect has run.
@@ -175,24 +293,241 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   applyPendingRevealRef.current = applyPendingReveal
 
   // The line a caret request put the caret on, until it has been scrolled into view. An editor mounted for
-  // the request has no height yet when the caret is placed, so the scroll is tried again on its layout.
-  const pendingCaretLineRef = useRef<number | undefined>(undefined)
+  // the request has no height yet when the caret is placed, so the scroll is tried again on its layout. A
+  // request that restores a scroll position — going back in the history — keeps the position instead.
+  const pendingCaretLineRef = useRef<{ line: number; scrollTop?: number } | undefined>(undefined)
   const scrollToPendingCaret = (): void => {
-    const line = pendingCaretLineRef.current
+    const pending = pendingCaretLineRef.current
     const editor = editorRef.current
-    if (line === undefined || !editor)
+    if (pending === undefined || !editor)
       return
-    editor.revealLineInCenterIfOutsideViewport(line)
-    if (editor.getVisibleRanges().some((range) => line >= range.startLineNumber && line <= range.endLineNumber))
+    if (pending.scrollTop !== undefined) {
+      editor.setScrollTop(pending.scrollTop)
+      if (editor.getLayoutInfo().height > 0)
+        pendingCaretLineRef.current = undefined
+      return
+    }
+    editor.revealLineInCenterIfOutsideViewport(pending.line)
+    if (editor.getVisibleRanges().some((range) => pending.line >= range.startLineNumber && pending.line <= range.endLineNumber))
       pendingCaretLineRef.current = undefined
   }
   const scrollToPendingCaretRef = useRef(scrollToPendingCaret)
   scrollToPendingCaretRef.current = scrollToPendingCaret
 
-  // The mount-time mouse handler cannot see this render's props, and the menu has to be built from the
+  // The mount-time handlers cannot see this render's props, and the menu has to be built from the
   // state the click lands in — so the builder is kept in a ref, like the reveal above.
   const commandsRef = useRef(commands)
   commandsRef.current = commands
+
+  /**
+   * dnSpy's MoveCaretToSpan: the caret to the end of the range and the range selected, the view scrolled so the
+   * caret shows, and the editor focused.
+   */
+  const moveCaretTo = (range: TextRange, center = false): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    if (!editor || !model)
+      return
+    const { anchor, active } = caretForSpan(spansRef.current, range)
+    const from = model.getPositionAt(anchor)
+    const to = model.getPositionAt(active)
+    editor.setSelection({ selectionStartLineNumber: from.lineNumber, selectionStartColumn: from.column, positionLineNumber: to.lineNumber, positionColumn: to.column })
+    if (center)
+      editor.revealLineInCenter(to.lineNumber)
+    else
+      editor.revealPositionInCenterIfOutsideViewport(to)
+    editor.focus()
+  }
+  const moveCaretToRef = useRef(moveCaretTo)
+  moveCaretToRef.current = moveCaretTo
+
+  /**
+   * dnSpy's DocumentViewerControl.GoTo: an opcode opens its page; a local moves the caret to its declaration
+   * (a new tab gets a copy of the document for that); a member the document defines is shown where it is
+   * defined, and any other member is followed into this tab or a new one. Every move is a step in the history.
+   */
+  const goTo = (span: TextSpan, newTab: boolean, followLocalReferences: boolean): void => {
+    if (span.opCode) {
+      commandsRef.current.onOpenUrl(opCodeUrl(span.opCode))
+      return
+    }
+    if (isLocalSpan(span)) {
+      if (newTab) {
+        commandsRef.current.onFollowReference(span, true)
+        return
+      }
+      if (!followLocalReferences)
+        return
+      const definition = definitionOf(spansRef.current, span) ?? (span.kind === 'definition' ? span : undefined)
+      if (!definition)
+        return
+      commandsRef.current.onRecordHistory()
+      moveCaretToRef.current(definition)
+      return
+    }
+    if (!newTab) {
+      const definition = definitionOf(spansRef.current, span)
+      if (definition) {
+        commandsRef.current.onRecordHistory()
+        moveCaretToRef.current(definition)
+        return
+      }
+    }
+    commandsRef.current.onFollowReference(span, newTab)
+  }
+  const goToRef = useRef(goTo)
+  goToRef.current = goTo
+
+  /** The reference highlighter: what names the same thing as the reference or the keyword under the caret. */
+  const updateHighlights = (): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const position = editor?.getPosition()
+    if (!editor || !model || !position || !highlightDecorationsRef.current)
+      return
+    const offset = model.getOffsetAt(position)
+    // Esc took the marks away; they come back once the caret moves somewhere else.
+    if (highlightsClearedAtRef.current === offset)
+      return
+    highlightsClearedAtRef.current = undefined
+    const options = advancedRef.current
+    const keyword = options.highlightRelatedKeywords ? keywordAtCaret(keywordsRef.current, offset) : undefined
+    const span = !keyword && options.referenceHighlighting ? spanAtCaret(spansRef.current, offset) : undefined
+    const highlights = keyword ? keywordHighlights(keywordsRef.current, keyword) : span ? referenceHighlights(spansRef.current, span) : []
+    highlightDecorationsRef.current.set(highlights.map((highlight) => ({
+      range: rangeOf(model, highlight.start, highlight.length),
+      options: { inlineClassName: highlightClass[highlight.kind] },
+    })))
+  }
+  const updateHighlightsRef = useRef(updateHighlights)
+  updateHighlightsRef.current = updateHighlights
+
+  /**
+   * dnSpy's BlockStructureService: a vertical line for each block whose lines are on screen, at the middle of the
+   * column its ends start at, in its kind's color and the dash the options pick.
+   */
+  const drawBlockStructure = (): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const layer = blockLayerRef.current
+    if (!editor || !model || !layer)
+      return
+    const options = advancedRef.current
+    const blocks = documentRef.current?.blockStructures ?? []
+    if (!options.showBlockStructure || blocks.length === 0) {
+      layer.replaceChildren()
+      return
+    }
+    const visible = editor.getVisibleRanges()
+    if (visible.length === 0) {
+      layer.replaceChildren()
+      return
+    }
+    const firstVisible = visible[0].startLineNumber
+    const lastVisible = visible[visible.length - 1].endLineNumber
+    const monaco = monacoRef.current
+    const fontInfo = monaco ? editor.getOption(monaco.editor.EditorOption.fontInfo) : undefined
+    const charWidth = fontInfo?.typicalHalfwidthCharacterWidth ?? 8
+    const tabSize = model.getOptions().tabSize
+    const layout = editor.getLayoutInfo()
+    // Monaco leaves a widget it does not position at no size; the layer spans the text area itself.
+    layer.style.width = `${layout.contentLeft + layout.contentWidth}px`
+    layer.style.height = `${layout.height}px`
+    const scrollTop = editor.getScrollTop()
+    const scrollLeft = editor.getScrollLeft()
+    const dash = dashLength[options.blockStructureLineKind] ?? 0
+    const elements: HTMLElement[] = []
+    for (const line of blockLines(blocks, (offset) => model.getPositionAt(offset).lineNumber, (lineNumber) => model.getLineContent(lineNumber))) {
+      if (line.toLine < firstVisible || line.fromLine > lastVisible)
+        continue
+      // The column counts tabs as the editor draws them.
+      const text = model.getLineContent(line.fromLine - 1)
+      let visual = 0
+      for (let index = 0; index < line.column - 1 && index < text.length; index++)
+        visual = text[index] === '\t' ? visual + tabSize - (visual % tabSize) : visual + 1
+      const x = layout.contentLeft + visual * charWidth + Math.floor(charWidth / 2) - scrollLeft
+      if (x < layout.contentLeft)
+        continue
+      const top = editor.getTopForLineNumber(line.fromLine) - scrollTop
+      const bottom = editor.getTopForLineNumber(line.toLine + 1) - scrollTop
+      const element = window.document.createElement('div')
+      element.className = 'block-structure-line'
+      element.style.left = `${x}px`
+      element.style.top = `${top}px`
+      element.style.height = `${Math.max(0, bottom - top)}px`
+      const color = `var(--tc-${blockStructureColor(line.kind).toLowerCase()}, var(--tc-blockstructureother))`
+      element.style.background = dash === 0
+        ? color
+        : `repeating-linear-gradient(to bottom, ${color} 0 ${dash}px, transparent ${dash}px ${dash * 2}px)`
+      element.style.backgroundAttachment = 'local'
+      elements.push(element)
+    }
+    layer.replaceChildren(...elements)
+  }
+  const drawBlockStructureRef = useRef(drawBlockStructure)
+  drawBlockStructureRef.current = drawBlockStructure
+
+  /**
+   * dnSpy's Incremental Search (SearchService with an incremental search kind): Ctrl+I looks forward and
+   * Ctrl+Shift+I back, from where the caret was, for what is typed — without regard to case — selecting each match
+   * as the text grows; asked again, it goes on to the next match. Backspace takes the last character back, and any
+   * other key, or a click, ends it with the match left selected.
+   */
+  const searchIncrementally = (forward: boolean, again: boolean): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const state = incrementalRef.current
+    if (!editor || !model || !state || state.text.length === 0)
+      return
+    const selection = editor.getSelection()
+    // The first search starts where the caret was; a repeated one from the match it is on.
+    const from = again && selection
+      ? (forward ? model.getOffsetAt(selection.getEndPosition()) : model.getOffsetAt(selection.getStartPosition()))
+      : state.start
+    const position = model.getPositionAt(from)
+    const match = forward
+      ? model.findNextMatch(state.text, position, false, false, null, false)
+      : model.findPreviousMatch(state.text, position, false, false, null, false)
+    if (!match)
+      return
+    editor.setSelection(match.range)
+    editor.revealRangeInCenterIfOutsideViewport(match.range)
+  }
+  const startIncrementalSearch = (forward: boolean): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const position = editor?.getPosition()
+    if (!editor || !model || !position)
+      return
+    const current = incrementalRef.current
+    if (current && current.text.length > 0) {
+      incrementalRef.current = { ...current, forward }
+      setIncrementalSearch({ forward, text: current.text })
+      searchIncrementally(forward, true)
+      return
+    }
+    incrementalRef.current = { forward, text: '', start: model.getOffsetAt(position) }
+    setIncrementalSearch({ forward, text: '' })
+    editor.focus()
+  }
+  const startIncrementalSearchRef = useRef(startIncrementalSearch)
+  startIncrementalSearchRef.current = startIncrementalSearch
+  const searchIncrementallyRef = useRef(searchIncrementally)
+  searchIncrementallyRef.current = searchIncrementally
+
+  /** dnSpy's GoToCommand: the caret to a line — its first non-blank character — or to a line and column. */
+  const applyGoToLine = (line: number, column?: number): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    if (!editor || !model)
+      return
+    const target = Math.min(Math.max(line, 1), model.getLineCount())
+    const text = model.getLineContent(target)
+    const firstNonBlank = text.length - text.trimStart().length + 1
+    editor.setPosition({ lineNumber: target, column: Math.min(column ?? firstNonBlank, model.getLineMaxColumn(target)) })
+    editor.revealLineInCenterIfOutsideViewport(target)
+    editor.focus()
+  }
 
   /**
    * Builds and shows the code viewer's context menu for a click at `line`/`column`. What the caret is on
@@ -211,20 +546,23 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     const editor = editorRef.current
     const model = editor?.getModel()
     const offset = model ? model.getOffsetAt({ lineNumber: line, column }) : -1
-    // A reference under the caret is a span, and only a C# document has them: VB and IL decompile without
-    // any, which is why their menus carry no command that needs a reference to act on.
-    const span = offset >= 0
-      ? spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
-      : undefined
+    // The reference under the caret, which the menu's reference commands act on.
+    const span = offset >= 0 ? spanAtCaret(spansRef.current, offset) : undefined
+    const memberSpan = span && !isLocalSpan(span) && !span.opCode ? span : undefined
+    const state0 = useAppStore.getState()
     // The hex statement group is resolved from the caret, so the menu waits for the store to have it rather
     // than building from wherever the caret was before. The node the reference names is looked up alongside:
     // the tree lists a member only once its type has been expanded, and dnSpy's commands act on whatever the
-    // reference is, not on what the tree happens to show.
-    const [referenceNode, readsResource] = await Promise.all([
-      span?.targetNodeId !== undefined ? referenceNodeOf(span.targetNodeId) : undefined,
+    // reference is, not on what the tree happens to show. So are the document's module's entry point and
+    // global constructor, which the token group offers only when the module has them.
+    const [referenceNode, readsResource, documentNode, entryPoint, globalCctor] = await Promise.all([
+      memberSpan?.targetNodeId ? referenceNodeOf(memberSpan.targetNodeId) : undefined,
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can tell
       // — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the rest.
-      span?.targetNodeId !== undefined ? useAppStore.getState().findResource(span.targetNodeId).then((id) => id !== null) : false,
+      memberSpan?.targetNodeId ? state0.findResource(memberSpan.targetNodeId).then((id) => id !== null) : false,
+      documentNodeOf(current.nodeId),
+      state0.workspaceId ? window.dnSpy.getSpecialNode(state0.workspaceId, current.nodeId, 'entryPoint').then((found) => Boolean(found.nodeId), () => false) : false,
+      state0.workspaceId ? window.dnSpy.getSpecialNode(state0.workspaceId, current.nodeId, 'globalCctor').then((found) => Boolean(found.nodeId), () => false) : false,
       useAppStore.getState().setCodeCaret({ documentId, line, column }),
     ])
     const state = useAppStore.getState()
@@ -243,12 +581,13 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     // the menu is about; the view is marked for as long as the menu is open, which keeps it drawn.
     const shown = showCodeEditorContextMenu({
       t: tRef.current,
-      documentNode: findNode(state, current.nodeId),
+      documentNode: findNode(state, current.nodeId) ?? documentNode,
       referenceNode,
       // "Open in New Tab" acts on the reference itself, not the node it names: dnSpy follows the
       // TextReference under the caret, and a reference into a module the workspace does not hold has no
-      // node here to name.
+      // node here to name. A local opens the document again with the caret on its declaration.
       referenceTarget: span,
+      openInNewTabFromKeyboard: false,
       statement,
       hasSelection: selection ? !selection.isEmpty() : false,
       breakpoint,
@@ -260,7 +599,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       debugState: state.debugState,
       stopped: state.debugState === 'stopped' && state.stoppedLocation !== undefined,
       canStartDebug: commandsRef.current.canStartDebug,
-      onOpenInNewTab: (target) => commandsRef.current.onOpenInNewTab(target),
+      onOpenInNewTab: (target) => goToRef.current(target, true, true),
       onStartDebug: () => commandsRef.current.onStartDebug(),
       onShowDisassembly: () => commandsRef.current.onShowDisassembly(),
       onToggleBreakpoint: () => void toggleLineBreakpointRef.current(documentId, line, column),
@@ -285,16 +624,18 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       onOpenUrl: (url) => commandsRef.current.onOpenUrl(url),
       readsResource,
       onGoToResource: (node) => commandsRef.current.onGoToResource(node),
+      hasEntryPoint: entryPoint,
+      hasGlobalCctor: globalCctor,
+      onGoToEntryPoint: (node) => commandsRef.current.onGoToEntryPoint(node),
+      onGoToGlobalCctor: (node) => commandsRef.current.onGoToGlobalCctor(node),
+      onGoToToken: (node) => commandsRef.current.onGoToToken(node),
       copyText,
-      // Monaco's copy is a command rather than one of the editor's actions, so `getAction` has nothing to run:
-      // the selected text is written out here, one selection per line as Monaco would.
       onCopy: () => {
-        const model = editor?.getModel()
-        const selections = editor?.getSelections()?.filter((range) => !range.isEmpty())
-        if (model && selections?.length)
-          copyText(selections.map((range) => model.getValueInRange(range)).join(model.getEOL()))
+        if (editor)
+          void copyWithFormatting(editor, spansRef.current, tRef.current)
       },
       onFind: () => void editor?.getAction('actions.find')?.run(),
+      onIncrementalSearch: () => startIncrementalSearchRef.current(true),
       onOpenHex: () => commandsRef.current.onOpenHex(),
       onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
       onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
@@ -318,27 +659,58 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
 
   useEffect(() => () => unregisterDocumentEditor(viewId), [viewId])
 
+  // Ctrl shows the hand over every reference, the way dnSpy's mouse processor updates the cursor as the
+  // modifier keys change.
   useEffect(() => {
-    const editor = editorRef.current
-    const model = editor?.getModel()
-    if (!editor || !model || !decorationsRef.current) return
-    decorationsRef.current.set(spansRef.current.filter(isNavigableSpan).map((span) => {
-      const start = model.getPositionAt(span.start)
-      const end = model.getPositionAt(span.start + span.length)
-      return {
-        range: {
-          startLineNumber: start.lineNumber,
-          startColumn: start.column,
-          endLineNumber: end.lineNumber,
-          endColumn: end.column,
-        },
-        options: {
-          inlineClassName: span.kind === 'definition' ? 'code-definition' : 'code-reference',
-          hoverMessage: { value: span.kind === 'definition' ? t('Definition') : t('Go to definition (F12)') },
-        },
-      }
-    }))
-  }, [document?.spans, document?.text, locale, editorReady])
+    const update = (event: KeyboardEvent): void => setCtrlDown(event.ctrlKey && !event.shiftKey && !event.altKey)
+    const clear = (): void => setCtrlDown(false)
+    window.addEventListener('keydown', update)
+    window.addEventListener('keyup', update)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', update)
+      window.removeEventListener('keyup', update)
+      window.removeEventListener('blur', clear)
+    }
+  }, [])
+
+  // What the hover reads for this model: the spans, and the workspace and language a member's Quick Info is
+  // asked in. The model goes with the editor, so the record goes when the document is decompiled again.
+  useEffect(() => {
+    const model = editorRef.current?.getModel()
+    if (!model || !document || document.loading)
+      return
+    setDocumentEditorData(model, { workspaceId, language: quickInfoLanguage(document.requestedLanguage), spans: document.spans })
+    return () => setDocumentEditorData(model, undefined)
+  }, [document?.spans, document?.requestedLanguage, document?.loading, workspaceId, editorReady])
+
+  useEffect(() => {
+    const model = editorRef.current?.getModel()
+    if (!model || !decorationsRef.current)
+      return
+    decorationsRef.current.set(spanDecorations(model, spansRef.current))
+  }, [document?.spans, document?.text, editorReady])
+
+  // dnSpy's procedure line separators: a line under the end of each member, when the option asks for them.
+  useEffect(() => {
+    const model = editorRef.current?.getModel()
+    if (!model || !separatorDecorationsRef.current)
+      return
+    const lines = advanced.lineSeparators ? [...new Set((document?.lineSeparators ?? []).map((offset) => model.getPositionAt(offset).lineNumber))] : []
+    separatorDecorationsRef.current.set(lines.map((line) => ({
+      range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+      options: { isWholeLine: true, className: 'line-separator' },
+    })))
+  }, [document?.lineSeparators, document?.text, advanced.lineSeparators, editorReady])
+
+  // The highlighter and the block structure follow the options as they change.
+  useEffect(() => {
+    updateHighlightsRef.current()
+  }, [advanced.referenceHighlighting, advanced.highlightRelatedKeywords, document?.spans, document?.relatedKeywords, editorReady])
+
+  useEffect(() => {
+    drawBlockStructureRef.current()
+  }, [advanced.showBlockStructure, advanced.blockStructureLineKind, document?.blockStructures, document?.text, zoom, tabs.tabSize, editorReady])
 
   useEffect(() => {
     breakpointDecorationsRef.current?.set(breakpointDecorations(documentId, breakpointStatementsOf(document), lineBreakpoints, t))
@@ -358,10 +730,12 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     }
   }, [document?.loading])
 
-  // "Go to bookmark" and the analyzer's "Show Reference in Method" are answered here rather than in the
-  // action itself: the place has to be shown in an editor that is mounted, and only the mounted view knows
-  // its own model. A request is carried out once: the document it names may be decompiled again as it is
-  // opened, and the editor that comes back is where the caret goes — later reloads leave the caret alone.
+  // "Go to bookmark", the analyzer's "Show Reference in Method", a followed reference and the history are
+  // answered here rather than in the action itself: the place has to be shown in an editor that is mounted,
+  // and only the mounted view knows its own model. A request is carried out once: the document it names may
+  // be decompiled again as it is opened, and the editor that comes back is where the caret goes — later
+  // reloads leave the caret alone. A request for a member's definition is answered from the spans, which
+  // only the loaded document has.
   useEffect(() => {
     if (!caretReveal || caretReveal.documentId !== documentId || (caretReveal.viewId !== undefined && caretReveal.viewId !== viewId))
       return
@@ -369,15 +743,24 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       return
     const editor = editorRef.current
     const model = editor?.getModel()
-    if (!editor || !model)
+    if (!editor || !model || document?.loading)
       return
+    appliedCaretRevealRef.current = caretReveal.token
+    if (caretReveal.definitionNodeId) {
+      const definition = definitionForNode(spansRef.current, caretReveal.definitionNodeId)
+      if (definition) {
+        moveCaretTo(definition, caretReveal.center)
+        pendingCaretLineRef.current = { line: model.getPositionAt(definition.start).lineNumber }
+        scrollToPendingCaret()
+        return
+      }
+    }
     const line = Math.min(Math.max(caretReveal.line, 1), model.getLineCount())
     editor.setPosition({ lineNumber: line, column: Math.min(caretReveal.column, model.getLineMaxColumn(line)) })
     editor.focus()
-    appliedCaretRevealRef.current = caretReveal.token
-    pendingCaretLineRef.current = line
+    pendingCaretLineRef.current = { line, scrollTop: caretReveal.scrollTop }
     scrollToPendingCaret()
-  }, [caretReveal, documentId, viewId, document?.text, editorReady])
+  }, [caretReveal, documentId, viewId, document?.text, document?.loading, editorReady])
 
   // The line the active frame is stopped at, in the document that frame decompiles to. Stepping moves it one
   // statement at a time, so the view follows it — otherwise the marker would advance off-screen and the step
@@ -419,6 +802,48 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     applyPendingReveal()
   }, [documentId, stoppedLocation, activeDocumentId, document?.text, locale, editorReady])
 
+  // The Text Editor category of Environment › Font, in the theme in use, scaled by the viewers' zoom.
+  const { fontFamily: editorFontFamily, fontSize: baseFontSize } = useCategoryFont('textEditor')
+
+  const editorFontSize = Math.max(1, Math.round(baseFontSize * zoom) / 100)
+  // dnSpy's text view keeps its lines taller than the font unless "Don't add extra line spacing" is on.
+  const lineHeight = Math.round(editorFontSize * (advanced.minimumLineSpacing ? 1.25 : 1.55))
+  // One object for as long as nothing in it changes: the editor is handed it again on every render, and a new
+  // one would have it apply every option afresh, which stops a smooth scroll that is under way.
+  const editorOptions = useMemo<MonacoEditor.IStandaloneEditorConstructionOptions>(() => ({
+    readOnly: true,
+    automaticLayout: true,
+    // The viewer draws dnSpy's menu instead (CodeEditorContextMenu.tsx), so Monaco's own — and
+    // the browser's, which Monaco only suppresses to put its own up — is switched off.
+    contextmenu: false,
+    // dnSpy's viewer has neither folding nor Monaco's guides, word highlighter and links; its block
+    // structure lines and its reference highlighter are drawn here instead.
+    folding: false,
+    occurrencesHighlight: 'off',
+    selectionHighlight: false,
+    links: false,
+    guides: { indentation: false, bracketPairs: false, highlightActiveIndentation: false },
+    matchBrackets: advanced.highlightMatchingBrace ? 'always' : 'never',
+    glyphMargin: advanced.glyphMargin,
+    lineDecorationsWidth: 14,
+    lineNumbers: general.showLineNumbers ? 'on' : 'off',
+    wordWrap: general.wordWrap ? 'on' : 'off',
+    renderLineHighlight: general.highlightCurrentLine ? 'all' : 'none',
+    renderWhitespace: general.useVisibleWhitespace ? 'all' : 'none',
+    scrollbar: {
+      horizontal: scrollBars.horizontalScrollBar ? 'auto' : 'hidden',
+      vertical: scrollBars.verticalScrollBar ? 'auto' : 'hidden',
+    },
+    tabSize: tabs.tabSize,
+    fontFamily: editorFontFamily,
+    fontSize: editorFontSize,
+    lineHeight,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    smoothScrolling: true,
+    padding: { top: 8, bottom: 8 },
+  }), [advanced, general, scrollBars, tabs.tabSize, editorFontFamily, editorFontSize, lineHeight])
+
   if (!document)
     return <div className="pane-empty">{t('Document closed')}</div>
 
@@ -432,11 +857,22 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
           ? 'xml'
           : 'csharp'
   const editorTheme = monacoThemeName(theme, transparentBackground)
-  // The Text Editor category of Environment › Font, in the theme in use.
-  const { fontFamily: editorFontFamily, fontSize: editorFontSize } = useCategoryFont('textEditor')
+  const showZoomControl = advanced.zoomControl && scrollBars.horizontalScrollBar
 
   return (
-    <div className="document-view" data-reference-count={document.spans.filter(isNavigableSpan).length}>
+    <div
+      className="document-view"
+      data-reference-count={document.spans.filter(isNavigableSpan).length}
+      onWheelCapture={(event) => {
+        // Ctrl+wheel zooms the viewers when the option allows it — and only them, not the tab's other content.
+        if (!event.ctrlKey || event.deltaY === 0)
+          return
+        event.preventDefault()
+        event.stopPropagation()
+        if (advancedRef.current.mouseWheelZoom)
+          setDocumentViewerZoom((current) => (event.deltaY < 0 ? zoomIn(current) : zoomOut(current)))
+      }}
+    >
       <div className="document-toolbar">
         {!['csharp', 'visual-basic', 'il'].includes(document.language) && <span className="document-language-label">{document.language === 'xml' ? 'XAML/XML' : document.language}</span>}
         {document.diagnostics.length > 0 && (
@@ -445,8 +881,16 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
             <DsIcon name="StatusWarning" /> {document.diagnostics.length}
           </span>
         )}
+        {incrementalSearch && (
+          <span className="document-incremental-search" role="status">
+            {t(incrementalSearch.forward ? 'Incremental Search' : 'Reverse Incremental Search')}: {incrementalSearch.text}
+          </span>
+        )}
+        {/* dnSpy's ZoomControl sits in the view's bottom margin; here it is in the row the view already has
+            above the text, at its right end, so the text keeps the height it had. */}
+        {showZoomControl && <ZoomControl zoom={zoom} onZoom={(value) => setDocumentViewerZoom(() => value)} />}
       </div>
-      <div className={menuOpen ? 'editor-host code-menu-open' : 'editor-host'}>
+      <div className={['editor-host', menuOpen ? 'code-menu-open' : '', ctrlDown ? 'ctrl-down' : ''].filter(Boolean).join(' ')}>
         {document.loading ? (
           <div className="loading-state"><LoaderCircle className="spin" size={18} /> {t('Loading')}</div>
         ) : (
@@ -457,6 +901,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
             theme={editorTheme}
             onMount={(editor, monaco) => {
               editorRef.current = editor
+              monacoRef.current = monaco
               registerDocumentEditor(viewId, editor, documentId)
               // The decoration collections exist from here on, so the effects that fill them can run again.
               setEditorReady(true)
@@ -481,6 +926,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                     editor.getScrollTop()
                   )
                 }
+                updateHighlightsRef.current()
               })
 
               // Save scroll position changes
@@ -494,6 +940,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                     editor.getScrollTop()
                   )
                 }
+                drawBlockStructureRef.current()
               })
 
               // A frame navigation opens its document while the tab is still being laid out, so the reveal
@@ -501,7 +948,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               editor.onDidLayoutChange(() => {
                 applyPendingRevealRef.current()
                 scrollToPendingCaretRef.current()
+                drawBlockStructureRef.current()
               })
+              editor.onDidChangeConfiguration(() => drawBlockStructureRef.current())
               const updateLanguageId = (): void => {
                 const languageId = editor.getModel()?.getLanguageId()
                 if (languageId)
@@ -510,6 +959,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               updateLanguageId()
               editor.onDidChangeModel(updateLanguageId)
               decorationsRef.current = editor.createDecorationsCollection()
+              highlightDecorationsRef.current = editor.createDecorationsCollection()
+              separatorDecorationsRef.current = editor.createDecorationsCollection()
               breakpointDecorationsRef.current = editor.createDecorationsCollection()
               breakpointDecorationsRef.current.set(breakpointDecorations(documentId, statementsRef.current, breakpointsRef.current, tRef.current))
               bookmarkDecorationsRef.current = editor.createDecorationsCollection()
@@ -517,35 +968,149 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               stoppedDecorationsRef.current = editor.createDecorationsCollection()
               const model = editor.getModel()
               if (!model) return
-              decorationsRef.current.set(spansRef.current.filter(isNavigableSpan).map((span) => {
-                const start = model.getPositionAt(span.start)
-                const end = model.getPositionAt(span.start + span.length)
-                return {
-                  range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
-                  options: {
-                    inlineClassName: span.kind === 'definition' ? 'code-definition' : 'code-reference',
-                    hoverMessage: { value: span.kind === 'definition' ? t('Definition') : t('Go to definition (F12)') },
-                  },
-                }
-              }))
-              const navigateAtCursor = (): void => {
+              decorationsRef.current.set(spanDecorations(model, spansRef.current))
+
+              // The block structure lines' own layer, under the pointer and over the text's background.
+              const layer = window.document.createElement('div')
+              layer.className = 'block-structure-layer'
+              blockLayerRef.current = layer
+              editor.addOverlayWidget({
+                getId: () => `dnspy.blockStructure.${viewId}`,
+                getDomNode: () => layer,
+                getPosition: () => null,
+              })
+
+              const offsetAtCaret = (): number | undefined => {
                 const position = editor.getPosition()
-                if (!position) return
-                const offset = model.getOffsetAt(position)
-                const span = spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
-                if (span) onNavigate(span)
+                return position ? model.getOffsetAt(position) : undefined
               }
-              editor.addCommand(monaco.KeyCode.F12, navigateAtCursor)
+              // dnSpy's FollowReference (F12, Enter) and FollowReferenceNewTab (Ctrl+F12, Ctrl+Enter): the
+              // reference at the caret, a local's declaration included.
+              const followAtCaret = (newTab: boolean): void => {
+                const offset = offsetAtCaret()
+                const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
+                if (span)
+                  goToRef.current(span, newTab, true)
+              }
+              editor.addCommand(monaco.KeyCode.F12, () => followAtCaret(false))
+              editor.addCommand(monaco.KeyCode.Enter, () => followAtCaret(false), '!findWidgetVisible && !findInputFocussed')
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12, () => followAtCaret(true))
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => followAtCaret(true), '!findWidgetVisible && !findInputFocussed')
+              // dnSpy's MoveToNextReference and MoveToPreviousReference — Tab and Ctrl+Shift+Down, Shift+Tab and
+              // Ctrl+Shift+Up — and MoveToNextDefinition and MoveToPreviousDefinition, Alt+Down and Alt+Up.
+              const moveReference = (forward: boolean): void => {
+                const offset = offsetAtCaret()
+                const target = offset === undefined ? undefined : nextReference(spansRef.current, keywordsRef.current, offset, forward)
+                if (target)
+                  moveCaretToRef.current(target)
+              }
+              const moveDefinition = (forward: boolean): void => {
+                const offset = offsetAtCaret()
+                const target = offset === undefined ? undefined : nextDefinition(spansRef.current, offset, forward)
+                if (target)
+                  moveCaretToRef.current(target)
+              }
+              editor.addCommand(monaco.KeyCode.Tab, () => moveReference(true), '!findWidgetVisible && !findInputFocussed')
+              editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Tab, () => moveReference(false), '!findWidgetVisible && !findInputFocussed')
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow, () => moveReference(true))
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow, () => moveReference(false))
+              editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => moveDefinition(true))
+              editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => moveDefinition(false))
+              // Esc clears the highlighted references and the selection — once the find box has had its Esc.
+              editor.addCommand(monaco.KeyCode.Escape, () => {
+                highlightDecorationsRef.current?.clear()
+                const position = editor.getPosition()
+                if (position) {
+                  highlightsClearedAtRef.current = model.getOffsetAt(position)
+                  editor.setSelection({ startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column })
+                }
+              }, '!findWidgetVisible && !suggestWidgetVisible')
+              // dnSpy's Incremental Search: Ctrl+I and Ctrl+Shift+I start it, or go on to the next match; while it is
+              // on, the keys typed are what it looks for.
+              editor.onKeyDown((event) => {
+                const browserEvent = event.browserEvent
+                const isI = browserEvent.code === 'KeyI' && browserEvent.ctrlKey && !browserEvent.altKey && !browserEvent.metaKey
+                if (isI) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  startIncrementalSearchRef.current(!browserEvent.shiftKey)
+                  return
+                }
+                const state = incrementalRef.current
+                if (!state || ['Control', 'Shift', 'Alt', 'Meta'].includes(browserEvent.key))
+                  return
+                if (browserEvent.key === 'Backspace' && !browserEvent.ctrlKey && !browserEvent.altKey) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  incrementalRef.current = { ...state, text: state.text.slice(0, -1) }
+                  setIncrementalSearch({ forward: state.forward, text: state.text.slice(0, -1) })
+                  if (state.text.length > 1)
+                    searchIncrementallyRef.current(state.forward, false)
+                  return
+                }
+                if (browserEvent.key.length === 1 && !browserEvent.ctrlKey && !browserEvent.altKey && !browserEvent.metaKey) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  incrementalRef.current = { ...state, text: state.text + browserEvent.key }
+                  setIncrementalSearch({ forward: state.forward, text: state.text + browserEvent.key })
+                  searchIncrementallyRef.current(state.forward, false)
+                  return
+                }
+                // Any other key ends the search and does what it does; Esc and Enter only end it.
+                incrementalRef.current = undefined
+                setIncrementalSearch(undefined)
+                if (browserEvent.key === 'Escape' || browserEvent.key === 'Enter') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }
+              })
+              editor.onMouseDown(() => {
+                if (incrementalRef.current) {
+                  incrementalRef.current = undefined
+                  setIncrementalSearch(undefined)
+                }
+              })
+              editor.onDidBlurEditorText(() => {
+                if (incrementalRef.current) {
+                  incrementalRef.current = undefined
+                  setIncrementalSearch(undefined)
+                }
+              })
+              // dnSpy's Go to Line, Ctrl+G.
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG, () => {
+                const position = editor.getPosition()
+                setGoToLine({ currentLine: position?.lineNumber ?? 1, lineCount: model.getLineCount() })
+              })
+              // Copy writes the HTML dnSpy's HtmlBuilderService makes beside the text, for a paste that keeps the colors.
+              const copy = (): void => void copyWithFormatting(editor, spansRef.current, tRef.current)
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copy)
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Insert, copy)
+              // The zoom keys of dnSpy's text editor: Ctrl+Shift+. Ctrl+= and Ctrl+NumPad+ in, their opposites out,
+              // Ctrl+0 back to 100%.
+              const zoomBy = (step: (current: number) => number) => (): void => setDocumentViewerZoom(step)
+              for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Period, monaco.KeyCode.Equal, monaco.KeyCode.NumpadAdd])
+                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomIn))
+              for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Comma, monaco.KeyCode.Minus, monaco.KeyCode.NumpadSubtract])
+                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomOut))
+              for (const key of [monaco.KeyCode.Digit0, monaco.KeyCode.Numpad0])
+                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(() => 100))
+              // View White Space: Ctrl+Shift+8, Ctrl+R Ctrl+W, Ctrl+E S and Ctrl+E Ctrl+S. Word wrap: Ctrl+E Ctrl+W
+              // and Ctrl+E W, which the window also answers when the focus is elsewhere.
+              const toggleWhitespace = (): void => toggleDocumentViewerOption('useVisibleWhitespace')
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Digit8, toggleWhitespace)
+              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyR, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), toggleWhitespace)
+              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyS), toggleWhitespace)
+              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS), toggleWhitespace)
+              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
+              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
               // dnSpy's Ctrl+Shift+R in the code viewer analyzes the reference under the caret — what the
               // context menu's Analyze would, a member of a module the workspace does not hold included.
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR, () => {
-                const position = editor.getPosition()
-                if (!position) return
-                const offset = model.getOffsetAt(position)
-                const span = spansRef.current.find((candidate) => isNavigableSpan(candidate) && offset >= candidate.start && offset <= candidate.start + candidate.length)
-                if (!span) return
+                const offset = offsetAtCaret()
+                const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
+                if (!span || isLocalSpan(span) || span.opCode) return
                 void (async () => {
-                  const referenceNode = span.targetNodeId !== undefined ? await referenceNodeOf(span.targetNodeId) : undefined
+                  const referenceNode = span.targetNodeId ? await referenceNodeOf(span.targetNodeId) : undefined
                   const external = externalMemberTarget({ referenceNode, referenceTarget: span })
                   if (isAnalyzableNode(referenceNode))
                     commandsRef.current.onAnalyze(referenceNode)
@@ -628,11 +1193,16 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 addBookmarkAction(binding.label, binding.run)
                 editor.addCommand((binding.ctrl ? monaco.KeyMod.CtrlCmd : 0) | (binding.shift ? monaco.KeyMod.Shift : 0) | monaco.KeyCode.F2, binding.run)
               }
+              // dnSpy's DocumentViewerMouseProcessor: the left button's press only notes the reference under it;
+              // the release on the same character follows it — a plain click a member reference into this tab, a
+              // Ctrl+click anything into a new one. Any other modifier, or a drag to another character, is no click.
+              let leftPress: { lineNumber: number; column: number; span: TextSpan | undefined; ctrl: boolean } | undefined
               editor.onMouseDown((event) => {
                 // Monaco leaves the right button to the browser, which takes the focus off the editor and so hides
                 // its caret. dnSpy focuses the view and moves the caret on the press, before the menu comes up;
                 // the right button never toggles the marks in the margins, which is the left button's job.
                 rightPress = undefined
+                leftPress = undefined
                 if (event.event.rightButton) {
                   const position = event.target.position
                   if (position && (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY)) {
@@ -654,37 +1224,53 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                   useAppStore.getState().toggleBookmark(documentId, event.target.position?.lineNumber ?? 0)
                   return
                 }
-                if (event.event.ctrlKey && event.target.position) {
-                  editor.setPosition(event.target.position)
-                  navigateAtCursor()
-                }
+                const position = event.target.position
+                const browserEvent = event.event
+                const modifiersAllowed = !browserEvent.shiftKey && !browserEvent.altKey && !browserEvent.metaKey
+                if (!event.event.leftButton || !position || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT || !modifiersAllowed)
+                  return
+                // The hit test answers the character boundary nearest the pointer, which is either edge of the
+                // character under it; the element under the pointer tells whether that character is in a reference.
+                const element = event.target.element
+                const onReference = element?.closest('.code-reference, .code-definition, .code-local') !== null && element !== null
+                const offset = model.getOffsetAt(position)
+                const span = onReference ? spanAtClick(spansRef.current, offset) ?? spanAtClick(spansRef.current, offset - 1) : undefined
+                leftPress = { lineNumber: position.lineNumber, column: position.column, span, ctrl: browserEvent.ctrlKey }
+              })
+              editor.onMouseUp((event) => {
+                const press = leftPress
+                leftPress = undefined
+                const position = event.target.position
+                if (!press?.span || !position || position.lineNumber !== press.lineNumber || position.column !== press.column)
+                  return
+                const browserEvent = event.event
+                if (browserEvent.shiftKey || browserEvent.altKey || browserEvent.metaKey || browserEvent.ctrlKey !== press.ctrl)
+                  return
+                const span = press.span
+                // Without Ctrl a definition and a local only place the caret; with it, every reference is followed.
+                if (!press.ctrl && (span.kind === 'definition' || isLocalSpan(span)))
+                  return
+                goToRef.current(span, press.ctrl, false)
               })
             }}
-            options={{
-              readOnly: true,
-              automaticLayout: true,
-              // The viewer draws dnSpy's menu instead (CodeEditorContextMenu.tsx), so Monaco's own — and
-              // the browser's, which Monaco only suppresses to put its own up — is switched off.
-              contextmenu: false,
-              glyphMargin: true,
-              lineDecorationsWidth: 14,
-              wordWrap: wordWrap ? 'on' : 'off',
-              renderLineHighlight: highlightCurrentLine ? 'all' : 'none',
-              fontFamily: editorFontFamily,
-              fontSize: editorFontSize,
-              // dnSpy's text view keeps its lines a fifth taller than the font, which is what the editor
-              // was drawing before the font became an option.
-              lineHeight: Math.round(editorFontSize * 1.55),
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              renderWhitespace: 'selection',
-              smoothScrolling: true,
-              tabSize: 4,
-              padding: { top: 8, bottom: 8 },
-            }}
+            options={editorOptions}
           />
         )}
       </div>
+      {goToLine && (
+        <GoToLineDialog
+          currentLine={goToLine.currentLine}
+          lineCount={goToLine.lineCount}
+          onClose={() => {
+            setGoToLine(undefined)
+            editorRef.current?.focus()
+          }}
+          onGo={(line, column) => {
+            setGoToLine(undefined)
+            applyGoToLine(line, column)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { cleanup, render } from '@testing-library/react'
 import { buildCodeEditorMenuItems, searchMsdnUrl, type CodeEditorMenuContext } from './CodeEditorContextMenu'
 import type { CodeStatement, TextSpan, TreeNode } from '../../../shared/protocol'
 import type { LineBreakpoint } from '../app-store'
@@ -131,10 +132,6 @@ const methodReferenceContext = (overrides: Partial<CodeEditorMenuContext> = {}):
 const UNIMPLEMENTED = [
   'break-when-exception-thrown',
   'edit-il-instructions',
-  'go-to-entry-point',
-  'go-to-global-cctor',
-  'go-to-token',
-  'incremental-search',
 ]
 
 describe('buildCodeEditorMenuItems', () => {
@@ -248,6 +245,34 @@ describe('buildCodeEditorMenuItems', () => {
     const ctx = methodReferenceContext()
     runEntry(ctx, 'open-in-new-tab')
     expect(ctx.onOpenInNewTab).toHaveBeenCalledWith(referenceSpan)
+  })
+
+  it('shows the gesture "Open in New Tab" was reached by: Ctrl+F12 from the keyboard, Ctrl+Click from the mouse', () => {
+    const shortcut = (ctx: CodeEditorMenuContext): string | undefined => {
+      const item = buildCodeEditorMenuItems(ctx).find((entry) => entry.type !== 'divider' && entry.key === 'open-in-new-tab')
+      const { container } = render(<>{item && item.type !== 'divider' ? item.content : null}</>)
+      const text = container.querySelector('.document-tab-menu-shortcut')?.textContent ?? undefined
+      cleanup()
+      return text
+    }
+    expect(shortcut(methodReferenceContext())).toBe('Ctrl+Click')
+    expect(shortcut(methodReferenceContext({ openInNewTabFromKeyboard: true }))).toBe('Ctrl+F12')
+    // A local is a reference the command follows too: into a copy of the document, with the caret on its declaration.
+    expect(menuKeys(context({ referenceTarget: { start: 0, length: 3, kind: 'reference', localId: 'L0' } }))).toContain('open-in-new-tab')
+  })
+
+  it('offers the token group\'s Go to commands for the document\'s module, the first two only when it has their member', () => {
+    const goTo = { onGoToEntryPoint: vi.fn(), onGoToGlobalCctor: vi.fn(), onGoToToken: vi.fn() }
+    expect(menuKeys(context({ documentNode: methodNode, ...goTo })).filter((key) => key.startsWith('go-to-'))).toEqual(['go-to-token'])
+    const ctx = context({ documentNode: methodNode, hasEntryPoint: true, hasGlobalCctor: true, ...goTo })
+    expect(menuKeys(ctx).filter((key) => key.startsWith('go-to-'))).toEqual(['go-to-entry-point', 'go-to-global-cctor', 'go-to-token'])
+    runEntry(ctx, 'go-to-entry-point')
+    runEntry(ctx, 'go-to-global-cctor')
+    runEntry(ctx, 'go-to-token')
+    expect(goTo.onGoToEntryPoint).toHaveBeenCalledWith(methodNode)
+    expect(goTo.onGoToGlobalCctor).toHaveBeenCalledWith(methodNode)
+    expect(goTo.onGoToToken).toHaveBeenCalledWith(methodNode)
+    expect(menuKeys(context({ hasEntryPoint: true, ...goTo })).filter((key) => key.startsWith('go-to-'))).toEqual([])
   })
 
   it('offers Analyze on a member of a module the workspace does not hold, and hands it the reference', () => {

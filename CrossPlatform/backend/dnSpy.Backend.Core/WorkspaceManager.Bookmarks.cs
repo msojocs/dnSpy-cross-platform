@@ -128,9 +128,9 @@ static class BookmarkLocations {
 /// same section lives in dnSpy's own settings file, so that file reads as a bookmark file too.
 /// </summary>
 static class BookmarksXml {
-	const string RootName = "settings";
-	const string SectionName = "section";
-	const string SectionNameAttribute = "_";
+	internal const string RootName = "settings";
+	internal const string SectionName = "section";
+	internal const string SectionNameAttribute = "_";
 	const string BookmarkSectionName = "Bookmark";
 	const string LocationSectionName = "BML";
 	const string LocationTypeAttribute = "__BMT";
@@ -176,7 +176,7 @@ static class BookmarksXml {
 	/// A section the way XmlSettingsWriter writes one: its name first, then its attributes sorted by their
 	/// upper-cased names with the default (culture) comparer — which puts "__BMT" ahead of the letters.
 	/// </summary>
-	static XElement Section(string name, IEnumerable<(string Key, string Value)> attributes) {
+	internal static XElement Section(string name, IEnumerable<(string Key, string Value)> attributes) {
 		var section = new XElement(SectionName);
 		section.SetAttributeValue(SectionNameAttribute, Escape(name));
 		foreach (var (key, value) in attributes.OrderBy(attribute => attribute.Key.ToUpperInvariant(), StringComparer.InvariantCulture))
@@ -255,21 +255,21 @@ static class BookmarksXml {
 	}
 
 	/// <summary>What the location serializer checks a token against: the member's dnlib full name.</summary>
-	static string? TokenString(ModuleDef? module, uint token) => BookmarkLocations.Resolve(module, token)?.ToString();
+	internal static string? TokenString(ModuleDef? module, uint token) => BookmarkLocations.Resolve(module, token)?.ToString();
 
-	static IEnumerable<XElement> Children(XElement section, string name) =>
+	internal static IEnumerable<XElement> Children(XElement section, string name) =>
 		section.Elements(SectionName).Where(child => Unescape(Attribute(child, SectionNameAttribute)) == name);
 
-	static string? Attribute(XElement section, string name) {
+	internal static string? Attribute(XElement section, string name) {
 		var value = (string?)section.Attribute(name);
 		return name == SectionNameAttribute ? value : Unescape(value);
 	}
 
 	// The TypeConverters the settings sections read values with: a bool is "True"/"False" in any case, a uint
 	// decimal or (BaseNumberConverter) hex with a 0x prefix.
-	static bool? ParseBool(string? value) => bool.TryParse(value?.Trim(), out var result) ? result : null;
+	internal static bool? ParseBool(string? value) => bool.TryParse(value?.Trim(), out var result) ? result : null;
 
-	static uint? ParseUInt32(string? value) {
+	internal static uint? ParseUInt32(string? value) {
 		value = value?.Trim();
 		if (string.IsNullOrEmpty(value))
 			return null;
@@ -279,7 +279,7 @@ static class BookmarksXml {
 	}
 
 	/// <summary>XmlUtils.EscapeAttributeValue: a control character, or the escape character itself, as ©XXXX.</summary>
-	static string Escape(string value) {
+	internal static string Escape(string value) {
 		var escaped = new StringBuilder(value.Length);
 		foreach (var ch in value) {
 			if (ch < ' ' || ch == EscapeChar)
@@ -291,7 +291,7 @@ static class BookmarksXml {
 	}
 
 	/// <summary>XmlUtils.UnescapeAttributeValue.</summary>
-	static string? Unescape(string? value) {
+	internal static string? Unescape(string? value) {
 		if (value is null || value.IndexOf(EscapeChar, StringComparison.Ordinal) < 0)
 			return value;
 		var parts = value.Split(EscapeChar);

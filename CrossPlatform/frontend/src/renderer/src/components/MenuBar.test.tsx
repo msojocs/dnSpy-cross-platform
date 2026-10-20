@@ -168,8 +168,9 @@ afterEach(() => {
 
 describe('MenuBar', () => {
   it('mirrors the upstream File menu layout', () => {
-    // Nothing modified and nothing recently opened, which is the state that greys Save, Save All and
-    // Recent Files. The commands dnSpy has and this port does not stay in place, disabled.
+    // Nothing modified, nothing recently opened and no module left over from a process, which is the state that greys
+    // Save, Save All, Recent Files and Close Old In-Memory Modules. Export to Project, which this port does not have,
+    // stays in place, disabled.
     renderMenuWith({ dirty: false })
     expect(openMenu('File')).toEqual([
       'Export to Project...',
@@ -203,6 +204,14 @@ describe('MenuBar', () => {
     // dnSpy never greys the restart entry — it is clickable or not there at all.
     expect(screen.getByRole('menuitem', { name: /^Restart as Administrator/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Exit/ })).toBeEnabled()
+  })
+
+  it('closes the modules read out of a process that is no longer debugged, as dnSpy\'s Close Old In-Memory Modules does', () => {
+    const onCloseOldInMemoryModules = vi.fn()
+    render(<MenuBar {...baseProps()} hasOldInMemoryModules={true} onCloseOldInMemoryModules={onCloseOldInMemoryModules} />)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'File' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Close Old In-Memory Modules/ }))
+    expect(onCloseOldInMemoryModules).toHaveBeenCalledTimes(1)
   })
 
   it('drops the restart entry altogether once the app is already elevated', () => {

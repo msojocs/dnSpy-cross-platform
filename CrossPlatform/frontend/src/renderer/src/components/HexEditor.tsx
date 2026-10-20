@@ -21,7 +21,7 @@ import {
   type HexValuesFormat,
 } from '../hex-model'
 import { useLanguage } from '../localization'
-import { useAppOptions } from './app-options'
+import { useAppOptions, type HexEditorView } from './app-options'
 import { DsIcon } from './DsIcon'
 import {
   HexGoToMetadataDialog,
@@ -142,6 +142,32 @@ const base64Of = (bytes: Uint8Array): string => {
   return btoa(binary)
 }
 
+/**
+ * Bytes the hex view shows that are not a module's file — the Memory windows' window onto a process's memory.
+ * Offsets are from the start of the window; the offset column reads them as addresses from `base`.
+ */
+export interface HexByteSource {
+  /** Where the view's state is remembered; a source without one remembers nothing. */
+  stateKey?: string
+  length: number
+  base: number
+  /** Changes whenever the bytes may have: every chunk is read again. */
+  revision: string
+  /** The bytes from `offset` on, and for each 4 KiB page from the one `offset` is in whether it could be read. */
+  read(offset: number, count: number): Promise<{ bytes: Uint8Array; readable?: boolean[] }>
+  write(offset: number, data: Uint8Array): Promise<boolean>
+  /** Moves the window so it holds `address`; answers the address's offset in the new window. */
+  reveal(address: number): number
+  /** One past the last address the window may move to, when the source is a window onto a larger space. */
+  end?: number
+  /** Entries the source's owner adds at the end of the context menu, such as the Memory window's Process submenu. */
+  menu?: MenuItem[]
+  /** The options page the view follows: the Memory windows have one of their own. */
+  optionsView?: HexEditorView
+}
+
+const PAGE_SIZE = 4096
+
 export interface HexViewCommands {
   /** dnSpy's Go to Code or Structure (F12): the bytes under the caret are opened as the node they name. */
   onGoToCodeOrStructure?(offset: number): void
@@ -157,7 +183,7 @@ export interface HexViewCommands {
  * The whole file is addressable: rows are drawn from the viewport alone, and the 64 KiB chunk each row sits
  * in is read on demand, so a large file scrolls without ever being loaded.
  */
-export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: HexViewCommands }): React.JSX.Element => {
+export const HexView = ({ moduleId = '', source, commands }: { moduleId?: string; source?: HexByteSource; commands?: HexViewCommands }): React.JSX.Element => {
   const hexFont = useCategoryFont('hexEditor')
   const options = useAppOptions()
   const workspaceId = useAppStore((state) => state.workspaceId)
@@ -169,9 +195,10 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   const appendOutput = useAppStore((state) => state.appendOutput)
   const { locale, t } = useLanguage()
 
-  const modulePath = useMemo(() => modules.find((module) => module.id === moduleId)?.path, [modules, moduleId])
+  const modulePath = useMemo(() => source ? source.stateKey : modules.find((module) => module.id === moduleId)?.path, [modules, moduleId, source])
   const saved = useMemo(() => hexViewStateOf(modulePath), [modulePath])
-  const [length, setLength] = useState(0)
+  const [fileLength, setLength] = useState(0)
+  const length = source ? source.length : fileLength
   const [caret, setCaret] = useState<HexCaret>({ offset: saved?.offset ?? 0, column: 'values', nibble: 0 })
   const [anchor, setAnchor] = useState<number | undefined>(undefined)
   const [marked, setMarked] = useState<HexSelection | undefined>(undefined)
@@ -185,7 +212,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   /** The bytes-per-line the context menu sets; 0 is dnSpy's "Fit to width". */
   const [bytesPerLineSetting, setBytesPerLineSetting] = useState<number>(saved?.bytesPerLine ?? 16)
   const [valuesFormat, setValuesFormat] = useState<HexValuesFormat>(saved?.valuesFormat ?? 'hexByte')
-  const [offsetFormat, setOffsetFormat] = useState(options.hexEditor.hexViewer.general.hexOffsetFormat)
+  const [offsetFormat, setOffsetFormat] = useState(options.hexEditor[source?.optionsView ?? 'hexViewer'].general.hexOffsetFormat)
   /** The columns the local settings dialog hides; dnSpy keeps this per view, not in the options file. */
   const [columns, setColumns] = useState<{ showOffset: boolean; showValues: boolean; showAscii: boolean }>({ showOffset: true, showValues: true, showAscii: true })
   /** The positions the local settings dialog names: the bytes the view shows, and how the addresses read. */
@@ -195,11 +222,13 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   const contentRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef(false)
   const chunks = useRef(new Map<number, Uint8Array>())
+  /** For a source's chunks, the 4 KiB pages that could not be read: their cells read as dnSpy's `??`. */
+  const unreadable = useRef(new Map<number, boolean[]>())
   const pending = useRef(new Set<number>())
   const [chunkVersion, setChunkVersion] = useState(0)
 
-  const paneOptions = options.hexEditor.hexViewer
-  const offsetBitSize = offsetBitSizeFor(length)
+  const paneOptions = options.hexEditor[source?.optionsView ?? 'hexViewer']
+  const offsetBitSize = offsetBitSizeFor(source ? source.base + length : length)
   const lineFormat = useMemo<HexLineFormatOptions>(() => ({
     ...lineFormatOf(paneOptions),
     bytesPerLine: bytesPerLineSetting,
@@ -223,15 +252,15 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     : { start: 0, end: length }
   const range = visibleRange ?? fileRange
   /** dnSpy's `ToLogicalPosition`: what an address reads once a base and relative positions are in play. */
-  const logicalOffset = (offset: number): number => offset - (positions.useRelativePositions ? range.start : 0) + positions.basePosition
+  const logicalOffset = (offset: number): number => offset - (positions.useRelativePositions ? range.start : 0) + positions.basePosition + (source?.base ?? 0)
   const lineCount = Math.max(1, Math.ceil((range.end - range.start) / bytesPerLine))
 
   // The file's length, read once per module and again after an edit.
   useEffect(() => {
-    if (!workspaceId)
+    if (!workspaceId || source)
       return
     void window.dnSpy.getHexLength(workspaceId, moduleId).then((response) => setLength(response.length))
-  }, [workspaceId, moduleId, workspaceStateId])
+  }, [workspaceId, moduleId, workspaceStateId, source])
 
   const measure = useCallback((): void => {
     const element = contentRef.current
@@ -268,15 +297,17 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     previousDialog.current = dialog
   }, [dialog, menu])
 
-  // A fresh state id — an edit, an undo — invalidates every chunk, so the patch shows up.
+  // A fresh state id — an edit, an undo — invalidates every chunk, so the patch shows up; so does a source's
+  // new stop or new window.
   useEffect(() => {
     chunks.current.clear()
+    unreadable.current.clear()
     pending.current.clear()
     setChunkVersion((version) => version + 1)
-  }, [workspaceStateId])
+  }, [workspaceStateId, source?.revision, source?.base])
 
   const loadRange = useCallback((start: number, end: number): void => {
-    if (!workspaceId || length === 0)
+    if ((!workspaceId && !source) || length === 0)
       return
     const firstChunk = Math.max(0, Math.floor(start / CHUNK_SIZE))
     const lastChunk = Math.min(Math.floor(Math.max(0, length - 1) / CHUNK_SIZE), Math.floor((Math.max(start + 1, end) - 1) / CHUNK_SIZE))
@@ -285,9 +316,17 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
         continue
       pending.current.add(index)
       const offset = index * CHUNK_SIZE
-      void window.dnSpy.readHex(workspaceId, moduleId, offset, CHUNK_SIZE).then((response) => {
-        const binary = atob(response.base64Data)
-        chunks.current.set(index, Uint8Array.from(binary, (character) => character.charCodeAt(0)))
+      const read = source
+        ? source.read(offset, Math.min(CHUNK_SIZE, length - offset)).then((response) => {
+          unreadable.current.set(index, (response.readable ?? []).map((readable) => !readable))
+          return response.bytes
+        })
+        : window.dnSpy.readHex(workspaceId!, moduleId, offset, CHUNK_SIZE).then((response) => {
+          const binary = atob(response.base64Data)
+          return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+        })
+      void read.then((bytes) => {
+        chunks.current.set(index, bytes)
         pending.current.delete(index)
         setChunkVersion((version) => version + 1)
       }).catch(() => {
@@ -296,7 +335,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
         setChunkVersion((version) => version + 1)
       })
     }
-  }, [workspaceId, moduleId, length])
+  }, [workspaceId, moduleId, length, source])
 
   const { first, last } = visibleRowRange(lineCount, viewport.top, viewport.height)
   // `chunkVersion` is in the dependencies so a chunk that an edit invalidated is read again even though the
@@ -317,6 +356,55 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   }, [measure])
 
   /** The caret's line is scrolled into sight whenever it moves outside the viewport. */
+  // ---- A source's window ---------------------------------------------------------------------------
+
+  /** The address the view is to show once a source's window has moved, and whether the caret goes there too. */
+  const pendingAddress = useRef<{ address: number; caret: boolean } | undefined>(undefined)
+  const previousBase = useRef(source?.base ?? 0)
+  const rebaseTo = (address: number, caretFollows = true): void => {
+    if (!source)
+      return
+    pendingAddress.current = { address, caret: caretFollows }
+    source.reveal(address)
+  }
+  // The window moved: what was on screen keeps its address, and the caret and selection their bytes.
+  useLayoutEffect(() => {
+    if (!source)
+      return
+    const delta = previousBase.current - source.base
+    previousBase.current = source.base
+    const pending = pendingAddress.current
+    pendingAddress.current = undefined
+    if (delta === 0 && !pending)
+      return
+    const clamp = (offset: number): number => Math.max(0, Math.min(source.length - 1, offset))
+    if (pending?.caret)
+      setCaret((current) => ({ ...current, offset: clamp(pending.address - source.base), nibble: 0 }))
+    else
+      setCaret((current) => ({ ...current, offset: clamp(current.offset + delta) }))
+    setAnchor((current) => current === undefined ? undefined : clamp(current + delta))
+    const element = contentRef.current
+    if (element && pending) {
+      element.scrollTop = Math.max(0, (Math.floor((pending.address - source.base) / bytesPerLine) - (pending.caret ? 2 : 0)) * ROW_HEIGHT)
+      measure()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source?.base])
+
+  /** A scroll that reaches the edge of a source's window moves the window, so the view scrolls on past it. */
+  const onScroll = (): void => {
+    measure()
+    const element = contentRef.current
+    if (!element || source?.end === undefined || pendingAddress.current)
+      return
+    const edge = 64 * ROW_HEIGHT
+    const topAddress = source.base + Math.floor(element.scrollTop / ROW_HEIGHT) * bytesPerLine
+    if (element.scrollTop < edge && source.base > 0)
+      rebaseTo(topAddress, false)
+    else if (element.scrollTop + element.clientHeight > element.scrollHeight - edge && source.base + source.length < source.end)
+      rebaseTo(topAddress, false)
+  }
+
   const revealCaret = useCallback((offset: number): void => {
     const element = contentRef.current
     if (!element)
@@ -331,6 +419,16 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   }, [bytesPerLine, range.start])
 
   const moveCaret = useCallback((next: number, extend: boolean, column: HexColumn = caret.column): void => {
+    // A caret that walks off a source's window takes the window along, over the whole space it is a window onto.
+    if (source?.end !== undefined && !extend && (next < 0 || next >= source.length)) {
+      const address = Math.max(0, Math.min(source.end - 1, source.base + next))
+      if (address !== source.base + caret.offset) {
+        rebaseTo(address)
+        setAnchor(undefined)
+        setMarked(undefined)
+        return
+      }
+    }
     const clamped = Math.max(range.start, Math.min(Math.max(range.start, range.end - 1), next))
     if (extend) {
       if (anchor === undefined)
@@ -341,7 +439,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     setCaret({ offset: clamped, column, nibble: caret.nibble })
     setMarked(undefined)
     revealCaret(clamped)
-  }, [anchor, caret, range, revealCaret])
+  }, [anchor, caret, range, revealCaret, source])
 
   const selectRange = useCallback((start: number, end: number): void => {
     if (end <= start)
@@ -357,15 +455,25 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   // ---- Edits ---------------------------------------------------------------------------------------
 
   const readBytes = useCallback(async (offset: number, count: number): Promise<Uint8Array> => {
+    if (source)
+      return (await source.read(offset, count)).bytes
     if (!workspaceId)
       return new Uint8Array(0)
     const response = await window.dnSpy.readHex(workspaceId, moduleId, offset, count)
     const binary = atob(response.base64Data)
     return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  }, [workspaceId, moduleId])
+  }, [workspaceId, moduleId, source])
 
-  const writeBytes = useCallback((offset: number, data: Uint8Array, message?: string): Promise<boolean> =>
-    useAppStore.getState().hexWriteBytes(moduleId, offset, data, message), [moduleId])
+  const writeBytes = useCallback(async (offset: number, data: Uint8Array, message?: string): Promise<boolean> => {
+    if (!source)
+      return useAppStore.getState().hexWriteBytes(moduleId, offset, data, message)
+    const written = await source.write(offset, data)
+    // A write to memory is no edit of the workspace, so the chunks it touched are read again here.
+    for (let index = Math.floor(offset / CHUNK_SIZE); index <= Math.floor((offset + Math.max(1, data.length) - 1) / CHUNK_SIZE); index++)
+      chunks.current.delete(index)
+    setChunkVersion((version) => version + 1)
+    return written
+  }, [moduleId, source])
 
   /** dnSpy's Delete: the selection, or the byte under the caret, becomes zero. */
   const clearBytes = useCallback(async (): Promise<void> => {
@@ -475,7 +583,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
   }, [appendOutput, caret, length, paneOptions.general.encoding, range.end, revealCaret, t, writeBytes])
 
   const find = useCallback(async (reverse: boolean): Promise<void> => {
-    if (!workspaceId)
+    if (!workspaceId && !source)
       return
     const pattern = findPatternBytes(findText)
     if (!pattern) {
@@ -484,7 +592,9 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     }
     try {
       const start = reverse ? Math.max(0, (selection?.start ?? caret.offset) - 1) : (selection?.end ?? caret.offset)
-      const response = await window.dnSpy.findHex(workspaceId, moduleId, base64Of(pattern), start, reverse, true)
+      const response = source
+        ? { offset: await findInSource(source, pattern, start, reverse) }
+        : await window.dnSpy.findHex(workspaceId!, moduleId, base64Of(pattern), start, reverse, true)
       if (response.offset < 0) {
         setFindStatus(t('Not found'))
         return
@@ -496,12 +606,15 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     catch (error) {
       setFindStatus(error instanceof Error ? error.message : String(error))
     }
-  }, [workspaceId, moduleId, findText, selection, caret.offset, selectRange, t])
+  }, [workspaceId, moduleId, source, findText, selection, caret.offset, selectRange, t])
 
   const goToPosition = useCallback((result: GoToPositionResult): void => {
     void (async () => {
       let offset = result.value
-      if (result.kind === 'rva' && workspaceId) {
+      // A source's offsets are addresses: one outside the window moves the window to it.
+      if (source && result.kind !== 'current')
+        offset = result.value >= source.base && result.value < source.base + source.length ? result.value - source.base : source.reveal(result.value)
+      else if (result.kind === 'rva' && workspaceId) {
         const response = await window.dnSpy.resolveHexPosition(workspaceId, moduleId, 'rva', result.value)
         offset = response.offset
       }
@@ -523,7 +636,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
         revealCaret(clamped)
       }
     })()
-  }, [workspaceId, moduleId, caret.offset, selection, length, selectRange, revealCaret])
+  }, [workspaceId, moduleId, source, caret.offset, selection, length, selectRange, revealCaret])
 
   const goToMetadata = useCallback((result: GoToMetadataResult): void => {
     void (async () => {
@@ -577,6 +690,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
 
   const refresh = useCallback((): void => {
     chunks.current.clear()
+    unreadable.current.clear()
     pending.current.clear()
     setChunkVersion((version) => version + 1)
   }, [])
@@ -686,7 +800,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     const extend = event.shiftKey
     const single = (offset: number): void => moveCaret(offset, extend)
     if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyG') { event.preventDefault(); setDialog('goto'); return }
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyM') { event.preventDefault(); setDialog('metadata'); return }
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyM' && !source) { event.preventDefault(); setDialog('metadata'); return }
     if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyL') { event.preventDefault(); setDialog('select'); return }
     if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyF') { event.preventDefault(); setDialog('find'); return }
     if (event.key === 'F3') { event.preventDefault(); void find(event.shiftKey); return }
@@ -701,7 +815,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     }
     if (event.ctrlKey && event.shiftKey && event.code === 'KeyD') { event.preventDefault(); setVisibleRange(undefined); return }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyD') { event.preventDefault(); if (selection) setVisibleRange(selection); return }
-    if (event.ctrlKey && event.altKey && event.code === 'KeyS') { event.preventDefault(); saveSelection(); return }
+    if (event.ctrlKey && event.altKey && event.code === 'KeyS' && !source) { event.preventDefault(); saveSelection(); return }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyC') { event.preventDefault(); copySpecial('hex'); return }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyV') { event.preventDefault(); void paste(); return }
     if (event.key === 'Delete') { event.preventDefault(); void clearBytes(); return }
@@ -817,9 +931,10 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
     const hasSelection = selection !== undefined && selection.end > selection.start
     return [
       { label: t('Go to Offset...'), shortcut: 'Ctrl+G', action: () => setDialog('goto') },
-      { label: t('Go to Metadata...'), shortcut: 'Ctrl+M', action: () => setDialog('metadata') },
+      // A process's memory has no metadata to go to and no file to save a part of.
+      ...(source ? [] : [{ label: t('Go to Metadata...'), shortcut: 'Ctrl+M', action: () => setDialog('metadata') }]),
       { separator: true },
-      { label: t('Save Selection...'), icon: 'Save', shortcut: 'Ctrl+Alt+S', disabled: !hasSelection, action: saveSelection },
+      ...(source ? [] : [{ label: t('Save Selection...'), icon: 'Save', shortcut: 'Ctrl+Alt+S', disabled: !hasSelection, action: saveSelection }]),
       { label: t('Show Only Selected Bytes'), shortcut: 'Ctrl+D', disabled: !hasSelection, action: () => { if (selection) setVisibleRange(selection) } },
       { label: t('Show All Bytes'), shortcut: 'Ctrl+Shift+D', disabled: visibleRange === undefined, action: () => setVisibleRange(undefined) },
       { separator: true },
@@ -881,6 +996,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
       { separator: true },
       { label: t('Find...'), icon: 'Search', shortcut: 'Ctrl+F', action: () => setDialog('find') },
       { label: t('Refresh'), icon: 'Refresh', shortcut: 'F5', action: refresh },
+      ...(source?.menu?.length ? [{ separator: true }, ...source.menu] : []),
     ]
   }
 
@@ -943,7 +1059,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
         onKeyDown={onKeyDown}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
-        onScroll={measure}
+        onScroll={onScroll}
         onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }) }}
       >
         {first > 0 && <div className="hex-spacer" aria-hidden="true" style={{ height: first * ROW_HEIGHT }} />}
@@ -951,7 +1067,7 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
           const offset = range.start + index * bytesPerLine
           const chunkStart = Math.floor(offset / CHUNK_SIZE) * CHUNK_SIZE
           const bytes = chunks.current.get(Math.floor(offset / CHUNK_SIZE)) ?? new Uint8Array(0)
-          const line = lineOf(bytes, chunkStart, offset, range.end, { ...lineFormat, offsetBitSize, showOffset: lineFormat.showOffset }, bytesPerLine)
+          const line = maskUnreadable(lineOf(bytes, chunkStart, offset, range.end, { ...lineFormat, offsetBitSize, showOffset: lineFormat.showOffset }, bytesPerLine), unreadable.current.get(Math.floor(offset / CHUNK_SIZE)), chunkStart)
           const address = lineFormat.showOffset ? formatHexOffset(logicalOffset(offset), offsetBitSize, lineFormat.offsetFormat, lineFormat.offsetLowerCaseHex) : ''
           const currentLine = offset <= caret.offset && caret.offset < offset + bytesPerLine
           return (
@@ -1013,6 +1129,43 @@ export const HexView = ({ moduleId, commands }: { moduleId: string; commands?: H
       <HexViewPersistence path={modulePath} state={{ offset: caret.offset, selectionStart: span?.start ?? caret.offset, selectionEnd: span?.end ?? caret.offset, bytesPerLine: bytesPerLineSetting, valuesFormat }} />
     </div>
   )
+}
+
+/** A line of a source's chunk with the cells of pages that could not be read shown as dnSpy shows them: `??`. */
+const maskUnreadable = (line: ReturnType<typeof lineOf>, pages: boolean[] | undefined, chunkStart: number): ReturnType<typeof lineOf> => {
+  if (!pages?.some((page) => page))
+    return line
+  const unreadableAt = (offset: number): boolean => pages[Math.floor((offset - chunkStart) / PAGE_SIZE)] === true
+  return {
+    ...line,
+    values: line.values.map((cell) => unreadableAt(line.offset + cell.byteOffset) ? { ...cell, text: '?'.repeat(cell.text.length) } : cell),
+    ascii: line.ascii.map((cell) => unreadableAt(line.offset + cell.byteOffset) ? { ...cell, text: '?' } : cell),
+  }
+}
+
+/** Find over a source's window, read a chunk at a time; a match may straddle two chunks. */
+const findInSource = async (source: HexByteSource, pattern: Uint8Array, start: number, reverse: boolean): Promise<number> => {
+  const matchAt = (bytes: Uint8Array, index: number): boolean => {
+    for (let i = 0; i < pattern.length; i++)
+      if (bytes[index + i] !== pattern[i]) return false
+    return true
+  }
+  const overlap = pattern.length - 1
+  if (!reverse) {
+    for (let offset = start; offset < source.length; offset += CHUNK_SIZE) {
+      const { bytes } = await source.read(offset, Math.min(CHUNK_SIZE + overlap, source.length - offset))
+      for (let index = 0; index + pattern.length <= bytes.length; index++)
+        if (matchAt(bytes, index)) return offset + index
+    }
+    return -1
+  }
+  for (let end = start + 1; end > 0; end -= CHUNK_SIZE) {
+    const offset = Math.max(0, end - CHUNK_SIZE)
+    const { bytes } = await source.read(offset, Math.min(end - offset + overlap, source.length - offset))
+    for (let index = Math.min(end - offset, bytes.length - pattern.length); index >= 0; index--)
+      if (matchAt(bytes, index)) return offset + index
+  }
+  return -1
 }
 
 const FillDialog = ({ value, onChange, onAccept, onClose }: { value: string; onChange(value: string): void; onAccept(): void; onClose(): void }): React.JSX.Element => {

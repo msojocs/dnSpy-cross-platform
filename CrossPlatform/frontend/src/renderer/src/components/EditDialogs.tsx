@@ -147,3 +147,33 @@ export const GoToLineDialog = ({ currentLine, lineCount, onGo, onClose }: GoToLi
     </div>
   )
 }
+
+interface AskTextDialogProps {
+  title: string
+  label: string
+  initialText: string
+  onOk(text: string): void
+  onClose(): void
+}
+
+/** dnSpy's MsgBox.Ask: a title, a labelled box filled with what there is, and OK and Cancel. */
+export const AskTextDialog = ({ title, label, initialText, onOk, onClose }: AskTextDialogProps): React.JSX.Element => {
+  const [text, setText] = useState(initialText)
+  const input = useRef<HTMLInputElement>(null)
+  const { t } = useLanguage()
+  useEffect(() => input.current?.select(), [])
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <form className="modal rename-dialog" role="dialog" aria-modal="true" aria-labelledby="ask-text-title" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onClose() } }} onSubmit={(event) => {
+        event.preventDefault()
+        onOk(text)
+      }}>
+        <div className="modal-title"><span id="ask-text-title">{title}</span><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
+        <div className="modal-content">
+          <label>{label}<input ref={input} aria-label={label} value={text} onChange={(event) => setText(event.target.value)} /></label>
+        </div>
+        <div className="modal-actions"><button type="button" onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary">{t('OK')}</button></div>
+      </form>
+    </div>
+  )
+}

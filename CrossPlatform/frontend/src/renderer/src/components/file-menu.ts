@@ -23,6 +23,9 @@ export interface FileMenuContext {
   onCloseAll(): void
   onCloseAllFramework(): void
   onCloseAllMissing(): void
+  /** dnSpy's Close Old In-Memory Modules: present when a module read out of a process outlived its process. */
+  onCloseOldInMemoryModules?(): void
+  hasOldInMemoryModules?: boolean
   onSortAssemblies(): void
   onRestartAsAdministrator(): void
   onQuit(): void
@@ -70,7 +73,7 @@ export const recentFileLabel = (path: string): string =>
 /**
  * dnSpy's File menu (AppMenus.cs + the ExportMenuItem registrations across dnSpy.Documents.Tabs,
  * dnSpy.AsmEditor and MainApp), in the order its Group and Order values give. Entries this port has no
- * command for — Export to Project, Close Old In-Memory Modules — keep dnSpy's place and render disabled,
+ * command for — Export to Project — keep dnSpy's place and render disabled,
  * so the menu still reads as dnSpy's.
  */
 const FILE_ENTRIES: FileEntry[] = [
@@ -90,7 +93,7 @@ const FILE_ENTRIES: FileEntry[] = [
   { group: GROUP_OPEN, order: 40, label: (ctx) => ctx.t('Reload All Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onReloadAll() },
   // Close All and Close Old In-Memory Modules share dnSpy's Order 50; the stable sort keeps this order.
   { group: GROUP_OPEN, order: 50, icon: 'CloseAll', label: (ctx) => ctx.t('Close All'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAll() },
-  { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close Old In-Memory Modules'), enabled: () => false },
+  { group: GROUP_OPEN, order: 50, label: (ctx) => ctx.t('Close Old In-Memory Modules'), enabled: (ctx) => ctx.hasOldInMemoryModules === true, action: (ctx) => ctx.onCloseOldInMemoryModules?.() },
   { group: GROUP_OPEN, order: 55, label: (ctx) => ctx.t('Close All Framework Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllFramework() },
   { group: GROUP_OPEN, order: 60, label: (ctx) => ctx.t('Close All Missing Files'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onCloseAllMissing() },
   { group: GROUP_OPEN, order: 100, icon: 'SortAscending', label: (ctx) => ctx.t('Sort Assemblies'), enabled: (ctx) => ctx.hasWorkspace, action: (ctx) => ctx.onSortAssemblies() },

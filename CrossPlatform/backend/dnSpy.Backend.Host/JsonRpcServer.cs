@@ -387,6 +387,14 @@ internal sealed class JsonRpcServer {
 				return await workspaces.ExportBookmarksAsync(DeserializeParams<ExportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.BookmarksImport:
 				return await workspaces.ImportBookmarksAsync(DeserializeParams<ImportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugVerifyFilter:
+				return new { error = CorDebugSessionManager.VerifyFilterExpression(ReadParamsElement(request).TryGetProperty("filter", out var filter) && filter.ValueKind == JsonValueKind.String ? filter.GetString() ?? string.Empty : string.Empty) };
+			case RpcMethods.DebugCodeTargets:
+				return await workspaces.GetDebugCodeTargetsAsync(DeserializeParams<DebugCodeTargetsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.BreakpointsExport:
+				return await workspaces.ExportBreakpointsAsync(DeserializeParams<ExportBreakpointsRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.BreakpointsImport:
+				return await workspaces.ImportBreakpointsAsync(DeserializeParams<ImportBreakpointsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.GacList:
 				return await workspaces.ListGacAsync(cancellationToken).ConfigureAwait(false);
 			case RpcMethods.GacGetDetails:

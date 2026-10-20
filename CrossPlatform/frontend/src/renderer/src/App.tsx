@@ -2,7 +2,8 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { isLocalSpan, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
-import { buildSession, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession } from './app-store'
+import { buildSession, debugSessionIds, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession, codeStatementAt, type MethodBreakpointTarget, type BreakpointSettings } from './app-store'
+import { useShallow } from 'zustand/react/shallow'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
 import { askDeleteAllBreakpointsId, askIgnorableMessage } from './message-box'
@@ -40,7 +41,7 @@ import { MetadataTableView } from './components/MetadataTableView'
 import { AskDialog } from './components/AskDialog'
 import { hasMetadataTables } from './metadata-table'
 import { AutosPane, BreakpointsPane, CallStackPane, LocalsPane, ModuleBreakpointsPane, ModulesPane, ProcessesPane, StaticFieldsPane, ThreadsPane, WatchPane } from './components/DebugToolWindows'
-import { DisassemblyPane, MemoryPane } from './components/DebugNativeWindows'
+import { DisassemblyDocumentView, MemoryPane } from './components/DebugNativeWindows'
 import { ExceptionSettingsPane } from './components/ExceptionSettingsPane'
 import { StringReferencesPane, type StringReferencesPaneCommands } from './components/StringReferencesPane'
 import { BookmarksPane } from './components/BookmarksPane'
@@ -108,7 +109,7 @@ const EXPLORER_WEIGHT = 43
 
 /** What the window opens in its editor, as against what it docks: dnSpy's editor gives a document its title
  * in the tab strip and nothing else, so these are the panes that go without a caption over them. */
-const DOCUMENT_COMPONENTS = ['document', 'hex', 'module-info', 'start']
+const DOCUMENT_COMPONENTS = ['document', 'hex', 'module-info', 'disassembly-document', 'start']
 
 /** The tabs the View menu can bring back, with the label and component each one needs. The explorer opens
  * in the column on the left; everything else belongs to the tool window tab set. */
@@ -138,7 +139,6 @@ const restorableTabs: Record<string, { name: string; component: string }> = {
   'memory-2': { name: 'Memory 2', component: 'memory' },
   'memory-3': { name: 'Memory 3', component: 'memory' },
   'memory-4': { name: 'Memory 4', component: 'memory' },
-  disassembly: { name: 'Disassembly', component: 'disassembly' },
 }
 
 // The default window, laid out the way dnSpy's is: the Assembly Explorer fills the left edge top to
@@ -240,6 +240,15 @@ const loadLayout = (): Model => {
     // Normalize saved strip visibility. The editor keeps its strip even while empty during restoration;
     // each tool window dock shows one only when it holds multiple windows.
     syncDockTabStrips(model, DOCUMENT_COMPONENTS, [DOCUMENT_TABSET_ID])
+    // Disassembly was a tool window once; it is a document now, and a Disassembly tab is a snapshot of a process
+    // that is gone by the next start — dnSpy does not save one either.
+    const disassemblyTabs: string[] = []
+    model.visitNodes((node) => {
+      if (node instanceof TabNode && (node.getId() === 'disassembly' || node.getComponent() === 'disassembly' || node.getComponent() === 'disassembly-document'))
+        disassemblyTabs.push(node.getId())
+    })
+    for (const id of disassemblyTabs)
+      model.doAction(Actions.deleteTab(id))
     // Migrate older layouts where the docked tabs were marked non-closable.
     for (const id of Object.keys(restorableTabs)) {
       const node = model.getNodeById(id)
@@ -389,7 +398,19 @@ export const App = (): React.JSX.Element => {
   // dnSpy's Go to MD Table Row window, and the node whose module it looks in.
   const [mdRowNode, setMdRowNode] = useState<TreeNode>()
   // The type "Add Class Tracepoint" asked for, while the breakpoint settings dialog it opens is up.
-  const [classTracepointNode, setClassTracepointNode] = useState<TreeNode>()
+  const [classTracepointNode, setClassTracepointNode] = useState<MethodBreakpointTarget>()
+  const breakpointSettingsRequest = useAppStore((state) => state.breakpointSettingsRequest)
+  const editBreakpointSettings = useAppStore((state) => state.editBreakpointSettings)
+  const locationTracepointRequest = useAppStore((state) => state.locationTracepointRequest)
+  const requestLocationTracepoint = useAppStore((state) => state.requestLocationTracepoint)
+  const addLocationBreakpoint = useAppStore((state) => state.addLocationBreakpoint)
+  const setBreakpointsSettings = useAppStore((state) => state.setBreakpointsSettings)
+  const breakpointSettingsOf = (id: string | undefined): BreakpointSettings | undefined => {
+    const state = useAppStore.getState()
+    return id?.startsWith('fn:')
+      ? state.functionBreakpoints.find((breakpoint) => `fn:${breakpoint.name}` === id)?.settings
+      : state.lineBreakpoints.find((breakpoint) => breakpoint.id === id)?.settings
+  }
   // The create or edit dialog the Edit menu opened, over the node it acts on: `nodeId` is what is being
   // edited, and is left off when a new node is being created in `ownerNodeId` instead.
   const [editNode, setEditNode] = useState<{ kind: CreatedKind, nodeId?: string, ownerNodeId?: string, nested?: boolean }>()
@@ -476,6 +497,12 @@ export const App = (): React.JSX.Element => {
   const sortAssemblies = useAppStore((state) => state.sortAssemblies)
   const goToResource = useAppStore((state) => state.goToResource)
   const removeModules = useAppStore((state) => state.removeModules)
+  // The modules read out of a process the debugger no longer debugs — what Close Old In-Memory Modules closes.
+  const memoryModules = useAppStore((state) => state.memoryModules)
+  const liveDebugSessions = useAppStore(useShallow((state) => debugSessionIds(state)))
+  const oldInMemoryModuleIds = useMemo(() => modules
+    .filter((module) => memoryModules[module.path] !== undefined && !liveDebugSessions.includes(memoryModules[module.path].sessionId))
+    .map((module) => module.id), [modules, memoryModules, liveDebugSessions])
   const getModifiedModules = useAppStore((state) => state.getModifiedModules)
   const getCloseCandidates = useAppStore((state) => state.getCloseCandidates)
   const goToSpecialNode = useAppStore((state) => state.goToSpecialNode)
@@ -549,6 +576,7 @@ export const App = (): React.JSX.Element => {
   const setBackendStatus = useAppStore((state) => state.setBackendStatus)
   const clearError = useAppStore((state) => state.clearError)
   const debugState = useAppStore((state) => state.debugState)
+  const activeDebugFrameId = useAppStore((state) => state.activeDebugFrameId)
   const debugProcess = useAppStore((state) => state.debugProcess)
   const debugSessionId = useAppStore((state) => state.debugSessionId)
   const stoppedReason = useAppStore((state) => state.stoppedReason)
@@ -560,21 +588,22 @@ export const App = (): React.JSX.Element => {
   const stopDebug = useAppStore((state) => state.stopDebug)
   const functionBreakpoints = useAppStore((state) => state.functionBreakpoints)
   const lineBreakpoints = useAppStore((state) => state.lineBreakpoints)
-  const toggleFunctionBreakpoint = useAppStore((state) => state.toggleFunctionBreakpoint)
   const deleteAllBreakpointsAction = useAppStore((state) => state.deleteAllBreakpoints)
   const setAllFunctionBreakpointsEnabled = useAppStore((state) => state.setAllFunctionBreakpointsEnabled)
   const setAllLineBreakpointsEnabled = useAppStore((state) => state.setAllLineBreakpointsEnabled)
   const { locale, setLanguage, t } = useLanguage()
 
-  // "Toggle Breakpoint" acts on the current item. With the tree focused that item is a method, so the entry still
-  // means "break wherever this method starts"; in the editor F9 is handled by Monaco, which knows the cursor line
-  // and can therefore set a line breakpoint instead.
-  const breakpointTarget = useMemo(
-    () => (selectedNode?.kind === 'method' ? methodBreakpointName(selectedNode.description) : undefined),
-    [selectedNode],
-  )
+  // dnSpy's Debug > Toggle Breakpoint is the code viewer's ToggleCreateBreakpoint at the caret of the document in front:
+  // there is something to do wherever the caret is on a statement, or on a breakpoint's line.
+  const codeCaret = useAppStore((state) => state.codeCaret)
+  const toggleLineBreakpoint = useAppStore((state) => state.toggleLineBreakpoint)
+  const canToggleBreakpointHere = useMemo(() => {
+    if (!codeCaret) return false
+    const statements = useAppStore.getState().documents[codeCaret.documentId]?.codeStatements
+    return (statements?.length ?? 0) > 0 || lineBreakpoints.some((breakpoint) => breakpoint.nodeId === codeCaret.documentId)
+  }, [codeCaret, lineBreakpoints])
   const toggleBreakpointHere = (): void => {
-    if (breakpointTarget) void toggleFunctionBreakpoint(breakpointTarget)
+    if (codeCaret) void toggleLineBreakpoint(codeCaret.documentId, codeCaret.line, codeCaret.column)
   }
   // dnSpy's DeleteAllBreakpointsAskUser: the question carries a "Don't show again" box, and a suppressed
   // one is taken as a yes — the user asked not to be troubled over it again.
@@ -707,6 +736,29 @@ export const App = (): React.JSX.Element => {
   }, [setBackendStatus])
   useEffect(() => window.dnSpy.onDebugEvent((event) => { void handleDebugEvent(event) }), [handleDebugEvent])
 
+  // dnSpy's SwitchToDebuggedProcess: once the process has been running for a second (DelayedIsRunningChanged), its
+  // window gets the focus when Give focus to debugged process is on — except before the session's first break,
+  // when the system gives a new process the focus by itself.
+  const debuggeeHasBroken = useRef(false)
+  useEffect(() => {
+    if (debugState === 'inactive') {
+      debuggeeHasBroken.current = false
+      return
+    }
+    if (debugState === 'stopped') {
+      debuggeeHasBroken.current = true
+      return
+    }
+    if (debugState !== 'running' || !debuggeeHasBroken.current)
+      return
+    const timer = setTimeout(() => {
+      const processId = useAppStore.getState().debugProcess?.id
+      if (processId && useAppStore.getState().debugState === 'running' && loadAppOptions().debugger.focusActiveProcess)
+        void window.dnSpy.focusProcessWindow?.(processId).catch(() => false)
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [debugState])
+
   // Upstream opens the Locals window from `AutoShowLocalsWindow`, which hangs off `DbgManager_IsDebuggingChanged`:
   // it is shown once, when a debugging session starts, and the Debugger options' "Show the Locals window when the
   // debugger starts" can turn it off. Breaking, stepping and continuing all leave the session — and its
@@ -811,7 +863,6 @@ export const App = (): React.JSX.Element => {
       'memory-2': t('Memory {number}', { number: 2 }),
       'memory-3': t('Memory {number}', { number: 3 }),
       'memory-4': t('Memory {number}', { number: 4 }),
-      disassembly: t('Disassembly'),
       start: t('Start'),
     }
     for (const [id, name] of Object.entries(names)) {
@@ -1181,6 +1232,9 @@ export const App = (): React.JSX.Element => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const target = event.target as HTMLElement | null
       const editingText = target?.matches('input, textarea, select, [contenteditable="true"]') ?? false
+      // The debugger's keys are global in dnSpy, the document viewer included: its text is read-only, so the
+      // textarea Monaco keeps the focus in is no text being typed into.
+      const debugKeysBlocked = editingText && target?.closest('.document-view') === null
       // The bookmark commands are two-key chords: Ctrl+K or Ctrl+B arms them and the second key runs one.
       // Monaco binds the same chords while the code editor has focus and stops the event there, so this
       // path is the one that answers when the focus is in the tree, a tool window or the menu bar. The
@@ -1354,9 +1408,9 @@ export const App = (): React.JSX.Element => {
       } else if (event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'Digit4' || event.code === 'Numpad4')) {
         event.preventDefault()
         showToolWindow('locals')
-      } else if (event.ctrlKey && event.altKey && !event.shiftKey && (event.code === 'Digit8' || event.code === 'Numpad8')) {
+      } else if (event.altKey && !event.shiftKey && (event.code === 'Digit8' || event.code === 'Numpad8')) {
         event.preventDefault()
-        showToolWindow('disassembly')
+        showActiveFrameDisassembly()
       } else if (event.ctrlKey && event.altKey && !event.shiftKey && event.code === 'KeyB') {
         event.preventDefault()
         showToolWindow('breakpoints')
@@ -1419,41 +1473,45 @@ export const App = (): React.JSX.Element => {
       } else if (event.key === 'F9' && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && !editingText) {
         event.preventDefault()
         toggleBreakpointHere()
-      } else if (event.ctrlKey && event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !editingText) {
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !debugKeysBlocked) {
         // dnSpy's Restart: the program goes and comes back the way it was started.
         event.preventDefault()
         void useAppStore.getState().restartDebug()
-      } else if (event.ctrlKey && event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !editingText) {
+      } else if (event.ctrlKey && event.altKey && (event.key === 'F10' || event.key === 'F11') && debugState === 'stopped' && !debugKeysBlocked && !loadAppOptions().debugger.breakAllProcesses) {
+        // dnSpy's Step Into/Over/Out (Current Process): Ctrl+Alt+F11, Ctrl+Alt+F10 and Ctrl+Shift+Alt+F11.
+        event.preventDefault()
+        void stepDebug(event.key === 'F10' ? 'next' : event.shiftKey ? 'stepOut' : 'stepIn', true)
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !debugKeysBlocked) {
         // dnSpy's Set Next Statement, from the statement under the caret.
         event.preventDefault()
         void useAppStore.getState().setNextStatement()
-      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !editingText) {
+      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F10' && debugState === 'stopped' && !debugKeysBlocked) {
         // dnSpy's Run to Cursor.
         event.preventDefault()
         void useAppStore.getState().runToCursor()
-      } else if (event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !editingText) {
+      } else if (event.shiftKey && event.key === 'F5' && debugState !== 'inactive' && !debugKeysBlocked) {
         event.preventDefault()
         void stopDebug()
-      } else if (event.altKey && event.code === 'NumpadMultiply' && debugState === 'stopped' && !editingText) {
+      } else if (event.altKey && event.code === 'NumpadMultiply' && debugState === 'stopped' && !debugKeysBlocked) {
         // dnSpy's Show Next Statement, which its Debug menu shows with Alt+Numpad* against it.
         event.preventDefault()
         void revealStoppedLocation()
-      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F5' && !editingText) {
+      } else if (event.ctrlKey && !event.shiftKey && event.key === 'F5' && !debugKeysBlocked) {
         // dnSpy's Start Without Debugging.
         event.preventDefault()
         setRunProgramDialogOpen(true)
-      } else if (event.key === 'F5' && !editingText) {
+      } else if (event.key === 'F5' && !debugKeysBlocked) {
         event.preventDefault()
         if (debugState === 'stopped') void continueDebug()
         // Upstream's F5 is ContinueOrDebugProgram: with no session it is the Start button, dialog and all.
         else if (debugState === 'inactive') setDebugProgramDialogOpen(true)
-      } else if (event.key === 'F10' && debugState === 'stopped' && !editingText) {
+      } else if (event.key === 'F10' && debugState === 'stopped' && !debugKeysBlocked) {
         event.preventDefault()
         void stepDebug('next')
-      } else if (event.shiftKey && event.key === 'F11' && debugState === 'stopped' && !editingText) {
+      } else if (event.shiftKey && event.key === 'F11' && debugState === 'stopped' && !debugKeysBlocked) {
         event.preventDefault()
         void stepDebug('stepOut')
-      } else if (event.key === 'F11' && !event.shiftKey && debugState === 'stopped' && !editingText) {
+      } else if (event.key === 'F11' && !event.shiftKey && debugState === 'stopped' && !debugKeysBlocked) {
         event.preventDefault()
         void stepDebug('stepIn')
       }
@@ -1989,7 +2047,7 @@ export const App = (): React.JSX.Element => {
     const baseName = (value: string): string => (value.split(/[\\/]/).at(-1) ?? value).replace(/\.exe$/i, '').toLowerCase()
     const target = pid
       ? processes.find((process) => process.processId === pid)
-      : processes.find((process) => baseName(process.name) === baseName(processName!) || (process.executablePath !== undefined && baseName(process.executablePath) === baseName(processName!)))
+      : processes.find((process) => baseName(process.name) === baseName(processName!) || (!!process.executablePath && baseName(process.executablePath) === baseName(processName!)))
     if (target)
       await useAppStore.getState().attachDebug(target.processId)
   }
@@ -2050,10 +2108,53 @@ export const App = (): React.JSX.Element => {
     await shellCallbacksRef.current.openBookmarkTarget(nodeId)
   }
 
+  /**
+   * dnSpy's DisassemblyViewerService.Show: a tab of its own when the Disassembler option says so, otherwise the
+   * Disassembly tab in front, which takes the new code — and a new tab when the one in front shows something else.
+   */
+  const openDisassemblyTab = (id: string): void => {
+    const document = useAppStore.getState().disassemblyDocuments[id]
+    if (!document) return
+    const front = getTargetDocumentTabSet(model)?.getSelectedNode()
+    if (!loadAppOptions().disassembler.newTab && front instanceof TabNode && front.getComponent() === 'disassembly-document') {
+      model.doAction(Actions.updateNodeAttributes(front.getId(), { name: document.title, helpText: document.toolTip, config: { disassemblyId: id } }))
+      model.doAction(Actions.selectTab(front.getId()))
+    } else {
+      const targetTabSet = getTargetDocumentTabSet(model)
+      if (!targetTabSet) return
+      model.doAction(Actions.addNode({
+        type: 'tab',
+        id: `disassembly:${id}`,
+        name: document.title,
+        helpText: document.toolTip,
+        component: 'disassembly-document',
+        config: { disassemblyId: id },
+      }, targetTabSet.getId(), DockLocation.CENTER, -1, true))
+      if (model.getNodeById('start')) model.doAction(Actions.deleteTab('start'))
+    }
+    forceLayoutUpdate((value) => value + 1)
+  }
+
+  // Debug > Windows > Disassembly and its Alt+8: the active frame's code (DisassemblyOperations.ShowDisassembly_CurrentFrame).
+  const showActiveFrameDisassembly = (): void => {
+    const { activeDebugFrameId: frameId, debugState: state } = useAppStore.getState()
+    if (state === 'stopped' && frameId !== undefined)
+      void useAppStore.getState().showDisassembly({ frameId })
+  }
+
+  // The code viewer's Go To Disassembly: the code of the method the statement under the caret is in.
+  const showCaretDisassembly = (): void => {
+    const state = useAppStore.getState()
+    const caret = state.codeCaret
+    const statement = caret ? codeStatementAt(state.documents[caret.documentId]?.codeStatements, caret.line, caret.column) : undefined
+    if (statement)
+      void state.showDisassembly({ modulePath: statement.modulePath, metadataToken: statement.metadataToken })
+  }
+
   // The store cannot open tabs or tool windows itself, so it calls back into the shell. Handlers are
   // read through a ref because both close over the current workspace and layout.
-  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested })
-  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested }
+  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab })
+  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab }
 
   // dnSpy's App.SwitchToOtherInstance, seen from the window that keeps the single instance lock: the second
   // process's command line arrives here the way this one's did, and is carried out on the window that is up.
@@ -2068,7 +2169,11 @@ export const App = (): React.JSX.Element => {
     setOpenNodeInNewTabById((nodeId) => shellCallbacksRef.current.openNodeInNewTab(nodeId))
     setOpenToolWindow((tabId) => shellCallbacksRef.current.showToolWindow(tabId))
     setRevealDocument((nodeId) => shellCallbacksRef.current.revealDocumentTarget(nodeId))
+    useAppStore.getState().setOpenDisassemblyTab((id) => shellCallbacksRef.current.openDisassemblyTab(id))
+    useAppStore.getState().setOpenAttachDialog(() => setAttachDialogOpen(true))
     return () => {
+      useAppStore.getState().setOpenDisassemblyTab(undefined)
+      useAppStore.getState().setOpenAttachDialog(undefined)
       setOpenNodeById(undefined)
       setOpenNodeInNewTabById(undefined)
       setOpenToolWindow(undefined)
@@ -2295,6 +2400,14 @@ export const App = (): React.JSX.Element => {
     await removeDocuments(frameworkNodeIds, () => removeModules(frameworkNodeIds))
   }
 
+  // dnSpy's CloseOldInMemoryModulesCommand: the modules read out of a process that is no longer debugged
+  // (IInMemoryDocument.IsActive is false), removed the way Remove Assembly removes them.
+  const closeOldInMemoryModules = async (): Promise<void> => {
+    const ids = oldInMemoryModuleIds
+    if (ids.length > 0)
+      await removeDocuments(ids, () => removeModules(ids))
+  }
+
   const closeAllMissingFiles = async (): Promise<void> => {
     const { missingNodeIds } = await getCloseCandidates()
     await removeDocuments(missingNodeIds, () => removeModules(missingNodeIds))
@@ -2478,7 +2591,7 @@ export const App = (): React.JSX.Element => {
     onGoToMdTableRow: (node, token) => goToMdTableRow(node, token),
     onStartDebug: () => setDebugProgramDialogOpen(true),
     canStartDebug: backendStatus.capabilities?.['debug.coreclr.launch'] === true,
-    onShowDisassembly: () => showToolWindow('disassembly'),
+    onShowDisassembly: () => showCaretDisassembly(),
     onDeleteNode: (node) => deleteSelected(node),
     onEditNode: (node) => openEditNode(node),
     onCreateMember: (kind, nested, node) => createMember(kind, nested, node),
@@ -2600,7 +2713,7 @@ export const App = (): React.JSX.Element => {
       case 'static-fields': return <StaticFieldsPane />
       case 'processes': return <ProcessesPane />
       case 'memory': return <MemoryPane />
-      case 'disassembly': return <DisassemblyPane />
+      case 'disassembly-document': return <div className="tab-zoom" style={tabZoomStyle}><DisassemblyDocumentView id={(node.getConfig() as { disassemblyId: string }).disassemblyId} theme={theme} transparentBackground={backgroundImageOn} /></div>
       case 'start': return (
         <div className="start-view">
           <button className="command-button" disabled={backendStatus.state !== 'ready'} onClick={() => void chooseAndOpen()}>
@@ -2645,6 +2758,8 @@ export const App = (): React.JSX.Element => {
         onCloseAll={closeCurrentWorkspace}
         onCloseAllFramework={() => void closeAllFrameworkAssemblies()}
         onCloseAllMissing={() => void closeAllMissingFiles()}
+        onCloseOldInMemoryModules={() => void closeOldInMemoryModules()}
+        hasOldInMemoryModules={oldInMemoryModuleIds.length > 0}
         dirty={dirty}
         onSave={() => void saveActiveDocument()}
         onSaveModule={() => void saveModule()}
@@ -2710,6 +2825,8 @@ export const App = (): React.JSX.Element => {
         onStepIn={() => void stepDebug('stepIn')}
         onStepOver={() => void stepDebug('next')}
         onStepOut={() => void stepDebug('stepOut')}
+        onStepCurrentProcess={(kind) => void stepDebug(kind, true)}
+        showCurrentProcessSteps={!options.debugger.breakAllProcesses}
         onStopDebug={() => void stopDebug()}
         onStartWithoutDebugging={() => setRunProgramDialogOpen(true)}
         onDetachDebug={() => void useAppStore.getState().detachDebug()}
@@ -2717,7 +2834,7 @@ export const App = (): React.JSX.Element => {
         onRestartDebug={() => void useAppStore.getState().restartDebug()}
         onShowNextStatement={() => void revealStoppedLocation({ caret: true })}
         canRestartDebug={debugProcess?.ownsDebuggee !== false}
-        canToggleBreakpoint={Boolean(breakpointTarget)}
+        canToggleBreakpoint={canToggleBreakpointHere}
         hasFunctionBreakpoints={lineBreakpoints.length > 0 || functionBreakpoints.length > 0}
         canEnableAllBreakpoints={anyBreakpointDisabled}
         canDisableAllBreakpoints={anyBreakpointEnabled}
@@ -2757,7 +2874,8 @@ export const App = (): React.JSX.Element => {
         onShowStaticFields={() => showToolWindow('static-fields')}
         onShowProcesses={() => showToolWindow('processes')}
         onShowMemory={() => showToolWindow('memory')}
-        onShowDisassembly={() => showToolWindow('disassembly')}
+        onShowDisassembly={showActiveFrameDisassembly}
+        canShowDisassembly={debugState === 'stopped' && activeDebugFrameId !== undefined}
         windowTabs={windowTabs}
         onSelectWindowTab={(tabId) => {
           if (model.getNodeById(tabId)) {
@@ -2966,7 +3084,6 @@ export const App = (): React.JSX.Element => {
           then puts a breakpoint on every method of the type — each carrying what the dialog said. */}
       {classTracepointNode && (
         <BreakpointSettingsDialog
-          title={t('Breakpoint settings')}
           settings={{ trace: { message: '', continue: true } }}
           onClose={() => setClassTracepointNode(undefined)}
           onSave={(settings) => {
@@ -2974,6 +3091,26 @@ export const App = (): React.JSX.Element => {
             setClassTracepointNode(undefined)
             void addClassBreakpoint(node, settings)
           }}
+        />
+      )}
+      {/* The Call Stack window's Insert Tracepoint asks for the settings the same way, for the frame's location. */}
+      {locationTracepointRequest && (
+        <BreakpointSettingsDialog
+          settings={{ trace: { message: '', continue: true } }}
+          onClose={() => requestLocationTracepoint(undefined)}
+          onSave={(settings) => {
+            const location = locationTracepointRequest
+            requestLocationTracepoint(undefined)
+            void addLocationBreakpoint(location, settings)
+          }}
+        />
+      )}
+      {/* dnSpy's ShowCodeBreakpointSettingsService.Edit: the first breakpoint's settings, given to every one of them. */}
+      {breakpointSettingsRequest && (
+        <BreakpointSettingsDialog
+          settings={breakpointSettingsOf(breakpointSettingsRequest.ids[0])}
+          onClose={() => editBreakpointSettings(undefined)}
+          onSave={(settings) => { void setBreakpointsSettings(breakpointSettingsRequest.ids, settings) }}
         />
       )}
       {editNode && workspaceId && (

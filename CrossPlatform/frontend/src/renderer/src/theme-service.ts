@@ -201,6 +201,10 @@ export const themeVariables = (theme: DsTheme): Record<string, string> => {
     const text = theme.textColors[index]
     if (text.fg)
       variables[`--tc-${info.name.toLowerCase()}`] = text.fg
+    // A text marker's own colours — dnSpy's GlyphTextMarker draws its background and, in the foreground colour,
+    // its outline — as the theme names them.
+    if (color.fg)
+      variables[`--tcfg-${info.name.toLowerCase()}`] = color.fg
     // A text view's own background — the Output window's, the hex editor's — is its colour's background.
     if (color.bg)
       variables[`--tcbg-${info.name.toLowerCase()}`] = color.bg

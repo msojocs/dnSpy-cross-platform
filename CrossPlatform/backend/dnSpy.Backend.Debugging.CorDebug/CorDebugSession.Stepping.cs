@@ -46,19 +46,29 @@ internal sealed partial class CorDebugSession {
 		if (kind != "stepOut" && location is { } where && SymbolResolver is not null)
 			targets = await SymbolResolver.GetSteppingTargetsAsync(WorkspaceId, where.ModulePath, where.MetadataToken, where.IlOffset, kind == "stepIn", cancellationToken).ConfigureAwait(false);
 		var stepTargets = location is { } origin && targets is not null ? FilterStepIntoTargets(origin.ModulePath, origin.MetadataToken, targets.Targets) : targets?.Targets ?? [];
+		var leaving = kind == "stepOut" || targets is { LeavesMethod: true };
+		// dnSpy's async stepping: a step in an async method's MoveNext is about the one call of the method.
+		var asyncInfo = location is { } asyncLocation ? await ReadAsyncStepInfoAsync(asyncLocation, cancellationToken).ConfigureAwait(false) : null;
+		// A step out of an async method is a return to whoever awaits its task, which the task itself tells the debugger
+		// about. A step over or into goes there once it reaches the method's completion.
+		var returningToAwaiter = kind == "stepOut" && asyncInfo is { } leavingInfo && location is { } leavingLocation &&
+			await BeginStepOutToAwaiterAsync(threadId, leavingLocation.ModulePath, leavingLocation.MetadataToken, leavingInfo.Info, leavingInfo.TaskPath, cancellationToken).ConfigureAwait(false);
+		var completesToAwaiter = !returningToAwaiter && kind != "stepOut" && asyncInfo is { Info.SetResultOffset: >= 0 };
 		await Dispatcher.RunAsync(() => {
 			var frame = CurrentFrame(threadId);
 			var armed = ArmStepTargets(stepTargets);
 			var stepInto = kind == "stepIn";
+			if (!returningToAwaiter && asyncInfo is { } info && location is { } where)
+				BeginAsyncStep(threadId, frame, where.ModulePath, where.MetadataToken, info.Info, info.TaskPath);
 			// Leaving a frame has one meaning, and the frame the thread returns to is exactly what the
 			// runtime knows how to find — the resolver says so when the body has nothing left to run.
-			var leaving = kind == "stepOut" || targets is { LeavesMethod: true };
 			// Without a target to watch for there is nothing to stop the step, so the runtime's own
 			// stepper is the only way to complete it. What it is asked to do is the step the user asked
 			// for, not the one the body's end implies: a step into never leaves the frame it started in,
 			// so a callee the workspace cannot decompile — nothing of it was armed — is still a call the
-			// stepper walks into rather than a frame to return from.
-			if (leaving || (armed == 0 && frame is not null))
+			// stepper walks into rather than a frame to return from. A return to the awaiter needs neither:
+			// its own breakpoint ends it.
+			if (!returningToAwaiter && !(completesToAwaiter && leaving) && (leaving || (armed == 0 && frame is not null)))
 				ArmNativeStepper(frame, leaving && !stepInto, stepInto, threadId);
 			if (returnValueTypes is not null)
 				ArmStepReturnValues(returnValueTypes, threadId, frame, stepOver: kind == "next", leaving);
@@ -79,7 +89,8 @@ internal sealed partial class CorDebugSession {
 		if (!options.StepOverPropertiesAndOperators && !options.EnableJustMyCode)
 			return targets;
 		var types = TryGetTypeSystem();
-		return targets.Where(target => {
+		var steppedOver = new List<Microsoft.CodeAnalysis.IMethodSymbol>();
+		var kept = targets.Where(target => {
 			if (target.MetadataToken == metadataToken && BreakpointTable.PathsMatch(target.ModulePath, modulePath))
 				return true;
 			var entry = Modules.FindEntry(target.ModulePath);
@@ -88,10 +99,33 @@ internal sealed partial class CorDebugSession {
 			if (options.StepOverPropertiesAndOperators && types is not null && entry is not null &&
 				types.GetMember(entry, target.MetadataToken) is Microsoft.CodeAnalysis.IMethodSymbol method &&
 				method.MethodKind is Microsoft.CodeAnalysis.MethodKind.PropertyGet or Microsoft.CodeAnalysis.MethodKind.PropertySet
-					or Microsoft.CodeAnalysis.MethodKind.UserDefinedOperator or Microsoft.CodeAnalysis.MethodKind.Conversion)
+					or Microsoft.CodeAnalysis.MethodKind.UserDefinedOperator or Microsoft.CodeAnalysis.MethodKind.Conversion) {
+				if (!steppedOver.Contains(method, Microsoft.CodeAnalysis.SymbolEqualityComparer.Default))
+					steppedOver.Add(method);
 				return false;
+			}
 			return true;
 		}).ToArray();
+		// dnSpy's step filter messages: "Step into: Stepping over property 'Ns.Type.Name'." — the client words them.
+		foreach (var method in steppedOver)
+			EmitStepFilterMessage(method);
+		return kept;
+	}
+
+	/// <summary>
+	/// DbgEngineStepperImpl.GetStepFilterMessage's subject: the declaring type's reflection name without its generic
+	/// arity, then the property's name, or the operator method's.
+	/// </summary>
+	void EmitStepFilterMessage(Microsoft.CodeAnalysis.IMethodSymbol method) {
+		var isProperty = method.AssociatedSymbol is Microsoft.CodeAnalysis.IPropertySymbol;
+		var memberName = isProperty ? method.AssociatedSymbol!.Name : method.MetadataName;
+		var type = method.ContainingType.OriginalDefinition;
+		var typeName = type.Name;
+		for (var containing = type.ContainingType; containing is not null; containing = containing.ContainingType)
+			typeName = containing.Name + "+" + typeName;
+		if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+			typeName = ns.ToDisplayString() + "." + typeName;
+		Emit(DebugEventNames.Output, new { category = "stepFilter", kind = isProperty ? "property" : "operator", member = typeName + "." + memberName });
 	}
 
 	/// <summary>Where the thread is stopped, in the terms the resolver speaks.</summary>
@@ -210,6 +244,13 @@ internal sealed partial class CorDebugSession {
 
 	/// <summary>Disarms everything a step left behind, called before any other move.</summary>
 	void CancelStepping() {
+		DisarmStepTargets();
+		DisarmReturnValueBreakpoints();
+		EndAsyncStep();
+	}
+
+	/// <summary>Disarms the statements the step may land on and the runtime's stepper.</summary>
+	void DisarmStepTargets() {
 		foreach (var target in steppingBreakpoints) {
 			try {
 				target.Breakpoint.Activate(false);
@@ -219,7 +260,6 @@ internal sealed partial class CorDebugSession {
 			}
 		}
 		steppingBreakpoints.Clear();
-		DisarmReturnValueBreakpoints();
 		var stepper = nativeStepper;
 		nativeStepper = null;
 		nativeStepperOrigin = null;

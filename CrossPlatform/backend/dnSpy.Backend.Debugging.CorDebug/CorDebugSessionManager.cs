@@ -46,6 +46,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 		"writeMemory",
 		"saveModule",
 		"modules",
+		"resetHitCounts",
 	};
 
 	static readonly JsonElement Capabilities = DebugJson.Serialize(new {
@@ -105,14 +106,55 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 
 	public event EventHandler<DebugEventNotification>? EventReceived;
 
-	public IReadOnlyList<DebugProcessDto> ListProcesses() {
-		var processes = new List<DebugProcessDto>();
+	/// <summary>
+	/// dnSpy's DbgFilterExpressionEvaluatorService.IsValidExpression, for the breakpoint settings dialog: null when the
+	/// filter reads, or the reason it does not. It is tried against the five values a filter can name, so a name that is
+	/// none of them, or a comparison of a number with a string, is caught before the breakpoint is hit.
+	/// </summary>
+	public static string? VerifyFilterExpression(string filter) {
+		try {
+			BreakpointExpression.Parse(filter).EvaluateAsBoolean(FilterSampleScope.Instance);
+			return null;
+		}
+		catch (BreakpointExpressionException ex) {
+			return ex.Message;
+		}
+	}
+
+	/// <summary>The names a filter can read, each with a value of the kind the debugger fills it with.</summary>
+	sealed class FilterSampleScope : IBreakpointScope {
+		public static readonly FilterSampleScope Instance = new();
+
+		public bool TryRead(string name, out BreakpointValue value) {
+			value = name switch {
+				"MachineName" or "ProcessName" or "ThreadName" => BreakpointValue.FromString(string.Empty),
+				"ProcessId" or "ThreadId" => BreakpointValue.FromInteger(0),
+				_ => BreakpointValue.Null,
+			};
+			return name is "MachineName" or "ProcessName" or "ThreadName" or "ProcessId" or "ThreadId";
+		}
+	}
+
+	/// <summary>
+	/// dnSpy's Attach to Process list: the processes with a runtime it has an engine for — here, those with CoreCLR
+	/// loaded — other than its own.
+	/// </summary>
+	public IReadOnlyList<AttachableProcessDto> ListProcesses() {
+		var processes = new List<AttachableProcessDto>();
 		foreach (var process in Process.GetProcesses()) {
 			using (process) {
 				try {
-					if (process.Id == Environment.ProcessId || process.HasExited || !HasCoreClr(process.Id))
+					if (process.Id == Environment.ProcessId || process.HasExited || !TryFindCoreClr(process.Id, out var coreClrPath))
 						continue;
-					processes.Add(new DebugProcessDto(process.Id, process.ProcessName, TryGetExecutablePath(process)));
+					var path = TryGetExecutablePath(process);
+					processes.Add(new AttachableProcessDto(
+						process.Id,
+						string.IsNullOrEmpty(path) ? process.ProcessName : Path.GetFileName(path),
+						string.Empty,
+						"CoreCLR " + CoreClrVersion(coreClrPath),
+						ReadArchitecture(process.Id),
+						path,
+						ReadCommandLine(process.Id)));
 				}
 				catch (InvalidOperationException) {
 				}
@@ -122,22 +164,76 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 	}
 
 	/// <summary>
-	/// dnSpy's Attach to Process lists the processes it has an engine for: here, those with CoreCLR loaded. On Linux
-	/// the process's mappings say so; a process whose mappings cannot be read is listed, since attaching is what
-	/// tells whether it can be debugged.
+	/// Whether the process has CoreCLR loaded. On Linux the process's mappings say so, and where from; a process whose
+	/// mappings cannot be read is listed, since attaching is what tells whether it can be debugged.
 	/// </summary>
-	static bool HasCoreClr(int processId) {
+	static bool TryFindCoreClr(int processId, out string? coreClrPath) {
+		coreClrPath = null;
 		if (!OperatingSystem.IsLinux())
 			return true;
 		try {
 			foreach (var line in File.ReadLines($"/proc/{processId}/maps")) {
-				if (line.EndsWith("/libcoreclr.so", StringComparison.Ordinal))
+				if (line.EndsWith("/libcoreclr.so", StringComparison.Ordinal)) {
+					var start = line.IndexOf('/');
+					coreClrPath = start < 0 ? null : line[start..];
 					return true;
+				}
 			}
 			return false;
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
 			return true;
+		}
+	}
+
+	/// <summary>The runtime's version: the name of the shared framework directory libcoreclr.so is loaded from.</summary>
+	internal static string CoreClrVersion(string? coreClrPath) {
+		var directory = coreClrPath is null ? null : Path.GetFileName(Path.GetDirectoryName(coreClrPath));
+		return !string.IsNullOrEmpty(directory) && char.IsAsciiDigit(directory[0]) ? directory : string.Empty;
+	}
+
+	/// <summary>dnSpy's DbgArchitecture names, read from the ELF header of the process's executable.</summary>
+	internal static string ReadArchitecture(int processId) {
+		if (!OperatingSystem.IsLinux())
+			return ArchitectureName(System.Runtime.InteropServices.RuntimeInformation.OSArchitecture);
+		try {
+			using var stream = File.OpenRead($"/proc/{processId}/exe");
+			Span<byte> header = stackalloc byte[20];
+			if (stream.Read(header) < header.Length || header[0] != 0x7F || header[1] != (byte)'E' || header[2] != (byte)'L' || header[3] != (byte)'F')
+				return string.Empty;
+			// e_machine, in the byte order EI_DATA names.
+			var machine = header[5] == 2 ? (header[18] << 8) | header[19] : header[18] | (header[19] << 8);
+			return machine switch {
+				0x03 => "x86",
+				0x3E => "x64",
+				0x28 => "ARM",
+				0xB7 => "ARM64",
+				_ => string.Empty,
+			};
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+			return string.Empty;
+		}
+	}
+
+	static string ArchitectureName(System.Runtime.InteropServices.Architecture architecture) => architecture switch {
+		System.Runtime.InteropServices.Architecture.X86 => "x86",
+		System.Runtime.InteropServices.Architecture.X64 => "x64",
+		System.Runtime.InteropServices.Architecture.Arm => "ARM",
+		System.Runtime.InteropServices.Architecture.Arm64 => "ARM64",
+		_ => string.Empty,
+	};
+
+	/// <summary>The command line, its arguments split by NULs in <c>/proc/&lt;pid&gt;/cmdline</c> and quoted where they hold a space.</summary>
+	internal static string ReadCommandLine(int processId) {
+		if (!OperatingSystem.IsLinux())
+			return string.Empty;
+		try {
+			var arguments = File.ReadAllText($"/proc/{processId}/cmdline").Split('\0', StringSplitOptions.RemoveEmptyEntries);
+			return string.Join(" ", arguments.Select(argument => argument.Contains(' ') ? "\"" + argument + "\"" : argument));
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+			return string.Empty;
 		}
 	}
 
@@ -202,6 +298,25 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 		if (sender is not CorDebugSession session)
 			return;
 		EventReceived?.Invoke(this, new DebugEventNotification(session.Id, e.Event, ToJson(e.Body)));
+		// DbgManager.BreakAllProcessesIfNeeded: with Break all processes on, a process that breaks pauses the others.
+		if (e.Event == DebugEventNames.Stopped && options.BreakAllProcesses)
+			BreakOtherProcesses(session);
+	}
+
+	void BreakOtherProcesses(CorDebugSession broken) {
+		foreach (var other in sessions.Values) {
+			if (ReferenceEquals(other, broken) || other.IsStopped || other.HasExited)
+				continue;
+			// Off the thread the event came on: a pause waits for the other session's dispatcher.
+			_ = Task.Run(async () => {
+				try {
+					await other.ExecuteAsync("pause", null, CancellationToken.None).ConfigureAwait(false);
+				}
+				catch (Exception ex) when (ex is RpcException or InvalidOperationException or ObjectDisposedException) {
+					// A session that ends meanwhile has nothing to pause.
+				}
+			});
+		}
 	}
 
 	static JsonElement? ToJson(object? body) =>

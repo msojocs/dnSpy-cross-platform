@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import type { TextPart, TreeNode } from '../../../shared/protocol'
 import { tokenParts } from '../analyzer-model'
-import { findNode, useAppStore } from '../app-store'
+import { findNode, memoryModulePathOf, useAppStore } from '../app-store'
 import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
 import { TreeExpanderGlyph } from './DsGlyphs'
@@ -648,11 +648,14 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can
       // tell — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the hex target. The
       // Save commands are headed by the files they would write, which only the backend can name too.
-      const [readsResource, resourceNames, analyzeTargets] = await Promise.all([
+      // dnSpy's debugger commands read the selected rows' references; rows that name no metadata have none.
+      const tokenRows = selection.filter((row) => row.metadataToken !== undefined)
+      const [readsResource, resourceNames, analyzeTargets, , debugTargets] = await Promise.all([
         RESOURCE_READER_KINDS.has(node.kind) ? store.findResource(node.id).then((id) => id !== null) : Promise.resolve(false),
         resources.length > 0 ? store.getResourceItemNames(resources.map((resource) => resource.id)) : Promise.resolve(undefined),
         resolveAnalyzeTargets(selection),
         store.resolveHexTarget(node),
+        tokenRows.length > 0 ? store.debugCodeTargets(tokenRows) : Promise.resolve(undefined),
       ])
       const state = useAppStore.getState()
       showAssemblyExplorerContextMenu({
@@ -671,6 +674,9 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         hexTarget: state.hexTarget,
         hasEmptyNamespaceSibling: hasEmptyNamespaceSibling(node, state.children, state.parents),
         analyzeTargets,
+        debugTargets: debugTargets ?? { methods: [] },
+        onBreakWhenThrown: (typeName) => void useAppStore.getState().breakWhenThrown(typeName),
+        onReloadMethodBodies: memoryModulePathOf(state, node.id) ? () => void useAppStore.getState().reloadMethodBodies(node.id) : undefined,
       }, position, { returnFocusTo })
     })()
   }, [t, show])

@@ -1,3 +1,4 @@
+using dnSpy.Backend.Contracts;
 using System.Globalization;
 using ICorDebugSharp;
 using ICorDebugSharp.Extensions;
@@ -46,9 +47,28 @@ internal sealed partial class CorDebugSession {
 			entry.IsJustMyCode = IsJustMyCode(entry, isProgram);
 			ApplyJustMyCode(module, entry.IsJustMyCode);
 		}
+		// dnSpy's ClassLoader: the types Reflection.Emit creates in a dynamic module are announced as they load, so the
+		// client can read the module out of the process again at the next stop.
+		if (entry is { IsDynamic: true }) {
+			try {
+				module.EnableClassLoadCallbacks(true);
+			}
+			catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+			}
+		}
 		if (entry is not null)
 			Emit(DebugEventNames.Module, new { reason = "new", module = DescribeModule(entry) });
 		CheckModuleBreakpoints(module, entry);
+	}
+
+	void OnClassLoaded(ICorDebugClass? loaded) {
+		try {
+			if (loaded?.Module is not { } module || Modules.FindEntry(module) is not { IsDynamic: true } entry)
+				return;
+			Emit(DebugEventNames.Module, new { reason = "classLoaded", module = DescribeModule(entry), token = unchecked((int)loaded.Token.Value) });
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+		}
 	}
 
 	void OnModuleUnloading(ICorDebugModule module) {
@@ -157,7 +177,54 @@ internal sealed partial class CorDebugSession {
 	}
 
 	/// <summary>A step finished; whether the stop stands is the step filters' call.</summary>
-	void OnStepComplete(ICorDebugThread thread) => Stop(StopReasons.Step, thread);
+	void OnStepComplete(ICorDebugThread thread) {
+		// A return to the awaiter steps out until it is out of the task plumbing.
+		if (ContinueReturnToAwaiter(thread))
+			return;
+		// dnSpy's StepOverHiddenInstructionsAsync: the runtime's stepper stops at IL boundaries, and one that no statement
+		// owns — the compiler's own code between statements — is stepped past to the statement it leads to. Whether a
+		// location is hidden is the resolver's to say, which decompiles, so the process is held while it is asked.
+		var threadId = ThreadTable.TryGetId(thread);
+		if (SymbolResolver is not null && threadId is { } id && CurrentFrame(id) is { } frame && FrameIdentity(frame) is var (modulePath, token) &&
+			!string.IsNullOrEmpty(modulePath) && ReadIlOffset(frame) is >= 0 and var ilOffset && hiddenStepCount < MaxHiddenSteps) {
+			deciding = true;
+			holdAfterEvent = true;
+			_ = Task.Run(() => FinishStepAsync(thread, id, modulePath, token, ilOffset));
+			return;
+		}
+		hiddenStepCount = 0;
+		Stop(StopReasons.Step, thread);
+	}
+
+	/// <summary>How many hidden locations in a row a step goes on past before it stops at one anyway.</summary>
+	const int MaxHiddenSteps = 16;
+
+	int hiddenStepCount;
+
+	async Task FinishStepAsync(ICorDebugThread thread, int threadId, string modulePath, int token, int ilOffset) {
+		ResolvedIlLocation? location = null;
+		try {
+			location = await SymbolResolver!.ResolveIlLocationAsync(WorkspaceId, modulePath, token, ilOffset, CancellationToken.None).ConfigureAwait(false);
+		}
+		catch (Exception ex) when (ex is not OutOfMemoryException) {
+			// A location the resolver cannot read is shown as it is.
+		}
+		await Dispatcher.RunAsync(() => {
+			deciding = false;
+			if (HasExited || process is null)
+				return;
+			if (location is { IsHidden: true } && CurrentFrame(threadId) is { } frame) {
+				hiddenStepCount++;
+				ArmNativeStepper(frame, stepOut: false, stepInto: false, threadId);
+				if (nativeStepper is not null) {
+					ContinueProcess();
+					return;
+				}
+			}
+			hiddenStepCount = 0;
+			Stop(StopReasons.Step, thread);
+		}).ConfigureAwait(false);
+	}
 
 	/// <summary>Hook for work every stop does, such as collecting the values the step's calls returned.</summary>
 	void OnStopped(ICorDebugThread? thread) {

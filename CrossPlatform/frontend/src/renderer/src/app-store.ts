@@ -10,7 +10,11 @@ import type {
   DecompilerLanguage,
   DecompileResponse,
   DebugBreakpoint,
+  DebugCodeReference,
+  DebugCodeTargets,
   DebugEvent,
+  DebugMethodTarget,
+  BreakpointFileEntry,
   DebugExceptionCategory,
   DebugExceptionCondition,
   DebugExceptionDiff,
@@ -34,6 +38,8 @@ import type {
   ScriptOutputNotification,
   SpecialNodeKind,
   TextSpan,
+  TextPart,
+  DebugDisassemblyOptions,
   AssemblyOptions, CompilerDiagnostic, CompilerLanguage, CompilerMode, CompilerSettings, ModuleOptions, SaveModuleOptions, TreeNode, CreateResourceEntry, CreateResourceOptions, CreateResourceElementOptions, ResourceElementOptions, ResourceOptions,
   DocumentSaveOptions, ModifiedDocument, SaveDocumentsResponse} from '../../shared/protocol'
 import { lineColumnOfOffset, offsetOfLineColumn } from './analyzer-model'
@@ -52,6 +58,14 @@ export interface DocumentState extends DecompileResponse {
   cursorLine?: number
   cursorColumn?: number
   scrollTop?: number
+}
+
+/** A Disassembly tab's content: its title and tool tip, and the lines of code in the theme's assembly colours. */
+export interface DisassemblyDocument {
+  id: string
+  title: string
+  toolTip: string
+  lines: TextPart[][]
 }
 
 export interface FunctionBreakpoint {
@@ -87,6 +101,13 @@ export interface LineBreakpoint {
   settings?: BreakpointSettings
   /** How many hits the engine has counted, which only a live session knows and nothing stores. */
   hitCount?: number
+  /**
+   * dnSpy's BoundBreakpointsMessage severity: while a debugger runs, a breakpoint it could not bind says why —
+   * a warning while its module is not there, an error when the runtime refused the location. Nothing otherwise.
+   */
+  severity?: 'warning' | 'error'
+  /** When it was added, the Breakpoints window's default sort. */
+  order: number
 }
 
 /**
@@ -116,6 +137,25 @@ export interface StoredBreakpoints {
 }
 
 /**
+ * One process the debugger debugs — dnSpy's DbgProcess — as the client knows it from the session's events. The
+ * current process's stop is read into the top-level debug fields; this is what is kept of the others meanwhile.
+ */
+export interface DebugSessionEntry {
+  sessionId: string
+  state: 'starting' | 'running' | 'stopped'
+  stoppedReason?: string
+  /** The thread the process broke on, or the one the user switched to while it was the current one. */
+  threadId?: number
+  process?: DebugProcessInfo
+  modules: DebugModule[]
+  /** The process's threads as its last stop read them; empty while it runs. */
+  threads: DebugThread[]
+  capabilities?: Record<string, unknown>
+  /** dnSpy's DbgProcess.ShouldDetach: true for a process the debugger attached to, unless the user says otherwise. */
+  shouldDetach: boolean
+}
+
+/**
  * Where the debugger is stopped, in decompiled-source terms. The node is the document the location has to be shown
  * in — a frame in a module the workspace does not hold has no node, and then there is nothing to navigate to.
  */
@@ -123,6 +163,10 @@ export interface StoppedLocation {
   nodeId?: string
   line: number
   column?: number
+  /** The frame's code location, which a view of any language finds its statement by. */
+  modulePath?: string
+  metadataToken?: number
+  ilOffset?: number
   name: string
   /** Identifies one reveal request: the view positions the caret once per token, not once per render. */
   token: number
@@ -600,8 +644,35 @@ interface AppState {
   handleDebugEvent(event: DebugEvent): Promise<void>
   continueDebug(): Promise<void>
   pauseDebug(): Promise<void>
-  stepDebug(kind: 'next' | 'stepIn' | 'stepOut'): Promise<void>
+  /**
+   * dnSpy's Step Into, Over and Out: the current thread steps and the other processes run meanwhile. With
+   * `currentProcessOnly` it is the "(Current Process)" variant, which leaves the other processes paused.
+   */
+  stepDebug(kind: 'next' | 'stepIn' | 'stepOut', currentProcessOnly?: boolean): Promise<void>
   stopDebug(): Promise<void>
+  /**
+   * The processes being debugged — dnSpy's DbgManager.Processes. The current one's stop is what the debugger
+   * windows show through the top-level fields; an entry holds what is known of the others.
+   */
+  debugSessions: DebugSessionEntry[]
+  /** dnSpy's current process: the Processes window's Switch To Process, and a break in a process while the current one runs. */
+  setCurrentDebugSession(sessionId: string): Promise<void>
+  /** The Processes window's per-process commands. */
+  continueDebugProcess(sessionId: string): Promise<void>
+  pauseDebugProcess(sessionId: string): Promise<void>
+  detachDebugProcess(sessionId: string): Promise<void>
+  terminateDebugProcess(sessionId: string): Promise<void>
+  /** dnSpy's DbgProcess.ShouldDetach: Stop Debugging detaches from the process instead of killing it. */
+  setDetachWhenDebuggingStopped(sessionIds: string[], detach: boolean): void
+  /**
+   * The workspace's modules that were read out of a process — dnSpy's MemoryModuleDefDocuments — by the path of the
+   * copy, with the process and the module they were read from.
+   */
+  memoryModules: Record<string, { sessionId: string; moduleId: number; name: string }>
+  /** dnSpy's Open Module from Memory: the module's image, as the process holds it, opened in the workspace. */
+  openModuleFromMemory(sessionId: string, module: DebugModule, options?: { select?: boolean }): Promise<string | undefined>
+  /** dnSpy's Reload All Method Bodies: the memory module the node is in is read out of the process again. */
+  reloadMethodBodies(nodeId: string): Promise<void>
   selectDebugFrame(frameId: number): Promise<void>
   /**
    * Makes a frame the one the debugger is working in — dnSpy's SwitchToFrame: the frame the Locals and
@@ -634,31 +705,43 @@ interface AppState {
   setNextStatement(): Promise<void>
   /** dnSpy's Run to Cursor: from the editor, a one-shot breakpoint at the caret; from the Call Stack, the frame's return. */
   runToCursor(frameId?: number): Promise<void>
-  freezeDebugThreads(threadIds: number[], freeze: boolean): Promise<void>
-  renameDebugThread(threadId: number, name: string | null): Promise<void>
+  /** Freezes or thaws threads of a process: the current one unless another session is named. */
+  freezeDebugThreads(threadIds: number[], freeze: boolean, sessionId?: string): Promise<void>
+  renameDebugThread(threadId: number, name: string | null, sessionId?: string): Promise<void>
   addModuleBreakpoint(breakpoint?: Partial<ModuleBreakpoint>): Promise<void>
   updateModuleBreakpoint(id: string, change: Partial<ModuleBreakpoint>): Promise<void>
   removeModuleBreakpoints(ids: string[]): Promise<void>
   /** dnSpy's Restart: the launched program is stopped and started again the way it was the last time. */
   restartDebug(): Promise<void>
-  /** Detaches from the debuggee without killing it — dnSpy's Detach All. */
+  /** Detaches from every debuggee without killing it — dnSpy's Detach All. */
   detachDebug(): Promise<void>
-  /** Kills the debuggee — dnSpy's Terminate All, the Stop Debugging of a launched process. */
+  /** Kills every debuggee — dnSpy's Terminate All. */
   terminateDebug(): Promise<void>
   addFunctionBreakpoint(name: string): Promise<void>
   removeFunctionBreakpoint(name: string): Promise<void>
   toggleFunctionBreakpoint(name: string): Promise<void>
+  /** What a context menu's debugger commands act on for these references, read from the backend. */
+  debugCodeTargets(targets: MethodBreakpointTarget[]): Promise<DebugCodeTargets | undefined>
   /**
-   * Adds a function breakpoint for every method of a type — dnSpy's "Add Class Breakpoint", which puts
-   * one breakpoint at the entry of each method of the type the row names. With settings it is "Add Class
-   * Tracepoint": every breakpoint it adds carries them.
+   * dnSpy's "Add Class Breakpoint": a breakpoint at the entry of each method of the type the reference names.
+   * With settings it is "Add Class Tracepoint": every breakpoint it adds carries them.
    */
-  addClassBreakpoint(node: TreeNode, settings?: BreakpointSettings): Promise<void>
+  addClassBreakpoint(target: MethodBreakpointTarget, settings?: BreakpointSettings): Promise<void>
   /**
    * dnSpy's "Add Method Breakpoint": a breakpoint at the entry of each method named — a property's or an
    * event's accessors for one of those. It only adds; a method that already has one keeps it.
    */
   addMethodBreakpoints(targets: MethodBreakpointTarget[]): Promise<void>
+  /**
+   * The Call Stack window's Insert Breakpoint and Insert Tracepoint: a breakpoint at a frame's code location, the
+   * offset the frame is at. It only adds; a location that already has one keeps it.
+   */
+  addLocationBreakpoint(location: DebugCodeLocation, settings?: BreakpointSettings): Promise<void>
+  /** Insert Tracepoint's settings dialog, which comes first and is given the location the tracepoint goes at. */
+  locationTracepointRequest?: DebugCodeLocation
+  requestLocationTracepoint(location: DebugCodeLocation | undefined): void
+  /** dnSpy's "Break When Thrown" for an exception type, by its reflection name. */
+  breakWhenThrown(typeName: string): Promise<void>
   setFunctionBreakpointEnabled(name: string, enabled: boolean): Promise<void>
   /** Attaches a condition, hit count, filter, trace and labels; `undefined` clears them all. */
   setFunctionBreakpointSettings(name: string, settings: BreakpointSettings | undefined): Promise<void>
@@ -672,6 +755,35 @@ interface AppState {
   deleteAllBreakpoints(): Promise<void>
   /** Merges an imported breakpoint file into the current set, answering how many rows it added. */
   importBreakpoints(stored: Partial<StoredBreakpoints>): Promise<number>
+  /** The Breakpoints window's commands over its rows, by row id: a line breakpoint's id, or `fn:` and a method name. */
+  removeBreakpoints(ids: string[]): Promise<void>
+  setBreakpointsEnabled(ids: string[], enabled: boolean): Promise<void>
+  /** dnSpy's settings dialog over several breakpoints: every one of them gets what it says; labels stay as they were. */
+  setBreakpointsSettings(ids: string[], settings: BreakpointSettings | undefined): Promise<void>
+  setBreakpointsLabels(ids: string[], labels: string[]): Promise<void>
+  /** dnSpy's Reset Hit Count: the engine starts counting the breakpoints' hits from 0 again. */
+  resetBreakpointHitCounts(ids: string[]): Promise<void>
+  /** dnSpy's breakpoint file of the rows: its settings XML, through the save dialog. Answers the path written. */
+  exportBreakpoints(ids: string[]): Promise<string | undefined>
+  /** Adds the breakpoints of a file dnSpy or this port wrote — its XML, or the JSON an earlier build wrote. Answers how
+   *  many it added and how many it dropped, or undefined when the file could not be read. */
+  importBreakpointFile(text: string): Promise<{ added: number; skipped: number } | undefined>
+  /** The Disassembly tabs' contents by id: dnSpy's disassembly is a snapshot of the method's code, shown as a document. */
+  disassemblyDocuments: Record<string, DisassemblyDocument>
+  /** dnSpy's DbgShowNativeCodeService: the native code of a frame, or of a method the process has compiled, in a
+   *  Disassembly tab. Answers whether there was code to show; when there was not, dnSpy's message says so. */
+  showDisassembly(target: { frameId: number } | { modulePath: string; metadataToken: number }): Promise<boolean>
+  /** The Breakpoints window's Go To Disassembly: the code of the method a bound breakpoint is in. */
+  goToBreakpointDisassembly(id: string): Promise<void>
+  /** Opens or brings forward the tab of a Disassembly document. Set by the shell, which owns the layout. */
+  openDisassemblyTab?: (id: string) => void
+  setOpenDisassemblyTab(open: ((id: string) => void) | undefined): void
+  /** Puts up the Attach to Process dialog — the Processes window's command. Set by the shell, which owns the dialog. */
+  openAttachDialog?: () => void
+  setOpenAttachDialog(open: (() => void) | undefined): void
+  /** The settings dialog the breakpoint commands put up, over the rows it edits. */
+  breakpointSettingsRequest?: { ids: string[] }
+  editBreakpointSettings(ids: string[] | undefined): void
   setAllLineBreakpointsEnabled(enabled: boolean): Promise<void>
   /**
    * Opens the document a node id names, in a tab. Set by the shell, which owns the tab layout; the
@@ -880,6 +992,10 @@ const showOrReveal = async (get: () => AppState, nodeId: string): Promise<void> 
 let stoppedRevealToken = 0
 // Up here for the same reason: `loadBreakpoints()` mints ids while the module is still evaluating.
 let lineBreakpointSequence = 0
+// The Breakpoints window's default order is the order the breakpoints were added in, dnSpy's running Order.
+let lineBreakpointOrder = 0
+let disassemblySequence = 0
+const DISASSEMBLY_LINE = '********************************************'
 
 export const useAppStore = create<AppState>((set, get) => ({
   backendStatus: { state: 'starting' },
@@ -910,11 +1026,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   canUndo: false,
   canRedo: false,
   recentFiles: loadRecentFiles(),
+  disassemblyDocuments: {},
   debugState: 'inactive',
   debugThreads: [],
   debugFrames: [],
   debugVariables: [],
   debugModules: [],
+  debugSessions: [],
+  memoryModules: {},
   watches: [],
   otherWatches: {},
   otherWatchValues: {},
@@ -2631,21 +2750,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   launchDebug: async (options) => {
     if (!options.program) return
     lastLaunchOptions = options
-    // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
-    set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
+    beginDebugSession(get, set)
     let sessionId: string | undefined
     try {
       await pushDebuggerOptions()
       // The workspace id travels with the launch: it is how the engine turns a decompiled line into an IL offset.
       const started = await window.dnSpy.launchDebug({ ...options, workspaceId: get().workspaceId })
       sessionId = started.sessionId
-      set({ debugSessionId: sessionId, debugCapabilities: started.capabilities })
-      const breakpointRequests = enabledFunctionBreakpointRequests(get().functionBreakpoints)
-      if (breakpointRequests.length > 0)
-        await window.dnSpy.setFunctionBreakpoints(sessionId, breakpointRequests)
-      if (get().lineBreakpoints.length > 0)
-        await syncLineBreakpoints(get, set)
-      await syncModuleBreakpoints(get)
+      upsertDebugSession(set, sessionId, { capabilities: started.capabilities, shouldDetach: false })
+      if (!get().debugSessionId)
+        set({ debugSessionId: sessionId, debugCapabilities: started.capabilities })
+      await syncAllBreakpoints(get, set, sessionId)
       // The exception list lives in the engine rather than in the session, and it outlives every
       // session, so the stored diff goes back in before the debuggee is released: a run started
       // without the Exception Settings window ever being opened still honors what it holds.
@@ -2658,34 +2773,131 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = error instanceof Error ? error.message : String(error)
       // A launch that was never released would sit suspended forever, so a failure here stops the
       // session rather than leaving the debuggee behind.
-      if (sessionId) await get().stopDebug()
-      set({ debugState: 'inactive', error: message })
+      if (sessionId) await endDebugProcess(get, set, sessionId, true)
+      set({ error: message })
       get().appendOutput(t('Debug launch failed: {message}', { message }), 'debug')
+    } finally {
+      endDebugStart(get, set)
     }
   },
 
   attachDebug: async (processId) => {
-    // OutputLogger, as the debugger starts: the Debug pane is emptied and shown.
-    set({ debugState: 'starting', error: undefined, debugOutput: [], outputPane: 'debug' })
+    beginDebugSession(get, set)
     try {
       await pushDebuggerOptions()
       const started = await window.dnSpy.attachDebug(processId, get().workspaceId)
-      set({ debugSessionId: started.sessionId, debugCapabilities: started.capabilities })
-      if (get().lineBreakpoints.length > 0)
-        await syncLineBreakpoints(get, set)
-      await syncModuleBreakpoints(get)
+      // A process the debugger attached to is detached from, not killed, when debugging stops.
+      upsertDebugSession(set, started.sessionId, { capabilities: started.capabilities, shouldDetach: true })
+      if (!get().debugSessionId)
+        set({ debugSessionId: started.sessionId, debugCapabilities: started.capabilities })
+      await syncAllBreakpoints(get, set, started.sessionId)
       await get().loadExceptionSettings()
+      // An attached process is not stopped: it runs from the moment the engine has it.
+      if (get().debugSessionId === started.sessionId && get().debugState === 'starting')
+        set({ debugState: 'running' })
+      upsertDebugSession(set, started.sessionId, (entry) => entry.state === 'starting' ? { state: 'running' } : {})
       get().appendOutput(t('Attached to process {processId}.', { processId }), 'debug')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      set({ debugState: 'inactive', error: message })
+      set({ error: message })
       get().appendOutput(t('Debug attach failed: {message}', { message }), 'debug')
+    } finally {
+      endDebugStart(get, set)
     }
   },
 
+  setCurrentDebugSession: async (sessionId) => {
+    if (get().debugSessionId === sessionId) return
+    const entry = get().debugSessions.find((candidate) => candidate.sessionId === sessionId)
+    if (!entry) return
+    captureCurrentSession(get, set)
+    set(sessionView(entry))
+    if (entry.state === 'stopped') {
+      await refreshDebugState(get, set, entry.threadId)
+      await get().revealStoppedLocation({ caret: true })
+    }
+  },
+
+  continueDebugProcess: async (sessionId) => {
+    if (sessionId === get().debugSessionId) {
+      await resumeCurrentProcess(get, set, (id, threadId) => window.dnSpy.debugContinue(id, threadId))
+      return
+    }
+    const entry = get().debugSessions.find((candidate) => candidate.sessionId === sessionId)
+    if (entry?.state === 'stopped')
+      await window.dnSpy.debugContinue(sessionId, entry.threadId ?? 0).catch(() => undefined)
+  },
+
+  pauseDebugProcess: async (sessionId) => {
+    const threadId = sessionId === get().debugSessionId ? get().selectedDebugThreadId : get().debugSessions.find((candidate) => candidate.sessionId === sessionId)?.threadId
+    await window.dnSpy.debugPause(sessionId, threadId ?? 0).catch(() => undefined)
+  },
+
+  detachDebugProcess: async (sessionId) => {
+    await endDebugProcess(get, set, sessionId, false)
+  },
+
+  terminateDebugProcess: async (sessionId) => {
+    await endDebugProcess(get, set, sessionId, true)
+  },
+
+  openModuleFromMemory: async (sessionId, module, options) => {
+    if (typeof module.id !== 'number') return undefined
+    try {
+      const path = await window.dnSpy.saveDebugModule(sessionId, module.id)
+      set((state) => ({ memoryModules: { ...state.memoryModules, [path]: { sessionId, moduleId: module.id as number, name: module.name } } }))
+      if (!get().modules.some((candidate) => candidate.path === path))
+        await get().openPaths([path], { select: options?.select })
+      return path
+    } catch (error) {
+      get().appendOutput(t('Could not read {name} from the process: {message}', { name: module.name, message: error instanceof Error ? error.message : String(error) }), 'debug')
+      return undefined
+    }
+  },
+
+  // MemoryModuleDefDocument.UpdateMemory: the module is read out of the process again, which is how code the program
+  // decrypted or patched since shows up. The copy is replaced in the workspace, so its tabs go with it.
+  reloadMethodBodies: async (nodeId) => {
+    const path = memoryModulePathOf(get(), nodeId)
+    const entry = path === undefined ? undefined : get().memoryModules[path]
+    if (!path || !entry) return
+    try {
+      await window.dnSpy.saveDebugModule(entry.sessionId, entry.moduleId, path)
+    } catch (error) {
+      get().appendOutput(t('Could not read {name} from the process: {message}', { name: entry.name, message: error instanceof Error ? error.message : String(error) }), 'debug')
+      return
+    }
+    const module = get().modules.find((candidate) => candidate.path === path)
+    if (module)
+      await get().removeModules([module.id])
+    await get().openPaths([path])
+    get().appendOutput(t('Reloaded the method bodies of {name}.', { name: entry.name }))
+  },
+
+  setDetachWhenDebuggingStopped: (sessionIds, detach) => {
+    for (const sessionId of sessionIds)
+      upsertDebugSession(set, sessionId, { shouldDetach: detach })
+  },
+
   handleDebugEvent: async (event) => {
+    // A session ended here keeps sending what was already on its way; none of it is about a process any more.
+    if (endedDebugSessions.has(event.sessionId)) return
+    // dnSpy's ClassLoader: a type Reflection.Emit created is noted, and the module's copy read again at the next stop.
+    if (event.event === 'module' && event.body?.reason === 'classLoaded') {
+      const module = event.body.module as DebugModule | undefined
+      if (typeof module?.id === 'number')
+        loadedDynamicClasses.add(`${event.sessionId}|${module.id}`)
+      return
+    }
+    const currentId = get().debugSessionId
+    const other = currentId !== undefined && event.sessionId !== currentId
+      ? get().debugSessions.find((candidate) => candidate.sessionId === event.sessionId)
+      : undefined
+    if (currentId !== undefined && event.sessionId !== currentId && await handleOtherProcessEvent(get, set, other, event))
+      return
     if (event.event === 'stopped') {
       const threadId = typeof event.body?.threadId === 'number' ? event.body.threadId : undefined
+      upsertDebugSession(set, event.sessionId, { state: 'stopped', threadId, stoppedReason: typeof event.body?.reason === 'string' ? event.body.reason : 'stopped' })
       set({
         debugSessionId: event.sessionId,
         debugState: 'starting',
@@ -2708,21 +2920,41 @@ export const useAppStore = create<AppState>((set, get) => ({
       await refreshDebugState(get, set, threadId)
       set({ debugState: 'stopped' })
       await get().revealStoppedLocation()
+      await reloadLoadedClasses(get, event.sessionId)
     } else if (event.event === 'breakpoint') {
       // The engine binds late — a module loads, or it refuses an offset we thought was good — so a breakpoint's
       // state can change without the client asking. This is the channel that keeps the gutter honest.
       const body = event.body?.breakpoint as DebugBreakpoint | undefined
-      if (body?.id)
+      if (body?.id?.startsWith('fn:'))
+        set((state) => ({
+          functionBreakpoints: state.functionBreakpoints.map((breakpoint) => `fn:${breakpoint.name}` === body.id ? { ...breakpoint, hitCount: body.hitCount ?? breakpoint.hitCount } : breakpoint),
+        }))
+      else if (body?.id)
         set((state) => ({
           lineBreakpoints: state.lineBreakpoints.map((breakpoint) => breakpoint.id === body.id ? applyBreakpointResult(breakpoint, body) : breakpoint),
         }))
     } else if (event.event === 'continued') {
+      upsertDebugSession(set, event.sessionId, { state: 'running', threads: [] })
       set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
     } else if (event.event === 'output') {
+      // OutputLogger: the program's output — its console and Debugger.Log — and the step filter's messages each have
+      // a switch in the Debug pane's context menu; a tracepoint's message is always written.
+      const logger = loadAppOptions().outputLogger
+      const category = event.body?.category
+      if (category === 'stepFilter') {
+        if (!logger.showStepFilteringMessages) return
+        const member = typeof event.body?.member === 'string' ? event.body.member : '?'
+        get().appendOutput(event.body?.kind === 'property'
+          ? t('Step into: Stepping over property \'{name}\'.', { name: member })
+          : t('Step into: Stepping over operator \'{name}\'.', { name: member }), 'debug')
+        return
+      }
+      if ((category === 'stdout' || category === 'stderr' || category === 'log') && !logger.showProgramOutputMessages) return
       const output = typeof event.body?.output === 'string' ? event.body.output.trimEnd() : ''
       if (output) get().appendOutput(output, 'debug')
     } else if (event.event === 'exception') {
       // OutputLogger's exception messages: every first chance the engine reports, and the unhandled one.
+      if (!loadAppOptions().outputLogger.showExceptionMessages) return
       const body = event.body ?? {}
       const name = typeof body.name === 'string' ? body.name : '?'
       const module = typeof body.module === 'string' ? body.module : '?'
@@ -2739,90 +2971,87 @@ export const useAppStore = create<AppState>((set, get) => ({
       const process = get().debugProcess?.name ?? ''
       const domain = module.appDomainName ?? 'clrhost'
       const prefix = `'${process}' (CoreCLR: ${domain}): `
+      const logger = loadAppOptions().outputLogger
       if (event.body?.reason === 'removed') {
         set((state) => ({ debugModules: state.debugModules.filter((candidate) => candidate.id !== module.id) }))
-        get().appendOutput(prefix + t('Unloaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
+        if (logger.showModuleUnloadMessages)
+          get().appendOutput(prefix + t('Unloaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
       } else {
         set((state) => ({ debugModules: [...state.debugModules.filter((candidate) => candidate.id !== module.id), module].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) }))
-        get().appendOutput(prefix + t('Loaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
+        if (logger.showModuleLoadMessages)
+          get().appendOutput(prefix + t('Loaded \'{path}\'.', { path: module.path ?? module.name }), 'debug')
       }
+      upsertDebugSession(set, event.sessionId, { modules: get().debugModules })
     } else if (event.event === 'thread') {
       // OutputLogger's DebugLogExitThread.
-      if (event.body?.reason === 'exited' && typeof event.body.threadId === 'number') {
+      if (event.body?.reason === 'exited' && typeof event.body.threadId === 'number' && loadAppOptions().outputLogger.showThreadExitMessages) {
         const code = typeof event.body.exitCode === 'number' ? event.body.exitCode : 0
         get().appendOutput(t('The thread 0x{id} has exited with code {code} (0x{hex}).', { id: event.body.threadId.toString(16), code, hex: (code >>> 0).toString(16) }), 'debug')
       }
       if (get().debugState === 'stopped' && get().debugSessionId)
         set({ debugThreads: await window.dnSpy.getDebugThreads(get().debugSessionId!).catch(() => get().debugThreads) })
     } else if (event.event === 'process') {
-      if (get().debugSessionId)
+      if (get().debugSessionId) {
         set({ debugProcess: await window.dnSpy.getDebugProcess?.(get().debugSessionId!).catch(() => get().debugProcess) })
+        upsertDebugSession(set, event.sessionId, { process: get().debugProcess })
+      }
     } else if (event.event === 'terminated' || event.event === 'exited') {
       const processName = get().debugProcess?.name
-      set({
-        debugState: 'inactive',
-        debugSessionId: undefined,
-        debugThreads: [],
-        debugFrames: [],
-        debugVariables: [],
-        debugModules: [],
-        watchValues: [],
-        otherWatchValues: {},
-        debugProcess: undefined,
-        stoppedLocation: undefined,
-        selectedDebugFrameId: undefined,
-        activeDebugFrameId: undefined,
-      })
-      // OutputLogger's DebugLogExitProcess: "The program '[pid] name' has exited with code N (0xN)."
-      const code = typeof event.body?.exitCode === 'number' ? event.body.exitCode : undefined
-      get().appendOutput(event.event === 'exited'
-        ? code !== undefined && processName
-          ? t('The program \'{name}\' has exited with code {code} (0x{hex}).', { name: processName, code, hex: (code >>> 0).toString(16) })
-          : t('Debug target exited with code {code}.', { code: String(event.body?.exitCode ?? '') })
-        : t('Debug session terminated.'), 'debug')
+      // The process is gone; another one being debugged becomes the current one, or debugging is over.
+      await removeDebugSession(get, set, event.sessionId)
+      writeProcessExit(get, event, processName)
     }
   },
 
+  // dnSpy's Continue is DbgManager.RunAll: every paused process runs again.
   continueDebug: async () => {
     const { debugSessionId, selectedDebugThreadId } = get()
     if (!debugSessionId || selectedDebugThreadId === undefined) return
-    await window.dnSpy.debugContinue(debugSessionId, selectedDebugThreadId)
-    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    runOtherProcesses(get)
+    await resumeCurrentProcess(get, set, (id, threadId) => window.dnSpy.debugContinue(id, threadId))
   },
 
+  // dnSpy's Break All: every running process breaks.
   pauseDebug: async () => {
-    const { debugSessionId, selectedDebugThreadId } = get()
-    if (!debugSessionId || selectedDebugThreadId === undefined) return
-    await window.dnSpy.debugPause(debugSessionId, selectedDebugThreadId)
+    const { debugSessionId, selectedDebugThreadId, debugState } = get()
+    for (const entry of get().debugSessions) {
+      if (entry.sessionId !== debugSessionId && entry.state === 'running')
+        void window.dnSpy.debugPause(entry.sessionId, entry.threadId ?? 0).catch(() => undefined)
+    }
+    if (!debugSessionId || debugState !== 'running') return
+    await window.dnSpy.debugPause(debugSessionId, selectedDebugThreadId ?? 0)
   },
 
-  stepDebug: async (kind) => {
+  stepDebug: async (kind, currentProcessOnly) => {
     const { debugSessionId, selectedDebugThreadId } = get()
     if (!debugSessionId || selectedDebugThreadId === undefined) return
+    // DbgStepKind.StepInto and the others run every process while the current thread steps; the
+    // "(Current Process)" kinds leave the other processes paused.
+    if (!currentProcessOnly)
+      runOtherProcesses(get)
     const command = kind === 'next' ? window.dnSpy.debugNext : kind === 'stepIn' ? window.dnSpy.debugStepIn : window.dnSpy.debugStepOut
-    await command(debugSessionId, selectedDebugThreadId)
-    set({ debugState: 'running', debugFrames: [], debugVariables: [], watchValues: [], otherWatchValues: {}, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+    await resumeCurrentProcess(get, set, command)
   },
 
-  // dnSpy's Stop Debugging is DbgManager.StopDebuggingAll: a process the debugger started is terminated, one it
-  // attached to is detached from, and keeps running.
+  // dnSpy's Stop Debugging is DbgManager.StopDebuggingAll: a process whose ShouldDetach is set — one the debugger
+  // attached to, unless the user said otherwise — is detached from and keeps running; the others are terminated.
   stopDebug: async () => {
-    await endDebugSession(get, set, get().debugProcess?.ownsDebuggee !== false)
+    await endAllDebugSessions(get, set, 'stop')
   },
 
   restartDebug: async () => {
     const options = lastLaunchOptions
     if (!options || get().debugProcess?.ownsDebuggee === false) return
-    await endDebugSession(get, set, true)
+    await endAllDebugSessions(get, set, 'terminate')
     await get().launchDebug(options)
   },
 
   detachDebug: async () => {
-    await endDebugSession(get, set, false)
+    await endAllDebugSessions(get, set, 'detach')
   },
 
   terminateDebug: async () => {
-    await endDebugSession(get, set, true)
+    await endAllDebugSessions(get, set, 'terminate')
   },
 
   // Highlighting a row costs nothing else: the frame the debugger reads only changes when the user
@@ -2879,18 +3108,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         nodeId: frame.nodeId,
         line: frame.line,
         column: frame.column,
+        modulePath: frame.source?.path,
+        metadataToken: frame.metadataToken,
+        ilOffset: frame.ilOffset,
         name: frame.name,
         token: ++stoppedRevealToken,
         caret: options?.caret,
       },
     })
-    // Only decompile when the document is not already showing this source: the engine resolves a
-    // frame against the C# method document, so a doc open in IL is not the one the line belongs to.
-    const node = findNode(get(), frame.nodeId)
-    if (node && get().workspaceId && get().documents[frame.nodeId]?.language !== 'csharp')
-      await get().openDocument(node, 'cSharp')
-    // Filling in the store is not showing anything: the document only becomes visible when the shell
-    // brings its tab forward, which is also what opens one for a method the user never visited.
+    // dnSpy's DotNetReferenceNavigator goes to the method in the tab's own language: the view finds the frame's
+    // statement among its own statements, whichever language it is in. Filling in the store is not showing
+    // anything — the document only becomes visible when the shell brings its tab forward, which is also what
+    // opens one for a method the user never visited.
     await get().revealDocument?.(frame.nodeId)
   },
 
@@ -3016,18 +3245,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     await syncModuleBreakpoints(get)
   },
 
-  freezeDebugThreads: async (threadIds, freeze) => {
-    const sessionId = get().debugSessionId
+  freezeDebugThreads: async (threadIds, freeze, explicitSessionId) => {
+    const sessionId = explicitSessionId ?? get().debugSessionId
     if (!sessionId) return
     await window.dnSpy.freezeDebugThreads(sessionId, threadIds, freeze)
-    set({ debugThreads: await window.dnSpy.getDebugThreads(sessionId) })
+    await rereadThreads(get, set, sessionId)
   },
 
-  renameDebugThread: async (threadId, name) => {
-    const sessionId = get().debugSessionId
+  renameDebugThread: async (threadId, name, explicitSessionId) => {
+    const sessionId = explicitSessionId ?? get().debugSessionId
     if (!sessionId) return
     await window.dnSpy.renameDebugThread(sessionId, threadId, name)
-    set({ debugThreads: await window.dnSpy.getDebugThreads(sessionId) })
+    await rereadThreads(get, set, sessionId)
   },
 
   addFunctionBreakpoint: async (name) => {
@@ -3051,74 +3280,49 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().addFunctionBreakpoint(trimmed)
   },
 
-  // dnSpy's Add Class Breakpoint puts a breakpoint at the entry of every method the type owns, skipping
-  // the ones that already carry one. This port's breakpoints are function breakpoints — matched by name —
-  // so the methods come from the tree row rather than from the type directly, and a method with no body
-  // simply never matches at launch, which is the same outcome as dnSpy's `IsAbstract || Body is null` skip.
-  addClassBreakpoint: async (node, settings) => {
-    await get().loadChildren(node)
-    const members = get().children[node.id] ?? []
-    // `type.Methods` is what dnSpy walks, and that holds a property's getter and setter too — the rows
-    // the tree nests under the property, which is why the members below them are read as well.
-    const accessorOwners = members.filter((member) => member.kind === 'property' || member.kind === 'event')
-    for (const owner of accessorOwners)
-      await get().loadChildren(owner)
-    const methods = [
-      ...members,
-      ...accessorOwners.flatMap((owner) => get().children[owner.id] ?? []),
-    ].filter((member) => member.kind === 'method')
-    // A method name here is the declaring type plus the method, with no parameter list, so two overloads
-    // answer to the same breakpoint; the engine breaks in whichever of them it binds the name to.
-    const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
-    const names: string[] = []
-    for (const method of methods) {
-      const name = methodBreakpointName(method.description)
-      if (name === undefined || seen.has(name))
-        continue
-      seen.add(name)
-      names.push(name)
+  debugCodeTargets: async (targets) => {
+    const references = targets.map(codeReferenceOf)
+    if (references.length === 0)
+      return undefined
+    try {
+      return await window.dnSpy.getDebugCodeTargets(get().workspaceId, references)
+    } catch {
+      // A reference the backend cannot read has nothing to break on.
+      return undefined
     }
-    if (names.length === 0) {
-      get().appendOutput(t('{name} has no method left to break on.', { name: node.label }))
-      return
-    }
-    const normalized = normalizeBreakpointSettings(settings)
-    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true, ...(normalized ? { settings: normalized } : {}) }))] }))
-    await syncFunctionBreakpoints(get)
-    get().appendOutput(t('Added {count} breakpoint(s) for {name}.', { count: names.length, name: node.label }))
+  },
+
+  // dnSpy's Add Class Breakpoint: a breakpoint at the entry of every method of the type the first reference names
+  // (MethodBreakpointsService.Add over `type.Methods`). With settings it is Add Class Tracepoint, and every
+  // breakpoint it adds carries them.
+  addClassBreakpoint: async (target, settings) => {
+    const targets = await get().debugCodeTargets([target])
+    await addCodeBreakpoints(get, set, targets?.typeMethods ?? [], settings)
   },
 
   // dnSpy's MethodBreakpointsService.Add, which every "Add Method Breakpoint" runs — the tree's, the code
-  // viewer's, the analyzer's and the search window's: the methods a property or an event stands for are its
-  // accessors, the rows the tree nests under it, and a method that already has a breakpoint keeps the one it
-  // has rather than losing it, the way dnSpy skips an existing location.
+  // viewer's, the analyzer's and the search window's: a method, or the accessors of a property or an event.
   addMethodBreakpoints: async (targets) => {
-    const candidates: (string | undefined)[] = []
-    for (const target of targets) {
-      if (typeof target === 'string')
-        candidates.push(target)
-      else if (target.kind === 'method')
-        candidates.push(methodBreakpointName(target.description))
-      else if (target.kind === 'property' || target.kind === 'event') {
-        await get().loadChildren(target)
-        for (const child of get().children[target.id] ?? []) {
-          if (child.kind === 'method')
-            candidates.push(methodBreakpointName(child.description))
-        }
-      }
-    }
-    const seen = new Set(get().functionBreakpoints.map((breakpoint) => breakpoint.name))
-    const names: string[] = []
-    for (const name of candidates) {
-      if (name === undefined || seen.has(name))
-        continue
-      seen.add(name)
-      names.push(name)
-    }
-    if (names.length === 0)
-      return
-    set((state) => ({ functionBreakpoints: [...state.functionBreakpoints, ...names.map((name) => ({ name, enabled: true }))] }))
-    await syncFunctionBreakpoints(get)
+    const resolved = await get().debugCodeTargets(targets)
+    await addCodeBreakpoints(get, set, resolved?.methods ?? [])
+  },
+
+  addLocationBreakpoint: async (location, settings) => {
+    await addCodeBreakpoints(get, set, [{ ...location, description: location.description ?? '', hasBody: true }], settings)
+  },
+
+  requestLocationTracepoint: (location) => set({ locationTracepointRequest: location }),
+
+  // dnSpy's BreakWhenThrownExceptionCommand: the exception's settings get Stop on first chance — a type the list
+  // already has keeps its conditions, one it does not is added breaking on both chances.
+  breakWhenThrown: async (typeName) => {
+    if (!get().exceptionSettingsLoaded)
+      await get().loadExceptionSettings()
+    const existing = get().exceptionSettings.find((row) => row.category === DOTNET_EXCEPTION_CATEGORY && row.name === typeName)
+    if (existing)
+      await get().setExceptionBreakWhenThrown([existing.key], true)
+    else
+      await get().addExceptionDefinition({ category: DOTNET_EXCEPTION_CATEGORY, name: typeName })
   },
 
   setFunctionBreakpointEnabled: async (name, enabled) => {
@@ -3149,17 +3353,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     await syncFunctionBreakpoints(get)
   },
 
+  // dnSpy's ToggleCreateBreakpoint: the breakpoints already at the place are deleted when every one of them is
+  // enabled and enabled when one is not, and only a place without any gets a new one — at the code location of
+  // the statement there, whatever language the view is in. A click in the margin is about the whole line; F9 and
+  // the menu about the statement under the caret.
   toggleLineBreakpoint: async (nodeId, line, column) => {
-    const statement = codeStatementAt(breakpointStatementsOf(get().documents[nodeId]), line, column)
-    // The document already carries the IL range of every statement, so the identity is known before the backend
-    // confirms it — which is what lets a second click on the snapped line remove the breakpoint it just created.
-    const identity = statement
-      ? statementIdentity(statement.modulePath, statement.metadataToken, statement.ilOffset)
-      : `${nodeId}|${line}`
-    const existing = get().lineBreakpoints.find((breakpoint) => breakpoint.identity === identity)
-    if (existing) {
-      set((state) => ({ lineBreakpoints: state.lineBreakpoints.filter((breakpoint) => breakpoint.id !== existing.id) }))
+    const statements = breakpointStatementsOf(get().documents[nodeId])
+    const statement = codeStatementAt(statements, line, column)
+    const existing = get().lineBreakpoints.filter((breakpoint) => {
+      const position = breakpointPositionInDocument(nodeId, statements, breakpoint)
+      if (!position)
+        return false
+      if (column === undefined || !statement)
+        return position.line === (statement?.startLine ?? line)
+      return position.line === statement.startLine && position.column === statement.startColumn
+    })
+    if (existing.length > 0) {
+      const ids = new Set(existing.map((breakpoint) => breakpoint.id))
+      if (existing.every((breakpoint) => breakpoint.enabled))
+        set((state) => ({ lineBreakpoints: state.lineBreakpoints.filter((breakpoint) => !ids.has(breakpoint.id)) }))
+      else
+        set((state) => ({ lineBreakpoints: state.lineBreakpoints.map((breakpoint) => ids.has(breakpoint.id) ? { ...breakpoint, enabled: true } : breakpoint) }))
     } else {
+      // A document without statements — a line the client cannot place — still asks the backend, which snaps it.
+      const identity = statement
+        ? statementIdentity(statement.modulePath, statement.metadataToken, statement.ilOffset)
+        : `${nodeId}|${line}`
+      if (get().lineBreakpoints.some((breakpoint) => breakpoint.identity === identity))
+        return
       set((state) => ({
         lineBreakpoints: [...state.lineBreakpoints, {
           id: `line${++lineBreakpointSequence}`,
@@ -3175,6 +3396,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           metadataToken: statement?.metadataToken,
           sourceMethodToken: statement?.sourceMethodToken,
           ilOffset: statement?.ilOffset,
+          order: ++lineBreakpointOrder,
         }],
       }))
     }
@@ -3231,6 +3453,124 @@ export const useAppStore = create<AppState>((set, get) => ({
     await Promise.all([syncLineBreakpoints(get, set), syncFunctionBreakpoints(get)])
     return imported.length + functions.length
   },
+
+  removeBreakpoints: async (ids) => {
+    const { lines, names } = splitRowIds(ids)
+    if (lines.size === 0 && names.size === 0) return
+    set((state) => ({
+      lineBreakpoints: state.lineBreakpoints.filter((breakpoint) => !lines.has(breakpoint.id)),
+      functionBreakpoints: state.functionBreakpoints.filter((breakpoint) => !names.has(breakpoint.name)),
+    }))
+    await Promise.all([lines.size > 0 ? syncLineBreakpoints(get, set) : undefined, names.size > 0 ? syncFunctionBreakpoints(get) : undefined])
+  },
+
+  setBreakpointsEnabled: async (ids, enabled) => {
+    const { lines, names } = splitRowIds(ids)
+    set((state) => ({
+      lineBreakpoints: state.lineBreakpoints.map((breakpoint) => lines.has(breakpoint.id) && breakpoint.enabled !== enabled ? { ...breakpoint, enabled } : breakpoint),
+      functionBreakpoints: state.functionBreakpoints.map((breakpoint) => names.has(breakpoint.name) && breakpoint.enabled !== enabled ? { ...breakpoint, enabled } : breakpoint),
+    }))
+    await Promise.all([lines.size > 0 ? syncLineBreakpoints(get, set) : undefined, names.size > 0 ? syncFunctionBreakpoints(get) : undefined])
+  },
+
+  setBreakpointsSettings: async (ids, settings) => {
+    const { lines, names } = splitRowIds(ids)
+    // The dialog has no labels: each breakpoint keeps its own.
+    const merge = (current: BreakpointSettings | undefined): BreakpointSettings | undefined =>
+      normalizeBreakpointSettings({ ...settings, labels: current?.labels })
+    set((state) => ({
+      lineBreakpoints: state.lineBreakpoints.map((breakpoint) => lines.has(breakpoint.id) ? { ...breakpoint, settings: merge(breakpoint.settings) } : breakpoint),
+      functionBreakpoints: state.functionBreakpoints.map((breakpoint) => names.has(breakpoint.name) ? { ...breakpoint, settings: merge(breakpoint.settings) } : breakpoint),
+    }))
+    await Promise.all([lines.size > 0 ? syncLineBreakpoints(get, set) : undefined, names.size > 0 ? syncFunctionBreakpoints(get) : undefined])
+  },
+
+  setBreakpointsLabels: async (ids, labels) => {
+    const { lines, names } = splitRowIds(ids)
+    const merge = (current: BreakpointSettings | undefined): BreakpointSettings | undefined => normalizeBreakpointSettings({ ...current, labels })
+    set((state) => ({
+      lineBreakpoints: state.lineBreakpoints.map((breakpoint) => lines.has(breakpoint.id) ? { ...breakpoint, settings: merge(breakpoint.settings) } : breakpoint),
+      functionBreakpoints: state.functionBreakpoints.map((breakpoint) => names.has(breakpoint.name) ? { ...breakpoint, settings: merge(breakpoint.settings) } : breakpoint),
+    }))
+    // Labels are the client's own: the engine has no use for them, so nothing goes back to it.
+  },
+
+  resetBreakpointHitCounts: async (ids) => {
+    const { lines, names } = splitRowIds(ids)
+    set((state) => ({
+      lineBreakpoints: state.lineBreakpoints.map((breakpoint) => lines.has(breakpoint.id) && breakpoint.hitCount ? { ...breakpoint, hitCount: 0 } : breakpoint),
+      functionBreakpoints: state.functionBreakpoints.map((breakpoint) => names.has(breakpoint.name) && breakpoint.hitCount ? { ...breakpoint, hitCount: 0 } : breakpoint),
+    }))
+    const sessionId = get().debugSessionId
+    if (sessionId)
+      await window.dnSpy.resetDebugBreakpointHitCounts?.(sessionId, ids).catch(() => undefined)
+  },
+
+  exportBreakpoints: async (ids) => {
+    const wanted = new Set(ids)
+    // dnSpy writes the breakpoints whose location it can serialize: a code location, which a name breakpoint is not.
+    const entries = breakpointFileEntries(get().lineBreakpoints.filter((breakpoint) => wanted.has(breakpoint.id)))
+    if (entries.length === 0) return undefined
+    const xml = await window.dnSpy.exportBreakpoints(get().workspaceId, entries)
+    return await window.dnSpy.saveCode('breakpoints.xml', xml)
+  },
+
+  importBreakpointFile: async (text) => {
+    let stored: Partial<StoredBreakpoints>
+    let skipped = 0
+    try {
+      if (text.trimStart().startsWith('<')) {
+        const file = await window.dnSpy.importBreakpoints(get().workspaceId, text)
+        stored = { breakpoints: file.breakpoints.map(lineBreakpointEntryOfFile), functions: [] }
+        skipped = file.skipped
+      } else {
+        // The JSON an earlier build of this port wrote.
+        const parsed = JSON.parse(text) as unknown
+        const record = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
+        stored = { breakpoints: parseLineBreakpointEntries(parsed), functions: parseFunctionBreakpoints(record.functions) }
+      }
+    } catch {
+      return undefined
+    }
+    return { added: await get().importBreakpoints(stored), skipped }
+  },
+
+  showDisassembly: async (target) => {
+    const sessionId = get().debugSessionId
+    if (!sessionId) return false
+    try {
+      const disassembly = await window.dnSpy.disassembleDebugFrame(sessionId, target, disassemblyOptions())
+      const id = `disasm${++disassemblySequence}`
+      const toolTip = [
+        ...(disassembly.isOptimized === false ? [DISASSEMBLY_LINE, t('The method is not optimized'), DISASSEMBLY_LINE] : []),
+        ...(disassembly.moduleName ? [disassembly.moduleName] : []),
+        disassembly.methodName ?? disassembly.title,
+        `Size: ${disassembly.size} (0x${disassembly.size.toString(16).toUpperCase()})`,
+      ].join('\n')
+      set((state) => ({
+        disassemblyDocuments: {
+          ...state.disassemblyDocuments,
+          [id]: { id, title: disassembly.shortName ?? disassembly.methodName ?? t('Disassembly'), toolTip, lines: disassembly.lines },
+        },
+      }))
+      get().openDisassemblyTab?.(id)
+      return true
+    } catch {
+      await window.dnSpy.showMessage(t("Could not find the method's code. Make sure that the process is paused and that the method has been jitted."))
+      return false
+    }
+  },
+
+  goToBreakpointDisassembly: async (id) => {
+    const breakpoint = get().lineBreakpoints.find((candidate) => candidate.id === id)
+    if (!breakpoint?.modulePath || breakpoint.metadataToken === undefined) return
+    await get().showDisassembly({ modulePath: breakpoint.modulePath, metadataToken: breakpoint.metadataToken })
+  },
+
+  setOpenDisassemblyTab: (open) => set({ openDisassemblyTab: open }),
+  setOpenAttachDialog: (open) => set({ openAttachDialog: open }),
+
+  editBreakpointSettings: (ids) => set({ breakpointSettingsRequest: ids && ids.length > 0 ? { ids } : undefined }),
 
   setAllLineBreakpointsEnabled: async (enabled) => {
     if (!get().lineBreakpoints.some((breakpoint) => breakpoint.enabled !== enabled)) return
@@ -3641,9 +3981,73 @@ const lastTopLevelSpace = (value: string): number => {
   return index
 }
 
-/** What "Add Method Breakpoint" is handed: a node — a method, or a property or an event for its
- * accessors — or a method already named the way a function breakpoint names one. */
-export type MethodBreakpointTarget = TreeNode | string
+/** What "Add Method Breakpoint" and the class commands are handed: a node of the tree, or a reference the code
+ * viewer names — one into a module the workspace does not hold carries its file and token. */
+export type MethodBreakpointTarget = TreeNode | DebugCodeReference
+
+/** A code location a breakpoint can go at — dnSpy's DbgDotNetCodeLocation — such as the one a stack frame is at. */
+export interface DebugCodeLocation {
+  modulePath: string
+  metadataToken: number
+  ilOffset: number
+  description?: string
+}
+
+/** The code location of a stack frame, or undefined for one without code of its own. */
+export const frameCodeLocation = (frame: DebugStackFrame | undefined): DebugCodeLocation | undefined =>
+  frame && !frame.isInternal && frame.source?.path && frame.metadataToken !== undefined && frame.ilOffset !== undefined && frame.ilOffset >= 0
+    ? { modulePath: frame.source.path, metadataToken: frame.metadataToken, ilOffset: frame.ilOffset, description: frame.description ?? undefined }
+    : undefined
+
+/** The breakpoints at exactly a code location, as dnSpy's DbgCodeBreakpointsService.TryGetBreakpoint finds them. */
+export const lineBreakpointsAtLocation = (breakpoints: LineBreakpoint[], location: DebugCodeLocation): LineBreakpoint[] =>
+  breakpoints.filter((breakpoint) => breakpoint.modulePath === location.modulePath && breakpoint.metadataToken === location.metadataToken && breakpoint.ilOffset === location.ilOffset)
+
+/** The category of the .NET exceptions in the engine's list, dnSpy's PredefinedExceptionCategories.DotNet. */
+const DOTNET_EXCEPTION_CATEGORY = 'DotNet'
+
+const codeReferenceOf = (target: MethodBreakpointTarget): DebugCodeReference =>
+  'id' in target ? { nodeId: target.id } : target
+
+/**
+ * Puts a breakpoint at the entry of each method — IL offset 0, the location dnSpy's MethodBreakpointsService gives
+ * it — skipping a method without code and a location that already has a breakpoint, and adding the rest at once.
+ */
+const addCodeBreakpoints = async (get: StoreGet, set: StoreSet, methods: (DebugMethodTarget & { ilOffset?: number })[], settings?: BreakpointSettings): Promise<void> => {
+  const known = new Set(get().lineBreakpoints.map((breakpoint) => breakpoint.identity))
+  const normalized = normalizeBreakpointSettings(settings)
+  const added: LineBreakpoint[] = []
+  for (const method of methods) {
+    if (!method.hasBody)
+      continue
+    const ilOffset = method.ilOffset ?? 0
+    const identity = statementIdentity(method.modulePath, method.metadataToken, ilOffset)
+    if (known.has(identity))
+      continue
+    known.add(identity)
+    added.push({
+      id: `line${++lineBreakpointSequence}`,
+      nodeId: '',
+      identity,
+      requestedLine: 0,
+      line: 0,
+      endLine: 0,
+      state: 'pending',
+      enabled: true,
+      description: method.description,
+      modulePath: method.modulePath,
+      metadataToken: method.metadataToken,
+      sourceMethodToken: method.metadataToken,
+      ilOffset,
+      ...(normalized ? { settings: normalized } : {}),
+      order: ++lineBreakpointOrder,
+    })
+  }
+  if (added.length === 0)
+    return
+  set((state) => ({ lineBreakpoints: [...state.lineBreakpoints, ...added] }))
+  await syncLineBreakpoints(get, set)
+}
 
 // Tree node descriptions are dnlib's MethodDef.FullName, e.g. "System.Void Ns.Type::Method(System.Int32)".
 // Debug adapters want "Ns.Type.Method", so drop the return type and the parameter list, and turn the "::"
@@ -3706,54 +4110,89 @@ const isCloserStatement = (candidate: CodeStatement, current: CodeStatement, lin
 }
 
 /**
- * The statements a line breakpoint is placed by. The backend resolves a breakpoint's line against the C#
- * statement map, so an IL view's statements — one per instruction, there for bookmarks, the hex commands and
- * the analyzer — are not offered to the breakpoint commands; those keep working off the C# view alone.
+ * The statements a line breakpoint is placed by: whatever view the document is in. dnSpy sets a breakpoint at
+ * the code location a statement names — its module, token and IL offset — so a C# or Visual Basic statement and
+ * an IL view's instruction are all places one can go, and the backend binds the location it is given.
  */
 export const breakpointStatementsOf = (document: { language: string; codeStatements?: CodeStatement[] } | undefined): CodeStatement[] | undefined =>
-  document?.language === 'csharp' ? document.codeStatements : undefined
+  document?.codeStatements
+
+/**
+ * The statement of a document that holds an IL location — dnSpy's lookup of a code location in a tab's method
+ * debug info: the statement that starts there, else the narrowest one whose IL covers it, else the first of the
+ * body after it (a method's entry, which no statement may start at). A document without the body has none.
+ */
+export const statementOfLocation = (
+  statements: CodeStatement[] | undefined,
+  modulePath: string,
+  metadataToken: number,
+  ilOffset: number,
+): CodeStatement | undefined => {
+  let covering: CodeStatement | undefined
+  let after: CodeStatement | undefined
+  for (const statement of statements ?? []) {
+    if (statement.isHidden || statement.metadataToken !== metadataToken || statement.modulePath !== modulePath)
+      continue
+    if (statement.ilOffset === ilOffset)
+      return statement
+    const start = Math.min(statement.ilOffset, statement.sequencePointIlOffset)
+    if (start <= ilOffset && ilOffset < statement.ilEndOffset &&
+      (!covering || statement.ilEndOffset - start < covering.ilEndOffset - Math.min(covering.ilOffset, covering.sequencePointIlOffset)))
+      covering = statement
+    if (statement.ilOffset > ilOffset && (!after || statement.ilOffset < after.ilOffset))
+      after = statement
+  }
+  return covering ?? after
+}
 
 // The IL identity a statement maps to. Two clicks that land on the same sequence point produce the same key, which
 // is what makes the second click a toggle even after the first one was snapped to a different line.
 export const statementIdentity = (modulePath: string, metadataToken: number, ilOffset: number): string =>
   `${modulePath}|${metadataToken}|${ilOffset}`
 
-// Where each breakpoint draws its dot. Markers are derived from the document on screen rather than stored on the
-// breakpoint, so breakpoints created elsewhere (the Breakpoints pane, F9) show up here too, and a document whose
-// language has no IL map simply draws nothing. A breakpoint is matched by IL identity, falling back to the node it
-// was requested from while the backend has not confirmed the snap yet.
-const breakpointLineInDocument = (
+// Where each breakpoint draws its glyph. Markers are derived from the document on screen rather than stored on the
+// breakpoint, so breakpoints created elsewhere (the Breakpoints window, another view of the method) show up here
+// too. A breakpoint is its code location, found in the view's statements whatever language the view is in — an IL
+// instruction in the middle of a C# statement is drawn on that statement — and falls back to the line it was asked
+// for while it has no location yet.
+export const breakpointPositionInDocument = (
   nodeId: string,
   statements: CodeStatement[] | undefined,
   breakpoint: LineBreakpoint,
-): number | undefined => {
-  const statement = breakpoint.modulePath !== undefined && breakpoint.ilOffset !== undefined
-    ? (statements ?? []).find((candidate) => statementIdentity(candidate.modulePath, candidate.metadataToken, candidate.ilOffset) === breakpoint.identity)
-    : undefined
-  if (statement)
-    return statement.startLine
-  // Until the engine has named the module, the requested line is the only place the dot can go. Once it has, an
-  // identity this document does not contain means the breakpoint belongs to some other document entirely.
-  return breakpoint.modulePath === undefined && breakpoint.nodeId === nodeId ? breakpoint.requestedLine : undefined
+): { line: number; column: number; endLine: number; endColumn: number } | undefined => {
+  if (breakpoint.modulePath !== undefined && breakpoint.metadataToken !== undefined && breakpoint.ilOffset !== undefined) {
+    const statement = statementOfLocation(statements, breakpoint.modulePath, breakpoint.metadataToken, breakpoint.ilOffset)
+    return statement ? { line: statement.startLine, column: statement.startColumn, endLine: statement.endLine, endColumn: statement.endColumn } : undefined
+  }
+  // Until the engine has named the module, the requested line is the only place the glyph can go.
+  return breakpoint.nodeId === nodeId ? { line: breakpoint.requestedLine, column: 1, endLine: breakpoint.requestedLine, endColumn: 1 } : undefined
+}
+
+const breakpointLineInDocument = (nodeId: string, statements: CodeStatement[] | undefined, breakpoint: LineBreakpoint): number | undefined =>
+  breakpointPositionInDocument(nodeId, statements, breakpoint)?.line
+
+/** One breakpoint's glyph in a document: the line it goes on and the breakpoint it stands for. */
+export interface LineBreakpointMarker {
+  line: number
+  breakpoint: LineBreakpoint
 }
 
 export const lineBreakpointMarkers = (
   nodeId: string,
   statements: CodeStatement[] | undefined,
   breakpoints: LineBreakpoint[],
-): { line: number; enabled: boolean; state: LineBreakpoint['state']; message?: string; description?: string }[] => {
-  const markers: { line: number; enabled: boolean; state: LineBreakpoint['state']; message?: string; description?: string }[] = []
+): LineBreakpointMarker[] => {
+  const markers: LineBreakpointMarker[] = []
   for (const breakpoint of breakpoints) {
     const line = breakpointLineInDocument(nodeId, statements, breakpoint)
     if (line !== undefined)
-      markers.push({ line, enabled: breakpoint.enabled, state: breakpoint.state, message: breakpoint.message, description: breakpoint.description })
+      markers.push({ line, breakpoint })
   }
   return markers
 }
 
-// The breakpoint whose dot a line carries, which is what the code viewer's context menu names in its
-// commands: the inverse of `lineBreakpointMarkers`, and wrong in the same way if the two disagree. Several
-// breakpoints can share a line only through the fallback below, so the first match is the one the dots merge.
+// The breakpoint whose glyph a line carries, which is what the code viewer's context menu names in its commands:
+// the inverse of `lineBreakpointMarkers`, and wrong in the same way if the two disagree.
 export const lineBreakpointAt = (
   nodeId: string,
   statements: CodeStatement[] | undefined,
@@ -3761,6 +4200,41 @@ export const lineBreakpointAt = (
   line: number,
 ): LineBreakpoint | undefined =>
   breakpoints.find((breakpoint) => breakpointLineInDocument(nodeId, statements, breakpoint) === line)
+
+/** Every breakpoint whose glyph is on a line — what dnSpy's toggle acts on as one. */
+export const lineBreakpointsAt = (
+  nodeId: string,
+  statements: CodeStatement[] | undefined,
+  breakpoints: LineBreakpoint[],
+  line: number,
+): LineBreakpoint[] =>
+  breakpoints.filter((breakpoint) => breakpointLineInDocument(nodeId, statements, breakpoint) === line)
+
+/** dnSpy's BreakpointKind: which glyph a breakpoint is drawn with. */
+export type BreakpointKind =
+  | 'BreakpointEnabled' | 'BreakpointDisabled' | 'AdvancedBreakpointEnabled' | 'AdvancedBreakpointDisabled'
+  | 'BreakpointWarning' | 'BreakpointError' | 'AdvancedBreakpointWarning' | 'AdvancedBreakpointError'
+  | 'TracepointEnabled' | 'TracepointDisabled' | 'AdvancedTracepointEnabled' | 'AdvancedTracepointDisabled'
+  | 'TracepointWarning' | 'TracepointError' | 'AdvancedTracepointWarning' | 'AdvancedTracepointError'
+
+/**
+ * dnSpy's BreakpointImageUtilities.GetBreakpointKind. A condition, a hit count or a filter makes a breakpoint
+ * advanced, a trace that continues makes it a tracepoint, and the message the bound breakpoints carry — only a
+ * debugger that is running has one — wins over enabled and disabled.
+ */
+export const breakpointKind = (breakpoint: Pick<LineBreakpoint, 'enabled' | 'settings' | 'severity'>): BreakpointKind => {
+  const settings = breakpoint.settings
+  const advanced = Boolean(settings?.condition || settings?.hitCount || settings?.filter)
+  const prefix = settings?.trace?.continue ? 'Tracepoint' : 'Breakpoint'
+  if (breakpoint.severity === 'warning')
+    return `${advanced ? 'Advanced' : ''}${prefix}Warning` as BreakpointKind
+  if (breakpoint.severity === 'error')
+    return `${advanced ? 'Advanced' : ''}${prefix}Error` as BreakpointKind
+  return `${advanced ? 'Advanced' : ''}${prefix}${breakpoint.enabled ? 'Enabled' : 'Disabled'}` as BreakpointKind
+}
+
+/** dnSpy's BreakpointImageUtilities.GetImage: the advanced warning and error kinds share the plain images. */
+export const breakpointImage = (kind: BreakpointKind): string => kind.replace(/^Advanced(\w+point)(Warning|Error)$/, '$1$2')
 
 // A body bookmark is named by the method it sits in and the IL offset inside it, which is what dnSpy's
 // `DotNetMethodBodyBookmarkLocation` stores. The *source* method token is the one that matters: inside a
@@ -4241,6 +4715,36 @@ useAppStore.subscribe((state, previous) => {
     saveBookmarks(state.bookmarks)
 })
 
+/** The Breakpoints window's row ids, split into line breakpoint ids and the names of name breakpoints. */
+const splitRowIds = (ids: string[]): { lines: Set<string>; names: Set<string> } => ({
+  lines: new Set(ids.filter((id) => !id.startsWith('fn:'))),
+  names: new Set(ids.filter((id) => id.startsWith('fn:')).map((id) => id.slice(3))),
+})
+
+/** The rows of dnSpy's breakpoint file: a code breakpoint's location, enabled state and settings. */
+export const breakpointFileEntries = (breakpoints: LineBreakpoint[]): BreakpointFileEntry[] => breakpoints
+  .filter((breakpoint) => !!breakpoint.modulePath && !!breakpoint.metadataToken && breakpoint.ilOffset !== undefined)
+  .map((breakpoint) => ({
+    modulePath: breakpoint.modulePath!,
+    metadataToken: breakpoint.metadataToken!,
+    ilOffset: breakpoint.ilOffset!,
+    enabled: breakpoint.enabled,
+    settings: normalizeBreakpointSettings(breakpoint.settings) ?? null,
+  }))
+
+/** A row of dnSpy's breakpoint file as a stored breakpoint: the file names the method by its full name, which is
+ *  what the row is labelled with until the backend formats it. */
+export const lineBreakpointEntryOfFile = (entry: BreakpointFileEntry): LineBreakpointEntry => ({
+  modulePath: entry.modulePath,
+  metadataToken: entry.metadataToken,
+  sourceMethodToken: entry.metadataToken,
+  ilOffset: entry.ilOffset,
+  line: 0,
+  enabled: entry.enabled,
+  description: entry.method ?? undefined,
+  settings: parseBreakpointSettings(entry.settings ?? undefined),
+})
+
 /**
  * The line breakpoints in the shape they are stored and exported. A breakpoint the engine has not
  * named a module and an offset for only exists for this session — there is nothing on disk to point
@@ -4272,7 +4776,8 @@ export const normalizeBreakpointSettings = (settings: BreakpointSettings | undef
   const condition = settings.condition?.expression ? settings.condition : undefined
   const hitCount = settings.hitCount
   const filter = settings.filter || undefined
-  const trace = settings.trace?.message ? settings.trace : undefined
+  // A trace is kept with an empty message: dnSpy's Add Class Tracepoint starts from one.
+  const trace = settings.trace ? settings.trace : undefined
   const labels = settings.labels?.filter((label) => label !== '') ?? []
   if (!condition && !hitCount && !filter && !trace && labels.length === 0)
     return undefined
@@ -4318,7 +4823,7 @@ export const parseBreakpointSettings = (value: unknown): BreakpointSettings | un
     settings.filter = stored.filter
 
   const trace = stored.trace as Record<string, unknown> | undefined
-  if (typeof trace?.message === 'string' && trace.message !== '')
+  if (typeof trace?.message === 'string')
     settings.trace = { message: trace.message, continue: trace.continue !== false }
 
   if (Array.isArray(stored.labels)) {
@@ -4452,6 +4957,7 @@ const lineBreakpointFromEntry = (entry: LineBreakpointEntry): LineBreakpoint => 
   sourceMethodToken: entry.sourceMethodToken,
   ilOffset: entry.ilOffset,
   settings: entry.settings,
+  order: ++lineBreakpointOrder,
 })
 
 const emptyBreakpoints = (): Pick<AppState, 'lineBreakpoints' | 'functionBreakpoints'> =>
@@ -5202,10 +5708,20 @@ const openDebugModule = async (get: StoreGet, set: StoreSet, path: string, name:
     autoOpenedModules = { workspaceId, paths: new Set() }
   if (autoOpenedModules.paths.has(path)) return false
   autoOpenedModules.paths.add(path)
+  // dnSpy's Use memory modules: the module is read out of the process rather than from its file. A module that has no
+  // file — a dynamic one, or one loaded from bytes — can only be read that way.
+  const module = get().debugModules.find((candidate) => candidate.path === path)
+  const sessionId = get().debugSessionId
+  const fromMemory = module !== undefined && sessionId !== undefined && (loadAppOptions().debugger.useMemoryModules || module.isDynamic === true || module.isInMemory === true)
   try {
-    const added = await window.dnSpy.addModules(workspaceId, [path])
-    const roots = await window.dnSpy.getRoots(workspaceId)
-    set({ modules: added.modules, roots: roots.nodes })
+    if (fromMemory) {
+      if (!await get().openModuleFromMemory(sessionId, module, { select: false }))
+        return false
+    } else {
+      const added = await window.dnSpy.addModules(workspaceId, [path])
+      const roots = await window.dnSpy.getRoots(workspaceId)
+      set({ modules: added.modules, roots: roots.nodes })
+    }
     get().appendOutput(t('Loaded {name} for the stopped location.', { name }))
   } catch {
     // The file is gone, or is not a module dnSpy can read. The stop keeps the identity it has — a
@@ -5235,14 +5751,26 @@ let lastLaunchOptions: DebugLaunchOptions | undefined
 
 const moduleBreakpointsStorageKey = 'dnspy.moduleBreakpoints.v1'
 
-const syncModuleBreakpoints = async (get: StoreGet): Promise<void> => {
-  const { debugSessionId, moduleBreakpoints } = get()
-  if (!debugSessionId) return
-  try {
-    await window.dnSpy.setDebugModuleBreakpoints?.(debugSessionId, moduleBreakpoints.filter((row) => row.enabled).map(({ id: _id, enabled: _enabled, ...settings }) => settings))
-  } catch {
-    // An engine without module breakpoints just never stops on a load.
-  }
+// Breakpoints are dnSpy's DbgManager's, not a process's: every process being debugged gets the same set.
+const syncModuleBreakpoints = async (get: StoreGet, targets: string[] = debugSessionIds(get())): Promise<void> => {
+  const rows = get().moduleBreakpoints.filter((row) => row.enabled).map(({ id: _id, enabled: _enabled, ...settings }) => settings)
+  await Promise.all(targets.map(async (sessionId) => {
+    try {
+      await window.dnSpy.setDebugModuleBreakpoints?.(sessionId, rows)
+    } catch {
+      // An engine without module breakpoints just never stops on a load.
+    }
+  }))
+}
+
+/** A process joining the session gets every kind of breakpoint before it is let go. */
+const syncAllBreakpoints = async (get: StoreGet, set: StoreSet, sessionId: string): Promise<void> => {
+  const functionRequests = enabledFunctionBreakpointRequests(get().functionBreakpoints)
+  if (functionRequests.length > 0)
+    await window.dnSpy.setFunctionBreakpoints(sessionId, functionRequests)
+  if (get().lineBreakpoints.length > 0)
+    await syncLineBreakpoints(get, set, [sessionId])
+  await syncModuleBreakpoints(get, [sessionId])
 }
 
 const loadModuleBreakpoints = (): ModuleBreakpoint[] => {
@@ -5276,16 +5804,316 @@ const pushDebuggerOptions = async (): Promise<void> => {
 }
 
 /** What the Call Stack window asks the engine to write: its own display settings and the shared hex toggles. */
+/** What the disassembly is written with: the Disassembler page and the code style of its dialect. */
+const disassemblyOptions = (): DebugDisassemblyOptions => {
+  const options = loadAppOptions()
+  const settings = options.disassembler
+  return {
+    syntax: settings.syntax,
+    showInstructionAddress: settings.showInstructionAddress,
+    showInstructionBytes: settings.showInstructionBytes,
+    showILCode: settings.showILCode,
+    showCode: settings.showCode,
+    emptyLineBetweenBasicBlocks: settings.emptyLineBetweenBasicBlocks,
+    addLabels: settings.addLabels,
+    codeStyle: { ...options.disassemblerCodeStyle[settings.syntax] },
+  }
+}
+
 const stackFrameFormat = (): DebugStackFrameFormat => {
   const options = loadAppOptions()
   return { ...options.callStack, useHexadecimal: options.debugger.useHexadecimal, useDigitSeparators: options.debugger.useDigitSeparators }
 }
 
-const endDebugSession = async (get: StoreGet, set: StoreSet, terminateDebuggee: boolean): Promise<void> => {
-  const sessionId = get().debugSessionId
-  if (!sessionId) return
+/** The dynamic modules, as `session|module`, that have had a type created since their copies were last read. */
+const loadedDynamicClasses = new Set<string>()
+
+/**
+ * ClassLoader.LoadNewClasses: once the process is paused, every copy of a dynamic module that has had a type created
+ * since it was read is read out of the process again.
+ */
+const reloadLoadedClasses = async (get: StoreGet, sessionId: string): Promise<void> => {
+  for (const [path, entry] of Object.entries(get().memoryModules)) {
+    const key = `${entry.sessionId}|${entry.moduleId}`
+    if (entry.sessionId !== sessionId || !loadedDynamicClasses.has(key))
+      continue
+    loadedDynamicClasses.delete(key)
+    const module = get().modules.find((candidate) => candidate.path === path)
+    if (module)
+      await get().reloadMethodBodies(module.id)
+  }
+}
+
+/** Sessions this client ended: what they still send is about a process that is gone. */
+const endedDebugSessions = new Set<string>()
+
+/** Launches and attaches still on their way, whose session's first events can arrive before their reply does. */
+let pendingDebugStarts = 0
+
+/** Forgets the sessions this client ended and the starts on their way — for tests, which reuse session ids. */
+export const resetDebugSessionTracking = (): void => {
+  endedDebugSessions.clear()
+  loadedDynamicClasses.clear()
+  pendingDebugStarts = 0
+}
+
+/** What the debugger windows show of the current process while it has no stop to show. */
+const NO_STOP_VIEW = {
+  debugThreads: [],
+  debugFrames: [],
+  debugVariables: [],
+  watchValues: [],
+  otherWatchValues: {},
+  stoppedLocation: undefined,
+  selectedDebugFrameId: undefined,
+  activeDebugFrameId: undefined,
+} satisfies Partial<AppState>
+
+/**
+ * The copy of a process's module the node is in, when the node's module was read out of a process the debugger still
+ * debugs — what Reload All Method Bodies acts on.
+ */
+export const memoryModulePathOf = (state: Pick<AppState, 'modules' | 'parents' | 'memoryModules' | 'debugSessionId' | 'debugSessions'>, nodeId: string): string | undefined => {
+  const path = state.modules.find((module) => module.id === rootIdOf(state, nodeId))?.path
+  const entry = path === undefined ? undefined : state.memoryModules[path]
+  return entry && debugSessionIds(state).includes(entry.sessionId) ? path : undefined
+}
+
+/** The session ids the engine is debugging: the current process's, then the others'. */
+export const debugSessionIds = (state: Pick<AppState, 'debugSessionId' | 'debugSessions'>): string[] =>
+  [...new Set([...(state.debugSessionId ? [state.debugSessionId] : []), ...state.debugSessions.map((entry) => entry.sessionId)])]
+
+/**
+ * The processes the Processes, Threads and Modules windows list: every entry, the current one's with what the
+ * top-level fields hold of it — they are newer than its entry.
+ */
+export const debugProcessesOf = (state: Pick<AppState, 'debugSessionId' | 'debugSessions' | 'debugState' | 'debugProcess' | 'debugModules' | 'debugThreads' | 'selectedDebugThreadId'>): DebugSessionEntry[] =>
+  state.debugSessions.map((entry) => entry.sessionId !== state.debugSessionId ? entry : {
+    ...entry,
+    state: state.debugState === 'inactive' ? entry.state : state.debugState,
+    process: state.debugProcess ?? entry.process,
+    modules: state.debugModules,
+    threads: state.debugThreads,
+    threadId: state.selectedDebugThreadId,
+  })
+
+const upsertDebugSession = (set: StoreSet, sessionId: string, change: Partial<DebugSessionEntry> | ((entry: DebugSessionEntry) => Partial<DebugSessionEntry>)): void => {
+  set((state) => {
+    const existing = state.debugSessions.find((entry) => entry.sessionId === sessionId)
+    const base: DebugSessionEntry = existing ?? { sessionId, state: 'starting', modules: [], threads: [], shouldDetach: false }
+    const next = { ...base, ...(typeof change === 'function' ? change(base) : change) }
+    return { debugSessions: existing ? state.debugSessions.map((entry) => entry.sessionId === sessionId ? next : entry) : [...state.debugSessions, next] }
+  })
+}
+
+/** The top-level debug fields for a process becoming the current one; its stop, if it has one, is read afterwards. */
+const sessionView = (entry: DebugSessionEntry): Partial<AppState> => ({
+  ...NO_STOP_VIEW,
+  debugSessionId: entry.sessionId,
+  debugState: entry.state,
+  debugProcess: entry.process,
+  debugModules: entry.modules,
+  debugThreads: entry.threads,
+  debugCapabilities: entry.capabilities ?? {},
+  stoppedReason: entry.stoppedReason,
+  selectedDebugThreadId: entry.threadId,
+})
+
+/** Keeps what the top-level fields know of the current process in its entry, before another one becomes current. */
+const captureCurrentSession = (get: StoreGet, set: StoreSet): void => {
+  const state = get()
+  const sessionId = state.debugSessionId
+  if (!sessionId || !state.debugSessions.some((entry) => entry.sessionId === sessionId))
+    return
+  upsertDebugSession(set, sessionId, (entry) => ({
+    threadId: state.selectedDebugThreadId,
+    stoppedReason: state.stoppedReason,
+    modules: state.debugModules,
+    threads: state.debugThreads,
+    process: state.debugProcess ?? entry.process,
+    capabilities: state.debugCapabilities,
+  }))
+}
+
+/**
+ * A launch or an attach begins. The first process starts debugging — OutputLogger empties the Debug pane and, unless
+ * ShowDebugOutputLog is off, shows it; a process that joins a session already under way leaves the current one as it is.
+ */
+const beginDebugSession = (get: StoreGet, set: StoreSet): void => {
+  pendingDebugStarts++
+  if (debugSessionIds(get()).length > 0) {
+    set({ error: undefined })
+    return
+  }
+  set({ ...NO_STOP_VIEW, debugState: 'starting', error: undefined, debugOutput: [], ...(loadAppOptions().outputLogger.showDebugOutputLog ? { outputPane: 'debug' as const } : {}) })
+}
+
+/** A launch or an attach is over, whichever way it went. */
+const endDebugStart = (get: StoreGet, set: StoreSet): void => {
+  pendingDebugStarts = Math.max(0, pendingDebugStarts - 1)
+  if (debugSessionIds(get()).length === 0 && get().debugState === 'starting')
+    set({ debugState: 'inactive' })
+}
+
+/**
+ * A process is gone. Another one being debugged becomes the current one — a paused one first, as dnSpy's
+ * RecheckAndUpdateCurrentProcess picks — or, with none left, debugging is over.
+ */
+const removeDebugSession = async (get: StoreGet, set: StoreSet, sessionId: string): Promise<void> => {
+  set((state) => ({ debugSessions: state.debugSessions.filter((entry) => entry.sessionId !== sessionId) }))
+  const current = get().debugSessionId
+  if (current !== undefined && current !== sessionId)
+    return
+  const next = get().debugSessions.find((entry) => entry.state === 'stopped') ?? get().debugSessions[0]
+  if (next) {
+    set(sessionView(next))
+    if (next.state === 'stopped') {
+      await refreshDebugState(get, set, next.threadId)
+      await get().revealStoppedLocation()
+    }
+    return
+  }
+  set((state) => ({ ...NO_STOP_VIEW, debugState: 'inactive', debugSessionId: undefined, debugModules: [], debugProcess: undefined, stoppedReason: undefined, selectedDebugThreadId: undefined, lineBreakpoints: withoutSessionState(state.lineBreakpoints) }))
+}
+
+/** dnSpy's DbgProcess.Detach and Terminate: the session lets go of the one process. */
+const endDebugProcess = async (get: StoreGet, set: StoreSet, sessionId: string, terminateDebuggee: boolean): Promise<void> => {
+  endedDebugSessions.add(sessionId)
   try { await window.dnSpy.disconnectDebug(sessionId, terminateDebuggee) } catch { /* adapter may exit before replying */ }
-  set({ debugState: 'inactive', debugSessionId: undefined, debugThreads: [], debugFrames: [], debugVariables: [], debugModules: [], watchValues: [], otherWatchValues: {}, debugProcess: undefined, stoppedLocation: undefined, selectedDebugFrameId: undefined, activeDebugFrameId: undefined })
+  await removeDebugSession(get, set, sessionId)
+}
+
+/** Stop Debugging, Detach All and Terminate All: every process at once, and then debugging is over. */
+const endAllDebugSessions = async (get: StoreGet, set: StoreSet, mode: 'stop' | 'detach' | 'terminate'): Promise<void> => {
+  const state = get()
+  const ids = debugSessionIds(state)
+  if (ids.length === 0) return
+  const terminates = (sessionId: string): boolean => {
+    if (mode !== 'stop')
+      return mode === 'terminate'
+    const entry = state.debugSessions.find((candidate) => candidate.sessionId === sessionId)
+    return !(entry?.shouldDetach ?? (sessionId === state.debugSessionId && state.debugProcess?.ownsDebuggee === false))
+  }
+  for (const sessionId of ids)
+    endedDebugSessions.add(sessionId)
+  await Promise.all(ids.map(async (sessionId) => {
+    try { await window.dnSpy.disconnectDebug(sessionId, terminates(sessionId)) } catch { /* adapter may exit before replying */ }
+  }))
+  set((current) => ({ ...NO_STOP_VIEW, debugSessions: [], debugState: 'inactive', debugSessionId: undefined, debugModules: [], debugProcess: undefined, stoppedReason: undefined, selectedDebugThreadId: undefined, lineBreakpoints: withoutSessionState(current.lineBreakpoints) }))
+}
+
+/** Lets the current process go on — a continue or a step of its current thread — and drops what its stop showed. */
+const resumeCurrentProcess = async (get: StoreGet, set: StoreSet, command: (sessionId: string, threadId: number) => Promise<unknown>): Promise<void> => {
+  const { debugSessionId, selectedDebugThreadId } = get()
+  if (!debugSessionId || selectedDebugThreadId === undefined) return
+  await command(debugSessionId, selectedDebugThreadId)
+  set({ ...NO_STOP_VIEW, debugThreads: get().debugThreads, debugState: 'running' })
+}
+
+/** Runs every paused process but the current one: what Continue and the stepping commands do to the others. */
+const runOtherProcesses = (get: StoreGet): void => {
+  const { debugSessionId, debugSessions } = get()
+  for (const entry of debugSessions) {
+    if (entry.sessionId !== debugSessionId && entry.state === 'stopped')
+      void window.dnSpy.debugContinue(entry.sessionId, entry.threadId ?? 0).catch(() => undefined)
+  }
+}
+
+/** Reads a process's threads again, into the Threads window's rows for it. */
+const rereadThreads = async (get: StoreGet, set: StoreSet, sessionId: string): Promise<void> => {
+  const threads = await window.dnSpy.getDebugThreads(sessionId).catch(() => undefined)
+  if (!threads) return
+  if (sessionId === get().debugSessionId)
+    set({ debugThreads: threads })
+  if (get().debugSessions.some((entry) => entry.sessionId === sessionId))
+    upsertDebugSession(set, sessionId, { threads })
+}
+
+/** OutputLogger's DebugLogExitProcess: "The program '[pid] name' has exited with code N (0xN)." */
+const writeProcessExit = (get: StoreGet, event: DebugEvent, processName: string | null | undefined): void => {
+  const code = typeof event.body?.exitCode === 'number' ? event.body.exitCode : undefined
+  if (event.event === 'exited' && !loadAppOptions().outputLogger.showProcessExitMessages) return
+  get().appendOutput(event.event === 'exited'
+    ? code !== undefined && processName
+      ? t('The program \'{name}\' has exited with code {code} (0x{hex}).', { name: processName, code, hex: (code >>> 0).toString(16) })
+      : t('Debug target exited with code {code}.', { code: String(event.body?.exitCode ?? '') })
+    : t('Debug session terminated.'), 'debug')
+}
+
+/** OutputLogger's DebugLogLoadModule and DebugLogUnloadModule, for the process the module is in. */
+const writeModuleMessage = (get: StoreGet, module: DebugModule, processName: string, removed: boolean): void => {
+  const logger = loadAppOptions().outputLogger
+  if (removed ? !logger.showModuleUnloadMessages : !logger.showModuleLoadMessages) return
+  const prefix = `'${processName}' (CoreCLR: ${module.appDomainName ?? 'clrhost'}): `
+  get().appendOutput(prefix + (removed ? t('Unloaded \'{path}\'.', { path: module.path ?? module.name }) : t('Loaded \'{path}\'.', { path: module.path ?? module.name })), 'debug')
+}
+
+/**
+ * An event of a process that is not the current one. Answers true when it is taken care of here; a stop while the
+ * current process runs makes the stopping one current and is then handled as the current one's, and the output,
+ * exception and breakpoint events are the same whichever process sent them.
+ */
+const handleOtherProcessEvent = async (get: StoreGet, set: StoreSet, known: DebugSessionEntry | undefined, event: DebugEvent): Promise<boolean> => {
+  let entry = known
+  if (!entry) {
+    // A launch or an attach still on its way: its first events come before its reply does.
+    if (pendingDebugStarts === 0) {
+      if (event.event === 'terminated')
+        get().appendOutput(t('Debug session terminated.'), 'debug')
+      return true
+    }
+    upsertDebugSession(set, event.sessionId, {})
+    entry = get().debugSessions.find((candidate) => candidate.sessionId === event.sessionId)!
+  }
+  const sessionId = entry.sessionId
+  switch (event.event) {
+    case 'stopped': {
+      const threadId = typeof event.body?.threadId === 'number' ? event.body.threadId : undefined
+      upsertDebugSession(set, sessionId, { state: 'stopped', threadId, stoppedReason: typeof event.body?.reason === 'string' ? event.body.reason : 'stopped' })
+      // dnSpy makes the process that breaks the current one when the current one has nothing to show.
+      if (get().debugState === 'running') {
+        captureCurrentSession(get, set)
+        set(sessionView(get().debugSessions.find((candidate) => candidate.sessionId === sessionId)!))
+        return false
+      }
+      await rereadThreads(get, set, sessionId)
+      return true
+    }
+    case 'continued':
+      upsertDebugSession(set, sessionId, { state: 'running', threads: [] })
+      return true
+    case 'module': {
+      const module = event.body?.module as DebugModule | undefined
+      if (!module) return true
+      const removed = event.body?.reason === 'removed'
+      upsertDebugSession(set, sessionId, (current) => ({
+        modules: removed
+          ? current.modules.filter((candidate) => candidate.id !== module.id)
+          : [...current.modules.filter((candidate) => candidate.id !== module.id), module].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+      }))
+      writeModuleMessage(get, module, entry.process?.name ?? '', removed)
+      return true
+    }
+    case 'process': {
+      const process = await window.dnSpy.getDebugProcess?.(sessionId).catch(() => undefined)
+      if (process)
+        upsertDebugSession(set, sessionId, { process })
+      return true
+    }
+    case 'thread':
+      if (event.body?.reason === 'exited' && typeof event.body.threadId === 'number' && loadAppOptions().outputLogger.showThreadExitMessages) {
+        const code = typeof event.body.exitCode === 'number' ? event.body.exitCode : 0
+        get().appendOutput(t('The thread 0x{id} has exited with code {code} (0x{hex}).', { id: event.body.threadId.toString(16), code, hex: (code >>> 0).toString(16) }), 'debug')
+      }
+      return true
+    case 'terminated':
+    case 'exited':
+      await removeDebugSession(get, set, sessionId)
+      writeProcessExit(get, event, entry.process?.name)
+      return true
+    default:
+      return false
+  }
 }
 
 const refreshDebugState = async (get: StoreGet, set: StoreSet, preferredThreadId?: number, options?: { keepFrame?: number }): Promise<void> => {
@@ -5357,21 +6185,21 @@ const refreshWatches = async (get: StoreGet, set: StoreSet): Promise<void> => {
 
 // Disabled breakpoints are deliberately left out of what we send: the debug adapter only knows
 // about the breakpoints it was last given, so omitting them is what "disables" them.
-const enabledFunctionBreakpointRequests = (breakpoints: FunctionBreakpoint[]): { name: string; settings?: BreakpointSettings }[] =>
-  breakpoints.filter((breakpoint) => breakpoint.enabled).map((breakpoint) => ({ name: breakpoint.name, settings: breakpoint.settings }))
+const enabledFunctionBreakpointRequests = (breakpoints: FunctionBreakpoint[]): { id: string; name: string; settings?: BreakpointSettings }[] =>
+  // The id is the window's row id, which is how the engine's reports find the row again.
+  breakpoints.filter((breakpoint) => breakpoint.enabled).map((breakpoint) => ({ id: `fn:${breakpoint.name}`, name: breakpoint.name, settings: breakpoint.settings }))
 
 const syncFunctionBreakpoints = async (get: StoreGet): Promise<void> => {
-  const { debugSessionId, functionBreakpoints } = get()
-  if (debugSessionId)
-    await window.dnSpy.setFunctionBreakpoints(debugSessionId, enabledFunctionBreakpointRequests(functionBreakpoints))
+  const requests = enabledFunctionBreakpointRequests(get().functionBreakpoints)
+  await Promise.all(debugSessionIds(get()).map((sessionId) => window.dnSpy.setFunctionBreakpoints(sessionId, requests)))
 }
 
 // Line breakpoints are sent as the whole set every time, including the disabled ones: the engine can arm and disarm
 // a breakpoint in place, so "disabled" does not have to mean "forgotten", and re-enabling one does not have to be
 // resolved from scratch. The reply is what the editor draws — the snapped line, and whether it bound at all.
-const syncLineBreakpoints = async (get: StoreGet, set: StoreSet): Promise<void> => {
+const syncLineBreakpoints = async (get: StoreGet, set: StoreSet, targets: string[] = debugSessionIds(get())): Promise<void> => {
   const { debugSessionId, lineBreakpoints } = get()
-  if (!debugSessionId) return
+  if (targets.length === 0) return
   const requested = lineBreakpoints.map((breakpoint) => ({
     id: breakpoint.id,
     nodeId: breakpoint.nodeId,
@@ -5385,7 +6213,10 @@ const syncLineBreakpoints = async (get: StoreGet, set: StoreSet): Promise<void> 
     ilOffset: breakpoint.ilOffset,
     settings: breakpoint.settings,
   }))
-  const results = await window.dnSpy.setBreakpoints(debugSessionId, requested)
+  // Every process gets the set; the gutter draws what the current one — or the one process asked — says of it.
+  const replies = await Promise.all(targets.map((sessionId) => window.dnSpy.setBreakpoints(sessionId, requested)))
+  const shown = targets.indexOf(debugSessionId ?? '')
+  const results = replies[shown >= 0 ? shown : 0]
   const byId = new Map(results.map((result) => [result.id, result]))
   set((state) => ({
     lineBreakpoints: state.lineBreakpoints.map((breakpoint) => {
@@ -5417,8 +6248,19 @@ const applyBreakpointResult = (breakpoint: LineBreakpoint, result: DebugBreakpoi
     ilOffset,
     // The count lives in the engine, which carries it across a re-send, so the client only mirrors it.
     hitCount: result.hitCount ?? breakpoint.hitCount,
+    // dnSpy's bound message: only an enabled breakpoint the engine could not bind has one.
+    severity: result.enabled && result.severity ? result.severity : undefined,
   }
 }
+
+/**
+ * The breakpoints once no debugger runs: dnSpy's bound message is None and the hit counts are gone with the
+ * session that counted them, so every glyph is the plain one again.
+ */
+const withoutSessionState = (breakpoints: LineBreakpoint[]): LineBreakpoint[] =>
+  breakpoints.some((breakpoint) => breakpoint.severity !== undefined || breakpoint.hitCount !== undefined || breakpoint.state !== 'pending')
+    ? breakpoints.map((breakpoint) => ({ ...breakpoint, severity: undefined, hitCount: undefined, state: 'pending', message: undefined }))
+    : breakpoints
 
 /**
  * Renames a namespace, or empties its types into the unnamed namespace when `newName` is blank — dnSpy

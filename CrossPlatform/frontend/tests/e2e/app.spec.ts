@@ -816,20 +816,17 @@ test.describe('the workspace shell', () => {
 
     await showBreakpoints()
     const rows = page.locator('.breakpoint-row')
-    // Every method of the type is broken on, named the way a function breakpoint names a method: the
-    // declaring type in full, then the method. The constructor and the property's getter are both here.
-    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException..ctor' })).toHaveCount(1)
-    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException.get_Code' })).toHaveCount(1)
+    // Every method of the type is broken on at its first instruction, named the way the Breakpoints window names
+    // a code location: the method in the C# formatter's words and the IL offset. The constructor and the
+    // property's getter are both here.
+    await expect(rows.filter({ hasText: 'RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x0000' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'RpcException.Code.get + 0x0000' })).toHaveCount(1)
 
-    // The output says what was added, and a second run adds nothing: the names are already there.
+    // A second run adds nothing: every method has its breakpoint already.
     const count = await rows.count()
     expect(count).toBeGreaterThan(1)
-    await showOutput()
-    const output = page.getByRole('tabpanel', { name: 'Output' })
-    await expect(output).toContainText(/Added \d+ breakpoint\(s\) for RpcException\./)
     await rpcException.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Class Breakpoint' }).click()
-    await expect(output).toContainText('RpcException has no method left to break on.')
     await expect(rows).toHaveCount(count)
   })
 
@@ -844,7 +841,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await showBreakpoints()
-    const getter = page.locator('.breakpoint-row').filter({ hasText: 'dnSpy.Backend.Contracts.RpcException.get_Code' })
+    const getter = page.locator('.breakpoint-row').filter({ hasText: 'RpcException.Code.get + 0x0000' })
     await expect(getter).toHaveCount(1)
 
     // Asked again, on the property or on the getter itself, it adds nothing and takes nothing away: the
@@ -865,20 +862,20 @@ test.describe('the workspace shell', () => {
     await menu.getByRole('menuitem', { name: 'Add Class Tracepoint' }).click()
 
     // dnSpy opens the breakpoint settings with the trace already switched on, and adds nothing until OK.
-    const dialog = page.getByRole('dialog', { name: 'Breakpoint settings' })
+    const dialog = page.getByRole('dialog', { name: 'Breakpoint Settings' })
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByRole('checkbox', { name: 'When Hit' })).toBeChecked()
-    await dialog.getByLabel('Print message:').fill('entered {$FUNCTION}')
+    await expect(dialog.getByRole('checkbox', { name: 'Log Message' })).toBeChecked()
+    await dialog.getByRole('textbox', { name: 'Log Message' }).fill('entered {$FUNCTION}')
     await dialog.getByRole('button', { name: 'OK' }).click()
     await expect(dialog).not.toBeVisible()
 
     await showBreakpoints()
     const rows = page.locator('.breakpoint-row')
-    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException..ctor' })).toHaveCount(1)
-    await expect(rows.filter({ hasText: 'dnSpy.Backend.Contracts.RpcException.get_Code' })).toHaveCount(1)
-    // Every breakpoint the command added prints the message rather than stopping.
+    await expect(rows.filter({ hasText: 'RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x0000' })).toHaveCount(1)
+    await expect(rows.filter({ hasText: 'RpcException.Code.get + 0x0000' })).toHaveCount(1)
+    // Every breakpoint the command added prints the message rather than stopping: the When Hit column says so.
     const count = await rows.count()
-    await expect(page.locator('.breakpoint-summary').filter({ hasText: 'entered {$FUNCTION}' })).toHaveCount(count)
+    await expect(rows.filter({ hasText: "Print message 'entered {$FUNCTION}'" })).toHaveCount(count)
   })
 
   test('runs the tree menu commands that reach the module file and the token box', async () => {
@@ -1255,7 +1252,7 @@ test.describe('the workspace shell', () => {
     }
 
     await clickGutter()
-    await expect(breakpointRows).toContainText('dnSpy.Backend.Contracts.RpcException..ctor')
+    await expect(breakpointRows).toContainText('RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x')
     await expect(glyphs).toHaveCount(1)
 
     // Clicking the marker again removes it, the same way the WPF editor toggles an existing breakpoint.
@@ -1514,26 +1511,32 @@ test.describe('the workspace shell', () => {
     await expect(location).toHaveText(/^0x060[0-9A-F]{5} RpcException\.RpcException\(int code/)
   })
 
-  test('toggles a breakpoint for the current method from the Debug menu', async () => {
-    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
-    await expect(page.getByRole('treeitem').first()).toContainText('dnSpy.Backend.Contracts')
-
-    await showBreakpoints()
-    await expandModule()
-    const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^dnSpy\.Backend\.Contracts$/ })
-    await namespaceRow.locator('.tree-expander').click()
+  test('toggles a breakpoint at the caret from the Debug menu', async () => {
+    await openAssemblyAndNamespace()
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008C$/ })
-    await rpcException.locator('.tree-expander').click()
-    await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    // The tree row keeps focus, so the F9 handler is not suppressed by the editor guard.
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ABA$/ }).click()
+    await rpcException.dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+    const bodyLine = page.locator('.monaco-editor .view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    await expect(bodyLine).toBeVisible()
+    await showBreakpoints()
 
+    // dnSpy's Toggle Breakpoint is the code viewer's: it acts on the statement under the caret, which a right click
+    // puts there without following the reference a left click would.
+    await bodyLine.click({ button: 'right' })
+    await expect(page.getByRole('menu', { name: 'Code editor' })).toBeVisible()
+    await expect.poll(async () => await page.evaluate(() => document.activeElement?.closest('[role="menu"]') !== null)).toBe(true)
+    await page.keyboard.press('Escape')
+    const toggle = async (): Promise<void> => {
+      await page.getByRole('menuitem', { name: 'Debug', exact: true }).click()
+      await page.getByRole('menuitem', { name: /^Toggle Breakpoint/ }).click()
+    }
     const breakpointRows = page.locator('.breakpoint-row')
-    await page.keyboard.press('F9')
-    await expect(breakpointRows).toContainText('dnSpy.Backend.Contracts.RpcException.get_Code')
+    await toggle()
+    await expect(breakpointRows).toContainText('RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x')
 
-    // A second press removes it again, like the upstream Toggle Breakpoint command.
-    await page.keyboard.press('F9')
+    // A second toggle removes it again, like the upstream Toggle Breakpoint command.
+    await toggle()
     await expect(breakpointRows).toHaveCount(0)
   })
 
@@ -1865,7 +1868,7 @@ test.describe('the in-process debug engine', () => {
     // A click in the margin left of the line numbers toggles a breakpoint on that line.
     await page.mouse.click(marginBox.x + 8, lineBox.y + lineBox.height / 2)
 
-    await expect(page.locator('.breakpoint-row')).toContainText('DebugTarget.Program.Calculate:')
+    await expect(page.locator('.breakpoint-row')).toContainText('Program.Calculate(int left, int right) + 0x')
     await expect(glyphs).toHaveCount(1)
     // The marker is echoed on the line the click mapped to, which for a click on a statement is its own line.
     const glyphBox = await glyphs.first().boundingBox()
@@ -1878,8 +1881,9 @@ test.describe('the in-process debug engine', () => {
     await startDebugging()
     // The launch asks not to break at the entry point, so the very first stop is the breakpoint's.
     await expect(page.getByText('Stopped: breakpoint', { exact: true })).toBeVisible()
-    // The debuggee's module only loads when the process starts, so the breakpoint was pending until then.
-    await expect(page.locator('.breakpoint-state-bound')).toHaveCount(1)
+    // The debuggee's module only loads when the process starts, so the breakpoint was pending until then; bound, its
+    // row wears the plain breakpoint image rather than a warning.
+    await expect(page.locator('.breakpoint-row .breakpoint-image-BreakpointEnabled')).toHaveCount(1)
 
     // The frame's arguments and locals, named through the module's portable PDB and matched to ICorDebug slots by
     // index: the accumulator is 2 * 21 by the time the return statement is reached — written in hexadecimal,
@@ -1985,7 +1989,7 @@ test.describe('the in-process debug engine', () => {
     await showBreakpoints()
     const { lineBox, marginBox } = await editorLayout(bodyLine, editor.locator('.margin').first())
     await page.mouse.click(marginBox.x + 8, lineBox.y + lineBox.height / 2)
-    await expect(page.locator('.breakpoint-row')).toContainText('DebugTarget.Program.Calculate:')
+    await expect(page.locator('.breakpoint-row')).toContainText('Program.Calculate(int left, int right) + 0x')
 
     const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
     await startDebugging()
@@ -2022,10 +2026,14 @@ test.describe('the in-process debug engine', () => {
     await page.getByRole('menuitem', { name: 'Step Out' }).click()
     await expect(page.getByText('Stopped: step', { exact: true })).toBeVisible()
     await expect(frameRow).toContainText('DebugTarget.dll!DebugTarget.Program.Main(string[] args)')
+    // The step out lands right after the call, which is still the call's statement: dnSpy shows the statement the
+    // instruction pointer is in.
+    await expect(frameRow).toHaveAttribute('title', 'DebugTarget.dll:17')
 
-    // The step out lands after the call, so what follows it is the framework's own call — which has no
-    // decompilable source to walk into. A step into degrades to a step over there and stops on the
-    // caller's next statement; the editor's marker stays on a statement of the debuggee.
+    // What follows is the framework's own call — which has no decompilable source to walk into. A step into
+    // finishes the call's statement, degrades to a step over there and stops on the caller's next statement;
+    // the editor's marker stays on a statement of the debuggee. F11 is a global key, the code viewer included.
+    await expect(toolbar.getByRole('button', { name: 'Step Into' })).toBeEnabled()
     await page.keyboard.press('F11')
     await expect(page.getByText('Stopped: step', { exact: true })).toBeVisible()
     await expect(frameRow).toContainText('DebugTarget.dll!DebugTarget.Program.Main(string[] args)')
@@ -2055,7 +2063,7 @@ test.describe('the in-process debug engine', () => {
     await showBreakpoints()
     const { lineBox, marginBox } = await editorLayout(bodyLine, editor.locator('.margin').first())
     await page.mouse.click(marginBox.x + 8, lineBox.y + lineBox.height / 2)
-    await expect(page.locator('.breakpoint-row')).toContainText('DebugTarget.Program.Calculate:')
+    await expect(page.locator('.breakpoint-row')).toContainText('Program.Calculate(int left, int right) + 0x')
 
     // The user is already on Call Stack when the debugger starts, so Locals coming to the front is the
     // session-start behaviour this test can see, not just the default layout.
@@ -2099,7 +2107,7 @@ test.describe('the in-process debug engine', () => {
     await showBreakpoints()
     const { lineBox, marginBox } = await editorLayout(callLine, editor.locator('.margin').first())
     await page.mouse.click(marginBox.x + 8, lineBox.y + lineBox.height / 2)
-    await expect(page.locator('.breakpoint-row')).toContainText('DebugTarget.Program.Main:')
+    await expect(page.locator('.breakpoint-row')).toContainText('Program.Main(string[] args) + 0x')
 
     const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
     await startDebugging()
@@ -2138,7 +2146,7 @@ test.describe('the in-process debug engine', () => {
     // The statement's own code starts inside the sequence point that covers it — the machine's field store
     // is charged to it — so where the engine can arm the breakpoint is not where the line begins. The row
     // still names the line that was clicked.
-    await expect(page.locator('.breakpoint-row')).toContainText('DebugTarget.Program.AddAsync:7')
+    await expect(page.locator('.breakpoint-row')).toContainText('Program.<AddAsync>d__3.MoveNext() + 0x')
 
     const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
     await startDebugging()
@@ -2213,11 +2221,12 @@ test.describe('the in-process debug engine', () => {
     await expect(caller).toHaveAttribute('aria-current', 'true')
     await expect(frame).not.toHaveAttribute('aria-current', 'true')
     await expect(page.getByRole('tab', { name: 'Main(string[]) : void' })).toHaveAttribute('aria-selected', 'true')
-    // A whole-line decoration lands in Monaco's overlay layer (a `cdr` div over the line), not on the
-    // `.view-line` element itself, and only for the lines the viewport holds — so the reveal, which is
-    // what scrolls the stopped line into view, is what makes it render at all.
-    const stoppedLine = page.locator('.view-overlays .cdr.debug-stopped-line')
-    await expect(stoppedLine).toHaveCount(1)
+    // The caller's statement wears dnSpy's call return marker — the green one — rather than the current statement's
+    // yellow, which belongs to the frame the thread is in. A statement decoration lands in Monaco's overlay layer (a
+    // `cdr` div over the text), and only for the lines the viewport holds — so the reveal, which is what scrolls the
+    // statement into view, is what makes it render at all.
+    await expect(page.locator('.view-overlays .cdr.stmt-CallReturn-marker')).toHaveCount(1)
+    await expect(page.locator('.view-overlays .cdr.debug-stopped-line')).toHaveCount(0)
     await page.getByRole('tab', { name: 'Locals' }).click()
     await expect(page.locator('.debug-table-row').filter({ hasText: 'args' })).toBeVisible()
 
@@ -2282,10 +2291,12 @@ test.describe('the in-process debug engine', () => {
     await showDebugWindow(/^Autos/)
     await expect(page.getByRole('treegrid', { name: 'Autos' }).getByRole('row').filter({ hasText: /^grid/ })).toBeVisible()
 
-    // The jitted method, with the instruction the frame returns to marked.
+    // The jitted method, in a document tab of its own the way dnSpy's Disassembly tab is: the native code in the
+    // Disassembler options' dialect.
     await showDebugWindow(/^Disassembly/)
-    await expect(page.locator('.disassembly-current')).toHaveCount(1)
-    await expect(page.locator('.disassembly-line').first()).toBeVisible()
+    const disassembly = page.getByRole('document', { name: 'Disassembly' })
+    await expect(disassembly.locator('.view-line').first()).toBeVisible()
+    await expect(disassembly.locator('.view-lines')).toContainText(/\b(push|mov|sub|stp|ldr)\b/)
 
     // The thread that hit the break is the program's main thread.
     await showDebugWindow(/^Threads/)
@@ -2579,7 +2590,7 @@ test.describe('the code viewer context menu', () => {
     await root.click({ button: 'right' })
     await page.getByRole('menu', { name: 'Analyzer' }).getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await showBreakpoints()
-    await expect(page.locator('.breakpoint-row').filter({ hasText: 'DebugTarget.Program.Main' })).toHaveCount(1)
+    await expect(page.locator('.breakpoint-row').filter({ hasText: 'Program.Main(string[] args) + 0x0000' })).toHaveCount(1)
   })
 
   test('analyzes the reference under the caret with Ctrl+Shift+R', async () => {
@@ -2592,6 +2603,10 @@ test.describe('the code viewer context menu', () => {
     // A right click puts the caret on the call — a left one would follow it, as dnSpy's does — and the
     // editor's own binding analyzes what the caret is on.
     await call.click({ button: 'right' })
+    // The menu is put up once what it acts on has been read, and takes the keyboard after that; the Escape has to
+    // reach it, not come before it.
+    await expect(page.getByRole('menu', { name: 'Code editor' })).toBeVisible()
+    await expect.poll(async () => await page.evaluate(() => document.activeElement?.closest('[role="menu"]') !== null)).toBe(true)
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu', { name: 'Code editor' })).not.toBeVisible()
     await page.keyboard.press('Control+Shift+R')
@@ -2702,24 +2717,41 @@ test.describe('the code viewer context menu', () => {
     const statementLine = editor.locator('.view-lines .view-line').filter({ hasText: /^\s*ThrowAndCatch\(\);/ }).first()
     const { lineBox, marginBox } = await editorLayout(statementLine, editor.locator('.margin').first())
     const y = lineBox.y + lineBox.height / 2
-    // The glyph margin is the strip next to the line numbers on the left, the bookmark strip the one on their right.
-    const strips = [
-      { x: marginBox.x + 8, marks: editor.locator('.breakpoint-glyph, .breakpoint-glyph-disabled, .breakpoint-glyph-unbound') },
-      { x: marginBox.x + marginBox.width - 7, marks: editor.locator('.bookmark-glyph, .bookmark-glyph-disabled') },
-    ]
-    for (const { x, marks } of strips) {
-      // The right button opens the menu there and leaves the line as it was; the left one is what toggles it.
-      await page.mouse.click(x, y, { button: 'right' })
-      const menu = page.getByRole('menu', { name: 'Code editor' })
-      await expect(menu).toBeVisible()
-      await page.keyboard.press('Escape')
-      await expect(menu).not.toBeVisible()
-      await expect(marks).toHaveCount(0)
-      await page.mouse.click(x, y)
-      await expect(marks).toHaveCount(1)
-      await page.mouse.click(x, y)
-      await expect(marks).toHaveCount(0)
-    }
+    // A menu takes the keyboard once it is up — its first item has the focus — and only then is the Escape its own.
+    const menuHasFocus = async (): Promise<boolean> => await page.evaluate(() => document.activeElement?.closest('[role="menu"]') !== null)
+    // The glyph margin is the strip next to the line numbers on the left. Its right button is dnSpy's glyph margin
+    // menu, which only has the commands of a breakpoint there: on an empty line nothing comes up and nothing changes.
+    const glyphX = marginBox.x + 8
+    const breakpoints = editor.locator('.breakpoint-glyph')
+    await page.mouse.click(glyphX, y, { button: 'right' })
+    await expect(page.getByRole('menu', { name: 'Breakpoint' })).toHaveCount(0)
+    await expect(breakpoints).toHaveCount(0)
+    await page.mouse.click(glyphX, y)
+    await expect(breakpoints).toHaveCount(1)
+    const glyphMenu = page.getByRole('menu', { name: 'Breakpoint' })
+    await page.mouse.click(glyphX, y, { button: 'right' })
+    await expect(glyphMenu).toBeVisible()
+    expect(await menuLabels(glyphMenu)).toEqual(['Delete Breakpoint', 'Disable Breakpoint', 'Settings...', 'Export...'])
+    await expect.poll(menuHasFocus).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(glyphMenu).not.toBeVisible()
+    await expect(breakpoints).toHaveCount(1)
+    await page.mouse.click(glyphX, y)
+    await expect(breakpoints).toHaveCount(0)
+
+    // The bookmark strip, on the right of the line numbers, has the code viewer's menu and toggles with the left one.
+    const bookmarkX = marginBox.x + marginBox.width - 7
+    const bookmarks = editor.locator('.bookmark-glyph, .bookmark-glyph-disabled')
+    await page.mouse.click(bookmarkX, y, { button: 'right' })
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    await expect.poll(menuHasFocus).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(menu).not.toBeVisible()
+    await expect(bookmarks).toHaveCount(0)
+    await page.mouse.click(bookmarkX, y)
+    await expect(bookmarks).toHaveCount(1)
+    await page.mouse.click(bookmarkX, y)
+    await expect(bookmarks).toHaveCount(0)
   })
 
   // dnSpy's DocumentViewerHighlightReferencesTagger and MoveToNextReference: with the caret on a local, every use
@@ -3098,7 +3130,7 @@ test.describe('the breakpoints a run leaves behind', () => {
     await showBreakpoints()
     const { lineBox, marginBox } = await editorLayout(bodyLine, page.locator('.monaco-editor .margin').first())
     await page.mouse.click(marginBox.x + 8, lineBox.y + lineBox.height / 2)
-    await expect(page.locator('.breakpoint-row')).toContainText('dnSpy.Backend.Contracts.RpcException..ctor')
+    await expect(page.locator('.breakpoint-row')).toContainText('RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x')
 
     await page.getByRole('textbox', { name: 'Function breakpoint', exact: true }).fill('dnSpy.Backend.Contracts.RpcException.get_Code')
     await page.getByRole('button', { name: 'Add function breakpoint' }).click()
@@ -3123,11 +3155,11 @@ test.describe('the breakpoints a run leaves behind', () => {
     await launchApp(contractsAssemblyPath, { userDataDirectory: profileDirectory })
 
     await showBreakpoints()
-    // The row is there before anything is decompiled: the method name and the line it was saved on are
-    // what the pane labels it with, so a restored breakpoint never reads as "Line 0".
+    // The row is there before anything is decompiled: the method and the IL offset it was saved with are what the
+    // pane names it by, as dnSpy's Breakpoints window does.
     const breakpointRows = page.locator('.breakpoint-row')
     await expect(breakpointRows).toHaveCount(2)
-    await expect(breakpointRows.first()).toContainText('dnSpy.Backend.Contracts.RpcException..ctor:')
+    await expect(breakpointRows.first()).toContainText('RpcException.RpcException(int code, string message, [object data], [Exception innerException]) + 0x')
     await expect(breakpointRows.nth(1)).toContainText('dnSpy.Backend.Contracts.RpcException.get_Code')
 
     // The session restores the document, and the restored breakpoint attaches to it by IL identity —
@@ -3138,7 +3170,8 @@ test.describe('the breakpoints a run leaves behind', () => {
     await expect(page.locator('.breakpoint-glyph')).toHaveCount(1)
 
     // Removing it is what a restored breakpoint has to support too, and it leaves the storage empty.
-    await breakpointRows.first().getByRole('button', { name: /^Remove / }).click()
+    await breakpointRows.first().click()
+    await page.getByRole('button', { name: 'Remove breakpoint', exact: true }).click()
     await expect(page.locator('.breakpoint-glyph')).toHaveCount(0)
     await expect.poll(async () => (await storedBreakpoints())?.breakpoints.length).toBe(0)
 

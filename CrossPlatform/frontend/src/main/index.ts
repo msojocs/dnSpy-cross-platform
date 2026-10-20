@@ -6,6 +6,7 @@ import path from 'node:path'
 import { BackendClient } from './backend-client'
 import { readBackgroundImages } from './background-images'
 import { formatAppTitle } from './app-info'
+import { focusProcessWindow } from './focus-process'
 import { loadAppMainSettings, saveAppMainSettings, toAppMainSettings } from './app-settings'
 import { parseCommandLine, userArguments } from './command-line'
 import { DialogPathHistory } from './dialog-path-history'
@@ -574,6 +575,12 @@ const registerIpc = (): void => {
     (await requireBackend().invoke<{ locations: unknown[] }>('bookmarks/formatLocations', { workspaceId: workspaceId ?? null, locations, format })).locations)
   ipcMain.handle('bookmarks:export', async (_event, workspaceId: string | undefined, bookmarks: unknown[]) =>
     (await requireBackend().invoke<{ xml: string }>('bookmarks/export', { workspaceId: workspaceId ?? null, bookmarks })).xml)
+  ipcMain.handle('debug:codeTargets', (_event, workspaceId: string | undefined, references: unknown[]) =>
+    requireBackend().invoke('debug/codeTargets', { workspaceId: workspaceId ?? null, references }))
+  ipcMain.handle('breakpoints:export', async (_event, workspaceId: string | undefined, breakpoints: unknown[]) =>
+    (await requireBackend().invoke<{ xml: string }>('breakpoints/export', { workspaceId: workspaceId ?? null, breakpoints })).xml)
+  ipcMain.handle('breakpoints:import', (_event, workspaceId: string | undefined, xml: string) =>
+    requireBackend().invoke('breakpoints/import', { workspaceId: workspaceId ?? null, xml }))
   ipcMain.handle('bookmarks:import', (_event, workspaceId: string | undefined, xml: string) =>
     requireBackend().invoke('bookmarks/import', { workspaceId: workspaceId ?? null, xml }))
   // A search walks every file it covers, which over the framework takes a while: it gets the long deadline,
@@ -862,8 +869,9 @@ const registerIpc = (): void => {
       // which is written out the same way — since it is the side that knows which language to say it in.
       title: title ?? nativeText().saveCode,
       defaultPath: safeName,
+      // dnSpy's bookmark and breakpoint files are XML, and its picker says so (PickFilenameConstants.XmlFilenameFilter).
       filters: [
-        { name: nativeText().codeFiles, extensions: [extension] },
+        { name: extension === 'xml' ? nativeText().xmlFiles : nativeText().codeFiles, extensions: [extension] },
         { name: nativeText().allFiles, extensions: ['*'] },
       ],
     })
@@ -887,7 +895,7 @@ const registerIpc = (): void => {
       defaultPath: dialogPathHistory?.openDirectory,
       properties: ['openFile'],
       // dnSpy's bookmark files are its settings XML; the JSON an earlier build of this port wrote still reads.
-      filters: kind === 'bookmarks'
+      filters: kind === 'bookmarks' || kind === 'breakpoints'
         ? [{ name: nativeText().xmlFiles, extensions: ['xml'] }, { name: nativeText().allFiles, extensions: ['*'] }]
         : [{ name: nativeText().allFiles, extensions: ['*'] }],
     })
@@ -1037,6 +1045,9 @@ const registerIpc = (): void => {
   debugRequest('debug:writeMemory', 'writeMemory')
   debugRequest('debug:disassemble', 'disassemble')
   debugRequest('debug:saveModule', 'saveModule')
+  debugRequest('debug:resetHitCounts', 'resetHitCounts')
+  ipcMain.handle('debug:verifyFilter', async (_event, filter: string) =>
+    (await requireBackend().invoke<{ error?: string | null }>('debug/verifyFilter', { filter })).error ?? null)
   ipcMain.handle('debug:setOptions', (_event, options: unknown) => requireBackend().invoke('debug/setOptions', options))
   // The exception list is engine-wide rather than per session, so these three go straight to the
   // manager the way listProcesses does.
@@ -1088,6 +1099,7 @@ const registerIpc = (): void => {
     window.show()
     window.focus()
   })
+  ipcMain.handle('window:focusProcess', (_event, processId: number) => focusProcessWindow(processId))
   ipcMain.handle('window:toggleMaximize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window)

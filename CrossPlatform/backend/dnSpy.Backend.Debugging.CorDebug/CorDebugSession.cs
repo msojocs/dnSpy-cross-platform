@@ -147,7 +147,10 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			session.debuggee = child;
 			session.TargetProcessId = child.Id;
 			child.StandardInput.Close();
-			session.HookOutput(child);
+			// dnSpy gives a console program a console of its own and only sends a GUI program's console output to the
+			// Output window when RedirectGuiConsoleOutput says so. A Linux debuggee has no console to be given, so a
+			// console program's output is always shown there; a GUI one's is drained and dropped when the option is off.
+			session.HookOutput(child, emit: options.RedirectGuiConsoleOutput || !IsGuiProgram(program));
 
 			// Registration must happen before the runtime is resumed, or the startup callback is lost.
 			startup = new RuntimeStartup.State();
@@ -336,9 +339,11 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		}
 	}
 
-	void HookOutput(Process child) {
-		child.OutputDataReceived += (_, e) => EmitOutput(e.Data, "stdout");
-		child.ErrorDataReceived += (_, e) => EmitOutput(e.Data, "stderr");
+	void HookOutput(Process child, bool emit = true) {
+		if (emit) {
+			child.OutputDataReceived += (_, e) => EmitOutput(e.Data, "stdout");
+			child.ErrorDataReceived += (_, e) => EmitOutput(e.Data, "stderr");
+		}
 		child.EnableRaisingEvents = true;
 		try {
 			child.BeginOutputReadLine();
@@ -346,6 +351,18 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		}
 		catch (InvalidOperationException) {
 			// Attached process: its streams are not redirected.
+		}
+	}
+
+	/// <summary>Whether the program's PE header says it is a GUI program (an <c>OutputType</c> of WinExe): IMAGE_SUBSYSTEM_WINDOWS_GUI.</summary>
+	internal static bool IsGuiProgram(string program) {
+		try {
+			using var stream = File.OpenRead(program);
+			using var reader = new System.Reflection.PortableExecutable.PEReader(stream);
+			return reader.PEHeaders.PEHeader?.Subsystem == System.Reflection.PortableExecutable.Subsystem.WindowsGui;
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or BadImageFormatException) {
+			return false;
 		}
 	}
 
@@ -403,6 +420,9 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				OnModuleLoadedCore(loadModule.Module);
 				OnModuleLoaded(loadModule.Module);
 				ArmEntryBreakpoint(loadModule.Module);
+				break;
+			case LoadClassCorDebugManagedCallbackEventArgs loadClass:
+				OnClassLoaded(loadClass.C);
 				break;
 			case UnloadModuleCorDebugManagedCallbackEventArgs unloadModule:
 				OnModuleUnloading(unloadModule.Module);
@@ -610,6 +630,8 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				return ProcessResponse();
 			case "scopes":
 				return Scopes(arguments);
+			case "resetHitCounts":
+				return ResetHitCounts(arguments);
 			// stackTrace, variables and the step commands are answered in ExecuteAsync: every one of
 			// them needs the symbol resolver, which must not run while the event pump is held.
 			default:

@@ -152,6 +152,9 @@ public sealed class DebugEvaluationTests {
 		Assert.Equal("(0x00000002, \"two\")", await stopped.ValueAsync("pair"));
 		var boxed = await stopped.EvaluateAsync("boxed");
 		Assert.Equal("object {int}", boxed.GetProperty("type").GetString());
+		// A boxed primitive reads as the primitive in it, the way dnSpy's formatter writes one.
+		Assert.Equal("0x0000002A", boxed.GetProperty("value").GetString());
+		Assert.Equal("\"42\"", await stopped.ValueAsync("boxed.ToString()"));
 	}
 
 	[Fact(Timeout = 120_000)]

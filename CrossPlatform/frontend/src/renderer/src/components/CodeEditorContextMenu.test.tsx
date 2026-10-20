@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { buildCodeEditorMenuItems, searchMsdnUrl, type CodeEditorMenuContext } from './CodeEditorContextMenu'
-import type { CodeStatement, TextSpan, TreeNode } from '../../../shared/protocol'
+import type { CodeStatement, DebugCodeTargets, TextSpan, TreeNode } from '../../../shared/protocol'
 import type { LineBreakpoint } from '../app-store'
 
 const methodNode: TreeNode = { id: 'n-method', label: 'WriteLine', kind: 'method', hasChildren: false, description: 'System.Void System.Console::WriteLine(System.String)', metadataToken: 0x06000001 }
@@ -38,7 +38,13 @@ const breakpoint: LineBreakpoint = {
   modulePath: '/tmp/DebugTarget.dll',
   ilOffset: 0,
   metadataToken: 0x06000002,
+  order: 1,
 }
+
+/** What the backend answers for a method reference: the method, which is no type and no exception. */
+const methodTargets: DebugCodeTargets = { methods: [{ modulePath: '/lib/System.Console.dll', metadataToken: 0x06000001, description: 'System.Void System.Console::WriteLine(System.String)', hasBody: true }] }
+/** And for a type reference: no method of its own, the type's methods. */
+const typeTargets: DebugCodeTargets = { methods: [], typeMethods: methodTargets.methods, typeName: 'System.Console' }
 
 /** Every callback the menu can ask for, so a case only has to say what it is *about*. */
 const commands = () => ({
@@ -124,13 +130,13 @@ const methodReferenceContext = (overrides: Partial<CodeEditorMenuContext> = {}):
   },
   hexStatement: { moduleId: 'module-1', range: { offset: 40, length: 5 } },
   selectionKind: 'method',
+  debugTargets: methodTargets,
   ...overrides,
 })
 
 // The commands this port has no equivalent for. dnSpy puts them in the menu; here they must never show,
 // which is asserted against a context rich enough to make everything else appear.
 const UNIMPLEMENTED = [
-  'break-when-exception-thrown',
   'edit-il-instructions',
 ]
 
@@ -367,19 +373,47 @@ describe('buildCodeEditorMenuItems', () => {
     const onProperty = methodReferenceContext({ referenceNode: property })
     runEntry(onProperty, 'add-method-breakpoint')
     expect(onProperty.onAddMethodBreakpoints).toHaveBeenCalledWith([property])
-    expect(menuKeys(methodReferenceContext({ referenceNode: typeNode }))).not.toContain('add-method-breakpoint')
+    expect(menuKeys(methodReferenceContext({ referenceNode: typeNode, debugTargets: typeTargets }))).not.toContain('add-method-breakpoint')
+    // A reference into a module the workspace does not hold is handed over as its file and token.
+    const external = context({ referenceTarget: { start: 0, length: 9, kind: 'reference', targetModulePath: '/lib/System.Console.dll', targetMetadataToken: 0x06000001 }, debugTargets: methodTargets })
+    runEntry(external, 'add-method-breakpoint')
+    expect(external.onAddMethodBreakpoints).toHaveBeenCalledWith([{ modulePath: '/lib/System.Console.dll', metadataToken: 0x06000001 }])
   })
 
   it('offers the class breakpoint and tracepoint on a type reference, for that type', () => {
     // dnSpy's GetTypeRef reads an ITypeDefOrRef off the reference at the caret; a method reference is no type.
     expect(menuKeys(methodReferenceContext())).not.toContain('add-class-breakpoint')
-    const ctx = methodReferenceContext({ referenceNode: typeNode })
+    const ctx = methodReferenceContext({ referenceNode: typeNode, debugTargets: typeTargets })
     const keys = menuKeys(ctx).filter((key) => key.startsWith('add-'))
     expect(keys).toEqual(['add-class-breakpoint', 'add-class-tracepoint'])
     runEntry(ctx, 'add-class-breakpoint')
     expect(ctx.onAddClassBreakpoint).toHaveBeenCalledWith(typeNode)
     runEntry(ctx, 'add-class-tracepoint')
     expect(ctx.onAddClassTracepoint).toHaveBeenCalledWith(typeNode)
+  })
+
+  it('offers Break When Thrown on an exception type, and turns it on by the type\'s name', () => {
+    expect(menuKeys(methodReferenceContext({ referenceNode: typeNode, debugTargets: typeTargets }))).not.toContain('break-when-exception-thrown')
+    const onBreakWhenThrown = vi.fn()
+    const ctx = methodReferenceContext({ referenceNode: typeNode, debugTargets: { ...typeTargets, exceptionTypeName: 'System.InvalidOperationException' }, onBreakWhenThrown })
+    runEntry(ctx, 'break-when-exception-thrown')
+    expect(onBreakWhenThrown).toHaveBeenCalledWith('System.InvalidOperationException')
+  })
+
+  it('names the breakpoint commands after every breakpoint the statement has', () => {
+    const disabled = { ...breakpoint, id: 'bp-2', enabled: false }
+    const label = (ctx: CodeEditorMenuContext, key: string): string | undefined => {
+      const item = buildCodeEditorMenuItems(ctx).find((entry) => entry.type !== 'divider' && entry.key === key)
+      const { container } = render(<>{item && item.type !== 'divider' ? item.content : null}</>)
+      const text = container.querySelector('.document-tab-menu-label')?.textContent ?? undefined
+      cleanup()
+      return text
+    }
+    expect(label(context({ statement: statement() }), 'toggle-breakpoint')).toBe('Add Breakpoint')
+    expect(label(context({ statement: statement(), breakpoints: [breakpoint] }), 'toggle-breakpoint')).toBe('Delete Breakpoint')
+    // One that is off among them makes F9 enable them, and Ctrl+F9 too.
+    expect(label(context({ statement: statement(), breakpoints: [breakpoint, disabled] }), 'toggle-breakpoint')).toBe('Enable Breakpoint')
+    expect(label(context({ statement: statement(), breakpoints: [breakpoint, disabled] }), 'enable-breakpoint')).toBe('Enable Breakpoint')
   })
 
   it('copies the token of a reference into a module the workspace does not hold', () => {

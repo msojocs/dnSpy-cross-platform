@@ -1,11 +1,15 @@
 import { Actions, DockLocation, Model, TabSetNode } from 'flexlayout-react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CodeStatement, DebugBreakpoint, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, SaveDocumentsResponse, TextSpan, TreeNode } from '../../shared/protocol'
+import { waitFor } from '@testing-library/react'
+import type { CodeStatement, DebugBreakpoint, DebugCodeTargets, DebugMethodTarget, DebugStackFrame, DecompilerLanguage, HexMethodTarget, HexTargetResponse, SaveDocumentsResponse, TextSpan, TreeNode } from '../../shared/protocol'
 import { isNavigableSpan } from '../../shared/protocol'
-import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadRecentFiles, loadSession, methodBreakpointName, rememberRecentFiles, orderedDocumentKeys, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
+import { bookmarkEntries, bookmarkLineInDocument, bookmarkMarkers, breakpointImage, breakpointKind, breakpointsFile, buildSession, bytesToHex, codeStatementAt, enableSessionPersistence, filterBookmarks, lineBreakpointEntries, lineBreakpointMarkers, loadRecentFiles, loadSession, methodBreakpointName, rememberRecentFiles, memoryModulePathOf, orderedDocumentKeys, resetDebugSessionTracking, ownerTypeIdOf, parseBookmarkEntries, parseHexText, parseLineBreakpointEntries, statementIdentity, suggestCodeFilename, syncDockTabStrips, useAppStore } from './app-store'
 import type { Bookmark, DocumentState, LineBreakpoint, SessionSource } from './app-store'
 import { moduleSaveOptions } from './components/save-options-fixtures'
 import { translate } from './localization'
+
+// Session ids repeat from test to test; what one test ended must not silence the next one's events.
+beforeEach(() => resetDebugSessionTracking())
 
 describe('suggestCodeFilename', () => {
   it.each([
@@ -115,14 +119,17 @@ describe('lineBreakpointMarkers', () => {
     modulePath: '/app/DebugTarget.dll',
     metadataToken: 0x06000001,
     ilOffset: 7,
+    order: 1,
     ...extra,
   })
 
-  it('draws a bound breakpoint at the line the engine snapped it to', () => {
-    const statements = [statement(5, 6, { ilOffset: 3 }), statement(7, 8, { ilOffset: 7 })]
-    expect(lineBreakpointMarkers('method-1', statements, [breakpoint()])).toEqual([
-      { line: 7, enabled: true, state: 'bound', message: undefined, description: undefined },
-    ])
+  it('draws a breakpoint on the statement its code location is in', () => {
+    const statements = [statement(5, 6, { ilOffset: 3, ilEndOffset: 7 }), statement(7, 8, { ilOffset: 7, ilEndOffset: 12 })]
+    expect(lineBreakpointMarkers('method-1', statements, [breakpoint()]).map((marker) => marker.line)).toEqual([7])
+    // An instruction in the middle of a statement — an IL view's breakpoint — is drawn on the statement that holds it.
+    expect(lineBreakpointMarkers('method-1', statements, [breakpoint({ ilOffset: 9 })]).map((marker) => marker.line)).toEqual([7])
+    // A method's entry, before its first statement, is drawn on the first statement after it.
+    expect(lineBreakpointMarkers('method-1', [statement(5, 6, { ilOffset: 3, ilEndOffset: 7, sequencePointIlOffset: 3 })], [breakpoint({ ilOffset: 0 })]).map((marker) => marker.line)).toEqual([5])
   })
 
   it('draws a pending breakpoint at the line the user clicked', () => {
@@ -134,10 +141,51 @@ describe('lineBreakpointMarkers', () => {
 
   it('draws nothing in a document that is not the breakpoint’s', () => {
     const statements = [statement(7, 8, { ilOffset: 7 })]
-    // Bound to another module: the IL identity matches nothing here, and there is no requested line to fall back on.
-    expect(lineBreakpointMarkers('method-1', statements, [breakpoint({ identity: 'other|1|2' })])).toEqual([])
+    // Another method's location has no statement here, and there is no requested line to fall back on.
+    expect(lineBreakpointMarkers('method-1', statements, [breakpoint({ metadataToken: 0x06000002 })])).toEqual([])
     // Not yet bound, and requested from a different node.
     expect(lineBreakpointMarkers('method-1', statements, [breakpoint({ nodeId: 'method-2', modulePath: undefined, ilOffset: undefined })])).toEqual([])
+  })
+})
+
+describe('breakpointKind', () => {
+  it('picks dnSpy\'s glyph from the settings and the bound message', () => {
+    expect(breakpointKind({ enabled: true })).toBe('BreakpointEnabled')
+    expect(breakpointKind({ enabled: false })).toBe('BreakpointDisabled')
+    expect(breakpointKind({ enabled: true, settings: { hitCount: { kind: 'equals', count: 2 } } })).toBe('AdvancedBreakpointEnabled')
+    // A trace that continues makes a tracepoint; one that breaks is still a breakpoint.
+    expect(breakpointKind({ enabled: true, settings: { trace: { message: 'x', continue: true } } })).toBe('TracepointEnabled')
+    expect(breakpointKind({ enabled: true, settings: { trace: { message: 'x', continue: false } } })).toBe('BreakpointEnabled')
+    expect(breakpointKind({ enabled: true, severity: 'warning' })).toBe('BreakpointWarning')
+    expect(breakpointKind({ enabled: true, severity: 'error', settings: { filter: 'ThreadId == 1' } })).toBe('AdvancedBreakpointError')
+    // The advanced warning and error kinds have no images of their own.
+    expect(breakpointImage('AdvancedBreakpointError')).toBe('BreakpointError')
+    expect(breakpointImage('AdvancedTracepointWarning')).toBe('TracepointWarning')
+    expect(breakpointImage('AdvancedTracepointEnabled')).toBe('AdvancedTracepointEnabled')
+  })
+})
+
+describe('toggleLineBreakpoint', () => {
+  const setBreakpoints = vi.fn(async () => [])
+
+  beforeEach(() => {
+    setBreakpoints.mockClear()
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, setBreakpoints } })
+    const document = { nodeId: 'method-1', language: 'il', codeStatements: [statement(4, 4, { ilOffset: 2, ilEndOffset: 3 }), statement(5, 5, { ilOffset: 3, ilEndOffset: 8 })] } as unknown as DocumentState
+    useAppStore.setState({ lineBreakpoints: [], debugSessionId: undefined, documents: { 'method-1': document } })
+  })
+
+  it('adds a breakpoint at an IL instruction, deletes it when every one there is enabled and enables one that is not', async () => {
+    await useAppStore.getState().toggleLineBreakpoint('method-1', 5)
+    const [added] = useAppStore.getState().lineBreakpoints
+    expect(added).toMatchObject({ modulePath: '/app/DebugTarget.dll', metadataToken: 0x06000001, ilOffset: 3, enabled: true })
+
+    useAppStore.setState({ lineBreakpoints: [{ ...added, enabled: false }] })
+    await useAppStore.getState().toggleLineBreakpoint('method-1', 5)
+    expect(useAppStore.getState().lineBreakpoints).toMatchObject([{ id: added.id, enabled: true }])
+
+    await useAppStore.getState().toggleLineBreakpoint('method-1', 5)
+    expect(useAppStore.getState().lineBreakpoints).toEqual([])
   })
 })
 
@@ -157,7 +205,7 @@ describe('function breakpoints', () => {
     await useAppStore.getState().addFunctionBreakpoint(' Ns.Type.A ')
     await useAppStore.getState().addFunctionBreakpoint('Ns.Type.A')
     expect(useAppStore.getState().functionBreakpoints).toEqual([{ name: 'Ns.Type.A', enabled: true }])
-    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type.A' }])
+    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ id: 'fn:Ns.Type.A', name: 'Ns.Type.A' }])
 
     await useAppStore.getState().toggleFunctionBreakpoint('Ns.Type.A')
     expect(useAppStore.getState().functionBreakpoints).toEqual([])
@@ -175,8 +223,8 @@ describe('function breakpoints', () => {
     })
     await useAppStore.getState().addFunctionBreakpoint('Ns.Type.C')
     expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [
-      { name: 'Ns.Type.A', settings: { condition: { kind: 'isTrue', expression: 'Code > 1' } } },
-      { name: 'Ns.Type.C' },
+      { id: 'fn:Ns.Type.A', name: 'Ns.Type.A', settings: { condition: { kind: 'isTrue', expression: 'Code > 1' } } },
+      { id: 'fn:Ns.Type.C', name: 'Ns.Type.C' },
     ])
   })
 
@@ -189,7 +237,7 @@ describe('function breakpoints', () => {
 
     await useAppStore.getState().setAllFunctionBreakpointsEnabled(true)
     expect(useAppStore.getState().functionBreakpoints.every((breakpoint) => breakpoint.enabled)).toBe(true)
-    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type.A' }, { name: 'Ns.Type.B' }])
+    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ id: 'fn:Ns.Type.A', name: 'Ns.Type.A' }, { id: 'fn:Ns.Type.B', name: 'Ns.Type.B' }])
   })
 
   it('enables and disables a single breakpoint', async () => {
@@ -200,10 +248,10 @@ describe('function breakpoints', () => {
       { name: 'Ns.Type.A', enabled: true },
       { name: 'Ns.Type.B', enabled: true },
     ])
-    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type.A' }, { name: 'Ns.Type.B' }])
+    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ id: 'fn:Ns.Type.A', name: 'Ns.Type.A' }, { id: 'fn:Ns.Type.B', name: 'Ns.Type.B' }])
 
     await useAppStore.getState().setFunctionBreakpointEnabled('Ns.Type.A', false)
-    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type.B' }])
+    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ id: 'fn:Ns.Type.B', name: 'Ns.Type.B' }])
   })
 
   it('deletes every breakpoint', async () => {
@@ -221,140 +269,64 @@ describe('function breakpoints', () => {
   })
 })
 
-describe('class breakpoints', () => {
-  const setFunctionBreakpoints = vi.fn(async () => ({}))
-  const getChildren = vi.fn()
+describe('method and class breakpoints', () => {
+  const setBreakpoints = vi.fn(async () => [])
+  const getDebugCodeTargets = vi.fn()
 
   const typeNode: TreeNode = { id: 'n-type', kind: 'type', label: 'Console', hasChildren: true }
-  const row = (description: string, kind: string): TreeNode => ({ id: `n-${description}`, kind, label: description, hasChildren: false, description })
+  const method = (token: number, description: string, hasBody = true): DebugMethodTarget => ({ modulePath: '/app/A.dll', metadataToken: token, description, hasBody })
 
-  const install = (nodes: TreeNode[]): void => {
-    getChildren.mockReset().mockImplementation(async () => ({ nodes }))
+  const install = (targets: DebugCodeTargets): void => {
+    getDebugCodeTargets.mockReset().mockImplementation(async () => targets)
     Object.defineProperty(window, 'dnSpy', {
       configurable: true,
-      value: { ...window.dnSpy, getChildren, setFunctionBreakpoints },
+      value: { ...window.dnSpy, getDebugCodeTargets, setBreakpoints },
     })
   }
 
   beforeEach(() => {
-    setFunctionBreakpoints.mockClear()
-    useAppStore.setState({ workspaceId: 'ws1', functionBreakpoints: [], debugSessionId: 'session', children: {}, output: [] })
+    setBreakpoints.mockClear()
+    useAppStore.setState({ workspaceId: 'ws1', lineBreakpoints: [], debugSessionId: 'session' })
   })
 
-  it('breaks on every method of the type, and on no other kind of row it holds', async () => {
-    install([
-      row('System.Void Ns.Type::.ctor()', 'method'),
-      row('System.Int32 Ns.Type::Get()', 'method'),
-      row('Ns.Type+Kind', 'type'),
-      row('System.Int32 _count', 'field'),
-    ])
+  it('breaks at the entry of every method of the type that has code, in one request', async () => {
+    install({ methods: [], typeMethods: [method(0x06000001, 'System.Void Ns.Type::.ctor()'), method(0x06000002, 'System.Int32 Ns.Type::Get()'), method(0x06000003, 'System.Void Ns.Type::Abstract()', false)], typeName: 'Ns.Type' })
 
     await useAppStore.getState().addClassBreakpoint(typeNode)
 
-    // The type's methods are not loaded until asked for, so the command reads them the way expanding the
-    // row would, and the whole set goes to the adapter as one request.
-    expect(getChildren).toHaveBeenCalledWith('ws1', 'n-type')
-    expect(useAppStore.getState().functionBreakpoints).toEqual([
-      { name: 'Ns.Type..ctor', enabled: true },
-      { name: 'Ns.Type.Get', enabled: true },
+    expect(getDebugCodeTargets).toHaveBeenCalledWith('ws1', [{ nodeId: 'n-type' }])
+    expect(useAppStore.getState().lineBreakpoints.map((breakpoint) => [breakpoint.metadataToken, breakpoint.ilOffset, breakpoint.description])).toEqual([
+      [0x06000001, 0, 'System.Void Ns.Type::.ctor()'],
+      [0x06000002, 0, 'System.Int32 Ns.Type::Get()'],
     ])
-    expect(setFunctionBreakpoints).toHaveBeenLastCalledWith('session', [{ name: 'Ns.Type..ctor' }, { name: 'Ns.Type.Get' }])
-    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 2, name: 'Console' }))
+    expect(setBreakpoints).toHaveBeenCalledTimes(1)
   })
 
-  it('breaks on the accessors the tree nests under a property, as type.Methods holds them too', async () => {
-    const property: TreeNode = { ...row('System.Int32 Ns.Type::Code', 'property'), hasChildren: true }
-    const getter = row('System.Int32 Ns.Type::get_Code()', 'method')
-    const setter = row('System.Void Ns.Type::set_Code(System.Int32)', 'method')
-    const constructor = row('System.Void Ns.Type::.ctor()', 'method')
-    getChildren.mockReset().mockImplementation(async (_workspaceId: string, nodeId: string) => ({
-      nodes: nodeId === 'n-type' ? [property, constructor] : [getter, setter],
-    }))
-    Object.defineProperty(window, 'dnSpy', {
-      configurable: true,
-      value: { ...window.dnSpy, getChildren, setFunctionBreakpoints },
-    })
-
-    await useAppStore.getState().addClassBreakpoint(typeNode)
-
-    // dnSpy walks `type.Methods`, which holds the getter and the setter as well as the constructor, so
-    // the property's own row has to be read down to them.
-    expect(useAppStore.getState().functionBreakpoints.map((breakpoint) => breakpoint.name)).toEqual([
-      'Ns.Type..ctor',
-      'Ns.Type.get_Code',
-      'Ns.Type.set_Code',
-    ])
-  })
-
-  it('leaves a breakpoint that is already there alone, and counts two overloads as the one name they share', async () => {
-    install([
-      row('System.Int32 Ns.Type::Get()', 'method'),
-      row('System.Int32 Ns.Type::Get(System.Int32)', 'method'),
-      row('System.Void Ns.Type::Put(System.Int32)', 'method'),
-    ])
-    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Put', enabled: false }] })
-
-    await useAppStore.getState().addClassBreakpoint(typeNode)
-
-    // A name that is already broken on keeps its own settings, and an overload pair cannot be told apart by
-    // name — the engine binds the name to whichever of them it finds.
-    expect(useAppStore.getState().functionBreakpoints).toEqual([
-      { name: 'Ns.Type.Put', enabled: false },
-      { name: 'Ns.Type.Get', enabled: true },
-    ])
-    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('Added {count} breakpoint(s) for {name}.', { count: 1, name: 'Console' }))
-  })
-
-  it('says so when the type has no method left to break on', async () => {
-    install([row('System.Void Ns.Type::Get()', 'method')])
-    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Get', enabled: true }] })
-
-    await useAppStore.getState().addClassBreakpoint(typeNode)
-
-    expect(useAppStore.getState().functionBreakpoints).toEqual([{ name: 'Ns.Type.Get', enabled: true }])
-    expect(setFunctionBreakpoints).not.toHaveBeenCalled()
-    expect(useAppStore.getState().output.at(-1)?.text).toContain(translate('{name} has no method left to break on.', { name: 'Console' }))
-  })
-
-  it('puts the tracepoint\'s settings on every breakpoint a class tracepoint adds', async () => {
-    install([row('System.Void Ns.Type::Get()', 'method'), row('System.Void Ns.Type::Put()', 'method')])
-    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Put', enabled: true }] })
+  it('leaves a location that already has a breakpoint alone, and puts a class tracepoint\'s settings on the others', async () => {
+    install({ methods: [], typeMethods: [method(0x06000001, 'System.Void Ns.Type::Get()'), method(0x06000002, 'System.Void Ns.Type::Put()')] })
+    await useAppStore.getState().addMethodBreakpoints([{ modulePath: '/app/A.dll', metadataToken: 0x06000002 }])
+    install({ methods: [method(0x06000002, 'System.Void Ns.Type::Put()')], typeMethods: [method(0x06000001, 'System.Void Ns.Type::Get()'), method(0x06000002, 'System.Void Ns.Type::Put()')] })
     const settings = { trace: { message: 'entered {$FUNCTION}', continue: true } }
+    useAppStore.setState({ lineBreakpoints: [] })
+    await useAppStore.getState().addMethodBreakpoints([{ modulePath: '/app/A.dll', metadataToken: 0x06000002 }])
 
     await useAppStore.getState().addClassBreakpoint(typeNode, settings)
 
-    // A method that already has a breakpoint keeps the one it has, the way dnSpy skips an existing location.
-    expect(useAppStore.getState().functionBreakpoints).toEqual([
-      { name: 'Ns.Type.Put', enabled: true },
-      { name: 'Ns.Type.Get', enabled: true, settings },
+    expect(useAppStore.getState().lineBreakpoints.map((breakpoint) => [breakpoint.metadataToken, breakpoint.settings])).toEqual([
+      [0x06000002, undefined],
+      [0x06000001, settings],
     ])
   })
 
-  it('adds a method breakpoint for each method named, and for a property\'s accessors, never taking one away', async () => {
-    const property: TreeNode = { ...row('System.Int32 Ns.Type::Code', 'property'), hasChildren: true }
-    install([row('System.Int32 Ns.Type::get_Code()', 'method'), row('System.Void Ns.Type::set_Code(System.Int32)', 'method')])
-    useAppStore.setState({ functionBreakpoints: [{ name: 'Ns.Type.Run', enabled: false }] })
+  it('adds a method breakpoint for each method the references collect, never taking one away', async () => {
+    install({ methods: [method(0x06000005, 'System.Int32 Ns.Type::get_Code()'), method(0x06000006, 'System.Void Ns.Type::set_Code(System.Int32)')] })
+    const property: TreeNode = { id: 'n-code', kind: 'property', label: 'Code', hasChildren: true }
 
-    await useAppStore.getState().addMethodBreakpoints([
-      row('System.Void Ns.Type::Run()', 'method'),
-      property,
-      row('System.Int32 Ns.Type::count', 'field'),
-      row('System.Void Ns.Type::Stop()', 'method'),
-      // The code viewer names the method a statement belongs to rather than handing a node.
-      'Ns.Type.Main',
-      'Ns.Type.Stop',
-    ])
+    await useAppStore.getState().addMethodBreakpoints([property])
+    await useAppStore.getState().addMethodBreakpoints([property])
 
-    // The method that already has one keeps it as it is: the command adds, it never takes one away.
-    expect(useAppStore.getState().functionBreakpoints).toEqual([
-      { name: 'Ns.Type.Run', enabled: false },
-      { name: 'Ns.Type.get_Code', enabled: true },
-      { name: 'Ns.Type.set_Code', enabled: true },
-      { name: 'Ns.Type.Stop', enabled: true },
-      { name: 'Ns.Type.Main', enabled: true },
-    ])
-    expect(getChildren).toHaveBeenCalledWith('ws1', property.id)
-    expect(setFunctionBreakpoints).toHaveBeenCalledTimes(1)
+    expect(getDebugCodeTargets).toHaveBeenLastCalledWith('ws1', [{ nodeId: 'n-code' }])
+    expect(useAppStore.getState().lineBreakpoints.map((breakpoint) => breakpoint.metadataToken)).toEqual([0x06000005, 0x06000006])
   })
 })
 
@@ -3156,5 +3128,145 @@ describe('debugger commands', () => {
     expect(lines).toContain(translate('Additional information: {message}', { message: 'boom' }))
     expect(lines.at(-1)).toContain('/app/a.dll')
     expect(useAppStore.getState().debugModules.map((module) => module.id)).toEqual([3])
+  })
+})
+
+describe('memory modules', () => {
+  const saveDebugModule = vi.fn(async () => '/tmp/dnSpy-memory-modules/7/3/Dyn')
+  const removeModules = vi.fn(async () => ({ removedNodeIds: ['root'], roots: [] }))
+  const addModules = vi.fn(async () => ({ modules: [{ id: 'root2', name: 'Dyn', path: '/tmp/dnSpy-memory-modules/7/3/Dyn', hasPdb: false }] }))
+
+  beforeEach(() => {
+    for (const mock of [saveDebugModule, removeModules, addModules])
+      mock.mockClear()
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: { ...window.dnSpy, saveDebugModule, removeModules, addModules, getRoots: vi.fn(async () => ({ nodes: [] })), getModifiedModules: vi.fn(async () => ({ paths: [] })), getModifiedDocuments: vi.fn(async () => ({ documents: [] })) },
+    })
+    useAppStore.setState({
+      workspaceId: 'w',
+      debugSessionId: 's',
+      debugSessions: [{ sessionId: 's', state: 'stopped', modules: [], threads: [], shouldDetach: false }],
+      modules: [{ id: 'root', name: 'Dyn', path: '/tmp/dnSpy-memory-modules/7/3/Dyn', hasPdb: false }],
+      parents: { type: 'root' },
+      memoryModules: { '/tmp/dnSpy-memory-modules/7/3/Dyn': { sessionId: 's', moduleId: 3, name: 'Dyn' } },
+      debugOutput: [],
+    })
+  })
+
+  it('offers Reload All Method Bodies on a module read out of a process still being debugged', () => {
+    expect(memoryModulePathOf(useAppStore.getState(), 'type')).toBe('/tmp/dnSpy-memory-modules/7/3/Dyn')
+    useAppStore.setState({ debugSessionId: undefined, debugSessions: [] })
+    expect(memoryModulePathOf(useAppStore.getState(), 'type')).toBeUndefined()
+  })
+
+  it('reads the module out of the process again and puts the new copy in place of the old one', async () => {
+    await useAppStore.getState().reloadMethodBodies('type')
+
+    expect(saveDebugModule).toHaveBeenCalledWith('s', 3, '/tmp/dnSpy-memory-modules/7/3/Dyn')
+    expect(removeModules).toHaveBeenCalledWith('w', ['root'])
+    expect(addModules).toHaveBeenCalledWith('w', ['/tmp/dnSpy-memory-modules/7/3/Dyn'])
+  })
+
+  it('reads a dynamic module again at the stop after a type was created in it, as dnSpy\'s ClassLoader does', async () => {
+    await useAppStore.getState().handleDebugEvent({ sessionId: 's', event: 'module', body: { reason: 'classLoaded', module: { id: 3, name: 'Dyn' }, token: 0x02000002 } })
+    expect(saveDebugModule).not.toHaveBeenCalled()
+    // Being told is not a module load: the Modules window and the Output stay as they were.
+    expect(useAppStore.getState().debugOutput).toEqual([])
+
+    await useAppStore.getState().handleDebugEvent({ sessionId: 's', event: 'stopped', body: { reason: 'breakpoint', threadId: 1 } })
+    await waitFor(() => expect(saveDebugModule).toHaveBeenCalledWith('s', 3, '/tmp/dnSpy-memory-modules/7/3/Dyn'))
+  })
+})
+
+describe('debugging several processes', () => {
+  const debugContinue = vi.fn(async () => undefined)
+  const debugNext = vi.fn(async () => undefined)
+  const disconnectDebug = vi.fn(async () => undefined)
+  const getDebugThreads = vi.fn(async (sessionId: string) => [{ id: sessionId === 'b' ? 20 : 10, name: `${sessionId} main` }])
+  const entry = (sessionId: string, state: 'running' | 'stopped', extra: Record<string, unknown> = {}) => ({ sessionId, state, modules: [], threads: [], shouldDetach: false, ...extra })
+
+  beforeEach(() => {
+    for (const mock of [debugContinue, debugNext, disconnectDebug, getDebugThreads])
+      mock.mockClear()
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: {
+        ...window.dnSpy,
+        debugContinue,
+        debugNext,
+        disconnectDebug,
+        getDebugThreads,
+        getDebugStackTrace: vi.fn(async () => []),
+        getDebugModules: vi.fn(async () => []),
+        getDebugProcess: vi.fn(async () => undefined),
+        getDebugScopes: vi.fn(async () => []),
+        getDebugVariables: vi.fn(async () => []),
+        bringWindowToFront: vi.fn(async () => undefined),
+      },
+    })
+    useAppStore.setState({
+      debugSessionId: 'a',
+      debugState: 'running',
+      selectedDebugThreadId: 10,
+      debugSessions: [entry('a', 'running'), entry('b', 'running', { shouldDetach: true })],
+      debugOutput: [],
+      lineBreakpoints: [],
+      documents: {},
+    })
+  })
+
+  it('makes a process that breaks the current one while the current one runs', async () => {
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'b', event: 'stopped', body: { reason: 'breakpoint', threadId: 20 } })
+
+    expect(useAppStore.getState()).toMatchObject({ debugSessionId: 'b', debugState: 'stopped', selectedDebugThreadId: 20 })
+    expect(useAppStore.getState().debugSessions.find((candidate) => candidate.sessionId === 'b')).toMatchObject({ state: 'stopped', threadId: 20 })
+  })
+
+  it('keeps the current process when another one is paused after it broke', async () => {
+    useAppStore.setState({ debugState: 'stopped', debugSessions: [entry('a', 'stopped'), entry('b', 'running')] })
+
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'b', event: 'stopped', body: { reason: 'pause', threadId: 20 } })
+
+    expect(useAppStore.getState().debugSessionId).toBe('a')
+    expect(useAppStore.getState().debugSessions.find((candidate) => candidate.sessionId === 'b')).toMatchObject({ state: 'stopped', threadId: 20, threads: [{ id: 20 }] })
+  })
+
+  it('runs every paused process on Continue, and only the current one on a step of the current process', async () => {
+    useAppStore.setState({ debugState: 'stopped', debugSessions: [entry('a', 'stopped'), entry('b', 'stopped', { threadId: 20 })] })
+
+    await useAppStore.getState().stepDebug('next', true)
+    expect(debugNext).toHaveBeenCalledWith('a', 10)
+    expect(debugContinue).not.toHaveBeenCalled()
+
+    useAppStore.setState({ debugState: 'stopped', selectedDebugThreadId: 10 })
+    await useAppStore.getState().continueDebug()
+    expect(debugContinue).toHaveBeenCalledWith('b', 20)
+    expect(debugContinue).toHaveBeenCalledWith('a', 10)
+  })
+
+  it('detaches from the processes marked so and terminates the rest when debugging stops', async () => {
+    await useAppStore.getState().stopDebug()
+
+    expect(disconnectDebug).toHaveBeenCalledWith('a', true)
+    expect(disconnectDebug).toHaveBeenCalledWith('b', false)
+    expect(useAppStore.getState()).toMatchObject({ debugState: 'inactive', debugSessionId: undefined, debugSessions: [] })
+  })
+
+  it('goes on with the other process when the current one exits', async () => {
+    useAppStore.setState({ debugSessions: [entry('a', 'running'), entry('b', 'stopped', { threadId: 20 })] })
+
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'a', event: 'exited', body: { exitCode: 0 } })
+
+    expect(useAppStore.getState()).toMatchObject({ debugSessionId: 'b', debugState: 'stopped', selectedDebugThreadId: 20 })
+    expect(useAppStore.getState().debugSessions.map((candidate) => candidate.sessionId)).toEqual(['b'])
+  })
+
+  it('ignores what a process it let go of still sends', async () => {
+    await useAppStore.getState().detachDebugProcess('b')
+    await useAppStore.getState().handleDebugEvent({ sessionId: 'b', event: 'stopped', body: { reason: 'pause', threadId: 20 } })
+
+    expect(useAppStore.getState().debugSessionId).toBe('a')
+    expect(useAppStore.getState().debugSessions.map((candidate) => candidate.sessionId)).toEqual(['a'])
   })
 })

@@ -58,6 +58,9 @@ interface MenuBarProps {
   onCloseAll(): void
   onCloseAllFramework(): void
   onCloseAllMissing(): void
+  /** dnSpy's Close Old In-Memory Modules, and whether there is one to close. */
+  onCloseOldInMemoryModules?(): void
+  hasOldInMemoryModules?: boolean
   /** Whether an edit is unsaved, which is what enables the File menu's Save and Save All. */
   dirty: boolean
   onSave(): void
@@ -123,6 +126,12 @@ interface MenuBarProps {
   onStepIn(): void
   onStepOver(): void
   onStepOut(): void
+  /**
+   * dnSpy's Step Into, Over and Out (Current Process), which leave the other processes paused. The menu has them
+   * while debugging when Break all processes is off — with it on, every step breaks the others again anyway.
+   */
+  onStepCurrentProcess?(kind: 'next' | 'stepIn' | 'stepOut'): void
+  showCurrentProcessSteps?: boolean
   onStopDebug(): void
   /** dnSpy's Start Without Debugging: the Debug Program dialog, to run the program on its own. */
   onStartWithoutDebugging?(): void
@@ -170,6 +179,8 @@ interface MenuBarProps {
   onShowProcesses(): void
   onShowMemory(): void
   onShowDisassembly(): void
+  /** Whether a frame is active in a paused process — the Disassembly entry's IsEnabled. */
+  canShowDisassembly?: boolean
   onShowLocals(): void
   onShowWatch(): void
   /** Opens one of the numbered debugger windows — Watch 2–4, Memory 1–4 — by its tab id. */
@@ -258,6 +269,8 @@ export const MenuBar = ({
   onCloseAll,
   onCloseAllFramework,
   onCloseAllMissing,
+  onCloseOldInMemoryModules,
+  hasOldInMemoryModules,
   dirty,
   onSave,
   onSaveModule,
@@ -315,6 +328,8 @@ export const MenuBar = ({
   onStepIn,
   onStepOver,
   onStepOut,
+  onStepCurrentProcess,
+  showCurrentProcessSteps = false,
   onStopDebug,
   onStartWithoutDebugging,
   onDetachDebug,
@@ -357,6 +372,7 @@ export const MenuBar = ({
   onShowProcesses,
   onShowMemory,
   onShowDisassembly,
+  canShowDisassembly,
   onShowLocals,
   onShowWatch,
   onShowToolWindow,
@@ -491,6 +507,8 @@ export const MenuBar = ({
       onCloseAll,
       onCloseAllFramework,
       onCloseAllMissing,
+      onCloseOldInMemoryModules,
+      hasOldInMemoryModules,
       onSortAssemblies,
       onRestartAsAdministrator,
       onQuit,
@@ -651,14 +669,15 @@ export const MenuBar = ({
                 return { label: t('Memory {number}', { number }), icon: 'MemoryWindow', shortcut: number === 1 ? 'Alt+6' : `Ctrl+Alt+M, ${number}`, checked: visibleToolWindows.has(id), action: number === 1 ? onShowMemory : () => onShowToolWindow?.(id) }
               }),
             },
-            { label: t('Disassembly'), icon: 'DisassemblyWindow', shortcut: 'Alt+8', checked: visibleToolWindows.has('disassembly'), action: onShowDisassembly },
+            { label: t('Disassembly'), icon: 'DisassemblyWindow', shortcut: 'Alt+8', disabled: canShowDisassembly === false, action: onShowDisassembly },
           ] : []),
         ],
       },
       { separator: true },
       { label: debugState === 'stopped' ? t('Continue') : t('Start Debugging...'), icon: 'Run', shortcut: 'F5', disabled: !debugAvailable || (debugState !== 'inactive' && debugState !== 'stopped'), action: debugState === 'stopped' ? onContinueDebug : onStartDebug },
       ...(onStartWithoutDebugging ? [{ label: t('Start Without Debugging...'), icon: 'RunOutline', shortcut: 'Ctrl+F5', disabled: false, action: onStartWithoutDebugging }] : []),
-      { label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', disabled: !debugAvailable || debugState !== 'inactive', action: onAttachDebug },
+      // Attach to Process is always there: in the start group before debugging, after Restart while debugging.
+      ...(!isDebugging ? [{ label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', disabled: !debugAvailable, action: onAttachDebug }] : []),
       // DebuggerMenuCommands' continue group: the commands that act on the session as a whole, shown while one runs.
       ...(isDebugging ? [
         { label: t('Break All'), icon: 'Pause', shortcut: 'Ctrl+Alt+Break', disabled: debugState !== 'running', action: onPauseDebug },
@@ -666,7 +685,14 @@ export const MenuBar = ({
         ...(onDetachDebug ? [{ label: t('Detach All'), disabled: false, action: onDetachDebug }] : []),
         ...(onTerminateDebug ? [{ label: t('Terminate All'), icon: 'TerminateProcess', disabled: false, action: onTerminateDebug }] : []),
         ...(onRestartDebug ? [{ label: t('Restart'), icon: 'Restart', shortcut: 'Ctrl+Shift+F5', disabled: !canRestartDebug, action: onRestartDebug }] : []),
+        { label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', disabled: !debugAvailable, action: onAttachDebug },
         { separator: true },
+        ...(onStepCurrentProcess && showCurrentProcessSteps ? [
+          { label: t('Step Into (Current Process)'), icon: 'StepInto', shortcut: 'Ctrl+Alt+F11', disabled: debugState !== 'stopped', action: () => onStepCurrentProcess('stepIn') },
+          { label: t('Step Over (Current Process)'), icon: 'StepOver', shortcut: 'Ctrl+Alt+F10', disabled: debugState !== 'stopped', action: () => onStepCurrentProcess('next') },
+          { label: t('Step Out (Current Process)'), icon: 'StepOut', shortcut: 'Ctrl+Shift+Alt+F11', disabled: debugState !== 'stopped', action: () => onStepCurrentProcess('stepOut') },
+          { separator: true },
+        ] : []),
         ...(onShowNextStatement ? [{ label: t('Show Next Statement'), icon: 'GoToNext', shortcut: 'Alt+Num *', disabled: debugState !== 'stopped', action: onShowNextStatement }] : []),
         { label: t('Step Into'), icon: 'StepInto', shortcut: 'F11', disabled: debugState !== 'stopped', action: onStepIn },
         { label: t('Step Over'), icon: 'StepOver', shortcut: 'F10', disabled: debugState !== 'stopped', action: onStepOver },

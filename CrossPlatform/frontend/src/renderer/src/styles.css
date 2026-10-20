@@ -596,6 +596,11 @@ select:focus-visible,
   height: 100%;
 }
 
+/* The Disassembly tab is a text view without the code document's toolbar row. */
+.document-view.disassembly-document {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .document-toolbar {
   display: flex;
   align-items: center;
@@ -709,31 +714,12 @@ select:focus-visible,
   visibility: inherit !important;
 }
 
-/* Breakpoints in the editor's glyph margin: a filled dot when enabled, a hollow one when disabled, and a grey one
-   when the engine has not bound it (the module is not loaded yet, or the offset is not a sequence point). */
-.breakpoint-glyph::before,
-.breakpoint-glyph-disabled::before,
-.breakpoint-glyph-unbound::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  box-sizing: border-box;
-  width: 9px;
-  height: 9px;
-  margin: auto;
-  border-radius: 50%;
-}
-
-.breakpoint-glyph::before {
-  background: var(--danger);
-}
-
-.breakpoint-glyph-disabled::before {
-  border: 2px solid var(--danger);
-}
-
-.breakpoint-glyph-unbound::before {
-  border: 2px solid var(--text-muted);
+/* dnSpy's images in the editor's glyph margin — a breakpoint's kind, the current statement's arrow — drawn the size
+   its margin draws them, in the middle of the line. */
+.ds-glyph {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 16px 16px;
 }
 
 /* Bookmarks draw in the lines-decorations strip rather than the glyph margin, so a bookmark and a breakpoint
@@ -754,26 +740,6 @@ select:focus-visible,
 
 .bookmark-glyph-disabled::before {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-/* Where the selected frame is stopped: the whole line tinted, and an arrow in the margin so it can be told
-   apart from the cursor line and from a breakpoint sitting on the same statement. */
-.debug-stopped-line {
-  background: var(--tcbg-currentstatement, var(--accent-soft));
-  color: var(--tc-currentstatement);
-}
-
-.debug-stopped-glyph::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  box-sizing: border-box;
-  width: 0;
-  height: 0;
-  margin: auto;
-  border-left: 9px solid var(--tcbg-currentstatementmarker, var(--accent));
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
 }
 
 .loading-state,
@@ -2380,39 +2346,6 @@ select:focus-visible,
   background: var(--selection);
 }
 
-.breakpoint-row {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
-
-.breakpoint-main-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 25px;
-  padding-left: 8px;
-}
-
-.breakpoint-summary {
-  padding: 2px 8px 4px 45px;
-  font-size: 11px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.breakpoint-row input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-}
-
-.breakpoint-disabled > span {
-  text-decoration: line-through;
-  opacity: 0.55;
-}
-
 /* The Exception Settings window: a toolbar, the optional add row, the table, and the count line. */
 .exception-settings-pane {
   display: grid;
@@ -2579,31 +2512,6 @@ select:focus-visible,
   align-self: flex-start;
 }
 
-.breakpoint-main-row > span {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The dot that tells bound from pending from unbound in the Breakpoints pane. */
-.breakpoint-state {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--danger);
-}
-
-.breakpoint-state-pending {
-  background: transparent;
-  border: 2px solid var(--danger);
-}
-
-.breakpoint-state-unbound {
-  background: var(--text-muted);
-}
-
 .attach-dialog {
   grid-template-rows: 33px 33px minmax(180px, 1fr) 43px;
   width: min(90vw, 850px);
@@ -2684,154 +2592,40 @@ select:focus-visible,
   color: var(--text-muted);
 }
 
-.breakpoint-settings-dialog {
-  grid-template-rows: 33px minmax(0, 1fr) 43px;
-  width: min(90vw, 520px);
-  max-height: min(85vh, 600px);
-}
-
-.breakpoint-settings-content {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 12px;
-  overflow-y: auto;
-}
-
-.breakpoint-settings-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.breakpoint-settings-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-}
-
-.breakpoint-settings-checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-}
-
-.breakpoint-settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-left: 20px;
-}
-
-.breakpoint-settings-field label {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.breakpoint-settings-field input,
-.breakpoint-settings-field select,
-.breakpoint-settings-field textarea {
-  width: 100%;
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  background: var(--wpf-CommonControlsTextBoxBackground);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 12px;
-}
-
-.breakpoint-settings-field textarea {
-  min-height: 60px;
-  resize: vertical;
-}
-
-.breakpoint-settings-field input:disabled,
-.breakpoint-settings-field select:disabled,
-.breakpoint-settings-field textarea:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.breakpoint-settings-help {
-  font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.breakpoint-settings-inline {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.breakpoint-settings-inline > div {
-  flex: 1;
-}
-
-.breakpoint-settings-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-left: 20px;
-}
-
-.breakpoint-settings-label-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  font-size: 11px;
-}
-
-.breakpoint-settings-label-tag button {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-
-.breakpoint-settings-label-tag button:hover {
-  color: var(--text);
-}
-
-.breakpoint-settings-label-input {
-  display: flex;
-  gap: 4px;
-  padding-left: 20px;
-}
-
-.breakpoint-settings-label-input input {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  background: var(--wpf-CommonControlsTextBoxBackground);
-  color: var(--text);
-  font-size: 11px;
-}
-
-.process-list {
+/* Attach to Process: dnSpy's seven columns, the header sticking to the top of the scrolled list. */
+.attach-table {
   overflow: auto;
+  outline: none;
 }
 
-.process-row {
+.attach-row {
   display: grid;
-  grid-template-columns: minmax(120px, 25%) 80px minmax(200px, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(110px, 1.2fr) 60px minmax(60px, 0.8fr) 110px 80px minmax(140px, 2fr) minmax(160px, 2fr);
+  gap: 8px;
   align-items: center;
-  width: 100%;
-  min-height: 26px;
+  min-width: 860px;
+  min-height: 24px;
   padding: 2px 8px;
   background: transparent;
   text-align: left;
+  cursor: default;
+  user-select: none;
+}
+
+.attach-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.attach-header span {
+  cursor: pointer;
+}
+
+.process-row {
+  min-height: 26px;
 }
 
 .process-row:hover {
@@ -4465,31 +4259,8 @@ fieldset.options-group {
   margin: auto;
 }
 
-/* The Breakpoints window's search box, and the labels and module columns its rows carry after the location. */
-.breakpoints-search {
-  flex: 1;
-  min-width: 80px;
-  height: 22px;
-  margin-left: auto;
-  padding: 0 6px;
-}
-
-.breakpoint-main-row > .breakpoint-state {
-  flex: 0 0 auto;
-}
-
 .breakpoint-main-row > .breakpoint-labels,
-.breakpoint-main-row > .breakpoint-module {
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.breakpoint-main-row > .breakpoint-module {
-  margin-left: auto;
-}
 
 /* Highlight changed variables: the value is drawn in the theme's DebuggerValueChangedHighlight, over its own colours. */
 .debug-value-changed,
@@ -4685,4 +4456,218 @@ fieldset.options-group {
 .md-table-cell:not([readonly]):focus {
   border-color: var(--wpf-CommonControlsTextBoxBorderFocused, var(--accent));
   background: var(--wpf-CommonControlsTextBoxBackgroundFocused, var(--surface));
+}
+
+/* dnSpy's Breakpoints window: its tool bar with the search box, the seven sortable columns, the box name
+   breakpoints are typed into, and the line it shows in place of the list when the search matches nothing. */
+.breakpoints-pane {
+  display: grid;
+  grid-template-rows: 31px minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.breakpoints-toolbar input {
+  flex: 1;
+  min-width: 80px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  background: var(--wpf-CommonControlsTextBoxBackground, var(--surface));
+  color: var(--text);
+}
+
+.breakpoints-search-label {
+  margin: 0 3px;
+}
+
+.breakpoints-table {
+  display: grid;
+  grid-template-rows: 23px minmax(0, 1fr);
+  min-height: 0;
+  outline: none;
+}
+
+.breakpoints-header,
+.breakpoint-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(60px, 0.6fr) minmax(90px, 1fr) minmax(90px, 1fr) minmax(60px, 0.7fr) minmax(70px, 0.8fr) minmax(80px, 0.8fr);
+  align-items: center;
+}
+
+.breakpoints-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--wpf-HeaderDefault);
+  color: var(--wpf-HeaderDefaultText);
+}
+
+.breakpoints-header > span {
+  cursor: pointer;
+  user-select: none;
+}
+
+.breakpoints-header > span,
+.breakpoint-row > span {
+  overflow: hidden;
+  padding: 0 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakpoints-rows {
+  overflow: auto;
+  background: var(--surface);
+}
+
+.breakpoint-row {
+  min-height: 25px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  cursor: default;
+}
+
+.breakpoint-row.selected {
+  background: var(--selection);
+}
+
+.breakpoint-name-cell,
+.breakpoint-labels-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.breakpoint-name-cell input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.breakpoint-name-cell .breakpoint-row-image {
+  flex: 0 0 auto;
+}
+
+.breakpoint-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.breakpoints-no-match {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+mark.search-match {
+  background: var(--wpf-ToolWindowFindTextHighlight, color-mix(in srgb, var(--accent) 35%, transparent));
+  color: inherit;
+}
+
+/* dnSpy's Breakpoint Settings dialog: a box, a kind and a text box on each of its four rows, and the help buttons. */
+.breakpoint-settings-dialog {
+  grid-template-rows: 33px auto 43px;
+  width: min(92vw, 700px);
+}
+
+.breakpoint-settings-grid {
+  display: grid;
+  grid-template-columns: auto 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 8px;
+}
+
+.breakpoint-settings-grid input:not([type="checkbox"]),
+.breakpoint-settings-grid select {
+  min-width: 0;
+  height: 22px;
+}
+
+.breakpoint-setting-check,
+.breakpoint-setting-continue {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.breakpoint-settings-grid input[aria-invalid="true"] {
+  outline: 1px solid var(--danger);
+}
+
+.breakpoint-settings-error {
+  overflow: hidden;
+  color: var(--danger);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* BreakpointGlyphPopupControl: right of the glyph margin and above the line the mouse rests on, with the
+   breakpoint's tool tip under that line. It fades out over a second once the mouse has gone. */
+.breakpoint-glyph-popup {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  height: 26px;
+  border: 1px solid var(--wpf-DebuggerBreakpointGlyphMarginControlBorder, var(--border));
+  background: var(--wpf-DebuggerBreakpointGlyphMarginControlBackground, var(--surface-2));
+  transition: opacity 1s linear;
+}
+
+.breakpoint-glyph-popup .icon-button {
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+}
+
+.breakpoint-glyph-popup .icon-button:hover {
+  background: var(--wpf-DebuggerBreakpointGlyphMarginControlHoverBackground, var(--selection));
+}
+
+.breakpoint-glyph-tooltip:empty {
+  display: none;
+}
+
+.breakpoint-glyph-tooltip {
+  position: absolute;
+  z-index: 21;
+  max-width: 600px;
+  padding: 3px 6px;
+  border: 1px solid var(--wpf-ToolTipBorderBrush, var(--border));
+  background: var(--wpf-ToolTipBackground, var(--surface-2));
+  color: var(--wpf-ToolTipForeground, var(--text));
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+
+.breakpoint-glyph-tooltip-error {
+  color: var(--danger);
+}
+
+/* The Threads and Modules windows once several processes are debugged: the "Process" combo over the grid. */
+.debug-process-window {
+  display: grid;
+  grid-template-rows: 31px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+}
+
+.debug-process-filter {
+  display: flex;
+  align-items: center;
+  padding: 0 5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.debug-process-filter label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.debug-process-filter select {
+  width: 150px;
 }

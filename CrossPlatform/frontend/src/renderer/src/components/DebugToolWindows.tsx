@@ -1,15 +1,15 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
 import type { DebugModule, DebugStackFrame, DebugThread } from '../../../shared/protocol'
-import { breakpointConditionsSummary, breakpointsFile, methodBreakpointName, parseLineBreakpointEntries, parseFunctionBreakpoints, useAppStore } from '../app-store'
-import type { BreakpointSettings, LineBreakpoint } from '../app-store'
+import { debugProcessesOf, frameCodeLocation, lineBreakpointsAtLocation, useAppStore, type DebugSessionEntry } from '../app-store'
 import { useLanguage } from '../localization'
 import { loadAppOptions, saveAppOptions, useAppOptions, type CallStackSettings, type DebuggerOptions } from './app-options'
-import { BreakpointSettingsDialog } from './BreakpointSettingsDialog'
 import { ColoredText } from './ColoredText'
 import { DsIcon, MenuEntryIcon } from './DsIcon'
 
 export { LocalsPane, WatchPane, AutosPane, StaticFieldsPane } from './DebugVariablesWindows'
+export { BreakpointsPane } from './BreakpointsWindow'
 
 type Translate = (message: string, values?: Record<string, string | number>) => string
 
@@ -147,6 +147,55 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
   )
 }
 
+/** The processes being debugged, the current one's from the top-level fields — dnSpy's DbgManager.Processes. */
+const useDebugProcesses = (): DebugSessionEntry[] => {
+  const state = useAppStore(useShallow((app) => ({
+    debugSessionId: app.debugSessionId,
+    debugSessions: app.debugSessions,
+    debugState: app.debugState,
+    debugProcess: app.debugProcess,
+    debugModules: app.debugModules,
+    debugThreads: app.debugThreads,
+    selectedDebugThreadId: app.selectedDebugThreadId,
+  })))
+  return useMemo(() => {
+    const processes = debugProcessesOf(state)
+    // A session whose start has not answered yet has no entry; its process is the current one all the same.
+    if (processes.length === 0 && state.debugSessionId)
+      return [{ sessionId: state.debugSessionId, state: state.debugState === 'stopped' ? 'stopped' : state.debugState === 'starting' ? 'starting' : 'running', process: state.debugProcess, modules: state.debugModules, threads: state.debugThreads, threadId: state.selectedDebugThreadId, shouldDetach: state.debugProcess?.ownsDebuggee === false }]
+    return processes
+  }, [state])
+}
+
+/** SimpleProcessVM's name: the process id, in the window's number format, and the process's name. */
+const processLabel = (entry: DebugSessionEntry, hex: boolean): string =>
+  entry.process ? `[${formatNumber(entry.process.id, hex)}]${entry.process.name ? ` ${entry.process.name}` : ''}` : entry.sessionId
+
+/**
+ * The "Process" combo of dnSpy's Threads and Modules windows: All, or one of the processes being debugged.
+ * It is only there when there is more than one process to choose from.
+ */
+const ProcessFilter = ({ processes, value, onChange, hex }: { processes: DebugSessionEntry[]; value: string; onChange(value: string): void; hex: boolean }): React.JSX.Element => {
+  const { t } = useLanguage()
+  return (
+    <div className="debug-process-filter" role="toolbar">
+      <label>
+        <span>{t('Process')}</span>
+        <select aria-label={t('Process')} value={processes.some((entry) => entry.sessionId === value) ? value : ''} onChange={(event) => onChange(event.target.value)}>
+          <option value="">{t('All')}</option>
+          {processes.map((entry) => <option key={entry.sessionId} value={entry.sessionId}>{processLabel(entry, hex)}</option>)}
+        </select>
+      </label>
+    </div>
+  )
+}
+
+/** A Threads or Modules window: the grid, under the process combo once there is more than one process. */
+const ProcessWindow = ({ processes, filter, onFilter, hex, children }: { processes: DebugSessionEntry[]; filter: string; onFilter(value: string): void; hex: boolean; children: ReactNode }): React.JSX.Element =>
+  processes.length > 1
+    ? <div className="debug-process-window"><ProcessFilter processes={processes} value={filter} onChange={onFilter} hex={hex} />{children}</div>
+    : <>{children}</>
+
 /** The text of a Call Stack row: the name in the formatter's colours, or plain for a frame from an older engine. */
 const frameName = (frame: DebugStackFrame): ReactNode =>
   frame.nameParts?.length ? <ColoredText parts={frame.nameParts} /> : frame.name
@@ -158,9 +207,33 @@ export const CallStackPane = (): React.JSX.Element => {
   const selectFrame = useAppStore((state) => state.selectDebugFrame)
   const switchToFrame = useAppStore((state) => state.switchToDebugFrame)
   const runToCursor = useAppStore((state) => state.runToCursor)
-  const showToolWindow = useAppStore((state) => state.openToolWindow)
+  const showDisassembly = useAppStore((state) => state.showDisassembly)
   const options = useAppOptions()
   const { t } = useLanguage()
+  // dnSpy's Breakpoint submenu: Insert Breakpoint and Insert Tracepoint at a frame's location without one, and the
+  // commands of the breakpoints already there for one with. The popup menu has no submenus, so its entries come
+  // in a group of their own.
+  const breakpointEntries = (frame: DebugStackFrame | undefined): MenuItem[] => {
+    const store = useAppStore.getState()
+    const location = frameCodeLocation(frame)
+    if (!location)
+      return []
+    const existing = lineBreakpointsAtLocation(store.lineBreakpoints, location)
+    if (existing.length === 0) {
+      return [
+        { key: 'insert-breakpoint', label: t('Insert Breakpoint'), icon: 'CheckDot', shortcut: 'F9', run: () => void store.addLocationBreakpoint(location) },
+        { key: 'insert-tracepoint', label: t('Insert Tracepoint'), run: () => store.requestLocationTracepoint(location) },
+      ]
+    }
+    const ids = existing.map((breakpoint) => breakpoint.id)
+    const enabled = existing[0].enabled
+    return [
+      { key: 'delete-breakpoint', label: t('Delete Breakpoint'), icon: 'CheckDot', run: () => void store.removeBreakpoints(ids) },
+      { key: 'toggle-breakpoint', label: enabled ? t('Disable Breakpoint') : t('Enable Breakpoint'), icon: 'ToggleAllBreakpoints', shortcut: 'Ctrl+F9', run: () => void store.setBreakpointsEnabled(ids, !enabled) },
+      { key: 'breakpoint-settings', label: t('Settings...'), icon: 'Settings', run: () => store.editBreakpointSettings(ids) },
+      { key: 'export-breakpoint', label: t('Export...'), icon: 'Open', run: () => void store.exportBreakpoints(ids) },
+    ]
+  }
   const openMenu = (frame: DebugStackFrame | undefined, position: { x: number; y: number }): void => {
     const callStack = options.callStack
     const check = (key: keyof CallStackSettings, label: string): MenuItem => ({ key, label, checked: callStack[key], run: () => toggleCallStackOption(key) })
@@ -171,8 +244,12 @@ export const CallStackPane = (): React.JSX.Element => {
       null,
       { key: 'switch', label: t('Switch To Frame'), shortcut: t('Enter'), disabled: !frame || frame.isInternal === true, run: () => { if (frame) void switchToFrame(frame.id) } },
       { key: 'go-to-code', label: t('Go To Code'), icon: 'GoToSourceCode', disabled: !frame || frame.isInternal === true, run: () => { if (frame) void switchToFrame(frame.id) } },
-      { key: 'go-to-disassembly', label: t('Go To Disassembly'), icon: 'DisassemblyWindow', disabled: !frame || frame.isInternal === true, run: () => { if (frame) { void switchToFrame(frame.id).then(() => showToolWindow?.('disassembly')) } } },
+      { key: 'go-to-disassembly', label: t('Go To Disassembly'), icon: 'DisassemblyWindow', disabled: !frame || frame.isInternal === true, run: () => { if (frame) void showDisassembly({ frameId: frame.id }) } },
       { key: 'run-to-cursor', label: t('Run To Cursor'), icon: 'Cursor', shortcut: 'Ctrl+F10', disabled: !frame || frame.isInternal === true || frame.id === top?.id, run: () => { if (frame) void runToCursor(frame.id) } },
+      // dnSpy has the command and never enables it: CallStackOperations.CanUnwindToFrame is always false.
+      { key: 'unwind', label: t('Unwind To This Frame'), disabled: true, run: () => undefined },
+      null,
+      ...breakpointEntries(frame),
       null,
       ...hexEntries(t, options.debugger),
       null,
@@ -225,6 +302,19 @@ export const CallStackPane = (): React.JSX.Element => {
               if (event.key === 'Enter') {
                 event.preventDefault()
                 if (!frame.isInternal) void switchToFrame(frame.id)
+              } else if (event.key === 'F9' && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                // F9 in the window toggles the frame's breakpoint, as its Breakpoint submenu's shortcut says.
+                const location = frameCodeLocation(frame)
+                if (!location)
+                  return
+                event.preventDefault()
+                event.stopPropagation()
+                const store = useAppStore.getState()
+                const existing = lineBreakpointsAtLocation(store.lineBreakpoints, location)
+                if (existing.length === 0)
+                  void store.addLocationBreakpoint(location)
+                else
+                  void store.removeBreakpoints(existing.map((breakpoint) => breakpoint.id))
               }
             }}
           >
@@ -246,20 +336,43 @@ const threadCategoryImage = (category?: string): string => {
   }
 }
 
+/** A row of the Threads window: a thread, and the process it is in. */
+type ThreadRow = DebugThread & { sessionId: string }
+
 export const ThreadsPane = (): React.JSX.Element => {
-  const threads = useAppStore((state) => state.debugThreads)
+  const processes = useDebugProcesses()
+  const currentSessionId = useAppStore((state) => state.debugSessionId)
   const selectedThreadId = useAppStore((state) => state.selectedDebugThreadId)
   const selectThread = useAppStore((state) => state.selectDebugThread)
+  const setCurrentProcess = useAppStore((state) => state.setCurrentDebugSession)
   const freeze = useAppStore((state) => state.freezeDebugThreads)
   const rename = useAppStore((state) => state.renameDebugThread)
-  const debugState = useAppStore((state) => state.debugState)
   const options = useAppOptions()
   const hex = options.debugger.useHexadecimal
   const [selected, setSelected] = useState<string>()
-  const [renaming, setRenaming] = useState<{ id: number; text: string }>()
+  const [processFilter, setProcessFilter] = useState('')
+  const [renaming, setRenaming] = useState<{ key: string; text: string }>()
   const { t } = useLanguage()
-  const columns: GridColumn<DebugThread>[] = useMemo(() => [
-    { key: 'marker', header: '', width: '22px', text: () => '', render: (thread) => thread.id === selectedThreadId ? <DsIcon name="CurrentInstructionPointer" /> : thread.isFrozen ? <DsIcon name="Pause" /> : null },
+  // dnSpy's Threads window lists the threads of every process, or of the one the Process combo picks.
+  const threads: ThreadRow[] = useMemo(() => processes
+    .filter((entry) => !processFilter || entry.sessionId === processFilter)
+    .flatMap((entry) => entry.threads.map((thread) => ({ ...thread, sessionId: entry.sessionId }))), [processes, processFilter])
+  const rowKey = (thread: ThreadRow): string => `${thread.sessionId}:${thread.id}`
+  const isCurrent = (thread: ThreadRow): boolean => thread.sessionId === currentSessionId && thread.id === selectedThreadId
+  const stopped = (thread: ThreadRow): boolean => processes.find((entry) => entry.sessionId === thread.sessionId)?.state === 'stopped'
+  const finishRename = (thread: ThreadRow, text: string): void => {
+    void rename(thread.id, text.trim() || null, thread.sessionId)
+    setRenaming(undefined)
+  }
+  // dnSpy's SwitchToThread: a thread of another paused process makes that process the current one first.
+  const switchToThread = async (thread: ThreadRow): Promise<void> => {
+    if (!stopped(thread)) return
+    if (thread.sessionId !== currentSessionId)
+      await setCurrentProcess(thread.sessionId)
+    await selectThread(thread.id)
+  }
+  const columns: GridColumn<ThreadRow>[] = useMemo(() => [
+    { key: 'marker', header: '', width: '22px', text: () => '', render: (thread) => isCurrent(thread) ? <DsIcon name="CurrentInstructionPointer" /> : thread.isFrozen ? <DsIcon name="Pause" /> : null },
     { key: 'id', header: t('ID'), width: 'minmax(60px, auto)', text: (thread) => formatNumber(thread.id, hex) },
     { key: 'managed-id', header: t('Managed ID'), width: 'minmax(60px, auto)', text: (thread) => formatNumber(thread.managedId, hex) },
     { key: 'category', header: t('Category'), width: 'minmax(80px, auto)', text: (thread) => thread.category ? t(thread.category) : '', render: (thread) => <><DsIcon name={threadCategoryImage(thread.category)} className="debug-variable-image" />{thread.category ? t(thread.category) : ''}</> },
@@ -268,17 +381,17 @@ export const ThreadsPane = (): React.JSX.Element => {
       header: t('Name'),
       width: 'minmax(100px, 1fr)',
       text: (thread) => thread.name,
-      render: (thread) => renaming?.id === thread.id ? (
+      render: (thread) => renaming?.key === rowKey(thread) ? (
         <input
           className="debug-value-editor"
           autoFocus
           aria-label={t('Name')}
           value={renaming.text}
-          onChange={(event) => setRenaming({ id: thread.id, text: event.target.value })}
-          onBlur={() => { void rename(thread.id, renaming.text.trim() || null); setRenaming(undefined) }}
+          onChange={(event) => setRenaming({ key: rowKey(thread), text: event.target.value })}
+          onBlur={() => finishRename(thread, renaming.text)}
           onKeyDown={(event) => {
             event.stopPropagation()
-            if (event.key === 'Enter') { void rename(thread.id, renaming.text.trim() || null); setRenaming(undefined) }
+            if (event.key === 'Enter') finishRename(thread, renaming.text)
             else if (event.key === 'Escape') setRenaming(undefined)
           }}
         />
@@ -291,246 +404,53 @@ export const ThreadsPane = (): React.JSX.Element => {
     { key: 'process', header: t('Process Name'), width: 'minmax(80px, auto)', text: (thread) => thread.processName ? `[${formatNumber(thread.processId, hex)}] ${thread.processName}` : '' },
     { key: 'appdomain', header: t('AppDomain'), width: 'minmax(80px, auto)', text: (thread) => thread.appDomainName ?? '' },
     { key: 'state', header: t('State'), width: 'minmax(80px, auto)', text: (thread) => (thread.state ?? []).join(', ') },
-  ], [t, hex, selectedThreadId, renaming, rename])
-  const openMenu = (thread: DebugThread | undefined, position: { x: number; y: number }): void => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [t, hex, selectedThreadId, currentSessionId, renaming, rename])
+  const openMenu = (thread: ThreadRow | undefined, position: { x: number; y: number }): void => {
     showDebugMenu(t('Threads'), [
       { key: 'copy', label: t('Copy'), icon: 'Copy', shortcut: 'Ctrl+C', disabled: !thread, run: () => { if (thread) copyText(columns.map((column) => column.text(thread)).join('\t')) } },
       { key: 'select-all', label: t('Select All'), icon: 'Select', shortcut: 'Ctrl+A', run: () => copyText(threads.map((row) => columns.map((column) => column.text(row)).join('\t')).join('\n')) },
       null,
-      { key: 'switch', label: t('Switch To Thread'), shortcut: t('Enter'), disabled: !thread || debugState !== 'stopped', run: () => { if (thread) void selectThread(thread.id) } },
-      { key: 'rename', label: t('Rename'), disabled: !thread, run: () => { if (thread) setRenaming({ id: thread.id, text: thread.name }) } },
-      { key: 'freeze', label: t('Freeze'), disabled: !thread || thread.isFrozen === true, run: () => { if (thread) void freeze([thread.id], true) } },
-      { key: 'thaw', label: t('Thaw'), disabled: !thread || thread.isFrozen !== true, run: () => { if (thread) void freeze([thread.id], false) } },
+      { key: 'switch', label: t('Switch To Thread'), shortcut: t('Enter'), disabled: !thread || !stopped(thread), run: () => { if (thread) void switchToThread(thread) } },
+      { key: 'rename', label: t('Rename'), disabled: !thread, run: () => { if (thread) setRenaming({ key: rowKey(thread), text: thread.name }) } },
+      { key: 'freeze', label: t('Freeze'), disabled: !thread || thread.isFrozen === true, run: () => { if (thread) void freeze([thread.id], true, thread.sessionId) } },
+      { key: 'thaw', label: t('Thaw'), disabled: !thread || thread.isFrozen !== true, run: () => { if (thread) void freeze([thread.id], false, thread.sessionId) } },
       null,
       ...hexEntries(t, options.debugger),
     ], position)
   }
   return (
-    <DebugGrid
-      label={t('Threads')}
-      columns={columns}
-      rows={threads}
-      rowKey={(thread) => String(thread.id)}
-      selected={selected}
-      onSelect={setSelected}
-      onActivate={(thread) => { if (debugState === 'stopped') void selectThread(thread.id) }}
-      onMenu={openMenu}
-      rowClass={(thread) => `thread-row${thread.id === selectedThreadId ? ' thread-current' : ''}`}
-    />
+    <ProcessWindow processes={processes} filter={processFilter} onFilter={setProcessFilter} hex={hex}>
+      <DebugGrid
+        label={t('Threads')}
+        columns={columns}
+        rows={threads}
+        rowKey={rowKey}
+        selected={selected}
+        onSelect={setSelected}
+        onActivate={(thread) => void switchToThread(thread)}
+        onMenu={openMenu}
+        rowClass={(thread) => `thread-row${isCurrent(thread) ? ' thread-current' : ''}`}
+      />
+    </ProcessWindow>
   )
 }
 
-// A line breakpoint is identified by the method it lives in plus the line, so two breakpoints in the same method
-// do not read as the same row. The method name is the dotted form the Debug menu also uses, which keeps the pane
-// and the "Toggle Method Breakpoint" entry speaking the same language.
-const lineBreakpointLabel = (breakpoint: LineBreakpoint): string => {
-  const method = methodBreakpointName(breakpoint.description)
-  return method ? `${method}:${breakpoint.line}` : `Line ${breakpoint.line}`
-}
-
-export const BreakpointsPane = (): React.JSX.Element => {
-  const [name, setName] = useState('')
-  const [status, setStatus] = useState('')
-  // Which breakpoint's settings dialog is open: a line breakpoint by id, a function one by name.
-  const [editing, setEditing] = useState<{ kind: 'line' | 'function'; key: string }>()
-  const lineBreakpoints = useAppStore((state) => state.lineBreakpoints)
-  const removeLineBreakpoint = useAppStore((state) => state.removeLineBreakpoint)
-  const setLineBreakpointEnabled = useAppStore((state) => state.setLineBreakpointEnabled)
-  const setLineBreakpointSettings = useAppStore((state) => state.setLineBreakpointSettings)
-  const breakpoints = useAppStore((state) => state.functionBreakpoints)
-  const addBreakpoint = useAppStore((state) => state.addFunctionBreakpoint)
-  const removeBreakpoint = useAppStore((state) => state.removeFunctionBreakpoint)
-  const setBreakpointEnabled = useAppStore((state) => state.setFunctionBreakpointEnabled)
-  const setBreakpointSettings = useAppStore((state) => state.setFunctionBreakpointSettings)
-  const importBreakpoints = useAppStore((state) => state.importBreakpoints)
-  const goToLineBreakpoint = useAppStore((state) => state.goToLineBreakpoint)
-  const deleteAll = useAppStore((state) => state.deleteAllBreakpoints)
-  const [search, setSearch] = useState('')
-  const { t } = useLanguage()
-  // dnSpy's search box filters on every column the window shows: the location, the labels and the settings.
-  const matches = (...texts: (string | undefined)[]): boolean => {
-    const needle = search.trim().toLowerCase()
-    return !needle || texts.some((text) => text?.toLowerCase().includes(needle))
-  }
-  const visibleLineBreakpoints = lineBreakpoints.filter((breakpoint) => matches(lineBreakpointLabel(breakpoint), breakpoint.modulePath, breakpoint.settings?.labels?.join(' '), breakpointConditionsSummary(breakpoint.settings, breakpoint.hitCount)))
-  const visibleFunctionBreakpoints = breakpoints.filter((breakpoint) => matches(breakpoint.name, breakpoint.settings?.labels?.join(' '), breakpointConditionsSummary(breakpoint.settings, breakpoint.hitCount)))
-  const openLineMenu = (breakpoint: LineBreakpoint, position: { x: number; y: number }): void => {
-    showDebugMenu(t('Breakpoints'), [
-      { key: 'go-to-code', label: t('Go To Source Code'), icon: 'GoToSourceCode', shortcut: t('Enter'), run: () => void goToLineBreakpoint(breakpoint.id) },
-      { key: 'go-to-code-new-tab', label: t('Go To Source Code (New Tab)'), run: () => void goToLineBreakpoint(breakpoint.id, true) },
-      null,
-      { key: 'copy', label: t('Copy'), icon: 'Copy', shortcut: 'Ctrl+C', run: () => copyText([lineBreakpointLabel(breakpoint), breakpoint.modulePath ?? '', breakpointConditionsSummary(breakpoint.settings, breakpoint.hitCount) ?? ''].join('\t')) },
-      null,
-      { key: 'toggle', label: breakpoint.enabled ? t('Disable Breakpoint') : t('Enable Breakpoint'), icon: 'ToggleAllBreakpoints', shortcut: t('Space'), run: () => void setLineBreakpointEnabled(breakpoint.id, !breakpoint.enabled) },
-      { key: 'settings', label: t('Settings...'), icon: 'Settings', shortcut: 'Alt+Enter', run: () => setEditing({ kind: 'line', key: breakpoint.id }) },
-      null,
-      { key: 'delete', label: t('Delete'), icon: 'Cancel', shortcut: 'Del', run: () => void removeLineBreakpoint(breakpoint.id) },
-      { key: 'delete-all', label: t('Delete All Breakpoints'), icon: 'ClearBreakpointGroup', shortcut: 'Ctrl+Shift+F9', run: () => void deleteAll?.() },
-      null,
-      { key: 'export', label: t('Export Breakpoints'), icon: 'Open', run: () => void exportBreakpoints() },
-      { key: 'import', label: t('Import Breakpoints'), icon: 'Import', run: () => void runImport() },
-    ], position)
-  }
-  const submit = (): void => {
-    if (name.trim()) {
-      void addBreakpoint(name)
-      setName('')
-    }
-  }
-
-  // The same file the settings are written as, so an export can be dropped back in by hand.
-  const exportBreakpoints = async (): Promise<void> => {
-    const file = breakpointsFile(useAppStore.getState())
-    if (file.breakpoints.length === 0 && file.functions.length === 0)
-      return
-    const saved = await window.dnSpy.saveCode('breakpoints.json', JSON.stringify(file, null, 2))
-    setStatus(saved ? t('Exported breakpoints to {path}.', { path: saved }) : '')
-  }
-
-  const runImport = async (): Promise<void> => {
-    let text: string | undefined
-    try {
-      text = await window.dnSpy.readTextFile('breakpoints')
-    } catch {
-      // A file the host could not read is reported the same way a damaged one is.
-      setStatus(t('The breakpoint file could not be read.'))
-      return
-    }
-    if (text === undefined)
-      return
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      setStatus(t('The breakpoint file could not be read.'))
-      return
-    }
-    const stored = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
-    const file = {
-      breakpoints: parseLineBreakpointEntries(parsed),
-      functions: parseFunctionBreakpoints(stored.functions),
-    }
-    if (file.breakpoints.length === 0 && file.functions.length === 0) {
-      setStatus(t('The breakpoint file could not be read.'))
-      return
-    }
-    setStatus(t('Imported {count} breakpoint(s).', { count: await importBreakpoints(file) }))
-  }
-
-  return (
-    <div className="debug-tool-pane">
-      {/* CodeBreakpointsControl.xaml's import and export buttons, with the images dnSpy gives them; the
-          settings and remove buttons on each row are its context menu's _Settings and Remove Breakpoint. */}
-      <div className="bookmarks-toolbar">
-        <button className="icon-button" title={t('Import Breakpoints')} aria-label={t('Import Breakpoints')} onClick={() => void runImport()}><DsIcon name="Import" /></button>
-        <button
-          className="icon-button"
-          title={t('Export Breakpoints')}
-          aria-label={t('Export Breakpoints')}
-          disabled={lineBreakpoints.length === 0 && breakpoints.length === 0}
-          onClick={() => void exportBreakpoints()}
-        ><DsIcon name="Open" /></button>
-        {status ? <span className="bookmarks-status">{status}</span> : null}
-        <input className="breakpoints-search" type="search" aria-label={t('Search')} placeholder={t('Search')} value={search} onChange={(event) => setSearch(event.target.value)} />
-      </div>
-      <div className="result-list">
-        {visibleLineBreakpoints.map((breakpoint) => {
-          const label = lineBreakpointLabel(breakpoint)
-          const summary = breakpointConditionsSummary(breakpoint.settings, breakpoint.hitCount)
-          return (
-            <div
-              className={`breakpoint-row${breakpoint.enabled ? '' : ' breakpoint-disabled'}`}
-              key={breakpoint.id}
-              onDoubleClick={() => void goToLineBreakpoint(breakpoint.id)}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                openLineMenu(breakpoint, { x: event.clientX, y: event.clientY })
-              }}
-            >
-              <div className="breakpoint-main-row">
-                <input
-                  type="checkbox"
-                  checked={breakpoint.enabled}
-                  aria-label={t(breakpoint.enabled ? 'Disable {name}' : 'Enable {name}', { name: label })}
-                  onChange={() => void setLineBreakpointEnabled(breakpoint.id, !breakpoint.enabled)}
-                />
-                <span className={`breakpoint-state breakpoint-state-${breakpoint.state}`} title={breakpoint.message ?? t('Bound')} />
-                <span title={breakpoint.message ?? breakpoint.description}>{label}</span>
-                {breakpoint.settings?.labels?.length ? <span className="breakpoint-labels">{breakpoint.settings.labels.join(', ')}</span> : null}
-                <span className="breakpoint-module" title={breakpoint.modulePath}>{breakpoint.modulePath?.split(/[\\/]/).at(-1)}</span>
-                <button
-                  className="icon-button"
-                  aria-label={t('Breakpoint settings for {name}', { name: label })}
-                  title={t('Breakpoint settings')}
-                  onClick={() => setEditing({ kind: 'line', key: breakpoint.id })}
-                >
-                  <DsIcon name="Settings" />
-                </button>
-                <button className="icon-button" aria-label={t('Remove {name}', { name: label })} onClick={() => void removeLineBreakpoint(breakpoint.id)}><DsIcon name="Cancel" /></button>
-              </div>
-              {summary && <div className="breakpoint-summary">{summary}</div>}
-            </div>
-          )
-        })}
-      </div>
-      <div className="debug-input-row">
-        <input aria-label={t('Function breakpoint')} placeholder="Namespace.Type.Method" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} />
-        <button className="icon-button" aria-label={t('Add function breakpoint')} title={t('Add function breakpoint')} disabled={!name.trim()} onClick={submit}><DsIcon name="Add" /></button>
-      </div>
-      <div className="result-list">
-        {visibleFunctionBreakpoints.map((breakpoint) => {
-          const summary = breakpointConditionsSummary(breakpoint.settings, breakpoint.hitCount)
-          return (
-            <div className={`breakpoint-row${breakpoint.enabled ? '' : ' breakpoint-disabled'}`} key={breakpoint.name}>
-              <div className="breakpoint-main-row">
-                <input
-                  type="checkbox"
-                  checked={breakpoint.enabled}
-                  aria-label={t(breakpoint.enabled ? 'Disable {name}' : 'Enable {name}', { name: breakpoint.name })}
-                  onChange={() => void setBreakpointEnabled(breakpoint.name, !breakpoint.enabled)}
-                />
-                <span>{breakpoint.name}</span>
-                <button
-                  className="icon-button"
-                  aria-label={t('Breakpoint settings for {name}', { name: breakpoint.name })}
-                  title={t('Breakpoint settings')}
-                  onClick={() => setEditing({ kind: 'function', key: breakpoint.name })}
-                >
-                  <DsIcon name="Settings" />
-                </button>
-                <button className="icon-button" aria-label={t('Remove {name}', { name: breakpoint.name })} onClick={() => void removeBreakpoint(breakpoint.name)}><DsIcon name="Cancel" /></button>
-              </div>
-              {summary && <div className="breakpoint-summary">{summary}</div>}
-            </div>
-          )
-        })}
-      </div>
-      {editing && (
-        <BreakpointSettingsDialog
-          title={t('Breakpoint settings')}
-          settings={
-            editing.kind === 'line'
-              ? lineBreakpoints.find((bp) => bp.id === editing.key)?.settings
-              : breakpoints.find((bp) => bp.name === editing.key)?.settings
-          }
-          onClose={() => setEditing(undefined)}
-          onSave={(settings) => {
-            if (editing.kind === 'line') {
-              void setLineBreakpointSettings(editing.key, settings)
-            } else {
-              void setBreakpointSettings(editing.key, settings)
-            }
-            setEditing(undefined)
-          }}
-        />
-      )}
-    </div>
-  )
-}
+/** A row of the Modules window: a module, and the process it is loaded in. */
+type ModuleRow = DebugModule & { sessionId: string }
 
 export const ModulesPane = (): React.JSX.Element => {
-  const modules = useAppStore((state) => state.debugModules)
-  const sessionId = useAppStore((state) => state.debugSessionId)
+  const processes = useDebugProcesses()
+  const currentModules = useAppStore((state) => state.debugModules)
+  const currentSessionId = useAppStore((state) => state.debugSessionId)
+  const [processFilter, setProcessFilter] = useState('')
+  // dnSpy's Modules window lists the modules of every process, or of the one the Process combo picks. A session
+  // still starting has no entry yet; its modules are the top-level ones.
+  const modules: ModuleRow[] = useMemo(() => processes.length === 0
+    ? currentModules.map((module) => ({ ...module, sessionId: currentSessionId ?? '' }))
+    : processes
+      .filter((entry) => !processFilter || entry.sessionId === processFilter)
+      .flatMap((entry) => entry.modules.map((module) => ({ ...module, sessionId: entry.sessionId }))), [processes, processFilter, currentModules, currentSessionId])
   const workspaceModules = useAppStore((state) => state.modules)
   const openPaths = useAppStore((state) => state.openPaths)
   const revealNode = useAppStore((state) => state.revealNode)
@@ -540,7 +460,7 @@ export const ModulesPane = (): React.JSX.Element => {
   const [selected, setSelected] = useState<string>()
   const { t } = useLanguage()
   const yesNo = (value: boolean | null | undefined): string => value === null || value === undefined ? '' : value ? t('Yes') : t('No')
-  const columns: GridColumn<DebugModule>[] = useMemo(() => [
+  const columns: GridColumn<ModuleRow>[] = useMemo(() => [
     { key: 'name', header: t('Name'), width: 'minmax(140px, 1fr)', text: (module) => module.name, render: (module) => <><DsIcon name={module.isExe ? 'AssemblyExe' : 'ModuleFile'} className="debug-variable-image" />{module.name}</> },
     { key: 'optimized', header: t('Optimized'), width: 'minmax(60px, auto)', text: (module) => yesNo(module.isOptimized) },
     { key: 'dynamic', header: t('Dynamic'), width: 'minmax(60px, auto)', text: (module) => yesNo(module.isDynamic) },
@@ -555,11 +475,14 @@ export const ModulesPane = (): React.JSX.Element => {
   ], [t, hex])
 
   // dnSpy's Go To Module: the module's node in the assembly explorer, opening the file first if needed.
-  const goToModule = async (module: DebugModule): Promise<void> => {
-    let path = module.path
-    if (!path || module.isInMemory || module.isDynamic) {
-      if (!sessionId || typeof module.id !== 'number') return
-      path = await window.dnSpy.saveDebugModule(sessionId, module.id)
+  const goToModule = async (module: ModuleRow): Promise<void> => {
+    const sessionId = module.sessionId
+    let path: string | undefined = module.path
+    // A module without a file — and with Use memory modules, any module — is read out of the process.
+    if (!path || module.isInMemory || module.isDynamic || options.debugger.useMemoryModules) {
+      if (!sessionId) return
+      path = await useAppStore.getState().openModuleFromMemory(sessionId, module)
+      if (!path) return
     }
     const known = workspaceModules.find((candidate) => candidate.path === path)
     if (!known)
@@ -569,7 +492,8 @@ export const ModulesPane = (): React.JSX.Element => {
       await revealNode(opened.id)
   }
 
-  const saveModule = async (module: DebugModule): Promise<void> => {
+  const saveModule = async (module: ModuleRow): Promise<void> => {
+    const sessionId = module.sessionId
     if (!sessionId || typeof module.id !== 'number') return
     const target = await window.dnSpy.chooseDebugModuleSavePath(module.name)
     if (!target) return
@@ -581,7 +505,8 @@ export const ModulesPane = (): React.JSX.Element => {
     }
   }
 
-  const openMenu = (module: DebugModule | undefined, position: { x: number; y: number }): void => {
+  const openMenu = (module: ModuleRow | undefined, position: { x: number; y: number }): void => {
+    const sessionId = module?.sessionId
     showDebugMenu(t('Modules'), [
       { key: 'copy', label: t('Copy'), icon: 'Copy', shortcut: 'Ctrl+C', disabled: !module, run: () => { if (module) copyText(columns.map((column) => column.text(module)).join('\t')) } },
       { key: 'select-all', label: t('Select All'), icon: 'Select', shortcut: 'Ctrl+A', run: () => copyText(modules.map((row) => columns.map((column) => column.text(row)).join('\t')).join('\n')) },
@@ -589,7 +514,7 @@ export const ModulesPane = (): React.JSX.Element => {
       { key: 'go-to-module', label: t('Go To Module'), shortcut: t('Enter'), disabled: !module, run: () => { if (module) void goToModule(module) } },
       { key: 'open-from-memory', label: t('Open Module from Memory'), disabled: !module || typeof module.id !== 'number', run: () => {
         if (!module || !sessionId || typeof module.id !== 'number') return
-        void window.dnSpy.saveDebugModule(sessionId, module.id).then((path) => openPaths([path]))
+        void useAppStore.getState().openModuleFromMemory(sessionId, module)
       } },
       { key: 'load-all', label: t('Load All Modules'), disabled: modules.length === 0, run: () => void openPaths(modules.map((row) => row.path).filter((path): path is string => !!path && !workspaceModules.some((candidate) => candidate.path === path))) },
       null,
@@ -599,63 +524,77 @@ export const ModulesPane = (): React.JSX.Element => {
     ], position)
   }
   return (
-    <DebugGrid
-      label={t('Modules')}
-      columns={columns}
-      rows={modules}
-      rowKey={(module) => String(module.id)}
-      selected={selected}
-      onSelect={setSelected}
-      onActivate={(module) => void goToModule(module)}
-      onMenu={openMenu}
-    />
+    <ProcessWindow processes={processes} filter={processFilter} onFilter={setProcessFilter} hex={hex}>
+      <DebugGrid
+        label={t('Modules')}
+        columns={columns}
+        rows={modules}
+        rowKey={(module) => `${module.sessionId}:${module.id}`}
+        selected={selected}
+        onSelect={setSelected}
+        onActivate={(module) => void goToModule(module)}
+        onMenu={openMenu}
+      />
+    </ProcessWindow>
   )
 }
 
-/** dnSpy's Processes window: the process each session debugs. */
+/**
+ * dnSpy's Processes window: every process being debugged, the current one marked. Double click or Enter makes a
+ * paused process the current one; the context menu runs, breaks, detaches from or kills the selected process.
+ */
 export const ProcessesPane = (): React.JSX.Element => {
-  const process = useAppStore((state) => state.debugProcess)
-  const detach = useAppStore((state) => state.detachDebug)
-  const terminate = useAppStore((state) => state.terminateDebug)
-  const pause = useAppStore((state) => state.pauseDebug)
-  const resume = useAppStore((state) => state.continueDebug)
-  const debugState = useAppStore((state) => state.debugState)
+  const processes = useDebugProcesses()
+  const currentSessionId = useAppStore((state) => state.debugSessionId)
+  const store = useAppStore.getState
   const options = useAppOptions()
   const hex = options.debugger.useHexadecimal
   const [selected, setSelected] = useState<string>()
   const { t } = useLanguage()
-  const rows = process ? [process] : []
-  const columns: GridColumn<NonNullable<typeof process>>[] = [
-    { key: 'name', header: t('Name'), width: 'minmax(120px, 1fr)', text: (row) => row.name ?? '', render: (row) => <><DsIcon name="Process" className="debug-variable-image" />{row.name}</> },
-    { key: 'id', header: t('ID'), width: 'minmax(70px, auto)', text: (row) => formatNumber(row.id, hex) },
+  const stateText = (row: DebugSessionEntry): string => row.process?.state === 'Terminated' ? t('Terminated') : row.state === 'stopped' ? t('Paused') : t('Running')
+  const columns: GridColumn<DebugSessionEntry>[] = [
+    { key: 'marker', header: '', width: '22px', text: () => '', render: (row) => row.sessionId === currentSessionId ? <DsIcon name="CurrentInstructionPointer" /> : null },
+    { key: 'name', header: t('Name'), width: 'minmax(120px, 1fr)', text: (row) => row.process?.name ?? '', render: (row) => <><DsIcon name="Process" className="debug-variable-image" />{row.process?.name ?? ''}</> },
+    { key: 'id', header: t('ID'), width: 'minmax(70px, auto)', text: (row) => formatNumber(row.process?.id, hex) },
     { key: 'title', header: t('Title'), width: 'minmax(80px, auto)', text: () => '' },
-    { key: 'state', header: t('State'), width: 'minmax(70px, auto)', text: (row) => t(row.state) },
-    { key: 'debugging', header: t('Debugging'), width: 'minmax(80px, auto)', text: (row) => row.debugging },
-    { key: 'architecture', header: t('Architecture'), width: 'minmax(80px, auto)', text: (row) => row.architecture },
-    { key: 'path', header: t('Path'), width: 'minmax(160px, 2fr)', text: (row) => row.path ?? '' },
+    { key: 'state', header: t('State'), width: 'minmax(70px, auto)', text: stateText },
+    { key: 'debugging', header: t('Debugging'), width: 'minmax(80px, auto)', text: (row) => row.process?.debugging ?? '' },
+    { key: 'architecture', header: t('Architecture'), width: 'minmax(80px, auto)', text: (row) => row.process?.architecture ?? '' },
+    { key: 'path', header: t('Path'), width: 'minmax(160px, 2fr)', text: (row) => row.process?.path ?? '' },
   ]
-  const openMenu = (row: typeof process, position: { x: number; y: number }): void => {
+  // ProcessesOperations.SetCurrentProcess: only a paused process can be the current one.
+  const makeCurrent = (row: DebugSessionEntry): void => {
+    if (row.state === 'stopped')
+      void store().setCurrentDebugSession(row.sessionId)
+  }
+  const openMenu = (row: DebugSessionEntry | undefined, position: { x: number; y: number }): void => {
     showDebugMenu(t('Processes'), [
       { key: 'copy', label: t('Copy'), icon: 'Copy', shortcut: 'Ctrl+C', disabled: !row, run: () => { if (row) copyText(columns.map((column) => column.text(row)).join('\t')) } },
-      { key: 'select-all', label: t('Select All'), icon: 'Select', shortcut: 'Ctrl+A', run: () => copyText(rows.map((item) => columns.map((column) => column.text(item)).join('\t')).join('\n')) },
+      { key: 'select-all', label: t('Select All'), icon: 'Select', shortcut: 'Ctrl+A', run: () => copyText(processes.map((item) => columns.map((column) => column.text(item)).join('\t')).join('\n')) },
       null,
-      { key: 'continue', label: t('Continue Process'), icon: 'Run', disabled: debugState !== 'stopped', run: () => void resume() },
-      { key: 'break', label: t('Break Process'), icon: 'Pause', disabled: debugState !== 'running', run: () => void pause() },
-      { key: 'detach', label: t('Detach Process'), disabled: !row, run: () => void detach() },
-      { key: 'terminate', label: t('Terminate Process'), icon: 'TerminateProcess', disabled: !row, run: () => void terminate() },
+      { key: 'continue', label: t('Continue Process'), icon: 'Run', disabled: row?.state !== 'stopped', run: () => { if (row) void store().continueDebugProcess(row.sessionId) } },
+      { key: 'break', label: t('Break Process'), icon: 'Pause', disabled: row?.state !== 'running', run: () => { if (row) void store().pauseDebugProcess(row.sessionId) } },
       null,
+      { key: 'detach', label: t('Detach Process'), icon: 'Cancel', disabled: !row, run: () => { if (row) void store().detachDebugProcess(row.sessionId) } },
+      { key: 'terminate', label: t('Terminate Process'), icon: 'TerminateProcess', disabled: !row, run: () => { if (row) void store().terminateDebugProcess(row.sessionId) } },
+      null,
+      { key: 'detach-when-stopped', label: t('Detach When Debugging Stopped'), checked: row?.shouldDetach === true, disabled: !row, run: () => { if (row) store().setDetachWhenDebuggingStopped([row.sessionId], !row.shouldDetach) } },
       ...hexEntries(t, options.debugger),
+      null,
+      { key: 'attach', label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', run: () => store().openAttachDialog?.() },
     ], position)
   }
   return (
     <DebugGrid
       label={t('Processes')}
       columns={columns}
-      rows={rows}
-      rowKey={(row) => String(row.id)}
+      rows={processes}
+      rowKey={(row) => row.sessionId}
       selected={selected}
       onSelect={setSelected}
+      onActivate={makeCurrent}
       onMenu={openMenu}
+      rowClass={(row) => row.sessionId === currentSessionId ? 'process-current' : ''}
     />
   )
 }

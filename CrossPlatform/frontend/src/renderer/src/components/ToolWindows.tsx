@@ -3,7 +3,7 @@ import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
 import { useAppStore, type OutputLine, type OutputPaneId } from '../app-store'
 import { useCategoryFont } from '../fonts'
 import { useLanguage } from '../localization'
-import { saveAppOptions, useAppOptions, type AppOptions } from './app-options'
+import { saveAppOptions, useAppOptions, type AppOptions, type OutputLoggerSettings } from './app-options'
 import { DsIcon, MenuEntryIcon } from './DsIcon'
 
 /**
@@ -93,6 +93,23 @@ export const OutputPane = (): React.JSX.Element => {
       entry('timestamps', t('Show Timestamps'), () => setOutputOption(options, { showTimestamps: !showTimestamps }), <MenuEntryIcon checked={showTimestamps} />),
       entry('word-wrap', t('Word Wrap'), toggleWordWrap, <MenuEntryIcon name="WordWrap" checked={wordWrap} />, 'Ctrl+E, Ctrl+W'),
     ]
+    // OutputLogger's switches (Logger/Commands.cs), a group of their own that only the Debug pane's menu has.
+    if (pane === 'debug') {
+      const logger = options.outputLogger
+      const toggle = (key: keyof OutputLoggerSettings, label: string): PopupMenuEntry =>
+        entry(key, label, () => saveAppOptions({ ...options, outputLogger: { ...logger, [key]: !logger[key] } }), <MenuEntryIcon checked={logger[key]} />)
+      items.push(
+        { type: 'divider', key: 'logger' },
+        toggle('showExceptionMessages', t('Exception Messages')),
+        toggle('showStepFilteringMessages', t('Step Filtering Messages')),
+        toggle('showModuleLoadMessages', t('Module Load Messages')),
+        toggle('showModuleUnloadMessages', t('Module Unload Messages')),
+        toggle('showProcessExitMessages', t('Process Exit Messages')),
+        toggle('showThreadExitMessages', t('Thread Exit Messages')),
+        toggle('showProgramOutputMessages', t('Program Output')),
+        toggle('showMDAMessages', t('MDA Messages')),
+      )
+    }
     showPopupMenu({ anchor: { x: event.clientX, y: event.clientY }, returnFocusTo: log.current ?? undefined, title: t('Output'), items, onClose: () => undefined })
   }
 

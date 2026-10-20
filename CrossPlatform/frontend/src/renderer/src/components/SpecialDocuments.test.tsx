@@ -100,10 +100,11 @@ describe('HexView', () => {
 
     const marked = () => [...container.querySelectorAll<HTMLElement>('.hex-byte-marked')]
     await waitFor(() => expect(marked()).toHaveLength(2))
-    expect(marked().map((cell) => cell.textContent)).toEqual([
+    // The marked cells are drawn before the chunk under them has been read.
+    await waitFor(() => expect(marked().map((cell) => cell.textContent)).toEqual([
       fileByte(0x120).toString(16).toUpperCase().padStart(2, '0'),
       fileByte(0x121).toString(16).toUpperCase().padStart(2, '0'),
-    ])
+    ]))
     expect(container.querySelector('.hex-status-offset')).toHaveTextContent('0120')
   })
 

@@ -33,7 +33,7 @@ using DecompilerMetadataFile = ICSharpCode.Decompiler.Metadata.MetadataFile;
 
 namespace dnSpy.Backend.Core;
 
-public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver, IDebugSourceProvider {
+public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver, IDebugSourceProvider, IDebugAsyncStepInfoProvider {
 	const int MaxHexReadLength = 1024 * 1024;
 	readonly ConcurrentDictionary<string, Workspace> workspaces = new(StringComparer.Ordinal);
 	readonly SymbolResolver symbols = new();
@@ -255,6 +255,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 	public Task<MethodSourceDto?> GetMethodSourceAsync(string? workspaceId, string modulePath, int metadataToken, CancellationToken cancellationToken) =>
 		WithSymbolsAsync(workspaceId, w => symbols.GetMethodSource(w, modulePath, metadataToken, cancellationToken), cancellationToken);
 
+	public Task<AsyncStepInfoDto?> GetAsyncStepInfoAsync(string? workspaceId, string modulePath, int moveNextToken, CancellationToken cancellationToken) =>
+		WithSymbolsAsync(workspaceId, w => symbols.GetAsyncStepInfo(w, modulePath, moveNextToken, cancellationToken), cancellationToken);
+
 	/// <summary>
 	/// Runs a symbol lookup. Without a workspace the lookup still answers — a debuggee attached
 	/// without one, or a module that lives outside the workspace, is read straight from its file.
@@ -329,7 +332,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		public Workspace.ModuleEntry? FindModule(Workspace? workspace, string path) {
 			var full = Path.GetFullPath(path);
-			return workspace?.FindModuleEntry(full) ?? FindExternalModule(full);
+			return workspace?.FindModuleEntry(full) ?? workspace?.FindMemoryModuleCopy(full) ?? FindExternalModule(full);
 		}
 
 		Workspace.ModuleEntry? FindExternalModule(string path) {
@@ -377,6 +380,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				?? statements.LastOrDefault(statement => statement.MetadataToken == bodyToken && statement.SequencePointIlOffset <= ilOffset);
 			if (hit is null)
 				return null;
+			// The decompiler hands the code an expression goes on with after a call — the temporary it stores the
+			// result in, the call it passes it to — to a hidden point of its own. A frame that has returned there is
+			// still in the statement the call belongs to, which is where dnSpy's statements place it.
+			if (hit.IsHidden && ReturnsInto(method, ilOffset) &&
+				statements.LastOrDefault(statement => statement.MetadataToken == bodyToken && !statement.IsHidden && statement.IlEndOffset == hit.SequencePointIlOffset) is { } calling)
+				hit = calling;
 			return new ResolvedIlLocation(
 				workspace?.TryGetMemberNodeId(entry, source),
 				hit.Description,
@@ -391,6 +400,14 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				hit.IlEndOffset,
 				hit.IsHidden,
 				entry.IsExternal);
+		}
+
+		/// <summary>True when the instruction in front of an offset is a call, so the offset is where the call returns to.</summary>
+		static bool ReturnsInto(MethodDef method, int offset) {
+			if (method.Body is not { } body)
+				return false;
+			var index = body.Instructions.ToList().FindIndex(instruction => instruction.Offset == offset);
+			return index > 0 && body.Instructions[index - 1].OpCode.FlowControl == FlowControl.Call;
 		}
 
 		public MethodIlInfoResponse? GetMethodIlInfo(Workspace? workspace, string modulePath, int metadataToken, CancellationToken cancellationToken) {
@@ -688,7 +705,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		/// <summary>True when the module is one of the workspace's own files rather than a dependency.</summary>
 		public bool IsWorkspaceModule(Workspace? workspace, string modulePath) =>
-			!string.IsNullOrEmpty(modulePath) && workspace?.FindModuleEntry(modulePath) is not null;
+			!string.IsNullOrEmpty(modulePath) && (workspace?.FindModuleEntry(modulePath) ?? workspace?.FindMemoryModuleCopy(modulePath)) is not null;
 
 		public IReadOnlyList<MethodIlInfoResponse> FindMethods(Workspace? workspace, string name, CancellationToken cancellationToken) {
 			const int MaxResults = 64;
@@ -796,6 +813,82 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return Workspace.BuildCodeStatements(syntaxTree, decompiler, entry, cancellationToken)
 				.Where(statement => statement.SourceMethodToken == sourceToken)
 				.ToArray();
+		}
+
+		/// <summary>
+		/// The async step info of an async method's MoveNext, the way dnSpy's decompiler records it beside the
+		/// statements (AsyncMethodDebugInfo): ILSpy's await offsets for the method the user wrote, the call that sets
+		/// the method's result, found in the IL, and the builder field the task is held in.
+		/// </summary>
+		public AsyncStepInfoDto? GetAsyncStepInfo(Workspace? workspace, string modulePath, int moveNextToken, CancellationToken cancellationToken) {
+			var entry = FindModule(workspace, modulePath);
+			if (entry is null || entry.Module.ResolveToken(moveNextToken) is not MethodDef moveNext || !moveNext.HasBody)
+				return null;
+			var stateMachine = moveNext.DeclaringType;
+			if (stateMachine is null || !stateMachine.Interfaces.Any(implemented => implemented.Interface.FullName == "System.Runtime.CompilerServices.IAsyncStateMachine"))
+				return null;
+			var builder = stateMachine.Fields.FirstOrDefault(field => field.Name == "<>t__builder" || field.Name == "$Builder")
+				?? stateMachine.Fields.FirstOrDefault(field => field.FieldType.TypeName.EndsWith("MethodBuilder", StringComparison.Ordinal) || field.FieldType.TypeName.EndsWith("MethodBuilder`1", StringComparison.Ordinal));
+			if (builder is null)
+				return null;
+			// The builder's SetResult is what completes the task: the last call to it is the one the method returns through.
+			var setResult = moveNext.Body.Instructions.LastOrDefault(instruction =>
+				instruction.OpCode.Code is Code.Call or Code.Callvirt && instruction.Operand is IMethod { Name.String: "SetResult" } called &&
+				called.DeclaringType?.TypeName is { } typeName && typeName.Contains("MethodBuilder", StringComparison.Ordinal));
+			var awaits = new List<AsyncAwaitDto>();
+			var source = FindSourceMethod(moveNext);
+			try {
+				var settings = new DecompilerSettings();
+				using var session = Workspace.CreateCSharpDecompilerSession(entry, settings, cancellationToken);
+				var syntaxTree = session.Decompiler.Decompile([Workspace.ToEntityHandle(source)]);
+				foreach (var function in session.Decompiler.CreateSequencePoints(syntaxTree).Keys) {
+					if (Workspace.GetBodyMethodToken(function) != unchecked((uint)moveNextToken) || function.AsyncDebugInfo.Awaits.IsDefault)
+						continue;
+					awaits.AddRange(function.AsyncDebugInfo.Awaits.Select(awaited => new AsyncAwaitDto(TaskCreatedOffset(moveNext, awaited.YieldOffset), awaited.ResumeOffset)));
+				}
+			}
+			catch (OperationCanceledException) {
+				throw;
+			}
+			catch (Exception) {
+				// A body the decompiler cannot read steps without its awaits: the step still ends, only less precisely.
+			}
+			return new AsyncStepInfoDto(awaits, setResult is null ? -1 : CallSequenceStart(moveNext, setResult), unchecked((int)builder.MDToken.Raw));
+		}
+
+		/// <summary>
+		/// Where the evaluation stack is empty in front of the SetResult call — <c>ldarg.0; ldflda builder; [ldloc result];
+		/// call</c> — which is an offset the runtime breaks at; the call itself is in the middle of loading its arguments.
+		/// </summary>
+		static int CallSequenceStart(MethodDef moveNext, Instruction call) {
+			var instructions = moveNext.Body.Instructions;
+			var index = instructions.IndexOf(call) - 1;
+			if (index >= 0 && instructions[index].OpCode.Code is not Code.Ldflda && instructions[index].IsLdloc() || index >= 0 && instructions[index].IsLdarg() && instructions[index].OpCode.Code is not Code.Ldarg_0)
+				index--;
+			if (index >= 0 && instructions[index].OpCode.Code is Code.Ldflda)
+				index--;
+			return index >= 0 && instructions[index].OpCode.Code is Code.Ldarg_0 or Code.Ldarg && instructions[index].IsLdarg()
+				? (int)instructions[index].Offset
+				: (int)call.Offset;
+		}
+
+		/// <summary>
+		/// Where a suspending method's task exists: the instruction after the builder's AwaitOnCompleted call that follows
+		/// the yield point — the call is what makes the task — or the yield point itself when there is no such call.
+		/// </summary>
+		static int TaskCreatedOffset(MethodDef moveNext, int yieldOffset) {
+			var instructions = moveNext.Body.Instructions;
+			for (var index = 0; index < instructions.Count - 1; index++) {
+				var instruction = instructions[index];
+				if (instruction.Offset < yieldOffset)
+					continue;
+				if (instruction.OpCode.Code is Code.Call or Code.Callvirt && instruction.Operand is IMethod { Name.String: "AwaitUnsafeOnCompleted" or "AwaitOnCompleted" })
+					return (int)instructions[index + 1].Offset;
+				// The suspension leaves the method; past that leave the yield belongs to another await.
+				if (instruction.OpCode.Code is Code.Leave or Code.Leave_S or Code.Ret)
+					break;
+			}
+			return yieldOffset;
 		}
 
 		/// <summary>
@@ -2094,7 +2187,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				}, cancellationToken).ConfigureAwait(false);
 				if (request.Language != DecompilerLanguage.VisualBasic)
 					return csharp;
-				var visualBasic = await ConvertToVisualBasicAsync(csharp, cancellationToken).ConfigureAwait(false);
+				var visualBasic = await VisualBasicConversion.ConvertAsync(csharp, prepared.MemberOnly, cancellationToken).ConfigureAwait(false);
 				return await AnalyzeVisualBasicAsync(visualBasic, request.NodeId, cancellationToken).ConfigureAwait(false);
 			}
 			catch (OperationCanceledException) {
@@ -2117,7 +2210,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				? GetNamespaceIndex(module).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle).ToArray()
 				: wholeModule ? Array.Empty<System.Reflection.Metadata.EntityHandle>() : [ToEntityHandle((IMDTokenProvider)node.Value)];
 			var settings = settingsDto.ToDecompilerSettings();
-			return new CSharpDecompilation(stateId, wholeModule, handles, settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
+			return new CSharpDecompilation(stateId, wholeModule, node.Kind is NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event, handles, settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
 		}
 
 		DecompileResponse FinishCSharpDecompilation(NodeEntry node, CSharpDecompiler decompiler, SyntaxTree syntaxTree, DecompilerSettings settings, CancellationToken cancellationToken) {
@@ -2136,7 +2229,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			};
 		}
 
-		sealed record CSharpDecompilation(string StateId, bool WholeModule, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
+		sealed record CSharpDecompilation(string StateId, bool WholeModule, bool MemberOnly, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
 
 		public async Task<DecompileResponse> DecompileAsync(DecompileRequest request, CancellationToken cancellationToken) {
 			var node = GetNode(request.NodeId);
@@ -2672,27 +2765,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		async Task<DecompileResponse> DecompileVisualBasicAsync(NodeEntry node, CancellationToken cancellationToken) {
 			var csharp = DecompileCSharp(node, null, cancellationToken);
-			return await ConvertToVisualBasicAsync(csharp, cancellationToken).ConfigureAwait(false);
+			return await VisualBasicConversion.ConvertAsync(csharp, node.Kind is NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event, cancellationToken).ConfigureAwait(false);
 		}
 
-		static async Task<DecompileResponse> ConvertToVisualBasicAsync(DecompileResponse csharp, CancellationToken cancellationToken) {
-			var conversion = await CodeConverter.ConvertAsync(
-				new CodeWithOptions(csharp.Text).WithTypeReferences(),
-				cancellationToken).ConfigureAwait(false);
-			if (!conversion.Success) {
-				var message = conversion.GetExceptionsAsString();
-				return new DecompileResponse(
-					csharp.Title,
-					"visual-basic",
-					$"' Visual Basic conversion failed.\n' {message.Replace(Environment.NewLine, Environment.NewLine + "' ", StringComparison.Ordinal)}",
-					Array.Empty<TextSpanDto>(),
-					[new DiagnosticDto("error", message)]);
-			}
-			var diagnostics = csharp.Diagnostics
-				.Concat(conversion.Exceptions?.Select(exception => new DiagnosticDto("warning", exception)) ?? [])
-				.ToArray();
-			return new DecompileResponse(csharp.Title, "visual-basic", conversion.ConvertedCode, Array.Empty<TextSpanDto>(), diagnostics);
-		}
+		/// <summary>A C# text converted as it is, which is all the views other than a document's need of the converter.</summary>
+		static Task<DecompileResponse> ConvertToVisualBasicAsync(DecompileResponse csharp, CancellationToken cancellationToken) =>
+			VisualBasicConversion.ConvertAsync(csharp, memberOnly: false, cancellationToken);
 
 		public HexLengthResponse GetHexLength(string moduleId) => new(GetHexEntry(moduleId).FileLength);
 
@@ -4426,7 +4504,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		ResolvedBreakpoint ResolveBreakpoint(BreakpointQuery query, CancellationToken cancellationToken) {
-			var statement = FindStatementByNode(query, cancellationToken, out var reason) ?? FindStatementByIlIdentity(query, cancellationToken);
+			// A breakpoint that names its IL location is that location — WPF dnSpy's DbgDotNetCodeLocation —
+			// whichever view it was set from: a C# or Visual Basic statement, an IL instruction, the entry of a
+			// method. Only a click the client could not place carries a line alone.
+			if (query.ModulePath is string modulePath && query.MetadataToken is int metadataToken && query.IlOffset is int ilOffset)
+				return ResolveIlLocation(query, modulePath, metadataToken, ilOffset, cancellationToken);
+			var statement = FindStatementByNode(query, cancellationToken, out var reason) ?? FindStatementByMethodLine(query, cancellationToken);
 			if (statement is null)
 				return Unbound(query, reason ?? "No sequence point on this line.");
 			return new ResolvedBreakpoint(
@@ -4464,34 +4547,104 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		/// <summary>
-		/// The statement a saved breakpoint's IL identity names, for a breakpoint whose node id died with
-		/// the workspace that issued it. This is the location WPF dnSpy persists — module, token and IL
-		/// offset — so a restored breakpoint binds without its document ever having been opened.
+		/// The statement on a line of a method named by module and token, for a request that names the method but
+		/// not the offset — the line of its document is all the caller had.
 		/// </summary>
-		CodeStatementDto? FindStatementByIlIdentity(BreakpointQuery query, CancellationToken cancellationToken) {
+		CodeStatementDto? FindStatementByMethodLine(BreakpointQuery query, CancellationToken cancellationToken) {
 			if (query.ModulePath is not string modulePath || query.MetadataToken is not int metadataToken)
 				return null;
+			var statements = StatementsOfMethod(modulePath, query.SourceMethodToken is int source && source != 0 ? source : metadataToken, cancellationToken);
+			return statements is null ? null : FindStatement(statements, query.Line, query.Column);
+		}
+
+		/// <summary>
+		/// A breakpoint named by its IL location: module, token and offset, the location WPF dnSpy persists. It
+		/// binds where it says, so a breakpoint set on an IL instruction or on a method's entry stays there; the
+		/// C# statement that holds the offset only supplies the line and the sequence point the engine falls back
+		/// to, and only a breakpoint on the statement's own start falls back at all.
+		/// </summary>
+		ResolvedBreakpoint ResolveIlLocation(BreakpointQuery query, string modulePath, int metadataToken, int ilOffset, CancellationToken cancellationToken) {
+			var statements = StatementsOfMethod(modulePath, query.SourceMethodToken is int source && source != 0 ? source : metadataToken, cancellationToken)
+				?? (query.SourceMethodToken is int other && other != 0 && other != metadataToken ? StatementsOfMethod(modulePath, metadataToken, cancellationToken) : null);
+			if (statements is not null) {
+				if (StatementAt(statements, metadataToken, ilOffset) is { } statement) {
+					var ownStart = statement.IlOffset == ilOffset;
+					return new ResolvedBreakpoint(
+						query.Id,
+						true,
+						null,
+						statement.ModulePath,
+						metadataToken,
+						statement.SourceMethodToken,
+						ilOffset,
+						// The engine arms the statement's own start first and falls back to this; without one it
+						// reports the breakpoint dead, which beats a breakpoint that stops on another line.
+						ownStart ? symbols.AcceptedPointOffset(this, statement) : null,
+						statement.StartLine,
+						statement.EndLine,
+						statement.StartColumn,
+						statement.EndColumn,
+						statement.Description);
+				}
+				// The method is still there but no statement holds the saved offset — the assembly was recompiled,
+				// or edited here. The saved line is the best guess left.
+				if (!HasInstructionAt(modulePath, metadataToken, ilOffset) && FindStatement(statements, query.Line, null) is { } moved) {
+					return new ResolvedBreakpoint(
+						query.Id, true, null, moved.ModulePath, moved.MetadataToken, moved.SourceMethodToken, moved.IlOffset,
+						symbols.AcceptedPointOffset(this, moved), moved.StartLine, moved.EndLine, moved.StartColumn, moved.EndColumn, moved.Description);
+				}
+			}
+			// Nothing decompiled says where the offset is — a module the workspace does not hold, a body no view
+			// shows a statement of (a method's entry before its first statement, an async method's stub). The
+			// engine needs no more than the location, so it binds all the same.
+			return new ResolvedBreakpoint(
+				query.Id, true, null, modulePath, metadataToken, query.SourceMethodToken ?? metadataToken, ilOffset, null,
+				query.Line, query.Line, 0, 0, MethodFullName(modulePath, metadataToken));
+		}
+
+		/// <summary>The C# statements of the method a token names, or null when the workspace has no node for it.</summary>
+		IReadOnlyList<CodeStatementDto>? StatementsOfMethod(string modulePath, int metadataToken, CancellationToken cancellationToken) {
 			// Inside a state machine a statement belongs to MoveNext, whose token resolves to a method
 			// nobody navigates to; the source method is the one that owns a node with these statements.
-			var memberToken = query.SourceMethodToken is int source && source != 0 ? source : metadataToken;
-			if (FindMember(modulePath, memberToken).NodeId is not string nodeId)
+			if (FindMember(modulePath, metadataToken).NodeId is not string nodeId)
 				return null;
-			IReadOnlyList<CodeStatementDto> statements;
 			try {
-				statements = GetCodeStatements(nodeId, cancellationToken);
+				return GetCodeStatements(nodeId, cancellationToken);
 			}
 			catch (RpcException) {
 				return null;
 			}
-			if (query.IlOffset is int ilOffset) {
-				foreach (var statement in statements) {
-					if (!statement.IsHidden && statement.MetadataToken == metadataToken && statement.IlOffset == ilOffset)
-						return statement;
-				}
+		}
+
+		/// <summary>
+		/// The statement of a body that holds an IL offset: the one starting there, else the narrowest one whose
+		/// range covers it — an instruction in the middle of a statement belongs to that statement.
+		/// </summary>
+		internal static CodeStatementDto? StatementAt(IReadOnlyList<CodeStatementDto> statements, int metadataToken, int ilOffset) {
+			CodeStatementDto? covering = null;
+			foreach (var statement in statements) {
+				if (statement.IsHidden || statement.MetadataToken != metadataToken)
+					continue;
+				if (statement.IlOffset == ilOffset)
+					return statement;
+				if (statement.IlOffset <= ilOffset && ilOffset < statement.IlEndOffset &&
+					(covering is null || statement.IlEndOffset - statement.IlOffset < covering.IlEndOffset - covering.IlOffset))
+					covering = statement;
 			}
-			// The method is still there but its body moved under the saved offset — the assembly was
-			// recompiled, or edited here. The saved line is the best guess left.
-			return FindStatement(statements, query.Line, null);
+			return covering;
+		}
+
+		bool HasInstructionAt(string modulePath, int metadataToken, int ilOffset) =>
+			FindModuleEntry(modulePath)?.Module.ResolveToken(metadataToken) is MethodDef { Body: { } body } &&
+			body.Instructions.Any(instruction => instruction.Offset == ilOffset);
+
+		string? MethodFullName(string modulePath, int metadataToken) {
+			try {
+				return (FindModuleEntry(modulePath)?.Module ?? symbols.FindModule(this, modulePath)?.Module)?.ResolveToken(metadataToken) is MethodDef method ? method.FullName : null;
+			}
+			catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or BadImageFormatException) {
+				return null;
+			}
 		}
 
 		static ResolvedBreakpoint Unbound(BreakpointQuery query, string reason) => new(
@@ -4618,6 +4771,19 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		internal ModuleEntry? FindModuleEntry(string path) {
 			foreach (var entry in modules.Values) {
 				if (Path.GetFullPath(entry.Path).Equals(Path.GetFullPath(path), StringComparison.Ordinal))
+					return entry;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// dnSpy's memory modules: a module the debugger saved out of a process stands for the process's module of the
+		/// same name, which the engine names by the path the process loaded it from.
+		/// </summary>
+		internal ModuleEntry? FindMemoryModuleCopy(string path) {
+			var name = Path.GetFileName(path);
+			foreach (var entry in modules.Values) {
+				if (MemoryModuleFiles.Contains(entry.Path) && string.Equals(Path.GetFileName(entry.Path), name, StringComparison.OrdinalIgnoreCase))
 					return entry;
 			}
 			return null;

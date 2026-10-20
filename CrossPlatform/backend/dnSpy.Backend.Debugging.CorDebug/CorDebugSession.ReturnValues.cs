@@ -97,6 +97,8 @@ internal sealed partial class CorDebugSession {
 				.Take(MaxReturnValueCalls);
 			foreach (var call in calls) {
 				var callee = ResolveMethod(types, entry, reader, call.Operand, method);
+				// The runtime only tracks primitive and reference return values: for a call that returns a struct,
+				// GetReturnValueLiveOffset answers CORDBG_E_UNSUPPORTED, so dnSpy's engine shows none for it either.
 				if (callee is null || callee.ReturnsVoid)
 					continue;
 				IEnumerable<uint> offsets;

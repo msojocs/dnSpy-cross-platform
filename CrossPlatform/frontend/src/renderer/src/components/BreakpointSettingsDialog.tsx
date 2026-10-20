@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   BreakpointConditionKind,
   BreakpointHitCountKind,
@@ -6,17 +6,33 @@ import type {
 } from '../../../shared/protocol'
 import { useLanguage } from '../localization'
 import { CloseGlyph } from './DsGlyphs'
+import { DsIcon } from './DsIcon'
 import { trapTabKey, useModalLayer } from './modal-stack'
 
+/** The keywords a tracepoint message can use, the list ShowTracepointMessageHelp prints. */
+const TRACEPOINT_KEYWORDS = `$ADDRESS $ADDRESS1 $ADDRESS2 $ADDRESS3 $ADDRESS4 $ADDRESS5
+$ADID
+$BPADDR
+$CALLER $CALLER1 $CALLER2 $CALLER3 $CALLER4 $CALLER5
+$CALLERMODULE $CALLERMODULE1 $CALLERMODULE2 $CALLERMODULE3 $CALLERMODULE4 $CALLERMODULE5
+$CALLEROFFSET $CALLEROFFSET1 $CALLEROFFSET2 $CALLEROFFSET3 $CALLEROFFSET4 $CALLEROFFSET5
+$CALLERTOKEN $CALLERTOKEN1 $CALLERTOKEN2 $CALLERTOKEN3 $CALLERTOKEN4 $CALLERTOKEN5
+$CALLSTACK $CALLSTACK5 $CALLSTACK10 $CALLSTACK15 $CALLSTACK20
+$FUNCTION $FUNCTION1 $FUNCTION2 $FUNCTION3 $FUNCTION4 $FUNCTION5
+$MID
+$PID
+$PNAME
+$TID
+$TNAME`
+
 /**
- * The breakpoint settings dialog, ported from dnSpy's `ShowCodeBreakpointSettingsVM`. Each section is
- * a checkbox that enables its own controls, so a breakpoint says nothing until it is asked to.
- *
- * Expressions are not checked here. The parser lives in the backend, and WPF does the same: a typo in
- * a condition shows up at the hit, where it breaks and reports itself rather than silently skipping.
+ * dnSpy's Breakpoint Settings dialog (ShowCodeBreakpointSettingsDlg): four rows, each a box that switches its own
+ * controls on — the conditional expression and how it decides, the hit count and how it compares, the filter, and the
+ * message logged with whether execution goes on. A box that is on is kept even with empty text, as dnSpy keeps it.
+ * The filter is checked as it is typed, and an expression that does not read keeps OK disabled with the reason
+ * beside it; the condition and the message are only evaluated at a hit.
  */
-export const BreakpointSettingsDialog = ({ title, settings, onClose, onSave }: {
-  title: string
+export const BreakpointSettingsDialog = ({ settings, onClose, onSave }: {
   settings: BreakpointSettings | undefined
   onClose(): void
   onSave(settings: BreakpointSettings | undefined): void
@@ -34,35 +50,73 @@ export const BreakpointSettingsDialog = ({ title, settings, onClose, onSave }: {
   // Kept as text so a half-typed number does not snap back to a valid one under the user's cursor.
   const [hitCount, setHitCount] = useState(String(settings?.hitCount?.count ?? 1))
 
-  const [filterOn, setFilterOn] = useState(!!settings?.filter)
+  const [filterOn, setFilterOn] = useState(settings?.filter !== undefined)
   const [filter, setFilter] = useState(settings?.filter ?? '')
+  const [filterError, setFilterError] = useState<string | null>(null)
 
   const [traceOn, setTraceOn] = useState(!!settings?.trace)
   const [trace, setTrace] = useState(settings?.trace?.message ?? '')
   const [traceContinue, setTraceContinue] = useState(settings?.trace?.continue ?? true)
 
-  const [labels, setLabels] = useState(settings?.labels?.join(', ') ?? '')
-
   const hitCountValue = Number(hitCount)
   const hitCountValid = !hitCountOn || (Number.isInteger(hitCountValue) && hitCountValue > 0)
 
+  // dnSpy verifies the filter on a timer after each keystroke; the answer is the backend's parser's.
+  useEffect(() => {
+    if (!filterOn) {
+      setFilterError(null)
+      return
+    }
+    let current = true
+    const timer = setTimeout(() => {
+      void window.dnSpy.verifyBreakpointFilter?.(filter).then((error) => { if (current) setFilterError(error) }, () => { if (current) setFilterError(null) })
+    }, 250)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [filterOn, filter])
+
+  const hasError = !hitCountValid || (filterOn && filterError !== null)
+
   const save = (): void => {
+    if (hasError)
+      return
     const next: BreakpointSettings = {}
-    if (conditionOn && condition !== '')
+    if (conditionOn)
       next.condition = { kind: conditionKind, expression: condition }
-    if (hitCountOn && hitCountValid)
+    if (hitCountOn)
       next.hitCount = { kind: hitCountKind, count: hitCountValue }
-    if (filterOn && filter !== '')
+    if (filterOn)
       next.filter = filter
-    if (traceOn && trace !== '')
+    if (traceOn)
       next.trace = { message: trace, continue: traceContinue }
-    const parsedLabels = labels.split(',').map((label) => label.trim()).filter((label) => label !== '')
-    if (parsedLabels.length > 0)
-      next.labels = parsedLabels
-    // The store normalizes this back to `undefined` when nothing was set, which is what clears a
-    // breakpoint's settings: unticking every box and pressing OK.
     onSave(next)
     onClose()
+  }
+
+  const showFilterHelp = (): void => {
+    void window.dnSpy.showMessage([
+      t('Example: {example}', { example: 'ProcessId == 0x1234 && ThreadName == "Main Thread"' }),
+      '',
+      t('Variables that can be used:'),
+      '',
+      'MachineName\nProcessId\nProcessName\nThreadId\nThreadName',
+    ].join('\n'))
+  }
+
+  const showTraceHelp = (): void => {
+    void window.dnSpy.showMessage([
+      t('Example: {example}', { example: '$CALLERTOKEN: string: {s}' }),
+      '',
+      t('Use {xxx} to evaluate expression xxx'),
+      '',
+      t('Escape sequences: {sequences}', { sequences: '\\\\ \\$ \\{ \\} \\a \\b \\f \\n \\r \\t \\v' }),
+      '',
+      t('The following keywords can be used:'),
+      '',
+      TRACEPOINT_KEYWORDS,
+    ].join('\n'))
   }
 
   return (
@@ -78,134 +132,74 @@ export const BreakpointSettingsDialog = ({ title, settings, onClose, onSave }: {
         role="dialog"
         aria-modal="true"
         aria-labelledby="breakpoint-settings-title"
-        onKeyDown={(event) => trapTabKey(event, dialog.current)}
+        onKeyDown={(event) => {
+          trapTabKey(event, dialog.current)
+          if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+            event.preventDefault()
+            save()
+          }
+        }}
       >
         <div className="modal-title">
-          <span id="breakpoint-settings-title">{title}</span>
+          <span id="breakpoint-settings-title">{t('Breakpoint Settings')}</span>
           <button className="icon-button" aria-label={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
 
-        <div className="breakpoint-settings-body">
-          <section className="breakpoint-setting">
-            <label className="breakpoint-setting-header">
-              <input type="checkbox" checked={conditionOn} onChange={(event) => setConditionOn(event.target.checked)} />
-              <span>{t('Condition')}</span>
-            </label>
-            <div className="breakpoint-setting-controls">
-              <select
-                aria-label={t('Condition')}
-                disabled={!conditionOn}
-                value={conditionKind}
-                onChange={(event) => setConditionKind(event.target.value as BreakpointConditionKind)}
-              >
-                <option value="isTrue">{t('Is true')}</option>
-                <option value="whenChanged">{t('When changed')}</option>
-              </select>
-              <input
-                aria-label={t('Expression')}
-                disabled={!conditionOn}
-                value={condition}
-                onChange={(event) => setCondition(event.target.value)}
-              />
-            </div>
-          </section>
+        <div className="breakpoint-settings-grid">
+          <label className="breakpoint-setting-check">
+            <input type="checkbox" checked={conditionOn} onChange={(event) => setConditionOn(event.target.checked)} />
+            <span>{t('Conditional Expression')}</span>
+          </label>
+          <select aria-label={t('Conditional Expression')} disabled={!conditionOn} value={conditionKind} onChange={(event) => setConditionKind(event.target.value as BreakpointConditionKind)}>
+            <option value="isTrue">{t('Is true')}</option>
+            <option value="whenChanged">{t('When changed')}</option>
+          </select>
+          <input aria-label={t('Expression')} disabled={!conditionOn} value={condition} onChange={(event) => setCondition(event.target.value)} />
+          <span />
 
-          <section className="breakpoint-setting">
-            <label className="breakpoint-setting-header">
-              <input type="checkbox" checked={hitCountOn} onChange={(event) => setHitCountOn(event.target.checked)} />
-              <span>{t('Hit Count')}</span>
-            </label>
-            <div className="breakpoint-setting-controls">
-              <select
-                aria-label={t('Hit Count')}
-                disabled={!hitCountOn}
-                value={hitCountKind}
-                onChange={(event) => setHitCountKind(event.target.value as BreakpointHitCountKind)}
-              >
-                <option value="equals">{t('is equal to')}</option>
-                <option value="multipleOf">{t('is a multiple of')}</option>
-                <option value="greaterThanOrEquals">{t('is greater than or equal to')}</option>
-              </select>
-              <input
-                type="number"
-                min={1}
-                aria-label={t('Hit Count')}
-                aria-invalid={!hitCountValid}
-                disabled={!hitCountOn}
-                value={hitCount}
-                onChange={(event) => setHitCount(event.target.value)}
-              />
-            </div>
-          </section>
+          <label className="breakpoint-setting-check">
+            <input type="checkbox" checked={hitCountOn} onChange={(event) => setHitCountOn(event.target.checked)} />
+            <span>{t('Hit Count')}</span>
+          </label>
+          <select aria-label={t('Hit Count')} disabled={!hitCountOn} value={hitCountKind} onChange={(event) => setHitCountKind(event.target.value as BreakpointHitCountKind)}>
+            <option value="equals">=</option>
+            <option value="multipleOf">{t('Is a multiple of')}</option>
+            <option value="greaterThanOrEquals">&gt;=</option>
+          </select>
+          <input
+            aria-label={t('Hit count value')}
+            aria-invalid={!hitCountValid}
+            disabled={!hitCountOn}
+            value={hitCount}
+            onChange={(event) => setHitCount(event.target.value)}
+          />
+          <span />
 
-          <section className="breakpoint-setting">
-            <label className="breakpoint-setting-header">
-              <input type="checkbox" checked={filterOn} onChange={(event) => setFilterOn(event.target.checked)} />
-              <span>{t('Filter')}</span>
-            </label>
-            <div className="breakpoint-setting-controls">
-              <input
-                aria-label={t('Filter')}
-                disabled={!filterOn}
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-              />
-            </div>
-            <p className="breakpoint-setting-help">
-              {t('A filter can use {names}, for example {example}.', {
-                names: 'MachineName, ProcessId, ProcessName, ThreadId, ThreadName',
-                example: 'ProcessId == 0x1234 && ThreadName == "Main Thread"',
-              })}
-            </p>
-          </section>
+          <label className="breakpoint-setting-check">
+            <input type="checkbox" checked={filterOn} onChange={(event) => setFilterOn(event.target.checked)} />
+            <span>{t('Filter')}</span>
+          </label>
+          <span />
+          <input aria-label={t('Filter')} aria-invalid={filterOn && filterError !== null} title={filterOn ? filterError ?? undefined : undefined} disabled={!filterOn} value={filter} onChange={(event) => setFilter(event.target.value)} />
+          <button className="icon-button" title={t('Help')} aria-label={t('Filter help')} onClick={showFilterHelp}><DsIcon name="StatusHelp" /></button>
 
-          <section className="breakpoint-setting">
-            <label className="breakpoint-setting-header">
-              <input type="checkbox" checked={traceOn} onChange={(event) => setTraceOn(event.target.checked)} />
-              <span>{t('When Hit')}</span>
-            </label>
-            <div className="breakpoint-setting-controls">
-              <input
-                aria-label={t('Print message:')}
-                disabled={!traceOn}
-                value={trace}
-                onChange={(event) => setTrace(event.target.value)}
-              />
-            </div>
-            <label className="breakpoint-setting-continue">
-              <input
-                type="checkbox"
-                disabled={!traceOn}
-                checked={traceContinue}
-                onChange={(event) => setTraceContinue(event.target.checked)}
-              />
-              <span>{t('Continue execution')}</span>
-            </label>
-            <p className="breakpoint-setting-help">
-              {t('Use {expression} to print a value, and keywords such as {keywords}.', {
-                expression: '{expression}',
-                keywords: '$FUNCTION, $CALLER, $CALLSTACK, $TID, $TNAME, $PID, $PNAME',
-              })}
-            </p>
-          </section>
-
-          <section className="breakpoint-setting">
-            <div className="breakpoint-setting-header"><span>{t('Labels')}</span></div>
-            <div className="breakpoint-setting-controls">
-              <input
-                aria-label={t('Labels')}
-                placeholder={t('Comma separated labels')}
-                value={labels}
-                onChange={(event) => setLabels(event.target.value)}
-              />
-            </div>
-          </section>
+          <label className="breakpoint-setting-check">
+            <input type="checkbox" checked={traceOn} onChange={(event) => setTraceOn(event.target.checked)} />
+            <span>{t('Log Message')}</span>
+          </label>
+          <label className="breakpoint-setting-continue">
+            <input type="checkbox" disabled={!traceOn} checked={traceContinue} onChange={(event) => setTraceContinue(event.target.checked)} />
+            <span>{t('Continue execution')}</span>
+          </label>
+          <input aria-label={t('Log Message')} disabled={!traceOn} value={trace} onChange={(event) => setTrace(event.target.value)} />
+          <button className="icon-button" title={t('Help')} aria-label={t('Log message help')} onClick={showTraceHelp}><DsIcon name="StatusHelp" /></button>
         </div>
 
         <div className="modal-actions">
+          <span className="breakpoint-settings-error" role="status">{filterOn && filterError ? filterError : ''}</span>
           <span className="modal-action-spacer" />
+          <button className="primary" disabled={hasError} onClick={save}>{t('OK')}</button>
           <button onClick={onClose}>{t('Cancel')}</button>
-          <button className="primary" disabled={!hitCountValid} onClick={save}>{t('OK')}</button>
         </div>
       </div>
     </div>

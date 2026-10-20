@@ -265,7 +265,7 @@ internal sealed partial class CorDebugSession {
 		if (decision.TraceMessage is not null)
 			Emit(DebugEventNames.Output, new { category = "trace", output = decision.TraceMessage + "\n" });
 		if (decision.ErrorMessage is not null)
-			Emit(DebugEventNames.Output, new { category = "stderr", output = decision.ErrorMessage + "\n" });
+			Emit(DebugEventNames.Output, new { category = "traceError", output = decision.ErrorMessage + "\n" });
 		if (decision.HitCountChanged)
 			EmitBreakpointChanged(entry);
 	}

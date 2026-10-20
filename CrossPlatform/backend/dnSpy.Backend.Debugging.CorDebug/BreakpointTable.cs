@@ -92,6 +92,12 @@ internal sealed class BreakpointEntry {
 	/// <summary>Why the breakpoint is not usable, when it is not. Null means it is fine.</summary>
 	public string? Message { get; set; }
 
+	/// <summary>
+	/// True when the runtime itself refused the breakpoint — dnSpy's "Could not create the breakpoint." error —
+	/// rather than it merely waiting for its module, which is only a warning.
+	/// </summary>
+	public bool EngineRefused { get; set; }
+
 	public bool IsBound => Breakpoint is not null;
 
 	/// <summary>
@@ -116,6 +122,12 @@ internal sealed class BreakpointEntry {
 /// entries live here unbound until <see cref="BindModule"/> sees their module come in.
 /// </summary>
 internal sealed class BreakpointTable {
+	/// <summary>dnSpy's BreakpointMessage_CouldNotCreateBreakpoint, the error a refused location reports.</summary>
+	public const string CouldNotCreate = "Could not create the breakpoint.";
+
+	/// <summary>dnSpy's Breakpoints_ModuleNotLoaded, the warning of a breakpoint whose module is not there yet.</summary>
+	public const string ModuleNotLoaded = "The module hasn't been loaded or no symbols have been loaded for this module.";
+
 	readonly object gate = new();
 	readonly List<BreakpointEntry> entries = new();
 
@@ -138,6 +150,16 @@ internal sealed class BreakpointTable {
 					entry.HitState = carried;
 			}
 			entries.AddRange(requested);
+		}
+	}
+
+	/// <summary>dnSpy's Reset Hit Count: the breakpoints named start counting from 0, and a When Changed condition anew.</summary>
+	public IReadOnlyList<BreakpointEntry> ResetHitCounts(IReadOnlySet<string> ids) {
+		lock (gate) {
+			var reset = entries.Where(entry => ids.Contains(entry.Id)).ToArray();
+			foreach (var entry in reset)
+				entry.HitState = new BreakpointHitState();
+			return reset;
 		}
 	}
 
@@ -181,7 +203,7 @@ internal sealed class BreakpointTable {
 				if (!entry.IsBound || !PathsMatch(entry.ModulePath, modulePath))
 					continue;
 				Deactivate(entry);
-				entry.Message = "Module not loaded yet.";
+				entry.Message = ModuleNotLoaded;
 			}
 		}
 	}
@@ -213,6 +235,7 @@ internal sealed class BreakpointTable {
 					entry.BoundIlOffset = offset;
 					entry.Module = module;
 					entry.Message = null;
+					entry.EngineRefused = false;
 					return true;
 				}
 				catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
@@ -222,13 +245,15 @@ internal sealed class BreakpointTable {
 			// The token is not in this module, or the method has no IL body the engine can hook.
 			entry.Breakpoint = null;
 			entry.Module = null;
-			entry.Message = $"Metadata token 0x{entry.MetadataToken:X8} could not be bound in {System.IO.Path.GetFileName(modulePath)}.";
+			entry.Message = CouldNotCreate;
+			entry.EngineRefused = true;
 			return false;
 		}
 		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
 			entry.Breakpoint = null;
 			entry.Module = null;
-			entry.Message = $"Metadata token 0x{entry.MetadataToken:X8} could not be bound in {System.IO.Path.GetFileName(modulePath)}.";
+			entry.Message = CouldNotCreate;
+			entry.EngineRefused = true;
 			return false;
 		}
 	}
@@ -250,7 +275,8 @@ internal sealed class BreakpointTable {
 				entry.Message = null;
 				if (module is not null && TryBind(module, entry.ModulePath, entry))
 					return true;
-				entry.Message = $"Breakpoint could not be bound after the runtime refused IL offset {ilOffset}.";
+				entry.Message = CouldNotCreate;
+				entry.EngineRefused = true;
 				return false;
 			}
 			return false;
@@ -266,7 +292,7 @@ internal sealed class BreakpointTable {
 		}
 		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
 			entry.Breakpoint = null;
-			entry.Message = "Module not loaded yet.";
+			entry.Message = ModuleNotLoaded;
 		}
 	}
 

@@ -1586,10 +1586,18 @@ export interface EditNodeResponse {
   kind: string
 }
 
+/**
+ * A process Attach to Process offers — dnSpy's AttachableProcessInfo: the executable's file name, the window title
+ * (none on Linux), the runtime as "CoreCLR <version>", the architecture, the executable's path and the command line.
+ */
 export interface DebugProcess {
   processId: number
   name: string
-  executablePath?: string
+  title?: string
+  runtimeName?: string
+  architecture?: string
+  executablePath?: string | null
+  commandLine?: string
 }
 
 export interface DebugStartResponse {
@@ -1719,6 +1727,8 @@ export interface DebugBreakpointRequest {
 
 /** A method breakpoint, which the engine matches by name rather than by location. */
 export interface DebugFunctionBreakpointRequest {
+  /** The client's id for it, which the engine's reports name it by. */
+  id?: string
   name: string
   settings?: BreakpointSettings
 }
@@ -1802,6 +1812,48 @@ export interface DebugBreakpoint {
   enabled: boolean
   /** How many times the engine has reached the breakpoint and its condition and filter passed. */
   hitCount?: number
+  /** dnSpy's bound message severity: a location the runtime refused is an error, one not bound for another reason a warning. */
+  severity?: 'warning' | 'error' | null
+}
+
+/** A reference a debugger command acts on: a tree node, or a definition named by its module and token. */
+export interface DebugCodeReference {
+  nodeId?: string | null
+  modulePath?: string | null
+  metadataToken?: number | null
+}
+
+/** A method a breakpoint goes at the entry of. */
+export interface DebugMethodTarget {
+  modulePath: string
+  metadataToken: number
+  description: string
+  /** False for an abstract method, which the commands collect and skip when they add the breakpoints. */
+  hasBody: boolean
+}
+
+/** What a context menu's debugger commands act on — see `DebugCodeTargetsResponse` in the backend's protocol. */
+export interface DebugCodeTargets {
+  methods: DebugMethodTarget[]
+  typeMethods?: DebugMethodTarget[] | null
+  typeName?: string | null
+  exceptionTypeName?: string | null
+}
+
+/** A code breakpoint as dnSpy's breakpoint file holds it. */
+export interface BreakpointFileEntry {
+  modulePath: string
+  metadataToken: number
+  ilOffset: number
+  enabled: boolean
+  settings?: {
+    condition?: { kind: BreakpointConditionKind; expression: string } | null
+    hitCount?: { kind: BreakpointHitCountKind; count: number } | null
+    filter?: string | null
+    trace?: { message: string; continue: boolean } | null
+    labels?: string[] | null
+  } | null
+  method?: string | null
 }
 
 export interface DebugScope {
@@ -1903,6 +1955,9 @@ export interface DebugDisassembly {
   title: string
   moduleName?: string | null
   methodName?: string | null
+  /** The method's short name, which the Disassembly tab is titled with. */
+  shortName?: string | null
+  isOptimized?: boolean | null
   address: number
   size: number
   lines: TextPart[][]
@@ -2341,6 +2396,12 @@ export interface DnSpyApi {
   startWithoutDebugging(options: DebugLaunchOptions): Promise<number>
   attachDebug(processId: number, workspaceId?: string): Promise<DebugStartResponse>
   setBreakpoints(sessionId: string, breakpoints: DebugBreakpointRequest[]): Promise<DebugBreakpoint[]>
+  /** What Add Method Breakpoint, Add Class Breakpoint and Break When Thrown act on for these references. */
+  getDebugCodeTargets(workspaceId: string | undefined, references: DebugCodeReference[]): Promise<DebugCodeTargets>
+  /** Writes breakpoints as dnSpy's breakpoint file. */
+  exportBreakpoints(workspaceId: string | undefined, breakpoints: BreakpointFileEntry[]): Promise<string>
+  /** Reads the breakpoints out of dnSpy's breakpoint file, and how many rows it dropped. */
+  importBreakpoints(workspaceId: string | undefined, xml: string): Promise<{ breakpoints: BreakpointFileEntry[]; skipped: number }>
   setFunctionBreakpoints(sessionId: string, breakpoints: DebugFunctionBreakpointRequest[]): Promise<Record<string, unknown>>
   /** Releases a launch the engine held back until the client had armed its breakpoints. */
   configurationDone(sessionId: string): Promise<void>
@@ -2379,6 +2440,10 @@ export interface DnSpyApi {
   /** Continues to the statement under the caret: a temporary breakpoint there, on any thread. */
   runToDebugCursor(sessionId: string, location: { nodeId?: string; line?: number; column?: number; modulePath?: string; metadataToken?: number; ilOffset?: number }): Promise<void>
   freezeDebugThreads(sessionId: string, threadIds: number[], freeze: boolean): Promise<void>
+  /** dnSpy's Reset Hit Count: the breakpoints, by the ids they were set with, count from 0 again. */
+  resetDebugBreakpointHitCounts(sessionId: string, ids: string[]): Promise<void>
+  /** Whether a breakpoint filter reads — null — or why not, for the settings dialog. */
+  verifyBreakpointFilter(filter: string): Promise<string | null>
   renameDebugThread(sessionId: string, threadId: number, name: string | null): Promise<void>
   getDebugProcess(sessionId: string): Promise<DebugProcessInfo>
   readDebugMemory(sessionId: string, address: string, count: number): Promise<DebugMemory>
@@ -2402,6 +2467,8 @@ export interface DnSpyApi {
   minimizeWindow(): Promise<void>
   /** Restores and focuses the window, as the debugger does when the process breaks. */
   bringWindowToFront(): Promise<void>
+  /** dnSpy's Give focus to debugged process: activates the process's window where the session allows it. */
+  focusProcessWindow?(processId: number): Promise<boolean>
   toggleMaximizeWindow(): Promise<boolean>
   closeWindow(): Promise<void>
   isWindowMaximized(): Promise<boolean>

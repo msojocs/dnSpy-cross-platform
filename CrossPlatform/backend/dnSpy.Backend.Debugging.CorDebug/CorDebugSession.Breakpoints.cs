@@ -36,7 +36,6 @@ internal sealed partial class CorDebugSession {
 
 	const string NoWorkspaceReason =
 		"This debug session has no workspace, so decompiled source cannot be resolved to IL.";
-	const string ModuleNotLoadedReason = "Module not loaded yet.";
 
 	readonly BreakpointTable breakpoints = new();
 
@@ -203,7 +202,10 @@ internal sealed partial class CorDebugSession {
 		line = entry.Line,
 		endLine = entry.EndLine,
 		column = entry.Column,
-		message = entry.Breakpoint is not null ? null : entry.Message ?? ModuleNotLoadedReason,
+		message = entry.Breakpoint is not null ? null : entry.Message ?? BreakpointTable.ModuleNotLoaded,
+		// dnSpy's BoundBreakpointsMessage: a location the runtime refused is an error, one that is not bound for
+		// any other reason — its module is not loaded, nothing maps to it — a warning; a bound one says nothing.
+		severity = entry.Breakpoint is not null ? null : entry.EngineRefused ? "error" : "warning",
 		modulePath = entry.ModulePath,
 		metadataToken = entry.MetadataToken,
 		sourceMethodToken = entry.SourceMethodToken,
@@ -214,6 +216,20 @@ internal sealed partial class CorDebugSession {
 		// beside a hit-count condition.
 		hitCount = entry.HitState.HitCount,
 	};
+
+	/// <summary>dnSpy's Reset Hit Count over the breakpoints whose ids are named; each reports its count again.</summary>
+	JsonElement ResetHitCounts(JsonElement? arguments) {
+		var ids = new HashSet<string>(StringComparer.Ordinal);
+		if (arguments is { ValueKind: JsonValueKind.Object } args && args.TryGetProperty("ids", out var array) && array.ValueKind == JsonValueKind.Array) {
+			foreach (var id in array.EnumerateArray()) {
+				if (id.ValueKind == JsonValueKind.String && id.GetString() is { } text)
+					ids.Add(text);
+			}
+		}
+		foreach (var entry in breakpoints.ResetHitCounts(ids))
+			EmitBreakpointChanged(entry);
+		return EmptyJson();
+	}
 
 	void EmitBreakpointChanged(BreakpointEntry entry) =>
 		Emit(DebugEventNames.Breakpoint, new { reason = "changed", breakpoint = Describe(entry) });
@@ -353,7 +369,8 @@ internal sealed partial class CorDebugSession {
 			EmitBreakpointChanged(entry);
 			return;
 		}
-		breakpoints.SetMessage(entry, $"Breakpoint could not be bound (DwError=0x{dwError:X8}).", dropBreakpoint: true);
+		breakpoints.SetMessage(entry, BreakpointTable.CouldNotCreate, dropBreakpoint: true);
+		entry.EngineRefused = true;
 		EmitBreakpointChanged(entry);
 	}
 
@@ -371,6 +388,9 @@ internal sealed partial class CorDebugSession {
 		// A step in flight owns the location it started from: the runtime re-announces the breakpoint
 		// under the thread when the step resumes it, and that report is not a stop the user asked for.
 		if (IsNativeStepOrigin(breakpoint, thread))
+			return;
+		// An async step's yield points and the awaiter's notification are the step's own business.
+		if (HandleAsyncStepHit(breakpoint, thread))
 			return;
 		if (IsRunToCursorHit(breakpoint, thread)) {
 			Stop(StopReasons.RunToCursor, thread);
@@ -413,6 +433,9 @@ internal sealed partial class CorDebugSession {
 			Stop(StopReasons.Breakpoint, thread, null);
 			return;
 		}
+		// Another call of the same async method reaching the statement is not the one being stepped.
+		if (!AsyncStepAccepts(thread))
+			return;
 		Stop(StopReasons.Step, thread);
 	}
 

@@ -102,6 +102,8 @@ internal sealed partial class CorDebugSession {
 	/// Module from Memory and Save Module read.
 	/// </summary>
 	byte[]? ReadModuleFileImage(ModuleTable.ModuleEntry entry) {
+		if (entry.IsDynamic)
+			return ReadDynamicModuleImage(entry);
 		var image = ReadMemoryCore(entry.Address, (int)entry.Size);
 		if (image is null || image.Length < 0x200)
 			return null;
@@ -139,10 +141,12 @@ internal sealed partial class CorDebugSession {
 			?? throw new RpcException(ErrorCodes.InvalidParams, "The module's image could not be read from the process.");
 		var path = GetString(args, "path");
 		if (string.IsNullOrEmpty(path)) {
-			var directory = Path.Combine(Path.GetTempPath(), "dnSpy-memory-modules", TargetProcessId.ToString(CultureInfo.InvariantCulture));
+			// The copy keeps the module's own name — a dynamic module's is the one DefineDynamicModule gave it — which is
+			// how the workspace and the engine tell which module of the process it stands for.
+			var directory = Path.Combine(MemoryModuleFiles.Root, TargetProcessId.ToString(CultureInfo.InvariantCulture), entry.Order.ToString(CultureInfo.InvariantCulture));
 			Directory.CreateDirectory(directory);
 			var name = string.IsNullOrEmpty(entry.Name) ? $"module_{entry.Order}.dll" : entry.Name;
-			path = Path.Combine(directory, $"{entry.Address:X}_{name}");
+			path = Path.Combine(directory, name);
 		}
 		await File.WriteAllBytesAsync(path, bytes).ConfigureAwait(false);
 		return DebugJson.Serialize(new { path });
@@ -169,6 +173,9 @@ internal sealed partial class CorDebugSession {
 			title = native.MethodName ?? $"0x{native.Token:X8}",
 			moduleName = Path.GetFileName(native.ModulePath),
 			methodName = native.MethodName,
+			// The Disassembly tab's title, and its tool tip's first lines: dnSpy names the tab by the method's short name.
+			shortName = native.ShortName,
+			isOptimized = native.IsOptimized,
 			address = native.Address,
 			size = native.Bytes.Length,
 			lines,
@@ -176,7 +183,7 @@ internal sealed partial class CorDebugSession {
 		});
 	}
 
-	sealed record NativeCode(string ModulePath, int Token, string? MethodName, ulong Address, byte[] Bytes, COR_DEBUG_IL_TO_NATIVE_MAP[] Map, bool? IsOptimized, int? CurrentNativeOffset);
+	sealed record NativeCode(string ModulePath, int Token, string? MethodName, string? ShortName, ulong Address, byte[] Bytes, COR_DEBUG_IL_TO_NATIVE_MAP[] Map, bool? IsOptimized, int? CurrentNativeOffset);
 
 	static DisassemblyOptions ReadDisassemblyOptions(JsonElement args) {
 		var options = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("options", out var element) && element.ValueKind == JsonValueKind.Object ? element : default;
@@ -216,10 +223,13 @@ internal sealed partial class CorDebugSession {
 		}
 		var moduleEntry = string.IsNullOrEmpty(modulePath) ? null : Modules.FindEntry(modulePath);
 		string? methodName = null;
+		string? shortName = null;
 		var types = TryGetTypeSystem();
-		if (types is not null && moduleEntry is not null && types.GetMember(moduleEntry, token) is Microsoft.CodeAnalysis.IMethodSymbol method)
+		if (types is not null && moduleEntry is not null && types.GetMember(moduleEntry, token) is Microsoft.CodeAnalysis.IMethodSymbol method) {
 			methodName = method.ToDisplayString();
-		return new NativeCode(modulePath, token, methodName, code.Address.Value, bytes.AsSpan(0, Math.Min(read, bytes.Length)).ToArray(), map, moduleEntry?.IsOptimized, currentOffset);
+			shortName = method.MethodKind is Microsoft.CodeAnalysis.MethodKind.Constructor or Microsoft.CodeAnalysis.MethodKind.StaticConstructor ? method.ContainingType.Name : method.Name;
+		}
+		return new NativeCode(modulePath, token, methodName, shortName, code.Address.Value, bytes.AsSpan(0, Math.Min(read, bytes.Length)).ToArray(), map, moduleEntry?.IsOptimized, currentOffset);
 	}
 
 	/// <summary>dnSpy's <c>DisassemblyContentGenerator.Write</c>, line by line, in the theme's assembly colours.</summary>

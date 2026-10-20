@@ -109,4 +109,20 @@ describe('appendOutput', () => {
     expect(useAppStore.getState().debugOutput).toEqual([{ text: 'from the debugger' }])
     expect(useAppStore.getState().output).toEqual([])
   })
+
+  it('has OutputLogger\'s message switches in the Debug pane\'s menu only, saved as the logger settings', () => {
+    renderPane()
+    fireEvent.contextMenu(screen.getByRole('log'))
+    expect(screen.queryByRole('menuitem', { name: /Exception Messages/ })).toBeNull()
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    cleanup()
+
+    useAppStore.setState({ outputPane: 'debug' })
+    renderPane()
+    fireEvent.contextMenu(screen.getByRole('log'))
+    for (const name of ['Exception Messages', 'Step Filtering Messages', 'Module Load Messages', 'Module Unload Messages', 'Process Exit Messages', 'Thread Exit Messages', 'Program Output', 'MDA Messages'])
+      expect(screen.getByRole('menuitem', { name: new RegExp(name) })).toBeVisible()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Module Load Messages/ }))
+    expect(loadAppOptions().outputLogger.showModuleLoadMessages).toBe(false)
+  })
 })

@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核
+> 审计日期：2026-10-12；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -44,10 +44,10 @@
 | 搜索窗口 | 100% | 29 | 0 | 0 | 0 | 全部功能点对齐 WPF：结果文本与提示随工具栏语言（C#/VB/IL）重写而不重搜、提示为各语言的成员签名、「Search For」下拉项带图标、位置作用于整个选区、IL 视图跟随到指令、命令行 `--search*` |
 | 应用壳与通用 UI | 100% | 37 | 0 | 0 | 3 | 全部功能点对齐 WPF：读 `.dntheme` 的主题服务（界面与代码视图都按主题资源着色，支持用户主题）、15 种界面语言、按类别与主题的字体页、带 Debug 窗格的 Output 窗口、dnSpy 图标集覆盖菜单与工具窗口、`--settings-file` 与便携模式、`-p`/`-pn` 附加 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
-| 调试器 | ~83% | 63 | 16 | 7 | 4 | Roslyn 表达式求值与 func-eval，Locals/Autos/Watch 1–4 可展开、改值、DebuggerDisplay；Set Next Statement、Run to Cursor、模块断点、返回值；Threads/Modules/Processes/Memory/Disassembly 窗口；缺 Mono/Unity 与多进程 |
-| 程序集编辑（AsmEditor） | 100% | 70 | 0 | 0 | 2 | 全部功能点对齐 WPF：C#/VB 源码编辑与编译器设置、方法体三页编辑器（含指令剪贴板与四个操作数窗口）、图像与 ImageListStreamer 资源、新建程序集与 NetModule、按保存点的修改标记、Save Module 五页写出选项与带进度/取消的 Save All、PE 头与元数据表字段编辑、MD 表命令、Copy IL Bytes |
+| 调试器 | ~97% | 82 | 1 | 2 | 5 | 除 Mono/Unity 外对齐 WPF：断点按 IL 位置在 C#/VB/IL 视图都能下、WPF 的 Breakpoints 窗口与 XML 断点文件、跨 await 单步、多进程与「中断所有进程」、hex 编辑器式的 Memory 窗口与 Disassembly 标签、动态模块与内存模块；Roslyn 表达式求值与 func-eval |
+| 程序集编辑（AsmEditor） | 100% | 71 | 0 | 0 | 1 | 全部功能点对齐 WPF：C#/VB 源码编辑与编译器设置、方法体三页编辑器（含指令剪贴板与四个操作数窗口）、图像与 ImageListStreamer 资源、新建程序集与 NetModule、按保存点的修改标记、Save Module 五页写出选项与带进度/取消的 Save All、PE 头与元数据表字段编辑、MD 表命令、Copy IL Bytes |
 | C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
-| 元数据/PE 视图与本机反汇编 | ~90% | 18 | 2 | 1 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编未实现 |
+| 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
 | 反编译与语言 | ~44% | 6 | 11 | 9 | 1 | C# 完整；工具栏语言为全局并持久化；IL 格式简化但有定义/引用 span 与逐指令语句表，VB 无 span；GUI 无导出项目（命令行版已支持，见 4.17） |
 | 代码编辑器与文档标签 | ~98% | 29 | 1 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；只差虚拟空格、独立选择边距与行压缩三项选项 |
 | Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
@@ -58,19 +58,19 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，完成度约 **91%**（2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，完成度约 **94%**（2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
 | 工作流 | 可用程度 | 说明 |
 |---|---|---|
 | 打开程序集、浏览树、看 C# 代码、F12 跳转 | 日常可用 | 与 WPF 相同：树的选中显示在前面的标签，单击引用跟随、Ctrl+单击开新标签，每个标签有自己的后退/前进 |
-| 看 IL / VB | 能看，可跳转 | IL 是简化格式，操作码与操作数都可跟随，但不能下断点；VB 的成员与局部变量可跳转、高亮，仍不能下断点 |
+| 看 IL / VB | 能看，可跳转、下断点 | IL 是简化格式，操作码与操作数都可跟随；VB 的成员与局部变量可跳转、高亮；两种视图都有语句表，能下断点、显示当前语句（2026-10-20 起） |
 | 搜索、分析引用 | 日常可用 | 两块是移植最完整的部分 |
 | 改名、改元数据、增删成员 | 日常可用 | 五类成员的选项对话框与 WPF 逐页对齐 |
 | 改方法体 | 日常可用 | C# 源码编辑（方法、类、类成员、程序集特性、合并）与方法体三页编辑器都在；IL 编辑器可增删局部变量与异常处理器，撤销覆盖导入 |
 | 保存 | 日常可用 | 与 WPF 相同：Save Module 的五页写出选项，Save All 列出修改过的文档、有进度与取消；修改标记按保存点计算；新建的程序集与 NetModule 第一次保存时取得文件；退出时可「保存后退出」 |
-| 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件）、单步、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；内存与反汇编窗口；只能调一个 CoreCLR 进程 |
+| 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件，C#/VB/IL 视图都能下）、单步（含跨 await）、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；Memory 与 Disassembly；可同时调多个 CoreCLR 进程；不支持 Mono/Unity |
 | 元数据表、Hex 修改 | 日常可用 | Hex 可滚动浏览、查找、复制、直接改字节并撤销，非 .NET 文件也能改写与保存；PE 头与元数据表是可编辑的表单与表格，表可排序、复制粘贴行；Hex 视图仍没有结构信息与 F12 |
 | 脚本、批处理导出 | 部分可用 | 独立的 `dnSpy.Console` 可以批量导出项目、把单个类型/成员写到 stdout（见 4.17）；REPL 仍不能操作已打开的程序集，GUI 的 Export to Project 菜单仍未接线 |
 
@@ -88,7 +88,7 @@
 
 2. ~~**Monaco 的 contrib 没有打包。**~~ 2026-10-19 已修：`FE/monaco.ts` 仍只导入 `editor.api`（整包导入曾让右键光标定位回归），按需加入 find、hover、bracketMatching 三个 contrib，Edit→Find、F3 与悬停都可用。折叠、单词高亮、Monaco 的缩放与 Go to Line 面板有意不加载：dnSpy 的文档视图没有折叠，高亮的是引用而不是单词，缩放与转到行另有照 WPF 的实现（见 4.5）。
 
-3. **VB 文档没有语句表，IL 的断点仍按 C# 下。** C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）。IL 视图（含 IL with C#）有逐指令的语句表、成员声明处的定义 span、每条指令操作数所指成员的引用 span，以及（2026-10-19 起）操作码与局部变量/参数操作数的引用，所以 IL 里可以跳转、书签可以挂到指令上、分析器的「显示方法内的引用」会落到操作数上；但断点仍只按 C# 的语句表下。VB 是 C# 文本的转换；2026-10-19 起转换结果经 Roslyn 重新绑定，成员与局部变量有了引用 span（见 4.5），但仍没有语句表（方法文档还会变成空壳类），因此 VB 视图里不能下断点，搜索和分析器结果只打开方法。IL 输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决格式。
+3. ~~**VB 文档没有语句表，IL 的断点仍按 C# 下。**~~ 2026-10-20 已修：断点改为与 WPF 相同的 IL 位置（模块、方法标记、IL 偏移），每种视图按自己的语句表画在包含该偏移的语句上。C# 反编译生成引用 span 和语句到 IL 的映射（`BE/StatementIlRanges.cs`）；IL 视图（含 IL with C#）有逐指令的语句表、定义 span 与操作数引用 span；VB 是 C# 文本的转换，转换时在每条语句前插入标记注释、转换后按 VB 语法树取回位置（`BE/VisualBasicConversion.cs`），因此 VB 也有语句表，方法文档也不再变成空壳类（只转换成员时包进一个临时类，转换后再拆开）。三种视图里都能下断点、显示当前语句，搜索与分析器的跟随也按各自的语句表定位。剩下的是 IL 格式本身：输出由自写的简化 `ILFormatter` 生成（没有 `.try`、`.custom` 等），改用 ICSharpCode 的 `ReflectionDisassembler` 可以解决。
 
 4. ~~**菜单上标了快捷键却没有绑定。**~~ 2026-10-14 已修：菜单上标出的快捷键都接上了——Ctrl+Alt+L、Alt+2、Ctrl+D（转到元数据标记，dnSpy 在树上和文档视图里都用这个键）、Ctrl+E Ctrl+W、Alt+Numpad*、Ctrl+Alt+P、Ctrl+Alt+Break、Ctrl+Alt+B/E/C/H/U/Z、Alt+4、Alt+8，Shift+Alt+Enter 不再被 Alt+Enter 的分支截住（原先还有个 WPF 没有的 F11 全屏，一并去掉），Ctrl+Tab 与 Ctrl+Shift+Tab 也补上了。十六进制视图后来补了自己的快捷键（Ctrl+G/M/L/F、F5、Ctrl+D/Ctrl+Shift+D、Ctrl+Alt+S 等，见 4.7）。主菜单现在可以用键盘操作。
 
@@ -214,7 +214,7 @@
 | Reload All | `Documents/Tabs/DocumentListLoader.cs`、`AE/UndoRedo/UndoRedoDocumentListListener.cs` | RPC `workspace/reload`（`ReloadWorkspaceRequest`），`FE/App.tsx` 的 `reloadAll` | ✅ | 有未保存修改时用 dnSpy 原话询问；重新加载用户打开的文件，自动加载的文档只保留标签还在用的（仍标为自动加载）；随后按节点键恢复展开的分支、选中项和文档标签，Hex / 模块信息标签按文件恢复 |
 | Close All / Sort Assemblies | `Documents/Tabs/Commands.cs`、`DocumentTreeView.cs` | RPC `workspace/sortAssemblies` | ✅ | |
 | Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | RPC `workspace/getCloseCandidates` + `workspace/removeModules` | ✅ | 走 Remove Assembly：有未保存修改先询问是否保存，被移除文档的标签一并关闭 |
-| Close Old In-Memory Modules / Disable MMF | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 隐藏 | ⛔ | 后端整读镜像，没有 MMF，也不建模内存模块 |
+| Close Old In-Memory Modules / Disable MMF | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 隐藏 | ⛔ | 后端整读镜像，没有 MMF；Close Old In-Memory Modules 是 File 菜单的命令，2026-10-20 起可用，计在 4.12 |
 | Remove Assembly | `AE/Assembly/AssemblyCommands.cs` | RPC `workspace/removeModules`；树右键、Edit 菜单、Del 键 | ✅ | 作用于选中的全部根行（程序集、PE、ELF、未知文档），标题「移除 {n} 程序集」。有未保存修改时问「是否要在继续之前保存？」（是：先原地保存，失败则不移除；否：直接移除；取消）。撤销历史里的编辑涉及的文档，移除本身记为一步可撤销的编辑，撤销后同一批节点原样回到原位置；只在重做历史里的文档直接移除并清空重做历史 |
 | 会话恢复 | `Documents/Tabs/DocumentTabServiceLoader.cs` | `dnspy.session.v1` | ✅ | |
 | 命令行参数 | `MainApp/AppCommandLineArgs.cs`、`Documents/Tabs/AppCommandLineArgsHandler.cs` | `MAIN/command-line.ts`，RPC `tree/selectMember`（`BE/XmlDocKeyProvider.cs`），`FE/App.tsx` 的 `followCommandLine` | ✅ | 非选项参数都是要打开的文件（`--` 之后一律当文件，`file://` 地址转成路径），`--open` 保留；其余 dnSpy 选项连同取值一起跳过。打开后跟随 `--select`：数字（十进制或 `0x`/`&H` 十六进制）是第一个模块里的 token，`N:` 是命名空间，其余按 Roslyn、再按 MSVC 格式的 XML 文档 ID 查找；找不到就打开第一个程序集。单实例与参数转发见 4.1 |
@@ -250,7 +250,7 @@
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | C# 反编译 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core/CSharp/CSharpDecompiler.cs` | `BE/WorkspaceManager.cs` 的 `DecompileCSharp`，RPC `document/decompile` | ✅ | 有引用 span 和语句表 |
-| Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `ConvertToVisualBasicAsync`（CodeConverter） | 🟡 | 无 span、无语句表；方法文档会变成空壳类 |
+| Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `ConvertToVisualBasicAsync`（CodeConverter）、`BE/VisualBasicConversion.cs` | 🟡 | 是 C# 的转换而不是 VB 反编译器；经 Roslyn 重新绑定有引用 span（见 4.5），2026-10-20 起有语句表、方法文档不再是空壳类 |
 | IL | `.../IL/ILDecompiler.cs` | 自写 `ILFormatter` | 🟡 | 没有 `.try`、`.custom`、`.override` 等；修饰符不是 ilasm 语法；有定义 span、指令操作数的引用 span 与逐指令语句表 |
 | IL with C# | `.../Mixed/ILWithCSharpDecompiler.cs` | `DecompileILWithCSharp` | 🟡 | 同上 |
 | ILAst | `.../ILAst/ILAstDecompiler.cs` | 无 | ⛔ | WPF 只在 DEBUG 构建注册 |
@@ -405,9 +405,9 @@
 
 ### 4.8 元数据/PE 视图与本机反汇编
 
-完成度约 90%（✅ 18 / 🟡 2 / ❌ 1）。WPF 范围：`AE/Hex/Nodes/`、`AE/Hex/PE/`、`WPF/Metadata/`、`WPF/Disassembly/`。ELF 结构视图和右键「Module Information」是移植版新增的，不计入。
+完成度 100%（✅ 21）。WPF 范围：`AE/Hex/Nodes/`、`AE/Hex/PE/`、`WPF/Metadata/`、`WPF/Disassembly/`。ELF 结构视图和右键「Module Information」是移植版新增的，不计入。
 
-2026-10-19 随 4.12 补齐 PE 与元数据结构的编辑（此前约 38%：✅ 7 / 🟡 2 / ❌ 12）：PE 结构节点、表流、元数据表与表行打开的不再是文本，而是 WPF 的字段表单与表格；字段经 hex 补丁写入，撤销与保存与其他编辑一致。剩下的只有本机反汇编。
+2026-10-19 随 4.12 补齐 PE 与元数据结构的编辑（此前约 38%：✅ 7 / 🟡 2 / ❌ 12）：PE 结构节点、表流、元数据表与表行打开的不再是文本，而是 WPF 的字段表单与表格；字段经 hex 补丁写入，撤销与保存与其他编辑一致。本机反汇编随调试器（4.13）在 2026-10-17 实现、2026-10-20 改为文档标签，这里的三行随之更新。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -429,9 +429,9 @@
 | MD 表 Copy as Text / Copy / Paste | 同上 | RPC `metadata/tableText`；剪贴板十六进制 | ✅ | 粘贴按 `ClipboardUtils` 解析，必须是整行且落在表内 |
 | Go to MD Table Row | `AE/Hex/Commands.cs` | RPC `metadata/findRecord` | ✅ | Ctrl+Shift+D 询问标记；Shift+Alt+R 去选中行自己的标记；不存在的标记按 WPF 报错 |
 | PE 结构节点 Show in Hex Editor | 同上 | `HexTargetResponse.Structure` / `StructureData` | ✅ | 结构自身的字节，以及节表头与流头的「Show Data in Hex Editor」 |
-| 本机反汇编查看器 | `WPF/Disassembly/Viewer/*`、`DBG/dnSpy.Debugger/Disassembly/*` | `DebugPlaceholder` | ❌ | 没有反汇编器 |
-| Disassembler 选项页 | `WPF/Disassembly/Viewer/DisassemblyAppSettingsPage.cs` | `options-pages.ts` | 🟡 | 只有持久化 |
-| Code Style（MASM/NASM/GAS） | `WPF/Disassembly/X86/*` | `options-pages.ts` | 🟡 | 只有持久化 |
+| 本机反汇编查看器 | `WPF/Disassembly/Viewer/*`、`DBG/dnSpy.Debugger/Disassembly/*` | `DebugNativeWindows.tsx` 的 `DisassemblyDocumentView`；`CDS/CorDebugSession.Native.cs`（Iced） | ✅ | 与 WPF 一样是以方法名命名的只读文档标签，按主题的汇编颜色着色，可选择、复制、查找；内容来自停住的进程（JIT 后的代码），与 4.13 重复计入 |
+| Disassembler 选项页 | `WPF/Disassembly/Viewer/DisassemblyAppSettingsPage.cs` | `options-pages.ts`，经 `disassemble` 请求交给引擎 | ✅ | 地址、字节、IL、源码注释、基本块间空行、标签等开关都生效 |
+| Code Style（MASM/NASM/GAS） | `WPF/Disassembly/X86/*` | `options-pages.ts`，`CDS/CorDebugSession.Native.cs` 的 Iced 格式化器 | ✅ | 各方言的 Code Style 选项都交给 Iced 的格式化器 |
 
 `docs/linux-release-1.0.md` 中的「ECMA-335 Metadata Tables」在 2026-10-19 之前实际只是 Module Information 里的各表行数，现在有了完整的表视图。
 
@@ -460,7 +460,7 @@
 | 结果提示 | `SearchResult.CreateToolTipUI` | `SearchResultFormatter.WriteToolTip`、`SearchPaneParts.tsx` 的 `SearchResultToolTip` | ✅ | 成员走各语言的 `WriteToolTip`：C#（`CSharpMemberFormatter.WriteToolTip`，含 `(constant)`、默认值、`[deprecated]`、`(awaitable, extension)`、`(+ N overloads)`）、VB 同理、IL 用反汇编器的写法（`BE/ILMemberFormatter.cs`：`instance string NS.T::M(int32)`、`.property … { .get; }`）；方法体命中另起一行写 `IL_0002: ldc.i4 31337`，最后一行是文件路径。悬停 400ms 出现，开着语法高亮时按颜色画 |
 | 边搜边出 | `Search/DocumentSearcher.cs` | RPC `search/run` + `search/progress` | ✅ | 单线程切片 |
 | 上限 10,000 与红框 | 同上 | `BE/Search/SearchRun.cs` | ✅ | |
-| 跟随结果（含方法体内定位） | `SearchService.FollowResult` | `SearchPane.tsx`、`findSearchResultCaret` | ✅ | C# 定位到语句起点，IL 定位到那条指令（IL 视图的语句即指令）；VB 视图没有语句表（见第 2 节第 3 条），只打开方法 |
+| 跟随结果（含方法体内定位） | `SearchService.FollowResult` | `SearchPane.tsx`、`findSearchResultCaret` | ✅ | C# 与 VB 定位到语句起点（VB 的语句表见第 2 节第 3 条），IL 定位到那条指令（IL 视图的语句即指令） |
 | 右键：转到引用 / 新标签 | `Search/Commands.cs` | `SearchContextMenu.tsx` | ✅ | |
 | 右键：复制 token / 全名 | `CopyTokenCommand.cs` 等 | 同上 | ✅ | |
 | 右键：类断点 / 跟踪点 / 方法断点 | `DBG/.../ClassBreakpointCommands.cs` | 同上 | ✅ | |
@@ -498,7 +498,7 @@
 | 异步搜索：展开才搜、边搜边出、收起取消 | `TreeNodes/AsyncFetchChildrenHelper.cs` | RPC `analyze/children` + `analyze/progress` | ✅ | |
 | 结果规模与并行 | `TreeNodes/SearchNode.cs` | `WorkspaceManager.Analyzer.cs` | ✅ | 与 WPF 一样不设上限（25 个框架程序集上 `Object` 的「被使用」约 28,500 行、6 秒、分 35 批流入，前端每次重排约 40ms）；扫描按 40ms 切片单线程跑，多线程实测无收益（见交接文档「坑」第 4 条），结果与顺序同 WPF |
 | 激活行 | `AnalyzerService.OnActivated` | `AnalyzerPane.tsx` | ✅ | |
-| 显示方法内的引用 | `AnalyzerService.GoTo` | `findReferenceCaret` | ✅ | C# 定位到语句里对目标的引用；IL 定位到那条指令的操作数（IL 视图现有操作数引用 span）；VB 视图本身没有语句表（见第 2 节第 3 条），只打开方法 |
+| 显示方法内的引用 | `AnalyzerService.GoTo` | `findReferenceCaret` | ✅ | C# 定位到语句里对目标的引用；IL 定位到那条指令的操作数（IL 视图现有操作数引用 span）；VB 按语句表定位到所在语句（见第 2 节第 3 条） |
 | 右键：跳转组、复制（多选按层级缩进）、复制 token / 全名 | `Analyzer/Commands.cs` | `AnalyzerContextMenu.tsx` | ✅ | 按 3 项统计 |
 | 右键：断点、分析、MSDN、移除 | 同上 | 同上 | ✅ | 按 2 项统计 |
 | 选项组与持久化 | `AnalyzerSettings.cs` | `app-options.ts` | ✅ | |
@@ -552,7 +552,7 @@
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 
-整体完成度 100%（✅ 70 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。
+整体完成度 100%（✅ 71 / ⛔ 1）。WPF 范围：`Extensions/dnSpy.AsmEditor/` 全部子目录。2026-10-20 随调试器的内存模块补上 Close Old In-Memory Modules（此前 ⛔）。
 
 2026-10-19 补齐全部剩余差距后按实现与测试复核（2026-10-18 时约 82%：✅ 52 / 🟡 11 / ❌ 7 / ⛔ 2；更早约 53%：✅ 31 / 🟡 11 / ❌ 27 / ⛔ 2）。前两轮补上的主体（方法体三页编辑器、资源编辑、Edit Assembly / Module、C# 源码编辑、写出选项）见各表；2026-10-19 这一轮补上的是：
 
@@ -686,30 +686,39 @@
 | Copy IL Bytes | `AE/Commands/InstructionCommands.cs` | 代码视图右键与 Ctrl+B，RPC `document/getIlBytes` | ✅ | 改过的方法里未知的字节写作 `??` 并给出 WPF 的提示 |
 | Load Dependencies | `AE/Compiler/LoadDependenciesCommands.cs` | RPC `workspace/loadDependencies` | ✅ | 与 4.3 重复计入 |
 | Close All Framework Assemblies / Missing Files | `AE/Commands/CloseAll*Command.cs` | File 菜单 | ✅ | 与 4.3 重复计入 |
-| Close Old In-Memory Modules | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | 灰显 | ⛔ | 针对调试器加载的内存模块，后端不建模 |
+| Close Old In-Memory Modules | `AE/Commands/CloseOldInMemoryModulesCommand.cs` | File 菜单，`closeOldInMemoryModules` | ✅ | 关闭从进程内存读出、其进程已不在调试的模块（WPF 的 `IInMemoryDocument.IsActive` 为 false），按 Remove Assembly 的流程（含保存询问）移除 |
 
 测试：后端 `WorkspaceEditCreateTests.cs`、`WorkspaceEditOptionsTests.cs`、`Editing/NodeOptionsRoundTripTests.cs`、`Editing/SignatureRoundTripTests.cs`、`WorkspaceIlBodyTests.cs`（方法体三页、七个指令命令、跨模块粘贴、MemberRef、Copy IL Bytes）、`WorkspaceResourceEditingTests.cs`（含图像与 ImageListStreamer）、`WorkspaceAssemblyModuleOptionsTests.cs`、`WorkspaceSaveOptionsTests.cs`、`WorkspaceSavingTests.cs`（保存点、hex 文档保存、非 .NET 文件原地保存后撤销、写出选项、进度与取消）、`WorkspaceDocumentTests.cs`（新建程序集与 netmodule）、`WorkspaceMetadataStructureTests.cs`（PE/元数据结构、表行、排序、Go to MD Table Row、Show in Hex 范围）、`WorkspaceCompilerTests.cs`（含 VB 与编译器设置），以及 `WorkspaceManagerTests.cs` 中的方法体、资源、hex、保存用例；前端 `*OptionsDialog.test.tsx`、`MethodBodyDialog.test.tsx`、`il-body-clipboard.test.ts`、`ResourceDialogs.test.tsx`、`ImageResourceDialogs.test.tsx`、`image-list-streamer.test.ts`、`AssemblyModuleDialogs.test.tsx`、`NetModuleOptionsDialog.test.tsx`、`SaveModuleOptionsDialog.test.tsx`、`SaveModulesDialog.test.tsx`、`HexStructureView.test.tsx`、`hex-fields.test.ts`、`EditCodeDialog.test.tsx` 与 `widgets/*.test.ts(x)`；e2e 覆盖新建类型并经 Save Module 窗口另存、IL 与元数据编辑、hex 写入并撤销、模块转换、PE 头字段改写并撤销、元数据表网格、Go to RID 与 Go to MD Table Row。
 
 ### 4.13 调试器
 
-整体完成度约 83%（✅ 63 / 🟡 16 / ❌ 7 / ⛔ 4）。WPF 范围：`Extensions/dnSpy.Debugger/` 全部子项目、`dnSpy/Roslyn/Roslyn.ExpressionCompiler`。
+整体完成度约 97%（✅ 82 / 🟡 1 / ❌ 2 / ⛔ 5）。WPF 范围：`Extensions/dnSpy.Debugger/` 全部子项目、`dnSpy/Roslyn/Roslyn.ExpressionCompiler`。
 
-2026-10-17 按 WPF 补齐后按实现与测试复核（此前约 47%：✅ 30 / 🟡 21 / ❌ 35 / ⛔ 4）。跨平台版只有一个引擎：后端进程内直连 ICorDebug（`CDS/`），只支持 CoreCLR。没有 PDB 时，断点、单步落点和局部变量名都来自反编译语句到 IL 偏移的映射（`BE/StatementIlRanges.cs`）。
+2026-10-20 按 WPF 补齐后按实现与测试复核（2026-10-17 复核时约 83%：✅ 63 / 🟡 16 / ❌ 7 / ⛔ 4；更早约 47%）。跨平台版只有一个引擎：后端进程内直连 ICorDebug（`CDS/`），只支持 CoreCLR。没有 PDB 时，断点、单步落点和局部变量名都来自反编译语句到 IL 偏移的映射（`BE/StatementIlRanges.cs`）。
 
-这一轮补上的主体是表达式求值器（`CDS/Evaluation/`）：用 Roslyn 按被调试进程已加载的模块建 C#/VB 编译（`MetadataImportOptions.All`，C# 打开 `IgnoreAccessibility` 读私有成员），把表达式编译进一个以局部变量和 `this` 为参数的合成方法，再解释它的 IOperation 树；字段、数组、算术、转换、模式匹配等在调试器侧直接算，属性、方法调用、`new`、装箱与字符串用 func-eval（`ICorDebugEval`，冻结其他线程，超时后 Abort / RudeAbort）。值的格式化、DebuggerDisplay / DebuggerTypeProxy、Raw / Results / Dynamic View、格式说明符（`h`、`d`、`nq`、`raw`、`results`、`ac` 等）、`$exception`、`$ReturnValue`、`$N` 对象 ID 都按 WPF 的 `CSharpValueFormatter` 与值节点提供者实现，三列按 dnSpy 的颜色类型着色。断点条件与跟踪点的 `{表达式}` 也改走这个求值器。
+2026-10-17 那一轮补上的主体是表达式求值器（`CDS/Evaluation/`）：用 Roslyn 按被调试进程已加载的模块建 C#/VB 编译（`MetadataImportOptions.All`，C# 打开 `IgnoreAccessibility` 读私有成员），把表达式编译进一个以局部变量和 `this` 为参数的合成方法，再解释它的 IOperation 树；字段、数组、算术、转换、模式匹配等在调试器侧直接算，属性、方法调用、`new`、装箱与字符串用 func-eval（`ICorDebugEval`，冻结其他线程，超时后 Abort / RudeAbort）。值的格式化、DebuggerDisplay / DebuggerTypeProxy、Raw / Results / Dynamic View、格式说明符（`h`、`d`、`nq`、`raw`、`results`、`ac` 等）、`$exception`、`$ReturnValue`、`$N` 对象 ID 都按 WPF 的 `CSharpValueFormatter` 与值节点提供者实现，三列按 dnSpy 的颜色类型着色。断点条件与跟踪点的 `{表达式}` 也改走这个求值器。
+
+2026-10-20 这一轮补齐其余部分：
+
+- **断点是 IL 位置。** 与 WPF 的 `DbgDotNetCodeLocation` 一样，断点记的是模块、方法标记与 IL 偏移；C#、VB、IL 三种视图各按自己的语句表把它画在包含该偏移的语句上，所以哪种语言里都能下断点、切换语言不丢。VB 的语句表来自 C#→VB 转换时插入的标记注释（`BE/VisualBasicConversion.cs`），方法文档不再变成空壳类。字形按 `BreakpointImageUtilities` 分普通、高级（有条件/命中计数/筛选器）、跟踪点，调试时未绑定的显示警告或错误；语句本身按主题的断点标记着色。
+- **Breakpoints 窗口**是 WPF 的七列可排序表格，带搜索（`-n -l -c -h -f -w -m` 与 `!`）、工具栏、右键菜单、就地编辑标签；导入导出改为 WPF 的 XML 断点文件，两边互通。
+- **跨 await 单步**照 `DbgEngineStepperImpl`：在调用自己的线程上监视 yield 点、按任务身份认出恢复后的同一次调用，到达 `SetResult` 时让任务在被等待时通知调试器，再走出任务管线回到 await 处；Step Out 直接回到等待者。
+- **多进程**：可以同时启动、附加多个进程；一个进程中断时按「中断所有进程」选项暂停其他进程（引擎侧实现），当前进程随中断切换；Processes、Threads、Modules 窗口列出所有进程，后两者带 WPF 的「进程」下拉框；关闭 Break All Processes 时 Debug 菜单出现「(当前进程)」三个单步命令。
+- **Memory 窗口**改为 hex 编辑器本身（`HexView` 的字节源模式），**Disassembly** 改为文档标签，与 WPF 相同。
+- **动态模块**：Reflection.Emit 建的模块由运行时为调试器保存的元数据与进程内的方法体拼成 PE 映像（`CDS/CorDebugSession.DynamicModules.cs`），可以打开、反编译、下断点；从内存打开的模块有 Reload All Method Bodies，「使用内存模块」选项生效。
 
 | 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
 |---|---|---|---|---|---|
-| 变量与表达式求值 | ~96% | 11 | 1 | 0 | 0 |
-| 异常设置 | ~90% | 9 | 0 | 1 | 1 |
-| 调试器选项 | ~89% | 7 | 2 | 0 | 1 |
-| 调试工具窗口 | ~83% | 6 | 3 | 0 | 0 |
-| 单步与执行点 | ~80% | 7 | 2 | 1 | 0 |
-| 断点 | ~79% | 10 | 7 | 0 | 0 |
-| 会话控制 | ~75% | 10 | 1 | 3 | 1 |
-| 运行时与代码映射 | ~60% | 3 | 0 | 2 | 1 |
+| 变量与表达式求值 | 100% | 12 | 0 | 0 | 0 |
+| 异常设置 | 100% | 10 | 0 | 0 | 1 |
+| 调试器选项 | 100% | 9 | 0 | 0 | 1 |
+| 调试工具窗口 | 100% | 9 | 0 | 0 | 0 |
+| 单步与执行点 | 100% | 8 | 0 | 0 | 0 |
+| 断点 | 100% | 17 | 0 | 0 | 0 |
+| 运行时与代码映射 | ~92% | 5 | 1 | 0 | 2 |
+| 会话控制 | ~86% | 12 | 0 | 2 | 1 |
 
-剩下的 ❌ 都在 WPF 的边缘：Mono / Unity、多进程、Unwind To This Frame、编辑器的 Break When Exception Thrown、阻止托管代码检测调试器、动态模块。
+剩下的两个 ❌ 是 Mono / Unity：那是另一套调试引擎（Mono 的软调试协议），不在 1.0 的范围内，这一轮也明确不做（2026-10-20 与需求方确认）。
 
 #### 会话控制
 
@@ -718,55 +727,53 @@
 | Debug Program 对话框（.NET 页） | `DBG/dnSpy.Debugger/Dialogs/DebugProgram/*`、`dnSpy.Debugger.DotNet.CorDebug/Dialogs/DebugProgram/DotNetStartDebuggingOptionsPage.cs` | `DebugProgramDialog.tsx`，RPC `debug/launch` | ✅ | 支持宿主可执行文件；缺 ConnectionTimeout |
 | Break at（4 种） | `DotNetCommonStartDebuggingOptionsPage.cs` | `CDS/CorDebugSession.Entry.cs` | ✅ | `ModuleCctorOrEntryPoint` 的帧按 WPF 写成 `<Module>.<Module>()` |
 | .NET Framework 启动页 | `DotNetFrameworkStartDebuggingOptionsPage.cs` | 无 | ⛔ | Linux 上没有 .NET Framework |
-| Mono / Unity 启动与 connect | `dnSpy.Debugger.DotNet.Mono/Dialogs/DebugProgram/*` | 无 | ❌ | 计划列为后续方向 |
+| Mono / Unity 启动与 connect | `dnSpy.Debugger.DotNet.Mono/Dialogs/DebugProgram/*` | 无 | ❌ | 另一套引擎，不在 1.0 范围，本轮明确不做 |
 | 启动选项 MRU | `DbgUI/StartDebuggingOptionsMru.cs` | `DebugProgramDialog.tsx`（`dnspy.debugProgramMru.v1`） | ✅ | 按程序路径记住参数、目录、环境、宿主与 Break at，最多 20 个 |
 | Start Without Debugging | `DbgUI/DebugMenuCommands.cs` | 同一对话框，主进程 `debug:startWithoutDebugging` | ✅ | Ctrl+F5；与引擎一样对 `.dll` 走 dotnet 宿主 |
-| Attach to Process | `Dialogs/AttachToProcess/*` | `AttachDialog.tsx`，RPC `debug/listProcesses`、`debug/attach` | 🟡 | 只列已加载 CoreCLR 的进程（读 `/proc/<pid>/maps`）；没有 Title、Type、命令行列 |
-| Unity 附加 | `dnSpy.Debugger.DotNet.Mono/Dialogs/AttachToProcess/Unity*` | 无 | ❌ | |
-| Continue | `DebugMenuCommands.cs` | `continueDebug` | ✅ | |
-| Break All | 同上 | `pauseDebug` | ✅ | Ctrl+Alt+Break，运行时可用 |
-| Stop Debugging | 同上 | `stopDebug` | ✅ | 启动的进程终止，附加的进程分离（缺陷 #2 已修） |
-| Detach All / Terminate All | 同上 | `detachDebug`、`terminateDebug` | ✅ | Debug 菜单与 Processes 窗口 |
+| Attach to Process | `Dialogs/AttachToProcess/*` | `AttachDialog.tsx`，RPC `debug/listProcesses`、`debug/attach` | ✅ | WPF 的七列（进程、ID、标题、类型 `CoreCLR <版本>`、体系架构、文件名、命令行），可排序、按列搜索、多选一次附加多个、Refresh（F5）、Ctrl+C/Ctrl+A；已在调试的进程不列出。版本取自 libcoreclr.so 所在目录，体系架构读可执行文件的 ELF 头，命令行读 `/proc/<pid>/cmdline`；Linux 进程没有窗口标题，「标题」列为空 |
+| Unity 附加 | `dnSpy.Debugger.DotNet.Mono/Dialogs/AttachToProcess/Unity*` | 无 | ❌ | 同 Mono，本轮不做 |
+| Continue | `DebugMenuCommands.cs` | `continueDebug` | ✅ | 同 `RunAll`：所有暂停的进程都继续 |
+| Break All | 同上 | `pauseDebug` | ✅ | Ctrl+Alt+Break，所有运行中的进程 |
+| Stop Debugging | 同上 | `stopDebug` | ✅ | 同 `StopDebuggingAll`：按每个进程的「调试停止时分离」决定分离还是终止（附加的进程默认分离） |
+| Detach All / Terminate All | 同上 | `detachDebug`、`terminateDebug` | ✅ | 作用于所有进程 |
 | Restart | 同上 | `restartDebug` | ✅ | Ctrl+Shift+F5，按上次的参数重启；附加的进程不可用 |
-| 多进程调试 | 同上 | 只有一个会话 | ❌ | |
+| 多进程调试 | `Impl/DbgManagerImpl.cs` | `debugSessions`、`setCurrentDebugSession`；`CDS/CorDebugSessionManager.cs` 的 `BreakOtherProcesses` | ✅ | 调试中仍可启动与附加；「中断所有进程」由引擎在任一进程中断时暂停其余进程；当前进程无事可显示时切到中断的进程；进程退出后切到另一个（优先已暂停的）；断点同时下到所有进程。命中计数各进程分别计 |
 | 调试状态提示 | `DbgUI/DebuggerImpl.cs` | 状态栏 | ✅ | 中断时按选项把窗口带到前台 |
 
 #### 单步与执行点
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Step Into / Over / Out | `Steppers/DbgStepperImpl.cs` | `CDS/CorDebugSession.Stepping.cs` | ✅ | 按 3 项统计；在源级顺序点挂临时断点；Step Into 按选项跳过属性与运算符、Just My Code 之外的模块 |
-| 跨 await 单步 | `dnSpy.Debugger.DotNet/Steppers` | 语句级断点 | 🟡 | continuation 不做判定，分支或异常路径上可能多停一次 |
+| Step Into / Over / Out | `Steppers/DbgStepperImpl.cs` | `CDS/CorDebugSession.Stepping.cs` | ✅ | 按 3 项统计；在源级顺序点挂临时断点；Step Into 按选项跳过属性与运算符（并按 OutputLogger 写「Step into: Stepping over property …」）、Just My Code 之外的模块；落在隐藏顺序点上时继续单步；也有「(当前进程)」变体（Ctrl+Alt+F11 / F10、Ctrl+Shift+Alt+F11）。F5/F10/F11 等在代码视图里同样生效 |
+| 跨 await 单步 | `dnSpy.Debugger.DotNet/Steppers/Engine/DbgEngineStepperImpl.cs` | `CDS/CorDebugSession.AsyncStepping.cs` | ✅ | yield 断点、按任务身份过滤的恢复断点、`SetNotificationForWaitCompletion` + `Task.NotifyDebuggerOfWaitCompletion` 回到等待者；await 信息来自反编译器的 `AsyncDebugInfo` |
 | Show Next Statement | `DbgUI/DocumentViewerCommands.cs` | `revealStoppedLocation` | ✅ | Alt+Num *，Debug 菜单与编辑器右键 |
 | Set Next Statement | 同上 | `setNextStatement`，`CDS/CorDebugSession.Control.cs`（`ICorDebugILFrame.SetIP`） | ✅ | Ctrl+Shift+F10；先 `CanSetIP` 检查，只能在当前方法内 |
 | Run to Cursor | `ToolWindows/CallStack/CallStackOperations.cs`、`DocumentViewerCommands.cs` | `runToCursor` | ✅ | Ctrl+F10：编辑器里是光标处语句上的临时 IL 断点，Call Stack 里是该帧返回地址上的本机断点 |
-| Unwind To This Frame | `ToolWindows/CallStack/Commands.cs` | 无 | ❌ | |
-| 当前语句与调用栈帧高亮 | `CallStack/TextEditor/ActiveStatementService.cs` | `DocumentView.tsx` | 🟡 | 编辑器不区分当前语句与其他帧；总切到 C# 视图 |
-| 停在工作区外的模块时自动加载 | `dnSpy.Debugger.DotNet/Modules/DbgLoadModuleReferenceHandlerImpl.cs` | `openDebugModule` | ✅ | 切换到的帧保持为活动帧 |
+| Unwind To This Frame | `ToolWindows/CallStack/Commands.cs` | Call Stack 右键 | ✅ | 与 WPF 一样有菜单项而永远禁用（`CanUnwindToFrame` 恒为 false） |
+| 当前语句与调用栈帧高亮 | `CallStack/TextEditor/ActiveStatementService.cs` | `FE/debugger-markers.ts` | ✅ | 当前语句（黄）、切换到的调用方帧的返回语句（绿）、其他帧的活动语句（灰），颜色取自主题；各语言视图都按 IL 位置定位，不再强制切回 C# |
+| 停在工作区外的模块时自动加载 | `dnSpy.Debugger.DotNet/Modules/DbgLoadModuleReferenceHandlerImpl.cs` | `openDebugModule` | ✅ | 切换到的帧保持为活动帧；动态、内存模块与「使用内存模块」时从进程内存读 |
 
 #### 断点
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| 行断点 | `Breakpoints/Code/TextEditor/GlyphMarginOperations.cs` | `toggleLineBreakpoint`、`CDS/CorDebugSession.Breakpoints.cs` | 🟡 | 只有 C# 视图能下断点 |
-| 启用 / 禁用 | `DbgUI/DocumentViewerCommands.cs` | 右键、面板复选框 | ✅ | |
-| 绑定状态 | `Breakpoints/Code/BoundCodeBreakpointsService.cs` | `breakpoint` 事件 | ✅ | 运行时拒绝偏移时退回顺序点 |
-| 断点字形外观 | `BreakpointGlyphTextMarkerHandler.cs` | 三种样式 | 🟡 | 条件断点、跟踪点没有专用图标 |
-| 边距右键与悬停工具条 | `GlyphMarginCommands.cs` | 编辑器右键 | 🟡 | 没有 Settings…、Export… |
-| Add Method Breakpoint | `dnSpy.Debugger.DotNet/Breakpoints/Code/TextEditor/ClassBreakpointCommands.cs` | RPC `setFunctionBreakpoints` | 🟡 | 按名称匹配，重载只绑一个 |
-| Add Class Breakpoint / Tracepoint | 同上 | `addClassBreakpoint` | 🟡 | 同上 |
-| 条件 | `Breakpoints/Code/CondChecker/DbgCodeBreakpointConditionChecker.cs` | `BreakpointSettingsDialog.tsx`、`CDS/CorDebugSession.BreakpointChecks.cs` | ✅ | 完整的 C#/VB 表达式，可以访问成员、调用方法；求值时进程原地挂起，命中在调度线程外判定 |
-| 命中计数 | `CondChecker/DbgCodeBreakpointHitCountChecker.cs` | `CDS/BreakpointBreakDecision.cs` | ✅ | |
-| 筛选器 | `CondChecker/DbgCodeBreakpointFilterChecker.cs` | `CDS/CorDebugSession.BreakpointChecks.cs` | ✅ | |
+| 行断点 | `Breakpoints/Code/TextEditor/GlyphMarginOperations.cs` | `toggleLineBreakpoint`、`CDS/CorDebugSession.Breakpoints.cs` | ✅ | 存 IL 位置；C#、VB、IL 视图都能下，按 `ToggleCreateBreakpoint` 的语义（全部启用则删除、否则启用） |
+| 启用 / 禁用 | `DbgUI/DocumentViewerCommands.cs` | 右键、Ctrl+F9、窗口复选框 | ✅ | |
+| 绑定状态 | `Breakpoints/Code/BoundCodeBreakpointsService.cs` | `breakpoint` 事件 | ✅ | 运行时拒绝偏移时退回顺序点；未绑定的显示警告/错误字形与提示 |
+| 断点字形外观 | `BreakpointGlyphTextMarkerHandler.cs`、`BreakpointImageUtilities.cs` | `FE/debugger-markers.ts` | ✅ | 普通、高级、跟踪点、警告、错误各自的 dnSpy 图像；语句按主题的断点标记着色 |
+| 边距右键与悬停工具条 | `GlyphMarginCommands.cs`、`BreakpointGlyphPopupControl` | `DocumentView.tsx`、`BreakpointGlyphPopup.tsx` | ✅ | Delete / Disable-Enable（Ctrl+F9）/ Settings… / Export…；悬停的设置与开关按钮、WPF 格式的提示 |
+| Add Method Breakpoint | `dnSpy.Debugger.DotNet/Breakpoints/Code/TextEditor/ClassBreakpointCommands.cs` | `addMethodBreakpoints`，RPC `debug/codeTargets` | ✅ | 按标记在方法开头下断点，重载各自独立；属性与事件按访问器；树、代码视图、分析器、搜索都有 |
+| Add Class Breakpoint / Tracepoint | 同上 | `addClassBreakpoint` | ✅ | 类型的每个有代码的方法；Tracepoint 先开设置对话框 |
+| 条件 | `Breakpoints/Code/CondChecker/DbgCodeBreakpointConditionChecker.cs` | `BreakpointSettingsDialog.tsx`、`CDS/CorDebugSession.BreakpointChecks.cs` | ✅ | 完整的 C#/VB 表达式；设置对话框照 WPF 的四行布局与帮助 |
+| 命中计数 | `CondChecker/DbgCodeBreakpointHitCountChecker.cs` | `CDS/BreakpointBreakDecision.cs` | ✅ | 窗口显示当前次数，Reset Hit Count |
+| 筛选器 | `CondChecker/DbgCodeBreakpointFilterChecker.cs` | `CDS/CorDebugSession.BreakpointChecks.cs` | ✅ | 对话框里即时校验（RPC `debug/verifyFilter`），无效时不能确定 |
 | 跟踪点消息 | `CondChecker/TracepointMessageParser.cs` | `CDS/TracepointMessage.cs` | ✅ | `{表达式}` 走求值器 |
-| 标签 | 设置对话框 | 设置对话框 | ✅ | |
+| 标签 | Breakpoints 窗口 | 窗口内就地编辑、多行时对话框 | ✅ | |
 | Enable / Disable / Delete All | `DebugMenuCommands.cs` | `MenuBar.tsx` | ✅ | |
-| Breakpoints 窗口 | `ToolWindows/CodeBreakpoints/*` | `BreakpointsPane` | 🟡 | 有搜索、标签与模块列、双击转到源代码、右键菜单；不是可排序的多列表格 |
-| 导入 / 导出 | `Breakpoints/Code/BreakpointsSerializer.cs` | 面板按钮 | 🟡 | JSON 格式，与 WPF 的 XML 不互通 |
+| Breakpoints 窗口 | `ToolWindows/CodeBreakpoints/*` | `BreakpointsWindow.tsx`、`FE/breakpoints-model.ts` | ✅ | 七列可排序表格（名称按 C# 格式化器与显示选项写）、搜索与高亮、工具栏、右键菜单（含 Go To Disassembly、Show… 选项）；另有按名称的函数断点输入行 |
+| 导入 / 导出 | `Breakpoints/Code/BreakpointsSerializer.cs` | `BE/WorkspaceManager.Breakpoints.cs`，RPC `breakpoints/export`、`breakpoints/import` | ✅ | WPF 的 XML 格式；导入时方法名对不上的行与动态/内存模块的行照 WPF 丢弃 |
 | 持久化 | 同上 | `dnspy.breakpoints.v1` | ✅ | |
 | 模块断点 | `Breakpoints/Modules/*` | `ModuleBreakpointsPane`，RPC `setModuleBreakpoints`，`CDS/CorDebugSession.ModuleBreakpoints.cs` | ✅ | 模块名、顺序、动态、内存、应用程序域、进程，名称支持通配符；持久化在 `dnspy.moduleBreakpoints.v1` |
-
-另新增：Breakpoints 面板可按名称输入函数断点。
 
 #### 异常设置
 
@@ -784,21 +791,21 @@
 | 首次机会 / 未处理异常中断 | CorDebug 异常回调 | `CDS/CorDebugSession.Exceptions.cs` | ✅ | 与 WPF 一样不理会 user-first-chance；遵守「忽略未处理异常」 |
 | MDA 类别 | `DotNet.ex.xml` | 列出但不会触发 | ⛔ | MDA 只存在于 .NET Framework |
 | 异常中断后的提示 | `DbgUI/DebuggerImpl.cs`、`ToolWindows/Logger/OutputLogger.cs` | Output、状态栏、Locals 的 `$exception` | ✅ | Output 按 OutputLogger 写「Exception thrown: 'X' in M」与 Additional information（读 `Exception._message`，不做 func-eval） |
-| 右键 Break When Exception Thrown | `dnSpy.Debugger.DotNet/Exceptions/BreakWhenThrownExceptionCommand.cs` | 隐藏 | ❌ | |
+| 右键 Break When Thrown | `dnSpy.Debugger.DotNet/Exceptions/BreakWhenThrownExceptionCommand.cs` | 树与代码视图右键，`breakWhenThrown` | ✅ | 只对派生自 `System.Exception` 的类型出现；已有的行打开首次机会中断，没有的按两种机会都中断加入 |
 
 #### 调试工具窗口
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Call Stack | `ToolWindows/CallStack/*` | `DebugToolWindows.tsx` 的 `CallStackPane`；`CDS/CorDebugSession.Stack.cs` 的 `StackFrameFormatter` | ✅ | 帧名按 `CSharpStackFrameFormatter` 着色书写（模块、返回类型、参数类型/名/值、IL 与本机偏移、标记、属性访问器、状态机与局部函数还原）；右键的 Copy、Switch To Frame、Go To Code/Disassembly、Run To Cursor 与十个显示开关；本机到托管的过渡帧；深帧的行号在切换时再解析 |
-| Threads | `ToolWindows/Threads/*` | `ThreadsPane`；`CDS/CorDebugSession.Threads.cs` | ✅ | ID、托管 ID、类别（Main/Finalizer/GC/ThreadPool/Worker）、名称、位置、优先级、关联掩码、挂起计数、进程、应用程序域、状态；冻结/解冻、重命名、切换。类别与优先级在 Linux 上取自 `/proc/<pid>/task` |
-| Modules | `ToolWindows/Modules/*` | `ModulesPane` | ✅ | WPF 的全部列；Go To Module、Open Module from Memory、Load All Modules、Save Module |
-| Processes | `ToolWindows/Processes/*` | `ProcessesPane` | ✅ | 只有一个会话，所以只有一行；Continue/Break/Detach/Terminate Process |
-| Memory 1–4 | `ToolWindows/Memory/*` | `DebugNativeWindows.tsx` 的 `MemoryPane`，RPC `readMemory`、`writeMemory` | 🟡 | 地址或表达式定位、按页读、不可读的页显示 `??`、双击改字节；不是完整的 hex 编辑器（没有选区、复制、查找） |
-| Disassembly | `Disassembly/*` | `DisassemblyPane`；`CDS/CorDebugSession.Native.cs`（Iced） | 🟡 | 按 Disassembler 选项与各方言 Code Style 输出，带 IL 与源码注释、标签、当前指令；是工具窗口而不是文档标签，不能在里面下断点。与 4.8 重复计入 |
+| Call Stack | `ToolWindows/CallStack/*` | `DebugToolWindows.tsx` 的 `CallStackPane`；`CDS/CorDebugSession.Stack.cs` 的 `StackFrameFormatter` | ✅ | 帧名按 `CSharpStackFrameFormatter` 着色书写；右键的 Copy、Switch To Frame、Go To Code/Disassembly、Run To Cursor、Unwind To This Frame（禁用，同 WPF）、Breakpoint（Insert Breakpoint/Tracepoint，已有时 Delete/Disable/Settings/Export，F9）与十个显示开关。弹出菜单没有子菜单，Breakpoint 子菜单的各项平铺成一组 |
+| Threads | `ToolWindows/Threads/*` | `ThreadsPane`；`CDS/CorDebugSession.Threads.cs` | ✅ | WPF 的全部列；列出所有进程的线程，多进程时有「进程」下拉框；冻结/解冻、重命名、切换（其他进程的线程先切换当前进程）。类别与优先级在 Linux 上取自 `/proc/<pid>/task` |
+| Modules | `ToolWindows/Modules/*` | `ModulesPane` | ✅ | WPF 的全部列；所有进程的模块与「进程」下拉框；Go To Module、Open Module from Memory、Load All Modules、Save Module |
+| Processes | `ToolWindows/Processes/*` | `ProcessesPane` | ✅ | 每个进程一行，当前进程带标记；双击切换当前进程；Continue/Break/Detach/Terminate Process、Detach When Debugging Stopped、Attach to Process。Linux 进程没有窗口标题，「标题」列为空 |
+| Memory 1–4 | `ToolWindows/Memory/*` | `DebugNativeWindows.tsx` 的 `MemoryPane`，`HexEditor.tsx` 的字节源模式，RPC `readMemory`、`writeMemory` | ✅ | 就是 hex 编辑器：光标、选区、改写、Copy/Paste Special、查找、Go to Offset（输入地址）、每行字节数与值格式，读 Memory 窗口自己的 hex 选项；不可读的页显示 `??`；右键的 Process 子菜单选进程。视图一次映射 16 MiB，滚动或光标到边缘、跳到范围外的地址时整体移动，可以走遍整个地址空间 |
+| Disassembly | `Disassembly/*` | `DisassemblyDocumentView`（文档标签）；`CDS/CorDebugSession.Native.cs`（Iced） | ✅ | 与 WPF 一样是以方法名命名的文档标签，按 Disassembler 选项与各方言 Code Style 输出，带 IL 与源码注释、标签、未优化提示；与 WPF 一样不能在里面下断点。Alt+8、Call Stack 与 Breakpoints 窗口的 Go To Disassembly 打开它。与 4.8 重复计入 |
 | Output：程序 stdout/stderr | `ToolWindows/Logger/OutputLogger.cs` | `output` 事件 | ✅ | 附加的进程不能重定向 |
 | Output：Debugger.Log | 同上 | `LogMessage` 回调 | ✅ | |
-| Output：模块、线程、进程消息与过滤开关 | `ToolWindows/Logger/Commands.cs` | Loaded / Unloaded、线程与进程退出码、异常 | 🟡 | 措辞同 OutputLogger；没有各类消息的过滤开关 |
+| Output：模块、线程、进程消息与过滤开关 | `ToolWindows/Logger/Commands.cs` | Debug 窗格右键的八个开关（`outputLogger` 设置） | ✅ | 异常、单步过滤、模块加载/卸载、进程/线程退出、程序输出、MDA；开始调试时按 ShowDebugOutputLog 切到 Debug 窗格 |
 
 #### 变量与表达式求值
 
@@ -810,12 +817,12 @@
 | Static Fields | `ToolWindows/StaticFields/*` | `StaticFieldsPane`，RPC `staticFields` | ✅ | |
 | 表达式求值（C#/VB） | `dnSpy/Roslyn/Roslyn.ExpressionCompiler`、`Evaluation/*` | `CDS/Evaluation/ExpressionCompiler.cs`、`OperationInterpreter.cs` | ✅ | 语言随调试器选项的 Language；有副作用的表达式在 Locals/Autos 里不自动求值 |
 | 编辑变量值 | Locals 的 EditValue | `setExpression` | ✅ | 双击或 F2，值是任意表达式 |
-| 属性求值、ToString、函数调用 | `dnSpy.Debugger.DotNet.CorDebug/Impl/Evaluation` | `CDS/CorDebugSession.FuncEval.cs`、`Evaluation/EvalRuntime.cs` | ✅ | 1 秒超时后 Abort；遵守「属性求值与函数调用」「ToString」选项 |
+| 属性求值、ToString、函数调用 | `dnSpy.Debugger.DotNet.CorDebug/Impl/Evaluation` | `CDS/CorDebugSession.FuncEval.cs`、`Evaluation/EvalRuntime.cs` | ✅ | 1 秒超时后 Abort；遵守「属性求值与函数调用」「ToString」选项；装箱的值按其值类型显示 |
 | DebuggerDisplay / DebuggerTypeProxy | `dnSpy.Debugger.DotNet/Evaluation/Engine/*` | `Evaluation/ValueFormatter.cs`、`ValueNodes.cs` | ✅ | 还有 DebuggerBrowsable、元组、KeyValuePair、Nullable |
 | Raw / Results / Dynamic View | `dnSpy/Roslyn/dnSpy.Roslyn/Debugger/ValueNodes/*` | `ValueNodes.cs` | ✅ | |
 | 十六进制显示 | 各窗口命令 | 各窗口右键的 Hexadecimal Display、Digit Separators | ✅ | 默认十六进制，与 WPF 相同 |
 | Make Object ID | `Evaluation/DbgObjectIdServiceImpl.cs` | `makeObjectId`、`deleteObjectId` | ✅ | 强句柄，`$N` 可在表达式里用 |
-| 显示返回值 | ShowReturnValues 设置 | `CDS/CorDebugSession.ReturnValues.cs` | 🟡 | 单步越过的调用在 Locals 里显示「X returned」并可用 `$ReturnValue`（`GetReturnValueLiveOffset` + `GetReturnValueForILOffset`）；返回结构体的调用不保留 |
+| 显示返回值 | ShowReturnValues 设置 | `CDS/CorDebugSession.ReturnValues.cs` | ✅ | 单步越过的调用在 Locals 里显示「X returned」并可用 `$ReturnValue`（`GetReturnValueLiveOffset` + `GetReturnValueForILOffset`）。返回结构体的调用没有：运行时对它回 `CORDBG_E_UNSUPPORTED`，WPF 同样没有 |
 
 #### 调试器选项
 
@@ -830,8 +837,8 @@
 | 忽略 Debugger.Break() | ✅ | |
 | 忽略未处理异常 | ✅ | |
 | 变量窗口显示选项 | ✅ | 隐藏编译器生成成员、遵守隐藏特性、排序与分组、原始局部变量、返回值、高亮变化的值、语法高亮 |
-| 焦点相关选项 | 🟡 | 中断时把窗口带到前台；「把焦点给被调试进程」在 Linux 上做不到 |
-| 重定向 GUI 程序的控制台输出 | 🟡 | Linux 程序不分 GUI/控制台子系统，总是重定向 |
+| 焦点相关选项 | ✅ | 中断时把窗口带到前台；「把焦点给被调试进程」照 `SwitchToDebuggedProcess` 在进程持续运行 1 秒后激活它的窗口（X11 下经 xdotool；Wayland 合成器不允许，无效果） |
+| 重定向 GUI 程序的控制台输出 | ✅ | 按 PE 头的子系统判断：GUI 程序（WinExe）只在选项打开时把输出写进 Output。WPF 给控制台程序开独立控制台，Linux 没有可给的控制台，控制台程序的输出总写进 Output |
 | 启用 MDA | ⛔ | 只存在于 .NET Framework |
 
 #### 运行时、平台与代码映射
@@ -839,15 +846,17 @@
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | Windows 反反调试（IsDebuggerPresent 等） | `DBG/dnSpy.Debugger/AntiAntiDebug/*` | 选项在，无实现 | ⛔ | Windows API，计划明确不支持 |
-| 阻止托管代码检测调试器 | `dnSpy.Debugger.DotNet.CorDebug/AntiAntiDebug/ManagedDebuggerHook.cs` | 选项在，无实现 | ❌ | 在 Linux CoreCLR 上同样有意义 |
-| 从内存打开模块 | `Code/GoToInMemoryModuleStatement.cs` | `saveModule`（按节还原文件布局）后打开 | ✅ | Modules 窗口的 Open Module from Memory 与 Go To Module |
-| 动态模块与 Reload All Method Bodies | `dnSpy.Debugger.DotNet/Metadata/Commands.cs` | 无 | ❌ | |
-| 反编译源码上的断点、单步、定位 | `dnSpy.Debugger.DotNet/Code/DbgMethodDebugInfoProvider.cs` | `BE/StatementIlRanges.cs`、`IDebugSymbolResolver` | ✅ | 只有 C# |
+| 阻止托管代码检测调试器 | `dnSpy.Debugger.DotNet.CorDebug/AntiAntiDebug/ManagedDebuggerHook.cs` | 选项在，无实现 | ⛔ | WPF 的钩子只挂在 .NET Framework 的 `clr.dll`（`ExportDbgNativeFunctionHook("clr.dll", …)`，限 Windows），CoreCLR 进程在 WPF 里同样不处理 |
+| 从内存打开模块 | `Code/GoToInMemoryModuleStatement.cs` | `openModuleFromMemory`，`saveModule`（按节还原文件布局） | ✅ | Modules 窗口的 Open Module from Memory 与 Go To Module；副本存于 `dnSpy-memory-modules/<pid>/<序号>/`，文件名即模块名，栈帧与断点按模块名对应到副本 |
+| 动态模块 | `dnSpy.Debugger.DotNet/Metadata/DynamicModuleDefDocument.cs`、`ClassLoader.cs` | `CDS/CorDebugSession.DynamicModules.cs` | 🟡 | 运行时为调试器保存的元数据（`IMetaDataTables2.GetMetaDataStorage`）加上进程内每个方法体（IL 前的胖头与其后的异常节）拼成 PE；类型加载时引擎发 `classLoaded`，下一次中断时重新读入。WPF 在原文档上增量加入新类型，这里是整个副本替换，开着的该模块标签会关闭 |
+| Reload All Method Bodies | `dnSpy.Debugger.DotNet/Metadata/Commands.cs` | 树与代码视图右键，`reloadMethodBodies` | ✅ | 只对从内存打开、进程仍在调试的模块出现；重新从进程读入并替换副本 |
+| 使用内存模块 | `DebuggerSettings.UseMemoryModules` | `openDebugModule` | ✅ | 打开时从进程内存读模块而不是磁盘文件；动态与内存模块总是如此 |
+| 反编译源码上的断点、单步、定位 | `dnSpy.Debugger.DotNet/Code/DbgMethodDebugInfoProvider.cs` | `BE/StatementIlRanges.cs`、`BE/VisualBasicConversion.cs`、`IDebugSymbolResolver` | ✅ | C#、VB、IL 视图都有语句表 |
 | 无 PDB 时变量名取自反编译器 | `Evaluation/DbgLocalsValueNodeProviderImpl.cs` | `GetVariableNamesAsync` | ✅ | |
 
 Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `libdbgshim.so` 并在缺失时按能力降级、按名称的函数断点。附加失败时没有 ptrace 权限诊断，只返回 HRESULT。
 
-测试：后端 `DebugEvaluationTests.cs`（求值局部变量、成员与运算符，func-eval 调属性与方法，十六进制与格式说明符，对象展开与改值，错误作为值，Locals、Autos、对象 ID、`$exception`，内存与反汇编，线程，Run to Cursor，Set Next Statement，模块断点，返回值）、`DebugSessionManagerTests.cs`（启动、Break kind、附加与分离、进程列表、单步、异常中断）、`BreakpointExpressionTests.cs`、`BreakpointBreakDecisionTests.cs`、`TracepointMessageTests.cs`、`ExceptionSettingsTests.cs`；前端 `DebugVariablesWindows.test.tsx`（着色、展开、改值、变化高亮、Watch 输入）、`app-store.test.ts` 的 debugger commands（分离与终止、改值、Watch、Set Next Statement、Run to Cursor、模块断点、OutputLogger 消息）、`DebugProgramDialog.test.tsx`（含启动选项记忆）、`ExceptionSettingsPane.test.tsx`、`BreakpointsPane.test.tsx`、`CodeEditorContextMenu.test.tsx`、`MenuBar.test.tsx`；e2e 覆盖断点、单步、帧切换、Locals、异常中断、断点持久化，以及 `--evaluate` 夹具上的 DebuggerDisplay、展开、改值、Watch 调用属性、Autos、Disassembly、Threads。Memory 窗口与 Processes 窗口只有后端测试。
+测试：后端 `DebugEvaluationTests.cs`（求值局部变量、成员与运算符，func-eval 调属性与方法，装箱值，十六进制与格式说明符，对象展开与改值，错误作为值，Locals、Autos、对象 ID、`$exception`，内存与反汇编，线程，Run to Cursor，Set Next Statement，模块断点，返回值）、`DebugSessionManagerTests.cs`（启动、Break kind、附加与分离、进程列表的各列、单步、Step Out 回到调用语句、跨 await 单步与回到等待者、异常中断、多进程时中断其余进程、动态模块保存为可读的 PE 并对应到工作区副本、`classLoaded`）、`BreakpointCommandsTests.cs`（方法/类断点目标、Break When Thrown、XML 断点文件往返）、`WorkspaceManagerTests.cs`（VB 文档的语句表）、`BreakpointExpressionTests.cs`、`BreakpointBreakDecisionTests.cs`、`TracepointMessageTests.cs`、`ExceptionSettingsTests.cs`；前端 `DebugVariablesWindows.test.tsx`、`app-store.test.ts`（debugger commands、断点种类与切换、方法/类断点、多进程的事件路由与 Continue/Stop、内存模块与 Reload All Method Bodies）、`BreakpointsPane.test.tsx`、`AttachDialog.test.tsx`、`MemoryPane.test.tsx`、`DebugToolWindows.test.tsx`（多进程的 Processes、Threads、Modules）、`ToolWindows.test.tsx`（Output 的过滤开关）、`DebugProgramDialog.test.tsx`、`ExceptionSettingsPane.test.tsx`、`CodeEditorContextMenu.test.tsx`、`MenuBar.test.tsx`、`MAIN/focus-process.test.ts`；e2e 覆盖断点（边距、Debug 菜单、方法/类断点与跟踪点、字形菜单、持久化）、单步、帧切换与调用返回标记、Locals、异常中断，以及 `--evaluate` 夹具上的 DebuggerDisplay、展开、改值、Watch 调用属性、Autos、Disassembly 标签、Threads。多进程的界面、Attach 对话框、Memory 窗口与 Output 的过滤开关只有单测，没有 e2e。
 
 ### 4.14 C# 交互窗口（Scripting）
 
@@ -1025,16 +1034,18 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-2026-10-19 程序集编辑与元数据/PE 视图补齐后在本机重新跑过（后端与前端都是真实构建：`dotnet build dnSpy.Backend.Host`、`pnpm build`）：
+2026-10-20 调试器补齐后在本机重新跑过（后端与前端都是真实构建：`dotnet build dnSpy.Backend.Host`、`pnpm build`）：
 
 | 套件 | 结果 |
 |---|---|
-| 后端 `dotnet test` | 546 通过（程序集编辑补齐后；此前为 512、484、462、459、438、425、406、403、359） |
+| 后端 `dotnet test` | 556 通过（调试器补齐后；此前为 546、512、484、462、459、438、425、406、403、359）。连跑 10 次中有 2 次各失败一条：一次是 `ShowsThreadsAndTheirManagedFacts` 启动调试时 `DebugActiveProcess` 回 `CORDBG_E_TIMEOUT`（0x80131C08），另一次没有留下用例名；都是多个被调试进程并行启动时的偶发超时，重跑即过 |
 | 前端 `tsc --noEmit`（`tsconfig.json`、`tsconfig.node.json`） | 0 错误 |
-| 前端 vitest | 1369 通过（程序集编辑补齐后；此前为 1297、1279、1243、1225、1214、1201、1103、1095、1041） |
-| e2e（Playwright Electron） | 101 通过、3 跳过、0 失败（程序集编辑补齐后重跑；此前为 98） |
+| 前端 vitest | 1398 通过（调试器补齐后；此前为 1369、1297、1279、1243、1225、1214、1201、1103、1095、1041） |
+| e2e（Playwright Electron） | 101 通过、3 跳过、0 失败（调试器补齐后重跑） |
 
-这一轮改了 `Protocol.cs` 中间的记录（`EditCommitResponse` 加修改文档列表、`OpenedModule` 加 `InMemory`、`HexTargetResponse` 加两个范围等），e2e 钉死的标记随之变为 `get_Code @06000ABA`（`RpcException @0200008C` 未动）。删除类型与成员按 WPF 先询问，e2e 用 `DNSPY_E2E_ASK_ANSWER=first` 回答「是」；Save Module 窗口打开时是模块自己的文件，e2e 经「...」（`DNSPY_E2E_SAVE_PATH`）改成测试的副本。PE 结构节点改为表单后，`pe-structure.spec.ts` 原先断言文本与「没有 IL」的两条改为字段改写并撤销、元数据表格与 Go to MD Table Row。
+这一轮 `Protocol.cs` 只在文件末尾追加（调试目标、断点文件、异步单步信息、可附加进程、内存模块目录），e2e 钉死的 `get_Code @06000ABA`、`RpcException @0200008C` 没有移动。DebugTarget 夹具新增 `ZDynamicFixture.cs`（`--emit` 时在模块初始化器里用 Reflection.Emit 建模块后退出），它的类型排在 `Program @02000002` 之后，Program 的嵌套类型因此各后移一行，方法标记不变。e2e 里断点行的名称改为 Breakpoints 窗口按 C# 格式化器写的「方法 + IL 偏移」；Debug 菜单的 Toggle Breakpoint 改为按代码视图的光标；Disassembly 改为文档标签；字形边距的右键只在有断点时出现断点菜单；关上下文菜单的 Escape 要等焦点进了菜单再按（并行跑时菜单晚一步取得焦点）。
+
+2026-10-19 程序集编辑与元数据/PE 视图补齐后的记录：后端 546、前端 vitest 1369、e2e 101 通过 3 跳过。这一轮改了 `Protocol.cs` 中间的记录（`EditCommitResponse` 加修改文档列表、`OpenedModule` 加 `InMemory`、`HexTargetResponse` 加两个范围等），e2e 钉死的标记随之变为 `get_Code @06000ABA`（`RpcException @0200008C` 未动）。删除类型与成员按 WPF 先询问，e2e 用 `DNSPY_E2E_ASK_ANSWER=first` 回答「是」；Save Module 窗口打开时是模块自己的文件，e2e 经「...」（`DNSPY_E2E_SAVE_PATH`）改成测试的副本。PE 结构节点改为表单后，`pe-structure.spec.ts` 原先断言文本与「没有 IL」的两条改为字段改写并撤销、元数据表格与 Go to MD Table Row。
 
 2026-10-18 程序集编辑补齐时的记录：
 
@@ -1048,7 +1059,7 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 覆盖较好的部分：元数据编辑对话框、签名与自定义特性编解码、搜索、分析器、程序集树（键盘、图标、最近文件、命令行、Reload、移除与撤销）、断点判定与跟踪点、异常设置、书签。
 
-明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause、附加对话框，以及 Memory 与 Processes 窗口的前端。应用壳里，`--settings-file` 与 `-p`/`-pn` 只有单测、没有 e2e，系统高对比度切换只在单测里模拟；窗口状态与关闭询问有单测，但没有 e2e。
+明显的测试盲区：反解码器选项是否生效（消费方在后端，尚无 DTO）、Monaco 编辑器功能（查找、悬停、折叠）、`JsonRpcServer` 的握手与分帧、方法体编辑器组件、调试器的 Pause；附加对话框、Memory 窗口、多进程的窗口与 Output 的过滤开关只有单测，没有 e2e（2026-10-20）。应用壳里，`--settings-file` 与 `-p`/`-pn` 只有单测、没有 e2e，系统高对比度切换只在单测里模拟；窗口状态与关闭询问有单测，但没有 e2e。
 
 ## 7. 与现有文档的出入
 

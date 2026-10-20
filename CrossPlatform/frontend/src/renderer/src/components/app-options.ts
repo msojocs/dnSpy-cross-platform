@@ -416,6 +416,33 @@ export interface BookmarkSettings {
   showIntrinsicTypeKeywords: boolean
 }
 
+/** dnSpy's DbgCodeBreakpointDisplaySettings: the Breakpoints window's Show... options, which its context menu switches
+ * and its Name column reads. */
+export interface BreakpointDisplaySettings {
+  showTokens: boolean
+  showModuleNames: boolean
+  showParameterTypes: boolean
+  showParameterNames: boolean
+  showDeclaringTypes: boolean
+  showNamespaces: boolean
+  showReturnTypes: boolean
+  showIntrinsicTypeKeywords: boolean
+}
+
+/** dnSpy's OutputLoggerSettings: which of the debugger's messages the Output window's Debug pane writes, switched from
+ * that pane's context menu, and whether starting to debug brings the pane forward. */
+export interface OutputLoggerSettings {
+  showExceptionMessages: boolean
+  showStepFilteringMessages: boolean
+  showModuleLoadMessages: boolean
+  showModuleUnloadMessages: boolean
+  showProcessExitMessages: boolean
+  showThreadExitMessages: boolean
+  showProgramOutputMessages: boolean
+  showMDAMessages: boolean
+  showDebugOutputLog: boolean
+}
+
 /** dnSpy's AnalyzerSettings, which only the analyzer's own context menu changes — there is no page for them. */
 export interface AnalyzerSettings {
   showToken: boolean
@@ -455,6 +482,8 @@ export interface AppOptions {
   hexEditor: Record<HexEditorView, HexEditorPaneOptions>
   backgroundImage: BackgroundImageSettings
   bookmarks: BookmarkSettings
+  breakpoints: BreakpointDisplaySettings
+  outputLogger: OutputLoggerSettings
   analyzer: AnalyzerSettings
   search: SearchSettings
   stringReferences: StringReferencesSettings
@@ -760,6 +789,27 @@ export const defaultAppOptions: AppOptions = {
     showReturnTypes: true,
     showNamespaces: false,
     showIntrinsicTypeKeywords: true,
+  },
+  breakpoints: {
+    showTokens: true,
+    showModuleNames: false,
+    showParameterTypes: true,
+    showParameterNames: true,
+    showDeclaringTypes: true,
+    showNamespaces: false,
+    showReturnTypes: true,
+    showIntrinsicTypeKeywords: true,
+  },
+  outputLogger: {
+    showExceptionMessages: true,
+    showStepFilteringMessages: true,
+    showModuleLoadMessages: true,
+    showModuleUnloadMessages: true,
+    showProcessExitMessages: true,
+    showThreadExitMessages: true,
+    showProgramOutputMessages: true,
+    showMDAMessages: true,
+    showDebugOutputLog: true,
   },
   analyzer: {
     showToken: true,

@@ -6,9 +6,10 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 // spans themselves, so it is asked of them rather than decided here.
 import { isLocalSpan, isNavigableSpan, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { ilSelectionOf } from './il-selection'
-import { bookmarkMarkers, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointMarkers, useAppStore } from '../app-store'
+import { bookmarkMarkers, breakpointPositionInDocument, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointsAt, memoryModulePathOf, statementOfLocation, useAppStore } from '../app-store'
+import { breakpointDecorations, callStackDecorations } from '../debugger-markers'
 import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
-import type { Bookmark, BookmarkDocument, HexBodyKind, LineBreakpoint } from '../app-store'
+import type { Bookmark, BookmarkDocument, HexBodyKind, MethodBreakpointTarget } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
@@ -21,33 +22,13 @@ import {
 import { copyWithFormatting } from '../document-clipboard'
 import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
 import { DsIcon } from './DsIcon'
+import { BreakpointGlyphPopup, breakpointToolTip, toolTipMethodText } from './BreakpointGlyphPopup'
+import { showDebugMenu } from './DebugToolWindows'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
 import { GoToLineDialog } from './EditDialogs'
 import { useAppOptions, type BlockStructureLineKind } from './app-options'
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './document-viewer-options'
 import type { CreatedKind, HexShowKind } from './edit-menu'
-
-// One decoration per breakpoint that has a line in this document. A disabled breakpoint keeps its dot but draws it
-// hollow; one the engine has not bound (module not loaded yet, or no sequence point at that offset) draws it grey.
-const breakpointDecorations = (
-  nodeId: string,
-  statements: CodeStatement[] | undefined,
-  breakpoints: LineBreakpoint[],
-  translate: (message: string) => string,
-): MonacoEditor.IModelDeltaDecoration[] =>
-  lineBreakpointMarkers(nodeId, statements, breakpoints).map((marker) => ({
-    range: { startLineNumber: marker.line, startColumn: 1, endLineNumber: marker.line, endColumn: 1 },
-    options: {
-      glyphMarginClassName: !marker.enabled ? 'breakpoint-glyph-disabled' : marker.state === 'unbound' ? 'breakpoint-glyph-unbound' : 'breakpoint-glyph',
-      hoverMessage: {
-        value: [
-          marker.description ?? '',
-          marker.enabled ? translate('Enabled') : translate('Disabled'),
-          marker.state === 'bound' ? '' : marker.message ?? (marker.state === 'pending' ? translate('Module not loaded yet.') : ''),
-        ].filter(Boolean).join('\n'),
-      },
-    },
-  }))
 
 // A bookmark draws in the lines-decorations strip rather than the glyph margin, which the breakpoints
 // already own: a bookmark and a breakpoint on the same line then sit side by side instead of on top of
@@ -149,8 +130,8 @@ export interface DocumentViewCommands {
   onReplaceMethodBodyWithStub(node: TreeNode): void
   onAnalyze(node: TreeNode): void
   /** dnSpy's class breakpoint and class tracepoint for the type a reference names. */
-  onAddClassBreakpoint(node: TreeNode): void
-  onAddClassTracepoint(node: TreeNode): void
+  onAddClassBreakpoint(target: MethodBreakpointTarget): void
+  onAddClassTracepoint(target: MethodBreakpointTarget): void
   /** Analyzes a reference into a module the workspace does not hold, opening that module to do it. */
   onAnalyzeReference(target: TextSpan): void
   /** Opens an address in the browser, which is how the menu's "Search MSDN" runs. */
@@ -222,6 +203,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const caretReveal = useAppStore((state) => state.caretReveal)
   const toggleLineBreakpoint = useAppStore((state) => state.toggleLineBreakpoint)
   const stoppedLocation = useAppStore((state) => state.stoppedLocation)
+  const debugFrames = useAppStore((state) => state.debugFrames)
+  const activeDebugFrameId = useAppStore((state) => state.activeDebugFrameId)
+  const debugState = useAppStore((state) => state.debugState)
   const activeDocumentId = useAppStore((state) => state.activeDocumentId)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | undefined>(undefined)
   const monacoRef = useRef<typeof import('monaco-editor') | undefined>(undefined)
@@ -239,6 +223,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const incrementalRef = useRef<{ forward: boolean; text: string; start: number } | undefined>(undefined)
   // dnSpy's Go to Line box, with the line the caret was on when it was asked for.
   const [goToLine, setGoToLine] = useState<{ currentLine: number; lineCount: number } | undefined>(undefined)
+  // The tool bar and tool tip of the breakpoint glyph the mouse rests on (BreakpointGlyphPopupControl).
+  const [glyphPopup, setGlyphPopup] = useState<{ breakpointId: string; line: number; left: number; top: number; lineHeight: number; toolTip: string; fading: boolean }>()
+  const glyphTimersRef = useRef<{ show?: ReturnType<typeof setTimeout>; hide?: ReturnType<typeof setTimeout>; close?: ReturnType<typeof setTimeout>; line?: number }>({})
   // The stopped-location request whose line this view already moved the caret to.
   const revealedTokenRef = useRef(0)
   // The caret request — a bookmark's, the analyzer's — this view already carried out.
@@ -278,6 +265,100 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   bookmarksRef.current = bookmarks
   toggleLineBreakpointRef.current = toggleLineBreakpoint
   advancedRef.current = advanced
+
+  const clearGlyphTimers = (): void => {
+    const timers = glyphTimersRef.current
+    clearTimeout(timers.show)
+    clearTimeout(timers.hide)
+    clearTimeout(timers.close)
+    timers.show = timers.hide = timers.close = undefined
+  }
+
+  // The popup goes when the mouse has been away from the margin and the tool bar for a second, fading over another.
+  const leaveGlyph = (): void => {
+    const timers = glyphTimersRef.current
+    clearTimeout(timers.show)
+    timers.show = undefined
+    timers.line = undefined
+    if (timers.hide || timers.close)
+      return
+    timers.hide = setTimeout(() => {
+      timers.hide = undefined
+      setGlyphPopup((current) => current && { ...current, fading: true, toolTip: '' })
+      timers.close = setTimeout(() => {
+        timers.close = undefined
+        setGlyphPopup(undefined)
+      }, 1000)
+    }, 1000)
+  }
+
+  const enterGlyphPopup = (): void => {
+    const timers = glyphTimersRef.current
+    clearTimeout(timers.hide)
+    clearTimeout(timers.close)
+    timers.hide = timers.close = undefined
+    setGlyphPopup((current) => current && { ...current, fading: false })
+  }
+
+  // After the mouse has rested on a breakpoint's glyph for 150 ms its tool bar and tool tip come up.
+  const hoverGlyph = (line: number): void => {
+    const editor = editorRef.current
+    const timers = glyphTimersRef.current
+    const breakpoint = lineBreakpointAt(documentId, statementsRef.current, breakpointsRef.current, line)
+    if (!editor || !breakpoint) {
+      leaveGlyph()
+      return
+    }
+    clearTimeout(timers.hide)
+    clearTimeout(timers.close)
+    timers.hide = timers.close = undefined
+    if (timers.line === line)
+      return
+    timers.line = line
+    clearTimeout(timers.show)
+    timers.show = setTimeout(() => {
+      timers.show = undefined
+      const layout = editor.getLayoutInfo()
+      const top = editor.getTopForLineNumber(line) - editor.getScrollTop()
+      const lineHeight = editor.getOption(monacoRef.current!.editor.EditorOption.lineHeight)
+      const position = breakpointPositionInDocument(documentId, statementsRef.current, breakpoint) ?? { line, column: 1 }
+      const debugging = useAppStore.getState().debugState !== 'inactive'
+      const toolTip = (method?: string): string => breakpointToolTip(breakpoint, position, method, debugging, tRef.current)
+      setGlyphPopup({ breakpointId: breakpoint.id, line, left: layout.glyphMarginLeft + layout.glyphMarginWidth - 1, top, lineHeight, toolTip: toolTip(breakpoint.description), fading: false })
+      // The method as dnSpy's decompiler writes it with its default options.
+      if (breakpoint.modulePath && breakpoint.metadataToken !== undefined) {
+        void window.dnSpy.formatBookmarkLocations?.(useAppStore.getState().workspaceId, [{ modulePath: breakpoint.modulePath, metadataToken: breakpoint.metadataToken, ilOffset: null }], {
+          showTokens: false, showModuleNames: false, showParameterTypes: true, showParameterNames: true, showDeclaringTypes: true, showReturnTypes: true, showNamespaces: false, showIntrinsicTypeKeywords: true,
+        }).then(([written]) => {
+          if (written?.resolved)
+            setGlyphPopup((current) => current?.breakpointId === breakpoint.id && current.toolTip ? { ...current, toolTip: toolTip(toolTipMethodText(written.parts)) } : current)
+        }, () => undefined)
+      }
+    }, 150)
+  }
+  const hoverGlyphRef = useRef(hoverGlyph)
+  hoverGlyphRef.current = hoverGlyph
+  const leaveGlyphRef = useRef(leaveGlyph)
+  leaveGlyphRef.current = leaveGlyph
+
+  // GlyphMarginCommands: the margin's menu over a breakpoint's glyph — and none anywhere else in the margin.
+  const openGlyphMarginMenu = (line: number, screen: { x: number; y: number }): void => {
+    const breakpoint = lineBreakpointAt(documentId, statementsRef.current, breakpointsRef.current, line)
+    if (!breakpoint)
+      return
+    const store = useAppStore.getState()
+    const t = tRef.current
+    showDebugMenu(t('Breakpoint'), [
+      { key: 'delete', label: t('Delete Breakpoint'), icon: 'CheckDot', run: () => void store.removeBreakpoints([breakpoint.id]) },
+      { key: 'toggle', label: breakpoint.enabled ? t('Disable Breakpoint') : t('Enable Breakpoint'), icon: 'ToggleAllBreakpoints', shortcut: 'Ctrl+F9', run: () => void store.setBreakpointsEnabled([breakpoint.id], !breakpoint.enabled) },
+      null,
+      { key: 'settings', label: t('Settings...'), icon: 'Settings', run: () => store.editBreakpointSettings([breakpoint.id]) },
+      null,
+      { key: 'export', label: t('Export...'), icon: 'Open', run: () => void store.exportBreakpoints([breakpoint.id]) },
+    ], screen)
+  }
+  const openGlyphMarginMenuRef = useRef(openGlyphMarginMenu)
+  openGlyphMarginMenuRef.current = openGlyphMarginMenu
 
   // Puts the caret on the stopped line and scrolls it into view. This lives apart from the effect below
   // because the layout change that gives the scroll somewhere to go arrives after the effect has run.
@@ -559,7 +640,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     // the tree lists a member only once its type has been expanded, and dnSpy's commands act on whatever the
     // reference is, not on what the tree happens to show. So are the document's module's entry point and
     // global constructor, which the token group offers only when the module has them.
-    const [referenceNode, readsResource, documentNode, entryPoint, globalCctor] = await Promise.all([
+    // The debugger commands' targets for the reference: what dnSpy's ClassBreakpointCommands and Break When Thrown
+    // resolve the TextReference to, which only the backend can say.
+    const debugReference = memberSpan?.targetNodeId
+      ? { nodeId: memberSpan.targetNodeId }
+      : memberSpan?.targetModulePath && memberSpan.targetMetadataToken !== undefined
+        ? { modulePath: memberSpan.targetModulePath, metadataToken: memberSpan.targetMetadataToken }
+        : undefined
+    const [referenceNode, readsResource, documentNode, entryPoint, globalCctor, , debugTargets] = await Promise.all([
       memberSpan?.targetNodeId ? referenceNodeOf(memberSpan.targetNodeId) : undefined,
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can tell
       // — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the rest.
@@ -568,11 +656,19 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       state0.workspaceId ? window.dnSpy.getSpecialNode(state0.workspaceId, current.nodeId, 'entryPoint').then((found) => Boolean(found.nodeId), () => false) : false,
       state0.workspaceId ? window.dnSpy.getSpecialNode(state0.workspaceId, current.nodeId, 'globalCctor').then((found) => Boolean(found.nodeId), () => false) : false,
       useAppStore.getState().setCodeCaret({ documentId, line, column }),
+      debugReference ? state0.debugCodeTargets([debugReference]) : Promise.resolve(undefined),
     ])
     const state = useAppStore.getState()
     const statements = statementsRef.current
     const statement = codeStatementAt(statements, line, column)
     const breakpoint = lineBreakpointAt(documentId, statements, breakpointsRef.current, line)
+    // dnSpy's breakpoints at the caret: the ones the statement under it has.
+    const breakpoints = statement
+      ? breakpointsRef.current.filter((candidate) => {
+        const position = breakpointPositionInDocument(documentId, statements, candidate)
+        return position?.line === statement.startLine && position.column === statement.startColumn
+      })
+      : []
     const selection = editor?.getSelection()
     const copyText = (text: string): void => {
       void navigator.clipboard.writeText(text).catch((error: unknown) => {
@@ -595,6 +691,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       statement,
       hasSelection: selection ? !selection.isEmpty() : false,
       breakpoint,
+      breakpoints,
+      debugTargets,
       selectionKind: state.selectedNode?.kind,
       // A code document is open in a viewer, which is what dnSpy's file command reads the file from.
       documentAvailable: true,
@@ -608,15 +706,19 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       onShowDisassembly: () => commandsRef.current.onShowDisassembly(),
       onToggleBreakpoint: () => void toggleLineBreakpointRef.current(documentId, line, column),
       onSetBreakpointEnabled: (enabled) => {
-        if (breakpoint)
-          void useAppStore.getState().setLineBreakpointEnabled(breakpoint.id, enabled)
+        const targets = breakpoints.length > 0 ? breakpoints : breakpoint ? [breakpoint] : []
+        if (targets.length > 0)
+          void useAppStore.getState().setBreakpointsEnabled(targets.map((candidate) => candidate.id), enabled)
       },
       onShowNextStatement: () => void useAppStore.getState().revealStoppedLocation(),
       onSetNextStatement: () => void useAppStore.getState().setNextStatement(),
       onRunToCursor: () => void useAppStore.getState().runToCursor(),
       onAddMethodBreakpoints: (targets) => void useAppStore.getState().addMethodBreakpoints(targets),
-      onAddClassBreakpoint: (node) => commandsRef.current.onAddClassBreakpoint(node),
-      onAddClassTracepoint: (node) => commandsRef.current.onAddClassTracepoint(node),
+      onAddClassBreakpoint: (target) => commandsRef.current.onAddClassBreakpoint(target),
+      onAddClassTracepoint: (target) => commandsRef.current.onAddClassTracepoint(target),
+      onBreakWhenThrown: (typeName) => void useAppStore.getState().breakWhenThrown(typeName),
+      // ReloadAllMethodBodiesCommand.CodeCommand acts on the tree's selected node, as dnSpy's does.
+      onReloadMethodBodies: state.selectedNode && memoryModulePathOf(state, state.selectedNode.id) ? () => { if (state.selectedNode) void useAppStore.getState().reloadMethodBodies(state.selectedNode.id) } : undefined,
       onDeleteNode: (node) => commandsRef.current.onDeleteNode(node),
       onEditNode: (node) => commandsRef.current.onEditNode(node),
       onCreateMember: (kind, nested, node) => commandsRef.current.onCreateMember(kind, nested, node),
@@ -720,8 +822,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   }, [advanced.showBlockStructure, advanced.blockStructureLineKind, document?.blockStructures, document?.text, zoom, tabs.tabSize, editorReady])
 
   useEffect(() => {
-    breakpointDecorationsRef.current?.set(breakpointDecorations(documentId, breakpointStatementsOf(document), lineBreakpoints, t))
-  }, [documentId, lineBreakpoints, document?.codeStatements, document?.language, document?.text, locale, editorReady])
+    breakpointDecorationsRef.current?.set(breakpointDecorations(documentId, breakpointStatementsOf(document), lineBreakpoints))
+  }, [documentId, lineBreakpoints, document?.codeStatements, document?.language, document?.text, editorReady])
 
   useEffect(() => {
     bookmarkDecorationsRef.current?.set(bookmarkDecorations(documentId, document, bookmarks, t))
@@ -769,22 +871,40 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     scrollToPendingCaret()
   }, [caretReveal, documentId, viewId, document?.text, document?.loading, editorReady])
 
-  // The line the active frame is stopped at, in the document that frame decompiles to. Stepping moves it one
-  // statement at a time, so the view follows it — otherwise the marker would advance off-screen and the step
-  // would look like nothing happened.
+  // The call stack's marks in this document — the current statement, the frame switched to, the other frames'
+  // statements — wherever the frames' code locations have a statement here, whatever language the view is in.
   useEffect(() => {
-    const line = stoppedLocation?.nodeId === documentId ? stoppedLocation.line : 0
-    stoppedDecorationsRef.current?.set(line > 0
-      ? [{
-          range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
-          options: {
-            isWholeLine: true,
-            className: 'debug-stopped-line',
-            glyphMarginClassName: 'debug-stopped-glyph',
-            hoverMessage: { value: `${t('Stopped here')}: ${stoppedLocation?.name ?? ''}` },
-          },
-        }]
-      : [])
+    const statements = document?.codeStatements
+    const frames = debugState === 'stopped'
+      ? debugFrames.filter((frame) => !frame.isInternal).map((frame, index) => ({
+        modulePath: frame.source?.path,
+        metadataToken: frame.metadataToken,
+        ilOffset: frame.ilOffset,
+        current: index === 0,
+        active: frame.id === activeDebugFrameId,
+      }))
+      : []
+    stoppedDecorationsRef.current?.set(callStackDecorations(statements, frames))
+  }, [debugFrames, activeDebugFrameId, debugState, document?.codeStatements, document?.text, editorReady])
+
+  // The line the active frame is stopped at, when it is in this document. Stepping moves it one statement at a
+  // time, so the view follows it — otherwise the marker would advance off-screen and the step would look like
+  // nothing happened.
+  useEffect(() => {
+    let line = 0
+    let column: number | undefined
+    if (stoppedLocation && stoppedLocation.modulePath !== undefined && stoppedLocation.metadataToken !== undefined && stoppedLocation.ilOffset !== undefined) {
+      const statement = statementOfLocation(document?.codeStatements, stoppedLocation.modulePath, stoppedLocation.metadataToken, stoppedLocation.ilOffset)
+      if (statement) {
+        line = statement.startLine
+        column = statement.startColumn
+      }
+    }
+    // A document without the frame's statements is only the frame's when the backend said so.
+    if (line <= 0 && stoppedLocation?.nodeId === documentId && document?.language === 'csharp') {
+      line = stoppedLocation.line
+      column = stoppedLocation.column
+    }
     if (line <= 0 || !stoppedLocation) {
       pendingRevealRef.current = undefined
       return
@@ -800,14 +920,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     // nothing pending, so the repeats cost nothing.
     if (revealedTokenRef.current !== stoppedLocation.token) {
       revealedTokenRef.current = stoppedLocation.token
-      pendingRevealRef.current = { line, column: stoppedLocation.column }
+      pendingRevealRef.current = { line, column }
       // A step scrolls but leaves the keyboard where the user put it; a frame switch or Show Next
       // Statement is a navigation, and there the caret follows into the editor.
       if (stoppedLocation.caret)
         editorRef.current?.focus()
     }
     applyPendingReveal()
-  }, [documentId, stoppedLocation, activeDocumentId, document?.text, locale, editorReady])
+  }, [documentId, stoppedLocation, activeDocumentId, document?.text, document?.codeStatements, editorReady])
 
   // The Text Editor category of Environment › Font, in the theme in use, scaled by the viewers' zoom.
   const { fontFamily: editorFontFamily, fontSize: baseFontSize } = useCategoryFont('textEditor')
@@ -938,6 +1058,10 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
 
               // Save scroll position changes
               editor.onDidScrollChange(() => {
+                // The popup belongs to a line; a scroll takes the line away from under it.
+                clearGlyphTimers()
+                glyphTimersRef.current.line = undefined
+                setGlyphPopup(undefined)
                 const position = editor.getPosition()
                 if (position) {
                   useAppStore.getState().updateDocumentEditorState(
@@ -969,7 +1093,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               highlightDecorationsRef.current = editor.createDecorationsCollection()
               separatorDecorationsRef.current = editor.createDecorationsCollection()
               breakpointDecorationsRef.current = editor.createDecorationsCollection()
-              breakpointDecorationsRef.current.set(breakpointDecorations(documentId, statementsRef.current, breakpointsRef.current, tRef.current))
+              breakpointDecorationsRef.current.set(breakpointDecorations(documentId, statementsRef.current, breakpointsRef.current))
               bookmarkDecorationsRef.current = editor.createDecorationsCollection()
               bookmarkDecorationsRef.current.set(bookmarkDecorations(documentId, documentRef.current, bookmarksRef.current, tRef.current))
               stoppedDecorationsRef.current = editor.createDecorationsCollection()
@@ -1148,6 +1272,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 if (position)
                   void toggleLineBreakpointRef.current(documentId, position.lineNumber, position.column)
               })
+              // dnSpy's Ctrl+F9, ToggleEnableBreakpoint: the breakpoints on the caret's line are disabled when all of
+              // them are enabled, and enabled otherwise.
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F9, () => {
+                const position = editor.getPosition()
+                const onLine = position ? lineBreakpointsAt(documentId, statementsRef.current, breakpointsRef.current, position.lineNumber) : []
+                if (onLine.length > 0)
+                  void useAppStore.getState().setBreakpointsEnabled(onLine.map((breakpoint) => breakpoint.id), !onLine.every((breakpoint) => breakpoint.enabled))
+              })
               // The right button puts the caret where it lands, as dnSpy's `OnMouseRightButtonDown` does —
               // unless it lands inside the selection, which then stays for the menu's Copy to act on.
               const placeCaretForMenu = (position: { lineNumber: number; column: number }): void => {
@@ -1167,6 +1299,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               // wherever the caret happened to be.
               editor.onContextMenu((event) => {
                 const screen = { x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY }
+                if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+                  event.event.preventDefault()
+                  event.event.stopPropagation()
+                  rightPress = undefined
+                  if (event.target.position)
+                    openGlyphMarginMenuRef.current(event.target.position.lineNumber, screen)
+                  return
+                }
                 const press = rightPress
                 rightPress = undefined
                 const pressed = press && Math.abs(press.x - screen.x) <= 2 && Math.abs(press.y - screen.y) <= 2 ? press.position : undefined
@@ -1250,6 +1390,13 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 const span = onReference ? spanAtClick(spansRef.current, offset) ?? spanAtClick(spansRef.current, offset - 1) : undefined
                 leftPress = { lineNumber: position.lineNumber, column: position.column, span, ctrl: browserEvent.ctrlKey }
               })
+              editor.onMouseMove((event) => {
+                if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position)
+                  hoverGlyphRef.current(event.target.position.lineNumber)
+                else
+                  leaveGlyphRef.current()
+              })
+              editor.onMouseLeave(() => leaveGlyphRef.current())
               editor.onMouseUp((event) => {
                 const press = leftPress
                 leftPress = undefined
@@ -1269,6 +1416,23 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
             options={editorOptions}
           />
         )}
+        {glyphPopup && (() => {
+          const breakpoint = lineBreakpoints.find((candidate) => candidate.id === glyphPopup.breakpointId)
+          return breakpoint ? (
+            <BreakpointGlyphPopup
+              breakpoint={breakpoint}
+              left={glyphPopup.left}
+              top={glyphPopup.top}
+              lineHeight={glyphPopup.lineHeight}
+              toolTip={glyphPopup.toolTip}
+              fading={glyphPopup.fading}
+              onEnter={enterGlyphPopup}
+              onLeave={leaveGlyph}
+              onSettings={() => { clearGlyphTimers(); setGlyphPopup(undefined); useAppStore.getState().editBreakpointSettings([breakpoint.id]) }}
+              onToggle={() => { clearGlyphTimers(); setGlyphPopup(undefined); void useAppStore.getState().setBreakpointsEnabled([breakpoint.id], !breakpoint.enabled) }}
+            />
+          ) : null
+        })()}
       </div>
       {goToLine && (
         <GoToLineDialog

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import type { ResourceCreateKind, TreeNode } from '../../../shared/protocol'
+import type { DebugCodeTargets, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import type { MethodBreakpointTarget } from '../app-store'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { compilerCommandLanguage } from './compiler-language'
@@ -71,9 +71,9 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
    */
   onMergeAssembly?(node: TreeNode): void
   /** Adds a breakpoint for every method of a type — dnSpy's "Add Class Breakpoint". */
-  onAddClassBreakpoint?(node: TreeNode): void
+  onAddClassBreakpoint?(target: MethodBreakpointTarget): void
   /** Asks for the settings of a tracepoint, then puts one on every method of a type — "Add Class Tracepoint". */
-  onAddClassTracepoint?(node: TreeNode): void
+  onAddClassTracepoint?(target: MethodBreakpointTarget): void
   onLoadDependencies?(node: TreeNode, recursive: boolean): void
   onGoToEntryPoint?(node: TreeNode): void
   onGoToGlobalCctor?(node: TreeNode): void
@@ -148,6 +148,13 @@ export interface AssemblyExplorerMenuContext extends AssemblyExplorerCommands, H
    * judged by their kind alone.
    */
   analyzeTargets?: TreeNode[]
+  /** What the selection gives the debugger commands — the methods of Add Method Breakpoint, the type of the class
+   *  commands and the exception of Break When Thrown — which the backend answered before the menu opened. */
+  debugTargets?: DebugCodeTargets
+  /** dnSpy's "Break When Thrown" for the exception type the row names, by its reflection name. */
+  onBreakWhenThrown?(typeName: string): void
+  /** dnSpy's Reload All Method Bodies, present when the row's module was read out of a process being debugged. */
+  onReloadMethodBodies?(): void
 }
 
 type AsmMenuIcon = (ctx: AssemblyExplorerMenuContext) => ReactNode
@@ -499,10 +506,15 @@ const ASM_ENTRIES: AsmMenuEntry[] = [
   // Exception Thrown" stays hidden: it is dnSpy's shortcut for adding a definition to the Exception
   // Settings window, which this port reaches from that window instead — the tree row carries no base-type
   // chain to tell an exception type from any other, which is the check dnSpy's CanExecute makes.
-  { group: GROUP_DEBUG, order: 0, key: 'break-when-exception-thrown', icon: image('Add'), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
-  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => kindIs('type')(ctx) && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => ctx.onAddClassBreakpoint?.(ctx.node) },
-  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => kindIs('type')(ctx) && ctx.onAddClassTracepoint !== undefined, run: (ctx) => ctx.onAddClassTracepoint?.(ctx.node) },
-  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => isMethodBreakpointTarget(ctx) && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => ctx.onAddMethodBreakpoints?.([ctx.node]) },
+  // ClassBreakpointCommands and BreakWhenThrownExceptionCommand read the selected rows' references, which the backend
+  // resolved: the class commands the first one's type, the method command every method they collect, and Break When
+  // Thrown the one row's exception type.
+  // GROUP_CTX_DOCUMENTS_DEBUGRT, which shares its 9000 with the hex group and comes first in it.
+  { group: GROUP_HEX, order: -1, key: 'reload-method-bodies', icon: image('Refresh'), label: (ctx) => ctx.t('Reload All Method Bodies'), visible: (ctx) => ctx.onReloadMethodBodies !== undefined, run: (ctx) => ctx.onReloadMethodBodies?.() },
+  { group: GROUP_DEBUG, order: 0, key: 'break-when-exception-thrown', icon: image('Add'), label: (ctx) => ctx.t('Break When Thrown'), visible: (ctx) => !!ctx.debugTargets?.exceptionTypeName && ctx.onBreakWhenThrown !== undefined, run: (ctx) => { if (ctx.debugTargets?.exceptionTypeName) ctx.onBreakWhenThrown?.(ctx.debugTargets.exceptionTypeName) } },
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => (ctx.debugTargets ? !!ctx.debugTargets.typeMethods : kindIs('type')(ctx)) && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => ctx.onAddClassBreakpoint?.(ctx.selection?.[0] ?? ctx.node) },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => (ctx.debugTargets ? !!ctx.debugTargets.typeMethods : kindIs('type')(ctx)) && ctx.onAddClassTracepoint !== undefined, run: (ctx) => ctx.onAddClassTracepoint?.(ctx.selection?.[0] ?? ctx.node) },
+  { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => (ctx.debugTargets ? ctx.debugTargets.methods.length > 0 : isMethodBreakpointTarget(ctx)) && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => ctx.onAddMethodBreakpoints?.(ctx.selection?.length ? ctx.selection : [ctx.node]) },
 
   // 11000 — Other (GROUP_CTX_DOCUMENTS_OTHER). "Find String References in Module" is dnSpy's string
   // searcher: it shows for any selection with a row in a .NET module (DocumentsCommand's GetModule), and

@@ -163,6 +163,11 @@ internal sealed class EvalRuntime {
 				scalar = new ScalarValue(type, ValueReader.DecodePrimitive(element, ValueReader.ReadBytes(target)));
 				return true;
 			}
+			// A primitive read through a box is a value class to the runtime, though its bytes are the primitive's.
+			if (element is CorElementType.VALUETYPE && ValueReader.ElementTypeOf(type.SpecialType) is var primitive && primitive is not (CorElementType.CLASS or CorElementType.STRING)) {
+				scalar = new ScalarValue(Special(type.SpecialType), ValueReader.DecodePrimitive(primitive, ValueReader.ReadBytes(target)));
+				return true;
+			}
 			if (type.SpecialType == SpecialType.System_Decimal) {
 				scalar = new ScalarValue(type, ValueReader.DecimalFromBytes(ValueReader.ReadBytes(target)));
 				return true;
@@ -394,7 +399,8 @@ internal sealed class EvalRuntime {
 				return value;
 			}
 			case PreparedValue.Struct structure:
-				return structure.Value.Ref.Get();
+				// A struct is passed as itself: a boxed one is opened to the value inside the box.
+				return structure.Value.Object;
 			default:
 				throw new InvalidOperationException();
 		}

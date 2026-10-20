@@ -389,6 +389,42 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		Assert.InRange(returnStatement.IlEndOffset, returnStatement.IlOffset + 1, end);
 	}
 
+	/// <summary>
+	/// The Visual Basic view carries the C# statements over — dnSpy's Visual Basic decompiler writes its statements
+	/// with their IL too — and a member's document is the member itself, not an empty type.
+	/// </summary>
+	[Fact]
+	public async Task VisualBasicDocument_CarriesTheStatementsOfTheCSharpOne() {
+		var path = Path.Combine(AppContext.BaseDirectory, "DebugTarget.dll");
+		var opened = await manager.OpenAsync(new OpenWorkspaceRequest([path]), TestContext.Current.CancellationToken);
+		var program = await FindTypeAsync(opened.WorkspaceId, "DebugTarget", "Program");
+		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, program.Id), TestContext.Current.CancellationToken);
+		var calculateNode = Assert.Single(members.Nodes, node => node.Label.StartsWith("Calculate(", StringComparison.Ordinal));
+		var csharp = await manager.DecompileAsync(new DecompileRequest(opened.WorkspaceId, calculateNode.Id, DecompilerLanguage.CSharp), TestContext.Current.CancellationToken);
+		var visualBasic = await manager.DecompileAsync(new DecompileRequest(opened.WorkspaceId, calculateNode.Id, DecompilerLanguage.VisualBasic), TestContext.Current.CancellationToken);
+
+		Assert.Equal("visual-basic", visualBasic.Language);
+		Assert.Contains("Function Calculate(", visualBasic.Text, StringComparison.Ordinal);
+		Assert.DoesNotContain("SurroundingClass", visualBasic.Text, StringComparison.Ordinal);
+		Assert.DoesNotContain("dnSpyStatement", visualBasic.Text, StringComparison.Ordinal);
+		Assert.DoesNotContain("DnSpyMemberHost", visualBasic.Text, StringComparison.Ordinal);
+		var lines = visualBasic.Text.Split('\n');
+		var statements = (visualBasic.CodeStatements ?? []).Where(statement => !statement.IsHidden).ToArray();
+		Assert.NotEmpty(statements);
+		// Every C# statement of the body is somewhere in the Visual Basic text, with the IL it had.
+		var csharpOffsets = (csharp.CodeStatements ?? []).Where(statement => !statement.IsHidden).Select(statement => statement.IlOffset).Order().ToArray();
+		Assert.Equal(csharpOffsets, statements.Select(statement => statement.IlOffset).Order().ToArray());
+		string LineText(CodeStatementDto statement) => lines[statement.StartLine - 1];
+		var returnOffset = Assert.Single(csharp.CodeStatements!, statement => !statement.IsHidden && statement.StartLine == LineOf(csharp.Text, "return num;")).IlOffset;
+		Assert.Contains("Return ", LineText(Assert.Single(statements, statement => statement.IlOffset == returnOffset)), StringComparison.Ordinal);
+		var sumOffset = Assert.Single(csharp.CodeStatements!, statement => !statement.IsHidden && statement.StartLine == LineOf(csharp.Text, "num += left;")).IlOffset;
+		Assert.Contains("num += left", LineText(Assert.Single(statements, statement => statement.IlOffset == sumOffset)), StringComparison.Ordinal);
+		// The loop's parts have no statement of their own in Visual Basic: they are the For line's.
+		var loopOffsets = csharp.CodeStatements!.Where(statement => !statement.IsHidden && statement.StartLine == LineOf(csharp.Text, "for (")).Select(statement => statement.IlOffset).ToArray();
+		Assert.NotEmpty(loopOffsets);
+		Assert.All(loopOffsets, offset => Assert.Contains("For ", LineText(Assert.Single(statements, statement => statement.IlOffset == offset)), StringComparison.Ordinal));
+	}
+
 	/// <summary>The PDB's sequence points for a method, in IL order.</summary>
 	static List<SequencePoint> ReadSequencePoints(string pdbPath, int methodToken) {
 		using var stream = File.OpenRead(pdbPath);

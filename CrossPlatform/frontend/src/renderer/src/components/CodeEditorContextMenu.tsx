@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
-import { isNavigableSpan, type CodeStatement, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { isNavigableSpan, type CodeStatement, type DebugCodeTargets, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { methodBreakpointName, type LineBreakpoint, type MethodBreakpointTarget } from '../app-store'
 import type { CreatedKind } from './edit-menu'
 import { hexMenuEntries, type HexMenuContext } from './hex-menu'
@@ -32,6 +32,13 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   hasSelection: boolean
   /** The breakpoint whose statement covers the caret line, if the line has one. */
   breakpoint?: LineBreakpoint
+  /** Every breakpoint at the statement under the caret — what dnSpy's ToggleCreateBreakpoint and
+   *  ToggleEnableBreakpoint act on as one. */
+  breakpoints?: LineBreakpoint[]
+  /** What the reference under the caret gives the debugger commands — the methods of Add Method Breakpoint, the
+   *  type of the class commands and the exception of Break When Thrown — which the backend answered before the
+   *  menu opened. */
+  debugTargets?: DebugCodeTargets
   debugState: DebugState
   /** A frame is stopped, which is what the commands that jump to the instruction pointer need. */
   stopped: boolean
@@ -63,8 +70,12 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   /** Breaks at the entry of the methods named — dnSpy's "Add Method Breakpoint", which only adds. */
   onAddMethodBreakpoints?(targets: MethodBreakpointTarget[]): void
   /** dnSpy's "Add Class Breakpoint" and "Add Class Tracepoint", for the type the reference names. */
-  onAddClassBreakpoint?(node: TreeNode): void
-  onAddClassTracepoint?(node: TreeNode): void
+  onAddClassBreakpoint?(target: MethodBreakpointTarget): void
+  onAddClassTracepoint?(target: MethodBreakpointTarget): void
+  /** dnSpy's "Break When Thrown" for the exception type the reference names, by its reflection name. */
+  onBreakWhenThrown?(typeName: string): void
+  /** dnSpy's Reload All Method Bodies, present when the tree's selected node is in a module read out of a process. */
+  onReloadMethodBodies?(): void
   onDeleteNode?(node: TreeNode): void
   onEditNode?(node: TreeNode): void
   onEditMethodBody?(node: TreeNode): void
@@ -123,6 +134,7 @@ const GROUP_ASMED_SETTINGS = 5000
 const GROUP_ASMED_ILED = 6000
 const GROUP_TOKENS = 7000
 const GROUP_HEX = 9000
+const GROUP_DEBUGRT = 13000
 const GROUP_OTHER = 14000
 const GROUP_EDITOR = 15000
 
@@ -187,13 +199,24 @@ const methodTarget = (ctx: CodeEditorMenuContext): TreeNode | undefined => {
  * event whose accessors it stands for — dnSpy's GetMethodReferences, which reads the TextReference at the
  * caret and nothing else. A caret on no reference, or on one to a type or a field, has no method to name.
  */
+const debugReferenceOf = (ctx: CodeEditorMenuContext): MethodBreakpointTarget | undefined => {
+  if (ctx.referenceNode)
+    return ctx.referenceNode
+  const target = ctx.referenceTarget
+  return target?.targetModulePath && target.targetMetadataToken !== undefined
+    ? { modulePath: target.targetModulePath, metadataToken: target.targetMetadataToken }
+    : undefined
+}
+
+/** What the method breakpoint command is for: the reference under the caret, when it names methods to collect —
+ *  ClassBreakpointCommands' GetMethods over the TextReference, which the backend answered. */
 const methodBreakpointTarget = (ctx: CodeEditorMenuContext): MethodBreakpointTarget | undefined =>
-  ctx.referenceNode && ['method', 'property', 'event'].includes(ctx.referenceNode.kind) ? ctx.referenceNode : undefined
+  (ctx.debugTargets?.methods.length ?? 0) > 0 ? debugReferenceOf(ctx) : undefined
 
 /** What the class breakpoint commands are for: the type the reference under the caret names — dnSpy's
  *  GetTypeRef, which resolves the reference to its definition. */
-const classBreakpointTarget = (ctx: CodeEditorMenuContext): TreeNode | undefined =>
-  ctx.referenceNode?.kind === 'type' ? ctx.referenceNode : undefined
+const classBreakpointTarget = (ctx: CodeEditorMenuContext): MethodBreakpointTarget | undefined =>
+  ctx.debugTargets?.typeMethods ? debugReferenceOf(ctx) : undefined
 
 /**
  * The token dnSpy's "Copy MD Token" writes: the reference's under the caret, a member of a module the
@@ -228,12 +251,20 @@ export const searchMsdnUrl = (fullName: string): string => {
 }
 
 /** dnSpy picks its breakpoint command's header from what the line already holds. */
-const toggleBreakpointLabel = (ctx: CodeEditorMenuContext): string =>
-  ctx.t(ctx.breakpoint ? 'Delete Breakpoint' : 'Add Breakpoint')
+/** dnSpy's ToggleCreateBreakpointKind: Add where there is no breakpoint, Delete where every one is enabled, and
+ *  Enable where one is not. */
+const toggleBreakpointLabel = (ctx: CodeEditorMenuContext): string => {
+  const breakpoints = ctx.breakpoints ?? (ctx.breakpoint ? [ctx.breakpoint] : [])
+  if (breakpoints.length === 0)
+    return ctx.t('Add Breakpoint')
+  return ctx.t(breakpoints.every((breakpoint) => breakpoint.enabled) ? 'Delete Breakpoint' : 'Enable Breakpoint')
+}
 
-/** The enable/disable pair is one entry upstream too: the header flips with the breakpoint's state. */
-const enableBreakpointLabel = (ctx: CodeEditorMenuContext): string =>
-  ctx.t(ctx.breakpoint?.enabled ? 'Disable Breakpoint' : 'Enable Breakpoint')
+/** dnSpy's ToggleEnableBreakpointKind: Disable when every breakpoint there is enabled, Enable otherwise. */
+const enableBreakpointLabel = (ctx: CodeEditorMenuContext): string => {
+  const breakpoints = ctx.breakpoints ?? (ctx.breakpoint ? [ctx.breakpoint] : [])
+  return ctx.t(breakpoints.length > 0 && breakpoints.every((breakpoint) => breakpoint.enabled) ? 'Disable Breakpoint' : 'Enable Breakpoint')
+}
 
 const deleteReference = (ctx: CodeEditorMenuContext): void => {
   if (ctx.referenceNode)
@@ -288,15 +319,16 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   { group: GROUP_DEBUG, order: 0, key: 'start-debugging', icon: image('Run'), label: (ctx) => ctx.t('Start Debugging...'), shortcut: 'F5', visible: (ctx) => ctx.canStartDebug && ctx.debugState === 'inactive' && ctx.onStartDebug !== undefined, run: (ctx) => ctx.onStartDebug?.() },
   // The header flips between Add and Delete exactly as dnSpy's `GetToggleCreateBreakpointKind` does.
   { group: GROUP_DEBUG, order: 10, key: 'toggle-breakpoint', icon: image('CheckDot'), label: toggleBreakpointLabel, shortcut: 'F9', visible: (ctx) => ctx.statement !== undefined && ctx.onToggleBreakpoint !== undefined, run: (ctx) => ctx.onToggleBreakpoint?.() },
-  { group: GROUP_DEBUG, order: 20, key: 'enable-breakpoint', icon: image('ToggleAllBreakpoints'), label: enableBreakpointLabel, shortcut: 'Ctrl+F9', visible: (ctx) => ctx.breakpoint !== undefined && ctx.onSetBreakpointEnabled !== undefined, run: (ctx) => ctx.onSetBreakpointEnabled?.(ctx.breakpoint?.enabled !== true) },
+  { group: GROUP_DEBUG, order: 20, key: 'enable-breakpoint', icon: image('ToggleAllBreakpoints'), label: enableBreakpointLabel, shortcut: 'Ctrl+F9', visible: (ctx) => (ctx.breakpoints?.length ?? (ctx.breakpoint ? 1 : 0)) > 0 && ctx.onSetBreakpointEnabled !== undefined, run: (ctx) => { const breakpoints = ctx.breakpoints ?? (ctx.breakpoint ? [ctx.breakpoint] : []); ctx.onSetBreakpointEnabled?.(!breakpoints.every((breakpoint) => breakpoint.enabled)) } },
   { group: GROUP_DEBUG, order: 30, key: 'show-next-statement', icon: image('GoToNext'), label: (ctx) => ctx.t('Show Next Statement'), shortcut: 'Alt + Numpad *', visible: (ctx) => ctx.stopped && ctx.onShowNextStatement !== undefined, run: (ctx) => ctx.onShowNextStatement?.() },
   { group: GROUP_DEBUG, order: 40, key: 'set-next-statement', icon: image('GoToNextInList'), label: (ctx) => ctx.t('Set Next Statement'), shortcut: 'Ctrl+Shift+F10', visible: (ctx) => ctx.stopped && ctx.statement !== undefined && ctx.onSetNextStatement !== undefined, run: (ctx) => ctx.onSetNextStatement?.() },
   { group: GROUP_DEBUG, order: 45, key: 'run-to-cursor', icon: image('Cursor'), label: (ctx) => ctx.t('Run To Cursor'), shortcut: 'Ctrl+F10', visible: (ctx) => ctx.stopped && ctx.statement !== undefined && ctx.onRunToCursor !== undefined, run: (ctx) => ctx.onRunToCursor?.() },
-  { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: image('DisassemblyWindow'), label: (ctx) => ctx.t('Go to Disassembly'), visible: (ctx) => ctx.stopped && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
-  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassBreakpoint?.(node) } },
-  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const node = classBreakpointTarget(ctx); if (node) ctx.onAddClassTracepoint?.(node) } },
+  { group: GROUP_DEBUG, order: 50, key: 'go-to-disassembly', icon: image('DisassemblyWindow'), label: (ctx) => ctx.t('Go To Disassembly'), visible: (ctx) => ctx.stopped && ctx.statement !== undefined && ctx.onShowDisassembly !== undefined, run: (ctx) => ctx.onShowDisassembly?.() },
+  { group: GROUP_DEBUG, order: 100, key: 'add-class-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Class Breakpoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassBreakpoint !== undefined, run: (ctx) => { const target = classBreakpointTarget(ctx); if (target) ctx.onAddClassBreakpoint?.(target) } },
+  { group: GROUP_DEBUG, order: 101, key: 'add-class-tracepoint', icon: noImage, label: (ctx) => ctx.t('Add Class Tracepoint'), visible: (ctx) => classBreakpointTarget(ctx) !== undefined && ctx.onAddClassTracepoint !== undefined, run: (ctx) => { const target = classBreakpointTarget(ctx); if (target) ctx.onAddClassTracepoint?.(target) } },
   { group: GROUP_DEBUG, order: 150, key: 'add-method-breakpoint', icon: image('CheckDot'), label: (ctx) => ctx.t('Add Method Breakpoint'), visible: (ctx) => methodBreakpointTarget(ctx) !== undefined && ctx.onAddMethodBreakpoints !== undefined, run: (ctx) => { const target = methodBreakpointTarget(ctx); if (target) ctx.onAddMethodBreakpoints?.([target]) } },
-  { group: GROUP_DEBUG, order: 1000, key: 'break-when-exception-thrown', icon: image('Add'), label: (ctx) => ctx.t('Break When Exception Thrown'), visible: never },
+  { group: GROUP_DEBUGRT, order: 0, key: 'reload-method-bodies', icon: image('Refresh'), label: (ctx) => ctx.t('Reload All Method Bodies'), visible: (ctx) => ctx.onReloadMethodBodies !== undefined, run: (ctx) => ctx.onReloadMethodBodies?.() },
+  { group: GROUP_DEBUG, order: 1000, key: 'break-when-exception-thrown', icon: image('Add'), label: (ctx) => ctx.t('Break When Thrown'), visible: (ctx) => !!ctx.debugTargets?.exceptionTypeName && ctx.onBreakWhenThrown !== undefined, run: (ctx) => { if (ctx.debugTargets?.exceptionTypeName) ctx.onBreakWhenThrown?.(ctx.debugTargets.exceptionTypeName) } },
 
   // 3000 — Delete commands (GROUP_CTX_DOCVIEWER_ASMED_DELETE). One entry per deletable node type, so
   // exactly one is ever on screen: the kind of the reference under the caret picks it, and its header

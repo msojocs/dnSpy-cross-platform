@@ -157,6 +157,10 @@ public static class RpcMethods {
 	public const string BookmarksExport = "bookmarks/export";
 	/// <summary>Reads the bookmarks out of a WPF dnSpy bookmark (or settings) file.</summary>
 	public const string BookmarksImport = "bookmarks/import";
+	public const string DebugCodeTargets = "debug/codeTargets";
+	public const string DebugVerifyFilter = "debug/verifyFilter";
+	public const string BreakpointsExport = "breakpoints/export";
+	public const string BreakpointsImport = "breakpoints/import";
 	/// <summary>Removes several documents from the tree at once — dnSpy's Remove Assembly over a multiple
 	/// selection, and its Close All Framework Assemblies / Close All Missing Files sweeps.</summary>
 	public const string WorkspaceRemoveModules = "workspace/removeModules";
@@ -506,9 +510,10 @@ public sealed record DecompileResponse(
 	IReadOnlyList<TextSpanDto> Spans,
 	IReadOnlyList<DiagnosticDto> Diagnostics) {
 	/// <summary>
-	/// Per-statement IL mapping for the languages whose text can be mapped: C#, whose statements are the
-	/// decompiler's sequence points, and IL (with or without C#), which has one statement per instruction
-	/// the way dnSpy's disassembler records them. Visual Basic, a conversion of the C# text, has none.
+	/// Per-statement IL mapping, the way dnSpy's decompilers record it: C#, whose statements are the
+	/// decompiler's sequence points; IL (with or without C#), which has one statement per instruction the
+	/// way dnSpy's disassembler records them; and Visual Basic, a conversion of the C# text whose statements
+	/// are the C# ones carried through the converter.
 	/// </summary>
 	public IReadOnlyList<CodeStatementDto>? CodeStatements { get; init; }
 
@@ -2946,3 +2951,86 @@ public sealed record MetadataTableTextRequest(string WorkspaceId, string NodeId,
 
 /// <summary>The rows as dnSpy's Copy as Text writes them: a tab-separated header line, then a line per row.</summary>
 public sealed record MetadataTableTextResponse(string Text);
+
+/// <summary>A reference a debugger command acts on: a node of the workspace, or a module and the token of a definition in it.</summary>
+public sealed record DebugCodeReferenceDto(string? NodeId, string? ModulePath, int? MetadataToken);
+
+/// <summary>The references a context menu's debugger commands are about, in the order the menu has them.</summary>
+public sealed record DebugCodeTargetsRequest(string? WorkspaceId, IReadOnlyList<DebugCodeReferenceDto> References);
+
+/// <summary>
+/// A method a breakpoint goes at the entry of: its module, token and full name, and whether it has code — dnSpy's
+/// commands collect an abstract method too, and only skip it when the breakpoint is added.
+/// </summary>
+public sealed record DebugMethodTargetDto(string ModulePath, int MetadataToken, string Description, bool HasBody);
+
+/// <summary>
+/// What the debugger commands of a context menu act on: the methods "Add Method Breakpoint" adds a breakpoint to,
+/// the methods of the type "Add Class Breakpoint" does (null when the first reference is not a type) and the type's
+/// name, and the reflection name of the exception "Break When Thrown" turns on (null when it names none).
+/// </summary>
+public sealed record DebugCodeTargetsResponse(IReadOnlyList<DebugMethodTargetDto> Methods, IReadOnlyList<DebugMethodTargetDto>? TypeMethods, string? TypeName, string? ExceptionTypeName);
+
+/// <summary>A breakpoint's condition in a breakpoint file: <c>isTrue</c> or <c>whenChanged</c>, and the expression.</summary>
+public sealed record BreakpointFileConditionDto(string Kind, string Expression);
+
+/// <summary>A breakpoint's hit count in a breakpoint file: <c>equals</c>, <c>multipleOf</c> or <c>greaterThanOrEquals</c>.</summary>
+public sealed record BreakpointFileHitCountDto(string Kind, int Count);
+
+/// <summary>A tracepoint's message, and whether the breakpoint goes on after printing it.</summary>
+public sealed record BreakpointFileTraceDto(string Message, bool Continue);
+
+/// <summary>Everything a breakpoint carries besides its location and enabled state, in the shape the client keeps it.</summary>
+public sealed record BreakpointFileSettingsDto(
+	BreakpointFileConditionDto? Condition,
+	BreakpointFileHitCountDto? HitCount,
+	string? Filter,
+	BreakpointFileTraceDto? Trace,
+	IReadOnlyList<string>? Labels);
+
+/// <summary>
+/// A code breakpoint as dnSpy's breakpoint file holds it: module, token and IL offset, enabled state and settings.
+/// <paramref name="Method"/> is the method's full name the file named it with, when it did.
+/// </summary>
+public sealed record BreakpointFileEntryDto(string ModulePath, int MetadataToken, int IlOffset, bool Enabled, BreakpointFileSettingsDto? Settings, string? Method = null);
+
+public sealed record ExportBreakpointsRequest(string? WorkspaceId, IReadOnlyList<BreakpointFileEntryDto> Breakpoints);
+
+public sealed record ExportBreakpointsResponse(string Xml);
+
+public sealed record ImportBreakpointsRequest(string? WorkspaceId, string Xml);
+
+/// <summary>The breakpoints a file holds, and how many of its rows were dropped as dnSpy drops them.</summary>
+public sealed record ImportBreakpointsResponse(IReadOnlyList<BreakpointFileEntryDto> Breakpoints, int Skipped);
+
+/// <summary>One <c>await</c> of an async method's MoveNext: where it starts waiting and where it resumes.</summary>
+public sealed record AsyncAwaitDto(int YieldOffset, int ResumeOffset);
+
+/// <summary>
+/// dnSpy's AsyncMethodDebugInfo for a MoveNext: the awaits the decompiler found, the offset of the call that completes
+/// the method's task (-1 when there is none to find), and the builder field the task is reached through.
+/// </summary>
+public sealed record AsyncStepInfoDto(IReadOnlyList<AsyncAwaitDto> Awaits, int SetResultOffset, int BuilderFieldToken);
+
+/// <summary>What the engine asks to step across an <c>await</c> the way dnSpy's stepper does.</summary>
+public interface IDebugAsyncStepInfoProvider {
+	/// <summary>The async step info of a MoveNext, or null when the method is no async state machine's.</summary>
+	Task<AsyncStepInfoDto?> GetAsyncStepInfoAsync(string? workspaceId, string modulePath, int moveNextToken, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// A process Attach to Process lists — dnSpy's AttachableProcessInfo: the executable's file name, the window title (none
+/// on Linux), the runtime as "CoreCLR" and its version, the architecture, the executable's path and the command line.
+/// </summary>
+public sealed record AttachableProcessDto(int ProcessId, string Name, string Title, string RuntimeName, string Architecture, string? ExecutablePath, string CommandLine);
+
+/// <summary>
+/// Where the debugger saves the modules it reads out of a process — Open Module from Memory, Use memory modules: a
+/// directory per process and module, the file named as the module is, so the copy is found by the module's name.
+/// </summary>
+public static class MemoryModuleFiles {
+	public static string Root => Path.Combine(Path.GetTempPath(), "dnSpy-memory-modules");
+
+	public static bool Contains(string path) =>
+		!string.IsNullOrEmpty(path) && Path.GetFullPath(path).StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+}

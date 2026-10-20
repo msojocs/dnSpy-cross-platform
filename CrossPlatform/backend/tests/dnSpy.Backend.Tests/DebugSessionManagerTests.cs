@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using dnlib.DotNet;
+using dnlib.DotNet.Emit;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core;
 using dnSpy.Backend.Debugging.CorDebug;
@@ -172,7 +173,12 @@ public sealed class DebugSessionManagerTests {
 			var ready = await target.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken);
 			Assert.Equal("READY", ready);
 			// Attach to Process offers the processes running CoreCLR, and this one is.
-			Assert.Contains(manager.ListProcesses(), process => process.ProcessId == target.Id);
+			var listed = Assert.Single(manager.ListProcesses(), process => process.ProcessId == target.Id);
+			// The columns dnSpy's dialog shows: the runtime as "CoreCLR <version>", the architecture, the command line.
+			Assert.Equal("CoreCLR " + Environment.Version.ToString(3), listed.RuntimeName);
+			Assert.Equal(System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "ARM64" : "x64", listed.Architecture);
+			Assert.Contains("DebugTarget.dll --wait", listed.CommandLine, StringComparison.Ordinal);
+			Assert.Equal(Path.GetFileName(listed.ExecutablePath), listed.Name);
 			var stopped = new TaskCompletionSource<DebugEventNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
 			manager.EventReceived += (_, notification) => {
 				if (notification.Event == "stopped") stopped.TrySetResult(notification);
@@ -222,6 +228,124 @@ public sealed class DebugSessionManagerTests {
 		await manager.DisconnectAsync(
 			new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true),
 			TestContext.Current.CancellationToken);
+	}
+
+	/// <summary>
+	/// dnSpy's Break all processes when one process breaks: two processes are debugged, and the one still running is
+	/// paused the moment the other stops.
+	/// </summary>
+	[Fact(Timeout = 60_000)]
+	public async Task AProcessThatBreaksPausesTheOthers() {
+		using var workspaceManager = new WorkspaceManager();
+		var target = FindTarget();
+		var opened = await workspaceManager.OpenAsync(new OpenWorkspaceRequest([target]), TestContext.Current.CancellationToken);
+		await using var manager = CreateManager(workspaceManager);
+		var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		var stops = new System.Collections.Concurrent.ConcurrentQueue<DebugEventNotification>();
+		var stopSignal = new SemaphoreSlim(0);
+		manager.EventReceived += (_, notification) => {
+			if (notification.Event == "output" && notification.Body?.GetProperty("output").GetString()?.Contains("READY", StringComparison.Ordinal) == true)
+				ready.TrySetResult();
+			if (notification.Event == "stopped") {
+				stops.Enqueue(notification);
+				stopSignal.Release();
+			}
+		};
+
+		var running = await manager.LaunchAsync(
+			new DebugLaunchRequest(target, ["--wait"], StopAtEntry: false, WorkspaceId: opened.WorkspaceId),
+			TestContext.Current.CancellationToken);
+		await manager.RequestAsync(
+			new DebugAdapterRequest(running.SessionId, "configurationDone", JsonSerializer.SerializeToElement(new { })),
+			TestContext.Current.CancellationToken);
+		await ready.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+		var breaking = await manager.LaunchAsync(
+			new DebugLaunchRequest(target, StopAtEntry: true, WorkspaceId: opened.WorkspaceId),
+			TestContext.Current.CancellationToken);
+		var seen = new List<DebugEventNotification>();
+		while (!seen.Any(stop => stop.SessionId == running.SessionId)) {
+			await stopSignal.WaitAsync(TestContext.Current.CancellationToken);
+			while (stops.TryDequeue(out var stop))
+				seen.Add(stop);
+		}
+		Assert.Equal("entry", seen.First(stop => stop.SessionId == breaking.SessionId).Body?.GetProperty("reason").GetString());
+		Assert.Equal("pause", seen.First(stop => stop.SessionId == running.SessionId).Body?.GetProperty("reason").GetString());
+
+		await manager.DisconnectAsync(new DebugDisconnectRequest(breaking.SessionId, TerminateDebuggee: true), TestContext.Current.CancellationToken);
+		await manager.DisconnectAsync(new DebugDisconnectRequest(running.SessionId, TerminateDebuggee: true), TestContext.Current.CancellationToken);
+	}
+
+	/// <summary>
+	/// dnSpy's dynamic modules: a module Reflection.Emit built has no file, and Open Module from Memory still gets one —
+	/// the metadata the runtime saved for the debugger, with every method's body read out of the process.
+	/// </summary>
+	[Fact(Timeout = 60_000)]
+	public async Task SavesADynamicModuleWithItsMethodBodies() {
+		using var workspaceManager = new WorkspaceManager();
+		var target = FindTarget();
+		var opened = await workspaceManager.OpenAsync(new OpenWorkspaceRequest([target]), TestContext.Current.CancellationToken);
+		await using var manager = CreateManager(workspaceManager);
+		var stops = new System.Collections.Concurrent.ConcurrentQueue<DebugEventNotification>();
+		var stopSignal = new SemaphoreSlim(0);
+		var classLoads = new System.Collections.Concurrent.ConcurrentQueue<DebugEventNotification>();
+		manager.EventReceived += (_, notification) => {
+			if (notification.Event == "stopped") {
+				stops.Enqueue(notification);
+				stopSignal.Release();
+			}
+			if (notification.Event == "module" && notification.Body?.GetProperty("reason").GetString() == "classLoaded")
+				classLoads.Enqueue(notification);
+		};
+		var started = await manager.LaunchAsync(new DebugLaunchRequest(target, ["--emit"], StopAtEntry: false, WorkspaceId: opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.RequestAsync(
+			new DebugAdapterRequest(started.SessionId, "setFunctionBreakpoints", JsonSerializer.SerializeToElement(new { breakpoints = new[] { new { name = "DebugTarget.DynamicFixture.Ready" } } })),
+			TestContext.Current.CancellationToken);
+		await manager.RequestAsync(new DebugAdapterRequest(started.SessionId, "configurationDone", JsonSerializer.SerializeToElement(new { })), TestContext.Current.CancellationToken);
+		await stopSignal.WaitAsync(TestContext.Current.CancellationToken);
+
+		var modules = await manager.RequestAsync(
+			new DebugAdapterRequest(started.SessionId, "modules", JsonSerializer.SerializeToElement(new { startModule = 0, moduleCount = 1000 })),
+			TestContext.Current.CancellationToken);
+		var dynamic = modules.Body!.Value.GetProperty("modules").EnumerateArray().Single(module => module.GetProperty("isDynamic").GetBoolean());
+		// dnSpy's ClassLoader is told of the type CreateType made, in the module it was made in.
+		Assert.Contains(classLoads, load => load.Body!.Value.GetProperty("module").GetProperty("id").GetInt32() == dynamic.GetProperty("id").GetInt32());
+		string? path = null;
+		try {
+			// Open Module from Memory's copy: under the memory modules directory, named as the module is.
+			var saved = await manager.RequestAsync(
+				new DebugAdapterRequest(started.SessionId, "saveModule", JsonSerializer.SerializeToElement(new { moduleId = dynamic.GetProperty("id").GetInt32() })),
+				TestContext.Current.CancellationToken);
+			path = saved.Body!.Value.GetProperty("path").GetString()!;
+			Assert.True(MemoryModuleFiles.Contains(path));
+			Assert.Equal(dynamic.GetProperty("name").GetString(), Path.GetFileName(path));
+			using var module = ModuleDefMD.Load(path);
+			var answer = module.Find("Dynamic.Greeter", isReflectionName: true)?.FindMethod("Answer") ?? throw new InvalidOperationException("The emitted method is not in the saved module.");
+			Assert.True(answer.HasBody);
+			Assert.Equal(Code.Ldc_I4_S, answer.Body.Instructions[0].OpCode.Code);
+			Assert.Equal((sbyte)42, answer.Body.Instructions[0].Operand);
+			Assert.Equal(Code.Ret, answer.Body.Instructions[^1].OpCode.Code);
+			Assert.Single(answer.Body.Variables);
+			// The finally block came from the section after the IL.
+			Assert.Equal(ExceptionHandlerType.Finally, Assert.Single(answer.Body.ExceptionHandlers).HandlerType);
+			// And System.Reflection.Metadata, which the decompiler reads through, finds the same body.
+			using (var pe = new System.Reflection.PortableExecutable.PEReader(File.OpenRead(path))) {
+				var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+				var handle = reader.MethodDefinitions.Single(candidate => reader.GetString(reader.GetMethodDefinition(candidate).Name) == "Answer");
+				var body = System.Reflection.Metadata.PEReaderExtensions.GetMethodBody(pe, reader.GetMethodDefinition(handle).RelativeVirtualAddress);
+				Assert.Single(body.ExceptionRegions);
+			}
+			// The copy in the workspace is where a stop in the process's module is shown: the engine names the module by
+			// the process's path for it, and the copy answers for that name.
+			await workspaceManager.AddModulesAsync(new AddModulesRequest(opened.WorkspaceId, [path]), TestContext.Current.CancellationToken);
+			var location = await workspaceManager.ResolveIlLocationAsync(opened.WorkspaceId, dynamic.GetProperty("path").GetString()!, unchecked((int)answer.MDToken.Raw), 0, TestContext.Current.CancellationToken);
+			Assert.NotNull(location?.NodeId);
+		}
+		finally {
+			await manager.DisconnectAsync(new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true), TestContext.Current.CancellationToken);
+			if (path is not null)
+				File.Delete(path);
+		}
 	}
 
 	/// <summary>
@@ -282,6 +406,32 @@ public sealed class DebugSessionManagerTests {
 	}
 
 	/// <summary>
+	/// A step out of Calculate lands in Main right after the call, which is still the call's statement — dnSpy shows
+	/// the statement the instruction pointer is in — and a step into from there finishes that statement and stops on
+	/// the next one, the framework call it cannot walk into being stepped over.
+	/// </summary>
+	[Fact(Timeout = 120_000)]
+	public async Task StepsOutToTheCallThenOnToTheNextStatement() {
+		var target = FindTarget();
+		await using var harness = await StepHarness.StartAsync(target, TestContext.Current.CancellationToken);
+		var entry = await harness.NextStopAsync();
+		var call = await harness.CallStatementAsync();
+		var next = await harness.CallStatementAsync("WriteLine", callee => callee.MethodSig is { Params.Count: 1 } signature && signature.Params[0].ElementType == ElementType.I4);
+		await harness.SetLineBreakpointAsync(await harness.StatementAsync("Calculate", "+= left"));
+		var inCallee = await harness.ContinueAsync(ThreadId(entry));
+		Assert.Equal("breakpoint", Reason(inCallee));
+
+		var outStop = await harness.StepAsync("stepOut", ThreadId(inCallee));
+		var afterOut = await harness.TopFrameAsync(ThreadId(outStop));
+		Assert.Contains("Main", afterOut.Name, StringComparison.Ordinal);
+		Assert.Equal(call.Line, afterOut.Line);
+
+		var intoStop = await harness.StepAsync("stepIn", ThreadId(outStop));
+		var afterInto = await harness.TopFrameAsync(ThreadId(intoStop));
+		Assert.True(next.Line == afterInto.Line, $"Expected line {next.Line} ({await harness.DescribeFramesAsync(ThreadId(intoStop))}).");
+	}
+
+	/// <summary>
 	/// "Step over" from the same place has to stay in the caller: the call runs, but the stop is the
 	/// caller's next statement.
 	/// </summary>
@@ -303,6 +453,66 @@ public sealed class DebugSessionManagerTests {
 		Assert.True(after.Contains("Main", StringComparison.Ordinal), $"After step over: {after}");
 		var (_, line) = await harness.TopFrameAsync(ThreadId(stepped));
 		Assert.True(line > call.Line, $"Step over landed on line {line}, not past the call on line {call.Line}.");
+	}
+
+	/// <summary>
+	/// dnSpy's async stepping: a step over the await lands on the statement after it however the method resumes, and a
+	/// step over the method's last statement goes back to the code that waits for its task — not into the task
+	/// plumbing the state machine returns to.
+	/// </summary>
+	[Fact(Timeout = 120_000)]
+	public async Task StepsAcrossAnAwaitAndBackToTheAwaiter() {
+		var target = FindTarget();
+		await using var harness = await StepHarness.StartAsync(target, TestContext.Current.CancellationToken);
+		var entry = await harness.NextStopAsync();
+		var first = await harness.StatementAsync("AddAsync", "= left + right;");
+		var awaitLine = (await harness.StatementAsync("AddAsync", "await Task.Yield();")).Line;
+		var returnLine = (await harness.StatementAsync("AddAsync", "return sum;")).Line;
+		var caller = await harness.CallStatementAsync("AddAsync");
+
+		await harness.SetLineBreakpointAsync(first);
+		var atFirst = await harness.ContinueAsync(ThreadId(entry));
+		Assert.Equal("breakpoint", Reason(atFirst));
+
+		var atAwait = await harness.StepAsync("next", ThreadId(atFirst));
+		Assert.Equal("step", Reason(atAwait));
+		Assert.Equal(awaitLine, (await harness.TopFrameAsync(ThreadId(atAwait))).Line);
+
+		var atReturn = await harness.StepAsync("next", ThreadId(atAwait));
+		Assert.Equal("step", Reason(atReturn));
+		var (returnFrame, line) = await harness.TopFrameAsync(ThreadId(atReturn));
+		Assert.Contains("AddAsync", returnFrame, StringComparison.Ordinal);
+		Assert.Equal(returnLine, line);
+
+		// The task completes on the thread the method resumed on; the awaiter is Main, waiting for it.
+		var back = await harness.StepAsync("next", ThreadId(atReturn));
+		Assert.Equal("step", Reason(back));
+		var frames = await harness.DescribeFramesAsync(ThreadId(back));
+		var (backFrame, backLine) = await harness.TopFrameAsync(ThreadId(back));
+		Assert.True(backFrame.Contains("Main", StringComparison.Ordinal), $"Back to the awaiter landed in: {frames}");
+		Assert.Equal(caller.Line, backLine);
+	}
+
+	/// <summary>
+	/// A step out of an async method before it has ever suspended still goes back to the awaiter: the builder makes its
+	/// task when it is told to notify the debugger, and that task is the one the method completes.
+	/// </summary>
+	[Fact(Timeout = 120_000)]
+	public async Task StepsOutOfAnAsyncMethodToItsAwaiter() {
+		var target = FindTarget();
+		await using var harness = await StepHarness.StartAsync(target, TestContext.Current.CancellationToken);
+		var entry = await harness.NextStopAsync();
+		var caller = await harness.CallStatementAsync("AddAsync");
+		await harness.SetLineBreakpointAsync(await harness.StatementAsync("AddAsync", "= left + right;"));
+		var atFirst = await harness.ContinueAsync(ThreadId(entry));
+		Assert.Equal("breakpoint", Reason(atFirst));
+
+		var back = await harness.StepAsync("stepOut", ThreadId(atFirst));
+
+		Assert.Equal("step", Reason(back));
+		var (name, line) = await harness.TopFrameAsync(ThreadId(back));
+		Assert.True(name.Contains("Main", StringComparison.Ordinal), $"Step out landed in: {await harness.DescribeFramesAsync(ThreadId(back))}");
+		Assert.Equal(caller.Line, line);
 	}
 
 	/// <summary>The statement that runs <c>Calculate</c>, named the way the decompiled document shows it.</summary>
@@ -521,6 +731,19 @@ public sealed class DebugSessionManagerTests {
 				.Where(statement => !statement.IsHidden)
 				.Single(statement => statement.IlOffset <= callOffset && callOffset < statement.IlEndOffset);
 			return new CallStatement(metadataToken, statement.StartLine);
+		}
+
+		/// <summary>The line of a statement of one of the fixture's methods, found by the text the document writes it with.</summary>
+		public async Task<CallStatement> StatementAsync(string methodName, string text) {
+			using var module = ModuleDefMD.Load(target);
+			var method = module.GetTypes().Single(type => type.Name == "Program").Methods.Single(candidate => candidate.Name == methodName);
+			var metadataToken = unchecked((int)method.MDToken.Raw);
+			var member = await workspaceManager.FindMemberAsync(new FindMemberRequest(workspaceId, target, metadataToken), TestContext.Current.CancellationToken);
+			var document = await workspaceManager.DecompileAsync(new DecompileRequest(workspaceId, member.NodeId!, DecompilerLanguage.CSharp), TestContext.Current.CancellationToken);
+			var lines = document.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+			var line = Array.FindIndex(lines, candidate => candidate.Contains(text, StringComparison.Ordinal)) + 1;
+			Assert.True(line > 0, $"No line of {methodName} reads '{text}'.");
+			return new CallStatement(metadataToken, line);
 		}
 
 		public Task SetLineBreakpointAsync(CallStatement call) =>

@@ -32,11 +32,15 @@ const samePath = (left: string, right: string): boolean => left.replaceAll('\\',
 
 /**
  * dnSpy's CompareReferences: whether two spans name the same thing. A local is itself; an opcode is the
- * opcode; a member is its node when both know it, and its file and token otherwise.
+ * opcode; an address is the same place of the same file; a member is its node when both know it, and its file and token otherwise.
  */
 export const sameReference = (left: TextSpan, right: TextSpan): boolean => {
   if (left.opCode || right.opCode)
     return Boolean(left.opCode) && left.opCode === right.opCode
+  // dnSpy's AddressReference compares its file, its kind and its address.
+  if (left.address || right.address)
+    return Boolean(left.address && right.address) && left.address!.isRva === right.address!.isRva && left.address!.address === right.address!.address
+      && (left.address!.modulePath ?? '') === (right.address!.modulePath ?? '')
   if (left.localId || right.localId)
     return Boolean(left.localId) && left.localId === right.localId
   if (left.targetNodeId && right.targetNodeId)

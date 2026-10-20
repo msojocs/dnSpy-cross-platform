@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace dnSpy.Cli;
+namespace dnSpy.Backend.Core.ProjectExport;
 
 /// <summary>
 /// The textual fixes around the C#-to-VB converter. Nullable-reference attributes are metadata
@@ -9,33 +9,52 @@ namespace dnSpy.Cli;
 /// VB refuses a ParamArray parameter beside Optional ones, or a default value on a parameter that is
 /// not Optional; and ILSpy's `base..ctor()` spelling for a base constructor without a declared type
 /// reaches the converter as a member access it writes back as `MyBase._002Ector()`. None of the
-/// changes affects what the code does.
+/// changes affects what the code does. Shared by the project export (console and GUI) and the
+/// console's Visual Basic output.
 /// </summary>
-static partial class VisualBasicConversion {
-	[GeneratedRegex(@"(?:System\.Runtime\.CompilerServices\.)?@?Nullable(?:Context)?(?:Attribute)?\s*\([^)]*\)", RegexOptions.CultureInvariant)]
+public static partial class VisualBasicConverterFixes {
+	const string NullableAttributePattern = @"(?:System\.Runtime\.CompilerServices\.)?@?Nullable(?:Context)?(?:Attribute)?\s*\([^)]*\)";
+
+	[GeneratedRegex(NullableAttributePattern, RegexOptions.CultureInvariant)]
 	private static partial Regex NullableAttribute();
 
-	[GeneratedRegex(@"^\[(?:[a-z]+:\s*)?(?:System\.Runtime\.CompilerServices\.)?@?Nullable(?:Context)?(?:Attribute)?\s*\([^)]*\)\]$", RegexOptions.CultureInvariant)]
+	[GeneratedRegex(@"^\[(?:[a-z]+:\s*)?" + NullableAttributePattern + @"\]$", RegexOptions.CultureInvariant)]
 	private static partial Regex NullableAttributeLine();
+
+	// A section that holds only the attribute, in front of a parameter or a return type: `[Nullable(2)] string s`.
+	[GeneratedRegex(@"\[(?:[a-z]+:\s*)?" + NullableAttributePattern + @"\]\s*", RegexOptions.CultureInvariant)]
+	private static partial Regex NullableAttributeSection();
+
+	// The attribute among others in one section: `[Foo, Nullable(1)]`, `[Nullable(1), Foo]`.
+	[GeneratedRegex(@"\s*,\s*" + NullableAttributePattern + @"|" + NullableAttributePattern + @"\s*,\s*", RegexOptions.CultureInvariant)]
+	private static partial Regex NullableAttributeInList();
 
 	// ILSpy writes a base constructor call with no declared type as `base..ctor()`, which the converter
 	// passes through as `MyBase._002Ector()`; VB has no such member.
-	[GeneratedRegex(@"^\s*MyBase\._002Ector\(\)\s*$", RegexOptions.CultureInvariant)]
+	// A marker comment may follow on the same line when the GUI's decompiler wrote it (it keeps the statement map).
+	[GeneratedRegex(@"^\s*MyBase\._002Ector\(\)(?:\s*'.*)?\s*$", RegexOptions.CultureInvariant)]
 	private static partial Regex BaseCtorLine();
 
-	[GeneratedRegex(@"^\s*MyBase\.New\(\)\s*$", RegexOptions.CultureInvariant)]
+	[GeneratedRegex(@"^\s*MyBase\.New\(\)(?:\s*'.*)?\s*$", RegexOptions.CultureInvariant)]
 	private static partial Regex BaseNewLine();
 
 
-	/// <summary>Drops the nullability attributes from the C# source before it is converted.</summary>
+	/// <summary>
+	/// Drops the nullability attributes from the C# source before it is converted — a section that holds nothing else
+	/// with its brackets, one among others with its comma. Lines are only ever emptied, never removed, so the C#
+	/// statements keep their lines.
+	/// </summary>
 	public static string PrepareCSharp(string text) {
 		var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
 		for (var i = 0; i < lines.Length; i++) {
 			if (lines[i].Contains("Nullable", StringComparison.Ordinal)) {
 				if (NullableAttributeLine().IsMatch(lines[i].Trim()))
 					lines[i] = string.Empty;
-				else
-					lines[i] = NullableAttribute().Replace(lines[i], string.Empty);
+				else {
+					var line = NullableAttributeSection().Replace(lines[i], string.Empty);
+					line = NullableAttributeInList().Replace(line, string.Empty);
+					lines[i] = NullableAttribute().Replace(line, string.Empty);
+				}
 			}
 		}
 		return string.Join('\n', lines);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { KeywordReference, TextSpan } from '../../shared/protocol'
+import { isNavigableSpan, type KeywordReference, type TextSpan } from '../../shared/protocol'
 import {
   blockLines, blockStructureColor, buildClipboardHtml, caretForSpan, definitionForNode, definitionOf, integerLiteralValue, keywordAtCaret,
   keywordHighlights, localToolTip, nextDefinition, nextReference, numberToolTip, opCodeUrl, parseGoToLine, positionAt, referenceHighlights,
@@ -44,6 +44,16 @@ describe('what names the same thing', () => {
       { start: 5, length: 1, kind: 'reference', targetModulePath: '/a/b.dll', targetMetadataToken: 0x06000001 },
     )).toBe(true)
     expect(sameReference({ start: 0, length: 1, kind: 'reference', opCode: 'ldarg.0' }, { start: 9, length: 1, kind: 'reference', opCode: 'ldarg.0' })).toBe(true)
+  })
+
+  it('ties an address to the same place of the same file, and makes it something to follow', () => {
+    const rva = (address: number): TextSpan => ({ start: 0, length: 10, kind: 'reference', address: { modulePath: '/a/b.dll', isRva: true, address, length: 0 } })
+    expect(isNavigableSpan(rva(0x2050))).toBe(true)
+    expect(spanAtCaret([rva(0x2050)], 3)).toBeDefined()
+    expect(sameReference(rva(0x2050), rva(0x2050))).toBe(true)
+    expect(sameReference(rva(0x2050), rva(0x2054))).toBe(false)
+    expect(sameReference(rva(0x2050), { ...rva(0x2050), address: { modulePath: '/a/b.dll', isRva: false, address: 0x2050, length: 0 } })).toBe(false)
+    expect(sameReference(rva(0x2050), { start: 0, length: 1, kind: 'reference', targetNodeId: 'n1' })).toBe(false)
   })
 
   it('marks a definition, a write and a read apart, as the highlighter does', () => {

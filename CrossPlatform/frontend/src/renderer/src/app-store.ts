@@ -48,13 +48,26 @@ import { formatDateTime } from './dotnet-date-format'
 import { askIgnorableMessage } from './message-box'
 import { loadAppOptions } from './components/app-options'
 import { spansOfTrimmed } from './roslyn-classification'
+import { DecompilationCache, decompilationCache } from './decompilation-cache'
+import { decompilerRefreshOf, decompilerSettingsOf, settingsKeyOf } from './decompiler-settings'
+import { documentIdOf, documentShowsNode, documentTitleOf, documentToolTipOf, nodeIdsOfDocument } from './document-ids'
+import type { AppOptions } from './components/app-options'
 
 export type { BreakpointConditionKind, BreakpointHitCountKind, BreakpointSettings }
 
 export interface DocumentState extends DecompileResponse {
   nodeId: string
+  /** Every node the document shows, `nodeId` first: more than one for a tab showing a multi-selection. */
+  nodeIds?: string[]
   loading: boolean
   requestedLanguage: DecompilerLanguage
+  /**
+   * Why the document holds no code: its decompilation was canceled, or failed — DecompileDocumentTabContent writes
+   * the message in its place. Showing the document again decompiles it again.
+   */
+  failure?: 'canceled' | 'error'
+  /** The tab's tooltip: the tooltip of every node it shows. */
+  toolTip?: string
   cursorLine?: number
   cursorColumn?: number
   scrollTop?: number
@@ -435,6 +448,20 @@ interface AppState {
   /** Decompiles a node into its document — and makes it the tree's selection unless `select` is false. */
   openDocument(node: TreeNode, language?: DecompilerLanguage, select?: boolean): Promise<string>
   /**
+   * Decompiles the nodes into one document — dnSpy's DecompileDocumentTabContent over the tree's top-level selection —
+   * and answers its id. A document the decompilation cache holds is there at once; any other is loading until the
+   * backend answers, and a request for the same document still under way is called off. `keepEditorState` keeps the
+   * caret and scroll of a document decompiled again in place.
+   */
+  openNodesDocument(nodes: TreeNode[], language?: DecompilerLanguage, select?: boolean, options?: { keepEditorState?: boolean }): Promise<string>
+  /** The wait adorner's Cancel: calls the document's decompilation off, which leaves "The operation was canceled" in it. */
+  cancelDocument(documentId: string): void
+  /**
+   * dnSpy's DecompilerAppSettingsModifiedListener and BamlRefresher: the open documents the changed options are read
+   * by are decompiled again, keeping their caret.
+   */
+  refreshDocumentsForOptions(before: AppOptions, after: AppOptions, openDocumentIds?: string[]): Promise<void>
+  /**
    * dnSpy's language box: the decompiler every document is shown in. The open tabs are decompiled again in it
    * (RedecompileTabs), the documents opened from now on use it, and it is remembered for the next start. The
    * shell, which owns the layout, names the documents its tabs show; the recorded tab order stands in otherwise.
@@ -792,6 +819,12 @@ interface AppState {
   openNodeById?: (nodeId: string) => Promise<string | undefined>
   setOpenNodeById(open: ((nodeId: string) => Promise<string | undefined>) | undefined): void
   /**
+   * Follows a member the way dnSpy's FollowReference does — DecompileFullType and a state machine's MoveNext decide
+   * the document, the caret goes to the member — and answers the document's id. Set by the shell.
+   */
+  followNodeById?: (nodeId: string) => Promise<string | undefined>
+  setFollowNodeById(follow: ((nodeId: string) => Promise<string | undefined>) | undefined): void
+  /**
    * Opens the document a node id names in a tab of its own, even when a tab already shows it — what
    * dnSpy's "Open in New Tab" asks for. Set by the shell, which owns the tab layout, like
    * `openNodeById`.
@@ -980,9 +1013,96 @@ let bookmarkSequence = 0
 let bookmarkOrder = 0
 let caretRevealToken = 0
 
+/** A decompilation under way, by the document it is for: the key it was asked under, which cancels it. */
+interface DecompileRequestEntry {
+  key: string
+  /** The user called it off — the wait adorner's Cancel, or the tab moving on to another document. */
+  canceled: boolean
+}
+const decompileRequests = new Map<string, DecompileRequestEntry>()
+let decompileRequestSequence = 0
+
+/** Calls off what is still being decompiled for a document a new request replaces; nothing is shown for it. */
+const supersedeDecompileRequest = (documentId: string): void => {
+  const request = decompileRequests.get(documentId)
+  if (!request)
+    return
+  decompileRequests.delete(documentId)
+  cancelDecompileRequest(request.key)
+}
+
+const cancelDecompileRequest = (key: string): void => {
+  try {
+    void Promise.resolve(window.dnSpy.cancelDecompile?.(key)).catch(() => undefined)
+  } catch {
+    // A bridge without the call has nothing under way to call off.
+  }
+}
+
+/** Whether the document's decompilation is still under way. */
+export const isDecompiling = (documentId: string): boolean => decompileRequests.has(documentId)
+
+/**
+ * What DecompileDocumentTabContent.OnShowAsync shows in place of a document: "The operation was canceled" in the
+ * error color, or "An error occurred" in it with the exception's text on the line under it.
+ */
+const failedDocument = (canceled: boolean, message: string): Pick<DocumentState,
+  'failure' | 'language' | 'text' | 'spans' | 'diagnostics' | 'codeStatements' | 'blockStructures' | 'lineSeparators' | 'relatedKeywords'> => {
+  const heading = t(canceled ? 'The operation was canceled' : 'An error occurred')
+  return {
+    failure: canceled ? 'canceled' : 'error',
+    language: 'plaintext',
+    text: canceled ? heading : `${heading}\n${message}`,
+    spans: [{ start: 0, length: heading.length, kind: 'text', color: 'error' }],
+    diagnostics: canceled ? [] : [{ severity: 'error', message }],
+    codeStatements: [],
+    blockStructures: undefined,
+    lineSeparators: undefined,
+    relatedKeywords: undefined,
+  }
+}
+
+/** What a document that has just been decompiled — or taken from the cache — puts back in place: the bookmarks and
+ *  the line breakpoints its maps name. */
+const attachDecompiledDocument = (set: StoreSet, documentId: string, document: DecompileResponse): void => {
+  // The document is what turns a bookmark's location back into a line and a node id.
+  attachBookmarks(set, documentId, document)
+  // And the same for a breakpoint restored from settings, whose node id died with its workspace. Only a
+  // C# line is what the backend resolves a breakpoint's line against, so an IL view's statements —
+  // one per instruction — must not become its line.
+  if (document.language === 'csharp')
+    attachLineBreakpoints(set, documentId, document.codeStatements)
+}
+
+/** The roots a document's nodes hang under, as the tree knows them; undefined when one of them cannot be told. */
+const rootsOfNodes = (state: Pick<AppState, 'parents' | 'roots'>, nodeIds: readonly string[]): string[] | undefined => {
+  const roots = new Set<string>()
+  for (const nodeId of nodeIds) {
+    const root = rootIdOf(state, nodeId)
+    if (!state.roots.some((candidate) => candidate.id === root))
+      return undefined
+    roots.add(root)
+  }
+  return [...roots]
+}
+
+/** The nodes a document shows, read from the tree — or from the backend for one the tree has not listed. */
+const documentNodesOf = async (get: StoreGet, workspaceId: string, documentId: string, ask = true): Promise<TreeNode[] | undefined> => {
+  const nodeIds = get().documents[documentId]?.nodeIds ?? nodeIdsOfDocument(documentId)
+  const nodes: TreeNode[] = []
+  for (const nodeId of nodeIds) {
+    const node = findNode(get(), nodeId) ?? (ask ? await window.dnSpy.getNode(workspaceId, nodeId).catch(() => undefined) : undefined)
+    if (!node)
+      return undefined
+    nodes.push(node)
+  }
+  return nodes
+}
+
 /** Shows a node in the active tab when the shell can — which selects it in the tree too — and only selects it otherwise. */
 const showOrReveal = async (get: () => AppState, nodeId: string): Promise<void> => {
-  const open = get().openNodeById
+  // Go to Entry Point, Go to Token and their kin are dnSpy's FollowReference, so DecompileFullType applies to them.
+  const open = get().followNodeById ?? get().openNodeById
   if (open && await open(nodeId))
     return
   await get().revealNode(nodeId)
@@ -1102,6 +1222,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       }
       const opened = await window.dnSpy.openWorkspace(paths)
+      // A new workspace hands its node ids out from the start again.
+      decompilationCache.clearAll()
       if (!isCurrent()) {
         await window.dnSpy.closeWorkspace(opened.workspaceId)
         return
@@ -1156,6 +1278,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Close All is a user decision, even while startup is rebuilding the session. Save the empty
     // state now, before backend cleanup, and invalidate every continuation of that old workspace.
     enableSessionPersistence()
+    decompilationCache.clearAll()
     set({
       workspaceGeneration: get().workspaceGeneration + 1,
       workspaceId: undefined,
@@ -1315,113 +1438,141 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ expanded: next })
   },
 
-  openDocument: async (node, language = get().defaultLanguage, select = true) => {
+  openDocument: async (node, language = get().defaultLanguage, select = true) => get().openNodesDocument([node], language, select),
+
+  openNodesDocument: async (nodes, language = get().defaultLanguage, select = true, options = {}) => {
     const workspaceId = get().workspaceId
     if (!workspaceId)
       throw new Error(t('No workspace is open.'))
-    const documentId = node.id
+    const nodeIds = nodes.map((node) => node.id)
+    const documentId = documentIdOf(nodeIds)
+    const appOptions = loadAppOptions()
+    const settings = decompilerSettingsOf(appOptions)
+    const cacheKey = DecompilationCache.keyOf(workspaceId, language, nodeIds, settingsKeyOf(language, appOptions))
+    // A tab that shows something else calls off what it was still decompiling (DocumentTabContent's async work), and
+    // so does a second request for the same document — a language change, a refresh.
+    supersedeDecompileRequest(documentId)
+    const previous = get().documents[documentId]
+    const editorState = options.keepEditorState && previous
+      ? { cursorLine: previous.cursorLine, cursorColumn: previous.cursorColumn, scrollTop: previous.scrollTop }
+      : {}
+    const identity = { nodeId: nodeIds[0], nodeIds, requestedLanguage: language, toolTip: documentToolTipOf(nodes), ...editorState }
+    // A document of several nodes is the tree's selection already — a row under one of them may be selected too,
+    // and stays so; it only becomes the selection when it was opened from elsewhere.
+    const selected = get().selectedNodes
+    const selection = !select || (nodes.length > 1 && nodeIds.every((id) => selected.some((node) => node.id === id)))
+      ? {}
+      : { selectedNode: nodes[0], selectedNodes: [...nodes] }
+    // dnSpy's DecompilationCache.Lookup: a document decompiled before with the same settings is shown as it was, and no
+    // wait adorner goes up for it.
+    const cached = decompilationCache.lookup(cacheKey)
+    if (cached) {
+      set((state) => ({
+        ...selection,
+        documents: { ...state.documents, [documentId]: { ...cached, codeStatements: cached.codeStatements ?? [], ...identity, loading: false } },
+      }))
+      attachDecompiledDocument(set, documentId, cached)
+      return documentId
+    }
     set((state) => ({
-      ...(select ? { selectedNode: node, selectedNodes: [node] } : {}),
+      ...selection,
       documents: {
         ...state.documents,
         [documentId]: {
-          nodeId: node.id,
-          title: node.label,
+          ...identity,
+          title: documentTitleOf(nodes),
           language: language === 'cSharp' ? 'csharp' : language === 'visualBasic' ? 'visual-basic' : 'il',
           text: '',
           spans: [],
           diagnostics: [],
           codeStatements: [],
           loading: true,
-          requestedLanguage: language,
         },
       },
     }))
+    const request: DecompileRequestEntry = { key: `decompile-${++decompileRequestSequence}`, canceled: false }
+    decompileRequests.set(documentId, request)
     try {
-      // Pass decompiler settings from app options to the backend
-      const appOptions = await import('./components/app-options').then(m => m.loadAppOptions())
-      const settings = {
-        cSharp: {
-          anonymousMethods: appOptions.decompiler.cSharp.anonymousMethods,
-          yieldReturn: appOptions.decompiler.cSharp.yieldReturn,
-          asyncAwait: appOptions.decompiler.cSharp.asyncAwait,
-          queryExpressions: appOptions.decompiler.cSharp.queryExpressions,
-          expressionTrees: appOptions.decompiler.cSharp.expressionTrees,
-          useDebugSymbols: appOptions.decompiler.cSharp.useDebugSymbols,
-          showXmlDocumentation: appOptions.decompiler.cSharp.showXmlDocumentation,
-          sortCustomAttributes: appOptions.decompiler.cSharp.sortCustomAttributes,
-          fullyQualifyAllTypes: appOptions.decompiler.cSharp.fullyQualifyAllTypes,
-          fullyQualifyAmbiguousTypeNames: appOptions.decompiler.cSharp.fullyQualifyAmbiguousTypeNames,
-          removeEmptyDefaultConstructors: appOptions.decompiler.cSharp.removeEmptyDefaultConstructors,
-          showTokenAndRvaComments: appOptions.decompiler.cSharp.showTokenAndRvaComments,
-          sortMembers: appOptions.decompiler.cSharp.sortMembers,
-          forceShowAllMembers: appOptions.decompiler.cSharp.forceShowAllMembers,
-          sortSystemUsingStatementsFirst: appOptions.decompiler.cSharp.sortSystemUsingStatementsFirst,
-          useSourceCodeOrder: appOptions.decompiler.cSharp.useSourceCodeOrder,
-          oneCustomAttributePerLine: appOptions.decompiler.cSharp.oneCustomAttributePerLine,
-          allowFieldInitializers: appOptions.decompiler.cSharp.allowFieldInitializers,
-          typeAddInternalModifier: appOptions.decompiler.cSharp.typeAddInternalModifier,
-          memberAddPrivateModifier: appOptions.decompiler.cSharp.memberAddPrivateModifier,
-          hexadecimalNumbers: appOptions.decompiler.cSharp.hexadecimalNumbers,
-          emitCalliAsInvocationExpression: appOptions.decompiler.cSharp.emitCalliAsInvocationExpression,
-          insertParenthesesForReadability: appOptions.decompiler.cSharp.insertParenthesesForReadability,
-        },
-        il: {
-          showXmlDocumentation: appOptions.decompiler.il.showXmlDocumentation,
-          showTokenAndRvaComments: appOptions.decompiler.il.showTokenAndRvaComments,
-          showILBytes: appOptions.decompiler.il.showILBytes,
-          showILComments: appOptions.decompiler.il.showILComments,
-          sortMembers: appOptions.decompiler.il.sortMembers,
-          showPdbInfo: appOptions.decompiler.il.showPdbInfo,
-          hexadecimalNumbers: appOptions.decompiler.il.hexadecimalNumbers,
-        },
-        baml: {
-          newLineOnAttributes: appOptions.baml.newLineOnAttributes,
-          useTabs: appOptions.baml.useTabs,
-        },
-        decompileFullType: appOptions.environmentGeneral.decompileFullType,
-        useMemoryMappedIO: appOptions.environmentGeneral.useMemoryMappedIO,
-      }
-      const document = await window.dnSpy.decompile(workspaceId, node.id, language, settings)
+      const document = await window.dnSpy.decompile(workspaceId, nodeIds.length === 1 ? nodeIds[0] : nodeIds, language, settings, request.key)
+      // A request that was replaced by a newer one, or one the user called off, has nothing left to show.
+      if (decompileRequests.get(documentId) !== request)
+        return documentId
+      decompileRequests.delete(documentId)
+      if (request.canceled)
+        return documentId
       if (get().workspaceId !== workspaceId) return documentId
       if (get().documents[documentId]?.requestedLanguage === language) {
+        // DocumentViewerOutput.CanBeCached: a document with pictures or buttons in it is not kept.
+        if (!(document as DecompileResponse & { attachments?: unknown[] | null }).attachments?.length)
+          decompilationCache.cache(cacheKey, document, { roots: rootsOfNodes(get(), nodeIds) })
         set((state) => ({
           documents: {
             ...state.documents,
             [documentId]: {
               ...document,
               codeStatements: document.codeStatements ?? [],
-              nodeId: node.id,
+              ...identity,
               loading: false,
-              requestedLanguage: language,
             },
           },
         }))
-        // The document is what turns a bookmark's location back into a line and a node id.
-        attachBookmarks(set, documentId, document)
-        // And the same for a breakpoint restored from settings, whose node id died with its workspace. Only a
-        // C# line is what the backend resolves a breakpoint's line against, so an IL view's statements —
-        // one per instruction — must not become its line.
-        if (document.language === 'csharp')
-          attachLineBreakpoints(set, documentId, document.codeStatements)
+        attachDecompiledDocument(set, documentId, document)
       }
     } catch (error) {
+      if (decompileRequests.get(documentId) !== request)
+        return documentId
+      decompileRequests.delete(documentId)
       if (get().workspaceId !== workspaceId) return documentId
       const message = error instanceof Error ? error.message : String(error)
+      // DecompileDocumentTabContent.OnShowAsync: a canceled decompilation and a failed one each leave their message in
+      // the tab, the first in the error color, the second followed by the exception.
+      const canceled = request.canceled || /\bwas canceled\b/i.test(message)
       set((state) => ({
-        error: message,
+        ...(canceled ? {} : { error: message }),
         documents: {
           ...state.documents,
           [documentId]: {
             ...state.documents[documentId],
+            ...failedDocument(canceled, message),
             loading: false,
-            diagnostics: [{ severity: 'error', message }],
           },
         },
       }))
-      get().appendOutput(t('Decompile failed: {message}', { message }))
+      if (!canceled)
+        get().appendOutput(t('Decompile failed: {message}', { message }))
     }
     return documentId
+  },
+
+  cancelDocument: (documentId) => {
+    const request = decompileRequests.get(documentId)
+    if (!request || request.canceled)
+      return
+    request.canceled = true
+    void window.dnSpy.cancelDecompile(request.key).catch(() => undefined)
+    set((state) => state.documents[documentId]
+      ? { documents: { ...state.documents, [documentId]: { ...state.documents[documentId], ...failedDocument(true, ''), loading: false } } }
+      : {})
+  },
+
+  refreshDocumentsForOptions: async (before, after, openDocumentIds) => {
+    const workspaceId = get().workspaceId
+    if (!workspaceId)
+      return
+    const refresh = decompilerRefreshOf(before, after)
+    if (refresh.languages.size === 0 && !refresh.baml)
+      return
+    const shown = new Set([...(openDocumentIds ?? get().documentOrder), ...Object.keys(get().documents).filter((id) => get().documents[id].loading)])
+    const stale = [...shown].filter((documentId) => {
+      const document = get().documents[documentId]
+      return document && (refresh.languages.has(document.requestedLanguage) || (refresh.baml && isBamlDocumentLanguage(document.language)))
+    })
+    await Promise.all(stale.map(async (documentId) => {
+      const document = get().documents[documentId]
+      const nodes = await documentNodesOf(get, workspaceId, documentId)
+      if (document && nodes && get().workspaceId === workspaceId)
+        await get().openNodesDocument(nodes, document.requestedLanguage, false, { keepEditorState: true })
+    }))
   },
 
   changeLanguage: async (language, openDocumentIds) => {
@@ -1437,18 +1588,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       return document && document.requestedLanguage !== language
     })
     await Promise.all(stale.map(async (documentId) => {
-      const nodeId = get().documents[documentId]?.nodeId ?? documentId
-      const node = findNode(get(), nodeId) ?? await window.dnSpy.getNode(workspaceId, nodeId).catch(() => undefined)
-      if (node && get().workspaceId === workspaceId)
-        await get().openDocument(node, language, false)
+      const nodes = await documentNodesOf(get, workspaceId, documentId)
+      if (nodes && get().workspaceId === workspaceId)
+        await get().openNodesDocument(nodes, language, false)
     }))
   },
 
   changeDocumentLanguage: async (nodeId, language) => {
     const existing = get().documents[nodeId]
-    const node = findNode(get(), nodeId)
-    if (existing && node)
-      await get().openDocument(node, language)
+    const workspaceId = get().workspaceId
+    const nodes = existing && workspaceId ? await documentNodesOf(get, workspaceId, nodeId, false) : undefined
+    if (nodes)
+      await get().openNodesDocument(nodes, language)
   },
 
   updateDocumentEditorState: (nodeId, cursorLine, cursorColumn, scrollTop) => {
@@ -1478,6 +1629,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       transactionId = (await window.dnSpy.beginEdit(workspaceId)).transactionId
       await window.dnSpy.queueRename(workspaceId, transactionId, node.id, newName.trim())
       const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      clearCacheForNodes(get, committed.changedNodeIds)
       const parentId = get().parents[node.id]
       if (parentId) {
         const refreshed = await window.dnSpy.getChildren(workspaceId, parentId)
@@ -1832,6 +1984,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         return false
       }
       const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
+      clearCacheForNodes(get, committed.changedNodeIds)
       const parentId = get().parents[node.id]
       if (parentId) {
         const refreshed = await window.dnSpy.getChildren(workspaceId, parentId)
@@ -2253,6 +2406,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ busy: true, error: undefined })
     try {
       const reloaded = await window.dnSpy.reloadWorkspace(workspaceId, autoLoadedPaths)
+      // DecompilationCacheDocumentListListener: a document list that was loaded again forgets every document.
+      decompilationCache.clearAll()
       const roots = await window.dnSpy.getRoots(workspaceId)
       // Every node id the workspace handed out is gone with the reload, so the tabs, the expanded
       // branches and the selection all name nodes that no longer exist and are dropped with them. The
@@ -2312,6 +2467,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       return []
     try {
       const response = await window.dnSpy.removeModule(workspaceId, node.id)
+      // DocumentTabService.OnNodeRemoved clears the cache for the documents that went.
+      clearCacheForNodes(get, [node.id])
       set((state) => ({ ...withoutRemovedRoots(state, response), assemblyListRevision: state.assemblyListRevision + 1 }))
       return response.removedNodeIds
     } catch (error) {
@@ -2328,6 +2485,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       return []
     try {
       const response = await window.dnSpy.removeModules(workspaceId, nodeIds)
+      // DocumentTabService.OnNodeRemoved clears the cache for the documents that went.
+      clearCacheForNodes(get, nodeIds)
       set((state) => ({ ...withoutRemovedRoots(state, response), assemblyListRevision: state.assemblyListRevision + 1 }))
       // A document that goes takes its unsaved changes with it.
       await get().refreshModifiedDocuments()
@@ -2494,7 +2653,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!workspaceId || nodes.length === 0)
       return false
     try {
-      const paths = await window.dnSpy.saveResource(workspaceId, nodes.map((node) => node.id), raw, useSubDirs)
+      const paths = await window.dnSpy.saveResource(workspaceId, nodes.map((node) => node.id), raw, useSubDirs, decompilerSettingsOf(loadAppOptions()).baml)
       // A cancelled dialog is not a failure, and dnSpy says nothing about it either.
       if (paths.length === 0)
         return false
@@ -2640,7 +2799,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // dnSpy's two follow commands differ only in where the target goes: a plain follow reuses the tab
     // the target already has, while Follow Reference in New Tab always gives it one of its own. Which
     // callback the shell registered is the whole of the difference.
-    const open = newTab ? get().openNodeInNewTabById : get().openNodeById
+    const open = newTab ? get().openNodeInNewTabById : get().followNodeById ?? get().openNodeById
     if (!open)
       return
     try {
@@ -2693,6 +2852,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   methodBodyChanged: async (node, result) => {
+    clearCacheForNodes(get, [node.id, ...(result.changedNodeIds ?? [])])
     set((state) => ({
       ...modifiedFrom(result, state),
       workspaceStateId: result.stateId,
@@ -3579,6 +3739,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setOpenNodeById: (open) => set({ openNodeById: open }),
+  setFollowNodeById: (follow) => set({ followNodeById: follow }),
   setOpenNodeInNewTabById: (open) => set({ openNodeInNewTabById: open }),
   setRevealDocument: (open) => set({ revealDocument: open }),
   setOpenToolWindow: (open) => set({ openToolWindow: open }),
@@ -3949,7 +4110,28 @@ const collectVisibleNodes = (state: Pick<AppState, 'roots' | 'children' | 'expan
 }
 
 
+/**
+ * The languages of a BAML entry's document: `xaml` is the XAML it decompiles to, `baml` its records (Disassemble
+ * BAML). BamlRefresher writes these again when the BAML page changes.
+ */
+export const isBamlDocumentLanguage = (language: string): boolean => language === 'xaml' || language === 'baml'
+
+/**
+ * BamlResourceElementNode.GetFilename for a BAML tab: the entry's name with `.xaml`, or `.baml` when disassembled —
+ * the other one of the two extensions replaced, any other name given the extension as well. Only the last part of
+ * the entry's path is kept (BamlTabSaver.RemovePath).
+ */
+const bamlFilename = (title: string, language: string): string => {
+  const [other, target] = language === 'baml' ? ['.xaml', '.baml'] : ['.baml', '.xaml']
+  const name = title.slice(title.lastIndexOf('/') + 1)
+  if (name.toLowerCase().endsWith(other))
+    return name.slice(0, -other.length) + target
+  return name.toLowerCase().endsWith(target) ? name : name + target
+}
+
 export const suggestCodeFilename = (title: string, language: string): string => {
+  if (isBamlDocumentLanguage(language))
+    title = bamlFilename(title, language).replace(/\.[^.]*$/, '')
   const extension = language === 'csharp'
     ? '.cs'
     : language === 'visual-basic'
@@ -3958,7 +4140,11 @@ export const suggestCodeFilename = (title: string, language: string): string => 
         ? '.il'
         : language === 'xml'
           ? '.xml'
-          : '.txt'
+          : language === 'xaml'
+            ? '.xaml'
+            : language === 'baml'
+              ? '.baml'
+              : '.txt'
   const baseName = title
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
     .replace(/[. ]+$/g, '')
@@ -6369,6 +6555,7 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
     canUndo: result.canUndo,
     canRedo: result.canRedo,
   })
+  const editedRoots = clearCacheForNodes(get, result.changedNodeIds)
   const parentIds = new Set<string>()
   for (const nodeId of result.changedNodeIds) {
     const parentId = get().parents[nodeId]
@@ -6378,13 +6565,11 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
       if (get().selectedNode?.id === nodeId) {
         set({ selectedNode: node, selectedNodes: [node] })
       }
-      const document = get().documents[nodeId]
-      if (document)
-        await get().openDocument(node, document.requestedLanguage)
     } catch {
       // A removed metadata item may no longer have a view model.
     }
   }
+  await redecompileModifiedDocuments(get, workspaceId, result.changedNodeIds, editedRoots)
   for (const parentId of parentIds) {
     const refreshed = await window.dnSpy.getChildren(workspaceId, parentId)
     set((state) => ({ children: { ...state.children, [parentId]: refreshed.nodes } }))
@@ -6410,6 +6595,62 @@ const refreshAfterEdit = async (get: StoreGet, set: StoreSet, result: EditCommit
     assemblyListRevision: state.assemblyListRevision + 1,
   }))
   return removed
+}
+
+/**
+ * DecompilationCache.Clear over the modules an edit touched: the documents of their roots, and the documents that
+ * refer to them, are forgotten. A node whose root the tree cannot tell clears the whole cache. Answers the roots, or
+ * undefined when they could not be told.
+ */
+const clearCacheForNodes = (get: StoreGet, nodeIds: readonly string[] | undefined): Set<string> | undefined => {
+  const state = get()
+  const isRoot = (id: string): boolean => state.roots.some((root) => root.id === id) || state.modules.some((module) => module.id === id)
+  const roots = new Set<string>()
+  for (const nodeId of nodeIds ?? []) {
+    const root = rootIdOf(state, nodeId)
+    if (!isRoot(root)) {
+      decompilationCache.clearAll()
+      return undefined
+    }
+    roots.add(root)
+  }
+  if (roots.size > 0) {
+    decompilationCache.clearModules({
+      roots,
+      modulePaths: new Set(state.modules.filter((module) => roots.has(module.id)).map((module) => module.path)),
+      rootOf: (nodeId) => {
+        const root = rootIdOf(state, nodeId)
+        return isRoot(root) ? root : undefined
+      },
+    })
+  }
+  return roots
+}
+
+/**
+ * DocumentTabService.RefreshModifiedDocument: the documents that show a changed node are decompiled again, and so
+ * are the open ones of the modules the edit touched — every open one when those could not be told. The caret stays
+ * where it was, the way a refresh restores dnSpy's reference position.
+ */
+const redecompileModifiedDocuments = async (get: StoreGet, workspaceId: string, changedNodeIds: readonly string[], editedRoots: Set<string> | undefined): Promise<void> => {
+  const state = get()
+  const open = new Set(state.documentOrder)
+  const stale = Object.keys(state.documents).filter((documentId) => {
+    if (changedNodeIds.some((nodeId) => documentShowsNode(documentId, nodeId)))
+      return true
+    if (!open.has(documentId) || changedNodeIds.length === 0)
+      return false
+    if (!editedRoots)
+      return true
+    const roots = rootsOfNodes(state, state.documents[documentId].nodeIds ?? nodeIdsOfDocument(documentId))
+    return roots !== undefined && roots.some((root) => editedRoots.has(root))
+  })
+  await Promise.all(stale.map(async (documentId) => {
+    const document = get().documents[documentId]
+    const nodes = document ? await documentNodesOf(get, workspaceId, documentId) : undefined
+    if (document && nodes && get().workspaceId === workspaceId)
+      await get().openNodesDocument(nodes, document.requestedLanguage, false, { keepEditorState: true })
+  }))
 }
 
 /**

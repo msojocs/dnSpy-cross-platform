@@ -141,6 +141,18 @@ const UNIMPLEMENTED = [
 ]
 
 describe('buildCodeEditorMenuItems', () => {
+  it('offers Disassemble BAML on a BAML entry\'s tab only, checked while the records are shown', () => {
+    const onToggleDisassembleBaml = vi.fn()
+    expect(menuKeys(context({ onToggleDisassembleBaml }))).not.toContain('disassemble-baml')
+    const ctx = context({ bamlDocument: true, disassembleBaml: true, onToggleDisassembleBaml })
+    // DisassembleBamlCommand sits in GROUP_CTX_FILES_BAML_OPTIONS (500), before the debugger's group.
+    expect(menuKeys(ctx)[0]).toBe('disassemble-baml')
+    render(<>{(buildCodeEditorMenuItems(ctx)[0] as { content: React.ReactNode }).content}</>)
+    expect(document.querySelector('.ds-menu-check-panel')).not.toBeNull()
+    runEntry(ctx, 'disassemble-baml')
+    expect(onToggleDisassembleBaml).toHaveBeenCalledOnce()
+  })
+
   it('offers Go to Resource on a reference to a member that reads a .resources entry', () => {
     const property: TreeNode = { id: 'n-title', label: 'Title', kind: 'property', hasChildren: true, description: 'System.String Resources::Title()' }
     const onGoToResource = vi.fn()

@@ -3,6 +3,7 @@ using System.Security;
 using System.Text;
 using dnlib.DotNet;
 using dnSpy.Backend.Core;
+using dnSpy.Backend.Core.ProjectExport;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.Metadata;
 
@@ -287,7 +288,25 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 			throw new ConsoleErrorException(ConsoleStrings.MissingOutputDir);
 		if (options.Language.ProjectFileExtension is null)
 			throw new ConsoleErrorException(string.Format(CultureInfo.CurrentCulture, ConsoleStrings.LanguageXDoesNotSupportProjects, options.Language.Name));
-		new ProjectExporter(options, modules, Error).Export();
+		// The export itself is the GUI's Export to Project (dnSpy.Backend.Core's ProjectExporter); the console only
+		// turns its switches into that export's options, as dnSpy.Console fills in ProjectCreatorOptions.
+		var exportOptions = new ProjectExportOptions {
+			Directory = options.OutputDirectory,
+			SolutionFilename = options.CreateSolutionFile && !string.IsNullOrEmpty(options.SolutionName) ? options.SolutionName : null,
+			ProjectVersion = options.ProjectVersion,
+			SdkProject = options.SdkProject,
+			Language = options.Language.Kind == ConsoleLanguageKind.VisualBasic ? ProjectExportLanguage.VisualBasic : ProjectExportLanguage.CSharp,
+			ProjectGuid = options.ProjectGuid,
+			UnpackResources = options.UnpackResources,
+			CreateResX = options.CreateResX,
+			DecompileBaml = options.DecompileBaml,
+			AddCorlibReference = options.AddCorlibReference,
+			NumberOfThreads = options.NumberOfThreads,
+			IndentationString = options.Spaces <= 0 ? "\t" : new string(' ', options.Spaces),
+			Settings = options.Settings,
+		};
+		var exportModules = modules.Select(module => new ProjectExportModule(module.Path, module.File, module.Resolver, module.Resolver)).ToArray();
+		new ProjectExporter(exportOptions, exportModules, Error).ExportAsync(CancellationToken.None).GetAwaiter().GetResult();
 	}
 
 	static IMemberDef? ResolveToken(ModuleDef module, int token) {

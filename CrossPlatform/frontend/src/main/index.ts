@@ -31,8 +31,13 @@ const analyzerRequests = new Map<string, { controller: AbortController; sender: 
 // The search window's searches still running, kept the same way: a new query calls the last one off.
 const searchRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 const stringReferencesRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
+// The documents being decompiled, by window and the key the renderer named each with: the tab's Cancel button
+// (dnSpy's WaitAdorner) and a tab that moves on to another document call one off.
+const decompileRequests = new Map<string, { controller: AbortController }>()
 // The save runs of the Save Module and Save Modules windows, whose Cancel calls them off.
 const saveRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
+// The exports of the Export to Project dialog, whose Cancel calls them off.
+const exportProjectRequests = new Map<string, { controller: AbortController; sender: WebContents; requestKey: string }>()
 let uiLocale: UiLocale = 'en'
 // True while a restart-as-administrator request is being carried out, so a second one is ignored.
 let restartInFlight = false
@@ -254,6 +259,11 @@ const sendBackendNotification = (method: string, parameters: unknown): void => {
     const request = saveRequests.get(progress.progressToken)
     if (request && !request.sender.isDestroyed())
       request.sender.send('module:saveProgress', { ...progress, progressToken: undefined, requestKey: request.requestKey })
+  } else if (method === 'project/exportProgress') {
+    const progress = parameters as { progressToken: string; progress: number; maxProgress: number; errors: string[] }
+    const request = exportProjectRequests.get(progress.progressToken)
+    if (request && !request.sender.isDestroyed())
+      request.sender.send('project:exportProgress', { requestKey: request.requestKey, progress: progress.progress, maxProgress: progress.maxProgress, errors: progress.errors })
   } else if (method === 'stringReferences/progress') {
     const progress = parameters as { progressToken: string; start: number; references: StringReference[] }
     const request = stringReferencesRequests.get(progress.progressToken)
@@ -515,7 +525,7 @@ const registerIpc = (): void => {
   ipcMain.handle('gac:list', () => requireBackend().invoke('gac/list', {}))
   ipcMain.handle('gac:getDetails', (_event, path: string) => requireBackend().invoke('gac/getDetails', { path }))
   ipcMain.handle('documentList:defaults', () => requireBackend().invoke('documentList/defaults', {}))
-  ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw }))
+  ipcMain.handle('resource:getItems', (_event, workspaceId: string, nodeIds: string[], raw: boolean, baml?: unknown) => requireBackend().invoke('resource/getItems', { workspaceId, nodeIds, raw, baml }))
   ipcMain.handle('resource:find', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('resource/find', { workspaceId, nodeId }))
   ipcMain.handle('resource:getItemNames', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('resource/getItemNames', { workspaceId, nodeIds, raw: false }))
   ipcMain.handle('compiler:getAssemblyAttributesSource', (_event, workspaceId: string, nodeId: string, language?: string) => requireBackend().invoke('compiler/getAssemblyAttributesSource', { workspaceId, nodeId, language: language ?? 'csharp' }))
@@ -562,8 +572,29 @@ const registerIpc = (): void => {
   // Decompiling an assembly root requires ILSpy to walk every type and build source/IL mappings. Large
   // assemblies can legitimately take several minutes; the generic RPC deadline is intentionally shorter
   // for interactive tree operations, so give this operation its own deadline.
-  ipcMain.handle('document:decompile', (_event, workspaceId: string, nodeId: string, language: string, settings?: unknown) =>
-    requireBackend().invoke('document/decompile', { workspaceId, nodeId, language, settings }, 600_000))
+  // A document of several nodes — the tree's multi-selection — goes to the RPC that writes them one after another.
+  ipcMain.handle('document:decompile', async (event, workspaceId: string, nodeId: string | string[], language: string, settings?: unknown, requestKey?: string) => {
+    const nodeIds = Array.isArray(nodeId) ? nodeId : [nodeId]
+    const [method, params] = nodeIds.length > 1
+      ? ['document/decompileNodes', { workspaceId, nodeIds, language, settings }] as const
+      : ['document/decompile', { workspaceId, nodeId: nodeIds[0], language, settings }] as const
+    if (!requestKey)
+      return requireBackend().invoke(method, params, 600_000)
+    const key = `${event.sender.id}:${requestKey}`
+    const entry = { controller: new AbortController() }
+    decompileRequests.set(key, entry)
+    try {
+      return await requireBackend().invoke(method, params, 600_000, entry.controller.signal)
+    } finally {
+      if (decompileRequests.get(key) === entry)
+        decompileRequests.delete(key)
+    }
+  })
+  ipcMain.handle('document:cancelDecompile', (event, requestKey: string) => {
+    decompileRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
+  ipcMain.handle('document:resolveNode', (_event, workspaceId: string, nodeId: string, decompileFullType: boolean) =>
+    requireBackend().invoke('document/resolveNode', { workspaceId, nodeId, decompileFullType }, 600_000))
   ipcMain.handle('document:findMember', (_event, workspaceId: string, modulePath: string, metadataToken: number) => requireBackend().invoke('document/findMember', { workspaceId, modulePath, metadataToken }))
   // Quick Info is asked for on hover, so it takes the short interactive deadline the tree's own calls do.
   ipcMain.handle('document:quickInfo', (_event, workspaceId: string, request: Record<string, unknown>) =>
@@ -820,6 +851,58 @@ const registerIpc = (): void => {
   })
   ipcMain.handle('module:cancelSave', (event, requestKey: string) => {
     saveRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
+  // dnSpy's Export to Project: what the selection names, then the export itself, which takes as long as decompiling
+  // every type does — the long deadline, and the dialog's Cancel calls it off by the key it named it with.
+  ipcMain.handle('project:getExportInfo', (_event, workspaceId: string, nodeIds: string[]) =>
+    requireBackend().invoke('project/getExportInfo', { workspaceId, nodeIds }))
+  ipcMain.handle('project:export', async (event, request: Record<string, unknown>, requestKey: string) => {
+    const key = `${event.sender.id}:${requestKey}`
+    const entry = { controller: new AbortController(), sender: event.sender, requestKey }
+    exportProjectRequests.set(key, entry)
+    try {
+      return await requireBackend().invoke('project/export', { ...request, progressToken: key }, 3_600_000, entry.controller.signal)
+    } finally {
+      if (exportProjectRequests.get(key) === entry)
+        exportProjectRequests.delete(key)
+    }
+  })
+  ipcMain.handle('project:cancelExport', (event, requestKey: string) => {
+    exportProjectRequests.get(`${event.sender.id}:${requestKey}`)?.controller.abort()
+  })
+  // dnSpy's PickDirectory: a folder browser that starts at the folder the box names.
+  ipcMain.handle('dialog:pickExportDirectory', async (_event, currentDirectory?: string) => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: nativeText().selectDirectory,
+      defaultPath: currentDirectory || dialogPathHistory?.openDirectory,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0)
+      return undefined
+    return result.filePaths[0]
+  })
+  ipcMain.handle('fs:isExistingFile', (_event, target: string) => {
+    try {
+      return typeof target === 'string' && target.length > 0 && statSync(target).isFile()
+    } catch {
+      return false
+    }
+  })
+  // "Open project in Visual Studio": dnSpy hands the solution (or the project) to the shell, which opens it with
+  // the app registered for it. There is no Visual Studio on Linux or macOS, so the file goes to the app the
+  // desktop has for it; with none, its folder is shown instead. A test-driven run writes the path down instead.
+  ipcMain.handle('shell:openExportedProject', async (_event, target: string) => {
+    if (typeof target !== 'string' || target.length === 0)
+      throw new TypeError('A file path is required.')
+    if (!app.isPackaged && process.env.DNSPY_E2E_OPEN_PROJECT_PATH) {
+      writeFileSync(process.env.DNSPY_E2E_OPEN_PROJECT_PATH, target, 'utf8')
+      return
+    }
+    if (!existsSync(target))
+      return
+    const failure = await shell.openPath(target)
+    if (failure)
+      shell.showItemInFolder(target)
   })
   // dnSpy's PathUtils.ValidateFileName, which looks at the disk as well as at the name: the main process is the
   // side that can. Answers the message's template and its argument, or nothing for a name that will do.
@@ -1159,8 +1242,9 @@ const registerIpc = (): void => {
   // folder the user picks, each under its name with the characters a file name cannot hold made '_'. A
   // .resources file saves as its entries, the way dnSpy's deserialized save does, so even one resource can
   // be several files. `raw` is the Raw Save command: an entry's serialized bytes instead of its value.
-  ipcMain.handle('edit:saveResource', async (_event, workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs = false) => {
-    const { items } = await requireBackend().invoke<{ items: { name: string; base64Data: string }[] }>('resource/getItems', { workspaceId, nodeIds, raw })
+  // `baml` is the BAML page's settings: a BAML entry saves as the XAML (or, disassembled, the records) its tab shows.
+  ipcMain.handle('edit:saveResource', async (_event, workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs = false, baml?: unknown) => {
+    const { items } = await requireBackend().invoke<{ items: { name: string; base64Data: string }[] }>('resource/getItems', { workspaceId, nodeIds, raw, baml })
     if (items.length === 0)
       return []
     // A test cannot drive the native pickers, so it names the file or folder up front.

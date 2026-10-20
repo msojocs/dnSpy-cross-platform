@@ -103,9 +103,11 @@ public sealed class DocumentViewerDataTests : IDisposable {
 		var opCode = document.Spans.First(span => span.OpCode is not null);
 		Assert.Equal(opCode.OpCode, TextOf(document, opCode.Start, opCode.Length));
 		Assert.Equal(TextColors.OpCode, opCode.Color);
-		var method = Assert.Single(document.BlockStructures!);
-		Assert.Equal("method", method.Kind);
-		Assert.Equal(method.End, Assert.Single(document.LineSeparators!));
+		var method = Assert.Single(document.BlockStructures!, block => block.Kind == "method");
+		// The separator is under the method's closing brace, at the end of the line its end comment is on.
+		var separator = Assert.Single(document.LineSeparators!);
+		Assert.Equal(LineOf(document.Text, method.End), LineOf(document.Text, separator));
+		Assert.Equal("} // end of method Program::Calculate", document.Text[document.Text.LastIndexOf('\n', method.End)..separator].Trim());
 
 		var info = await manager.GetQuickInfoAsync(new DocumentQuickInfoRequest(workspaceId, OpCode: "ldarg.0"), TestContext.Current.CancellationToken);
 		Assert.StartsWith("ldarg.0 (0x02)", string.Concat(info.Parts.Select(part => part.Text)), StringComparison.Ordinal);

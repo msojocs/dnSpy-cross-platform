@@ -98,16 +98,64 @@ it('translates the hierarchy folders and leaves the type rows beside them alone'
   expect(screen.getByText('SubWorker @02000005')).toBeVisible()
 })
 
-it('does not open a document for a group folder row', () => {
+it('opens a document for a group folder row, which NodeDecompiler writes what it holds into', () => {
   const onOpenNode = vi.fn()
+  const onShowNode = vi.fn()
   const folder: TreeNode = { id: 'df', kind: 'derivedtypesfolder', label: 'Derived Types', hasChildren: true }
-  useAppStore.setState({ roots: [folder] })
-  render(<AssemblyExplorer commands={explorerCommands({ onOpenNode })} />)
+  useAppStore.setState({ roots: [folder], selectedNodes: [] })
+  render(<AssemblyExplorer commands={explorerCommands({ onOpenNode, onShowNode })} />)
 
-  // The folder is a heading rather than a document, so dnSpy's open commands leave it alone and only the
-  // expander acts on it.
+  // dnSpy shows a folder like any other row: its document lists the rows it holds.
+  fireEvent.click(screen.getByRole('treeitem'), { detail: 1 })
+  expect(onShowNode).toHaveBeenCalledWith(folder)
   fireEvent.doubleClick(screen.getByRole('treeitem'))
-  expect(onOpenNode).not.toHaveBeenCalled()
+  expect(onOpenNode).toHaveBeenCalledWith(folder)
+})
+
+describe('a selection of several rows', () => {
+  const first: TreeNode = { id: 'a', kind: 'type', label: 'First', hasChildren: true }
+  const second: TreeNode = { id: 'b', kind: 'type', label: 'Second', hasChildren: false }
+  const member: TreeNode = { id: 'm', kind: 'method', label: 'Run()', hasChildren: false }
+
+  beforeEach(() => {
+    useAppStore.setState({
+      roots: [first, second],
+      children: { a: [member] },
+      parents: { m: 'a' },
+      expanded: { a: true },
+      selectedNode: undefined,
+      selectedNodes: [],
+    })
+  })
+
+  it('shows the top-level selection in one document, as DocumentTabService does', () => {
+    const onShowNode = vi.fn()
+    const onShowNodes = vi.fn()
+    render(<AssemblyExplorer commands={explorerCommands({ onShowNode, onShowNodes })} />)
+    const row = (label: string): HTMLElement => document.querySelector(`.tree-row[data-node-id="${({ First: 'a', Second: 'b', 'Run()': 'm' } as Record<string, string>)[label]}"]`) as HTMLElement
+
+    fireEvent.click(row('Second'), { detail: 1 })
+    expect(onShowNode).toHaveBeenLastCalledWith(second)
+    fireEvent.click(row('First'), { detail: 1, ctrlKey: true })
+    expect(onShowNodes).toHaveBeenLastCalledWith([second, first])
+    // A row under a selected row is in the selection but not in what is shown (GetTopLevelSelection).
+    fireEvent.click(row('Run()'), { detail: 1, ctrlKey: true })
+    expect(onShowNodes).toHaveBeenLastCalledWith([second, first])
+    // Taking rows out again shows what is left of the selection.
+    fireEvent.click(row('Second'), { detail: 1, ctrlKey: true })
+    fireEvent.click(row('Run()'), { detail: 1, ctrlKey: true })
+    expect(onShowNode).toHaveBeenLastCalledWith(first)
+  })
+
+  it('shows a range picked with Shift as one document', () => {
+    const onShowNodes = vi.fn()
+    render(<AssemblyExplorer commands={explorerCommands({ onShowNodes })} />)
+    const row = (label: string): HTMLElement => document.querySelector(`.tree-row[data-node-id="${({ First: 'a', Second: 'b', 'Run()': 'm' } as Record<string, string>)[label]}"]`) as HTMLElement
+
+    fireEvent.click(row('Run()'), { detail: 1 })
+    fireEvent.click(row('Second'), { detail: 1, shiftKey: true })
+    expect(onShowNodes).toHaveBeenLastCalledWith([member, second])
+  })
 })
 
 it('re-reads the token option when it is saved', () => {

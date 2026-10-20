@@ -36,9 +36,7 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Move Group to Right': '移动组到右侧',
   'Move Group to Bottom': '移动组到底部',
   'Help': '帮助',
-  // dnSpy's File menu (dnSpy.Resources.zh-CN.resx / dnSpy.AsmEditor.Resources.zh-CN.resx). Entries the
-  // port has not implemented — Export to Project, Close Old In-Memory Modules — are listed and
-  // translated all the same: they keep dnSpy's place in the menu and render disabled.
+  // dnSpy's File menu (dnSpy.Resources.zh-CN.resx / dnSpy.AsmEditor.Resources.zh-CN.resx).
   'Open...': '打开...',
   'Export to Project...': '导出到工程...',
   'Save': '保存',
@@ -59,7 +57,31 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Close All Missing Files': '关闭所有已丢失的文件',
   'Sort Assemblies': '程序集排序',
   'Restart as Administrator': '以管理员身份重启',
+  // dnSpy's Export to Project dialog (ExportToProject_* and Error_* in dnSpy.Resources.zh-CN.resx). Version,
+  // Language, New, Cancel, Close and Invalid GUID already have translations from other dialogs.
+  'Export to Project': '导出到工程',
+  'Folder': '目标文件夹',
+  'Solution': '解决方案',
+  'Project GUID': '项目 GUID',
+  'Unpack resources': '解包资源',
+  'Create .resx files': '创建 .resx 文件',
+  'Decompile baml to xaml': '将 BAML 反编译为 XAML',
+  'Use SDK style project format': '使用 SDK 风格项目格式',
+  'Open project in Visual Studio': '在 Visual Studio 中打开项目',
+  'One file will be decompiled. Select more than one assembly to decompile more than one file.': '即将反编译一个文件。若要反编译多个文件，请选中多个程序集。',
+  '{count} files will be decompiled.': '{count} 个文件将反编译。',
+  'Error log': '错误日志',
+  'Export': '导出',
+  'Missing destination folder.': '目标文件夹不能为空！',
+  'A file with the same name as the destination folder already exists.': '目标文件夹中已存在具有相同名称的文件。',
+  'Missing filename': '缺少文件名',
+  // The port's own: the names its check box and progress bar are read out by, which dnSpy's leave unnamed.
+  'Create solution': '创建解决方案',
+  'Progress': '进度',
   'Save Code...': '保存代码...',
+  // dnSpy.BamlDecompiler's BamlTabSaver.MenuHeader.
+  'Save XAML...': '保存 XAML...',
+  'Save BAML...': '保存 BAML...',
   'Close All Tabs': '关闭所有标签页',
   'Close All But This': '除此之外全部关闭',
   'New Tab': '新标签页',
@@ -1751,4 +1773,8 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Memory can only be read while debugging.': '只有在调试时才能读取内存。',
   'Could not read {name} from the process: {message}': '无法从进程中读取 {name}: {message}',
   'Reloaded the method bodies of {name}.': '已重新加载 {name} 的所有方法体。',
+  // dnSpy's WaitAdorner and what DecompileDocumentTabContent writes when a decompilation does not finish.
+  'Decompiling...': '反编译中…',
+  'The operation was canceled': '操作已取消',
+  'An error occurred': '发生错误',
 }

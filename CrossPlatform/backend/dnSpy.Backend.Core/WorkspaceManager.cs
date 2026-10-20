@@ -84,6 +84,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 	public Task<DecompileResponse> DecompileAsync(DecompileRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).DecompileDocumentAsync(request, cancellationToken);
 
+	public Task<DecompileResponse> DecompileNodesAsync(DecompileNodesRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).DecompileNodesAsync(request, cancellationToken);
+
+	public Task<ResolveDocumentNodeResponse> ResolveDocumentNodeAsync(ResolveDocumentNodeRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ResolveDocumentNode(request.NodeId, request.DecompileFullType), cancellationToken);
+
 	public Task<FindMemberResponse> FindMemberAsync(FindMemberRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindMemberAsync(request.ModulePath, request.MetadataToken, cancellationToken), cancellationToken);
 
@@ -801,7 +807,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		static IReadOnlyList<CodeStatementDto> BuildMethodStatements(Workspace.ModuleEntry entry, MethodDef method, CancellationToken cancellationToken) {
-			var settings = new DecompilerSettings();
+			// The lines are those of the method's document as it opens with the C# page's defaults — token comments
+			// and all — so a frame's line is the one the tab shows.
+			var settings = ((DecompilerSettingsDto?)null).ToDecompilerSettings();
 			using var session = Workspace.CreateCSharpDecompilerSession(entry, settings, cancellationToken);
 			var decompiler = session.Decompiler;
 			var syntaxTree = decompiler.Decompile([Workspace.ToEntityHandle(method)]);
@@ -903,7 +911,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var source = FindSourceMethod(method);
 			var statements = new List<SourceStatementDto>();
 			try {
-				var settings = new DecompilerSettings();
+				var settings = ((DecompilerSettingsDto?)null).ToDecompilerSettings();
 				using var session = Workspace.CreateCSharpDecompilerSession(entry, settings, cancellationToken);
 				var decompiler = session.Decompiler;
 				var syntaxTree = decompiler.Decompile([Workspace.ToEntityHandle(source)]);
@@ -2163,20 +2171,28 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		}
 
 		// ILSpy owns its metadata and syntax tree. Only preparing the snapshot and publishing references
-		// need the workspace gate; holding it through DecompileWholeModuleAsSingleFile makes a tree click
+		// need the workspace gate; holding it through a large type's decompilation makes a tree click
 		// wait for an unrelated document (including a document restored at startup) to finish.
 		public async Task<DecompileResponse> DecompileDocumentAsync(DecompileRequest request, CancellationToken cancellationToken) {
 			if (request.Language is not (DecompilerLanguage.CSharp or DecompilerLanguage.VisualBasic))
 				return await RunAsync(w => w.DecompileAsync(request, cancellationToken), cancellationToken).ConfigureAwait(false);
 
 			try {
-				var prepared = await RunAsync(w => w.PrepareCSharpDecompilation(request.NodeId, request.Settings, cancellationToken), cancellationToken).ConfigureAwait(false);
+				// An assembly, a module and a namespace are no code: their header and, for the first two, their own
+				// attributes. Small enough to write under the gate; the Visual Basic one is analyzed after it.
+				var container = await RunAsync(w => w.DecompileContainer(request.NodeId, request.Language, request.Settings, cancellationToken), cancellationToken).ConfigureAwait(false);
+				if (container is not null) {
+					if (request.Language == DecompilerLanguage.CSharp || container.Attributes is not { } csharpAttributes || string.IsNullOrWhiteSpace(csharpAttributes.Text))
+						return request.Language == DecompilerLanguage.CSharp ? CSharpContainerDocument(container) : container.Header;
+					var vbText = await AttributesToVisualBasicAsync(csharpAttributes.Text, cancellationToken).ConfigureAwait(false);
+					var vbAttributes = await AnalyzeVisualBasicAsync(new DecompileResponse(container.Header.Title, "visual-basic", vbText, [], csharpAttributes.Diagnostics), request.NodeId, cancellationToken).ConfigureAwait(false);
+					return DocumentConcatenation.Concat([container.Header, vbAttributes], string.Empty, "visual-basic") with { Title = container.Header.Title };
+				}
+				var prepared = await RunAsync(w => w.PrepareCSharpDecompilation(request.NodeId, request.Settings, request.Language == DecompilerLanguage.VisualBasic, cancellationToken), cancellationToken).ConfigureAwait(false);
 				if (prepared is null)
 					return await RunAsync(w => w.DecompileAsync(request, cancellationToken), cancellationToken).ConfigureAwait(false);
 				using var session = prepared.Session;
-				var syntaxTree = await Task.Run(() => prepared.WholeModule
-					? session.Decompiler.DecompileWholeModuleAsSingleFile()
-					: session.Decompiler.Decompile(prepared.Handles), cancellationToken).ConfigureAwait(false);
+				var syntaxTree = await Task.Run(() => session.Decompiler.Decompile(prepared.Handles), cancellationToken).ConfigureAwait(false);
 				var csharp = await RunAsync(w => {
 					// An edit, reload or close while ILSpy worked must not publish spans or a statement map
 					// against different metadata. Shared dnlib objects and node dictionaries remain protected.
@@ -2188,7 +2204,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				if (request.Language != DecompilerLanguage.VisualBasic)
 					return csharp;
 				var visualBasic = await VisualBasicConversion.ConvertAsync(csharp, prepared.MemberOnly, cancellationToken).ConfigureAwait(false);
-				return await AnalyzeVisualBasicAsync(visualBasic, request.NodeId, cancellationToken).ConfigureAwait(false);
+				var analyzed = await AnalyzeVisualBasicAsync(visualBasic, request.NodeId, cancellationToken).ConfigureAwait(false);
+				return await RunAsync(w => w.GetNode(request.NodeId).AsModuleEntry is { } module ? w.WithTokenCommentSpans(analyzed, module) : analyzed, cancellationToken).ConfigureAwait(false);
 			}
 			catch (OperationCanceledException) {
 				throw;
@@ -2201,16 +2218,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		CSharpDecompilation? PrepareCSharpDecompilation(string nodeId, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken) {
+		CSharpDecompilation? PrepareCSharpDecompilation(string nodeId, DecompilerSettingsDto? settingsDto, bool visualBasic, CancellationToken cancellationToken) {
 			var node = GetNode(nodeId);
-			if (node.AsModuleEntry is not { } module || node.Kind is not (NodeKind.Assembly or NodeKind.Module or NodeKind.Namespace or NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event))
+			if (node.AsModuleEntry is not { } module || node.Kind is not (NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event))
 				return null;
-			var wholeModule = node.Kind is NodeKind.Assembly or NodeKind.Module;
-			var handles = node.Kind == NodeKind.Namespace
-				? GetNamespaceIndex(module).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle).ToArray()
-				: wholeModule ? Array.Empty<System.Reflection.Metadata.EntityHandle>() : [ToEntityHandle((IMDTokenProvider)node.Value)];
-			var settings = settingsDto.ToDecompilerSettings();
-			return new CSharpDecompilation(stateId, wholeModule, node.Kind is NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event, handles, settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
+			var settings = visualBasic ? settingsDto.ToVisualBasicSettings() : settingsDto.ToDecompilerSettings();
+			return new CSharpDecompilation(stateId, node.Kind is not NodeKind.Type, [ToEntityHandle((IMDTokenProvider)node.Value)], settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
 		}
 
 		DecompileResponse FinishCSharpDecompilation(NodeEntry node, CSharpDecompiler decompiler, SyntaxTree syntaxTree, DecompilerSettings settings, CancellationToken cancellationToken) {
@@ -2220,22 +2233,39 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var statements = BuildCodeStatements(syntaxTree, decompiler, module, cancellationToken);
 			RefreshStatementCache();
 			codeStatementsByNode[$"{node.Id}:{stateId}"] = statements;
-			return new DecompileResponse(GetDocumentTitle(node), "csharp", output.ToString(), output.Spans,
+			return WithTokenCommentSpans(new DecompileResponse(GetDocumentTitle(node), "csharp", output.ToString(), output.Spans,
 				decompiler.Errors.Select(e => new DiagnosticDto("warning", e.ToString())).ToArray()) {
 				CodeStatements = statements,
 				BlockStructures = output.BlockStructures,
 				LineSeparators = output.LineSeparators,
 				RelatedKeywords = output.RelatedKeywords,
-			};
+			}, module);
 		}
 
-		sealed record CSharpDecompilation(string StateId, bool WholeModule, bool MemberOnly, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
+		/// <summary>
+		/// The references of the token comments the C# page's ShowTokenAndRvaComments writes (in C#, or converted to
+		/// Visual Basic): the token is the member's, the RVA and the file offset addresses of the module's file.
+		/// </summary>
+		internal DecompileResponse WithTokenCommentSpans(DecompileResponse document, ModuleEntry module) {
+			var added = DnSpyCSharpTransform.TokenCommentSpans(document.Text, module.Path, token =>
+				// A reference into the workspace names its node, as the C# document's other references do.
+				ResolveInModule(module, unchecked((uint)token)) is { NodeId: { } nodeId }
+					? new TextSpanDto(0, 0, "reference", nodeId)
+					: null).ToList();
+			if (added.Count == 0)
+				return document;
+			return document with { Spans = document.Spans.Concat(added).OrderBy(span => span.Start).ToArray() };
+		}
+
+		sealed record CSharpDecompilation(string StateId, bool MemberOnly, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
 
 		public async Task<DecompileResponse> DecompileAsync(DecompileRequest request, CancellationToken cancellationToken) {
 			var node = GetNode(request.NodeId);
 			cancellationToken.ThrowIfCancellationRequested();
+			if (DecompileNodeDocument(node, request.Language, request.Settings, cancellationToken) is { } nodeDocument)
+				return nodeDocument;
 			if (node.Kind is NodeKind.Resource or NodeKind.ResourceEntry)
-				return DecompileResource(node, request.Language, cancellationToken);
+				return DecompileResource(node, request.Language, request.Settings, cancellationToken);
 			// A type hierarchy node, a reference and the folders that hold them have no code in any language:
 			// dnSpy's NodeDecompiler writes a comment per row whatever decompiler is chosen, so the language
 			// request only picks how a comment starts.
@@ -2249,9 +2279,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 			return request.Language switch {
 				DecompilerLanguage.CSharp => DecompileCSharp(node, request.Settings, cancellationToken),
-				DecompilerLanguage.IL => DecompileIL(node),
-				DecompilerLanguage.ILWithCSharp => DecompileILWithCSharp(node, cancellationToken),
-				DecompilerLanguage.VisualBasic => await DecompileVisualBasicAsync(node, cancellationToken).ConfigureAwait(false),
+				DecompilerLanguage.IL => DecompileIL(node, request.Settings, cancellationToken),
+				DecompilerLanguage.ILWithCSharp => DecompileILWithCSharp(node, request.Settings, cancellationToken),
+				DecompilerLanguage.VisualBasic => await DecompileVisualBasicAsync(node, request.Settings, cancellationToken).ConfigureAwait(false),
 				_ => throw new RpcException(ErrorCodes.InvalidParams, "Unknown decompiler language."),
 			};
 		}
@@ -2301,7 +2331,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return text.ToString();
 		}
 
-		DecompileResponse DecompileCSharp(NodeEntry node, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken) {
+		DecompileResponse DecompileCSharp(NodeEntry node, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken, bool visualBasic = false) {
 			// A PE node and its structures are not decompiled code: they are the headers, sections and metadata
 			// of the image, read straight out of the file (dnSpy's AsmEditor hex nodes). The ELF structures
 			// are the same thing under a different file format.
@@ -2321,15 +2351,14 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					return DecompileElfInfo(node, elfEntry);
 				return DecompileUnknownFile(node);
 			}
-			var settings = settingsDto.ToDecompilerSettings();
+			if (DecompileContainer(node.Id, DecompilerLanguage.CSharp, settingsDto, cancellationToken) is { } container)
+				return CSharpContainerDocument(container);
+			var settings = visualBasic ? settingsDto.ToVisualBasicSettings() : settingsDto.ToDecompilerSettings();
 			try {
 				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
 				var decompiler = session.Decompiler;
 
 				var syntaxTree = node.Kind switch {
-					NodeKind.Assembly => decompiler.DecompileWholeModuleAsSingleFile(),
-					NodeKind.Module => decompiler.DecompileWholeModuleAsSingleFile(),
-					NodeKind.Namespace => decompiler.Decompile(GetNamespaceIndex(moduleEntry).Groups.GetValueOrDefault(((NamespaceValue)node.Value).Name, Array.Empty<TypeDef>()).Select(ToEntityHandle)),
 					NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event =>
 						decompiler.Decompile([ToEntityHandle((IMDTokenProvider)node.Value)]),
 					_ => throw new RpcException(ErrorCodes.UnsupportedDocument, "This tree node cannot be decompiled."),
@@ -2342,21 +2371,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			catch (Exception ex) {
 				throw new RpcException(ErrorCodes.UnsupportedDocument, "The selected item could not be decompiled.", null, ex);
 			}
-		}
-
-		/// <summary>
-		/// A file that is not a managed assembly and not a PE image — an ELF binary, a script, a file that
-		/// went away. dnSpy opens it all the same and its tab holds the file name as a comment
-		/// (NodeDecompiler.DecompileUnknown); the diagnostic says why there is nothing else to show.
-		/// </summary>
-		DecompileResponse DecompileUnknownFile(NodeEntry node) {
-			var path = ((IModuleEntry)node.Module).Path;
-			return new DecompileResponse(
-				GetLabel(node),
-				"csharp",
-				$"// {Path.GetFileName(path)}" + Environment.NewLine,
-				Array.Empty<TextSpanDto>(),
-				[new DiagnosticDto("info", $"{path} is not a managed assembly or a valid PE file, so it has no code to show.")]);
 		}
 
 		/// <summary>
@@ -2447,26 +2461,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		/// <summary>
-		/// The document of a file that is a PE image but not a managed assembly — dnSpy's PEDocumentNode. It
-		/// says which file it is and then shows the same structures its PE node lists, since such a file has no
-		/// code to show and the headers are all it has.
-		/// </summary>
-		DecompileResponse DecompilePEInfo(NodeEntry node, PeOnlyModuleEntry peEntry) {
-			var builder = new StringBuilder();
-			builder.AppendLine($"// PE File: {Path.GetFileName(peEntry.Path)}");
-			builder.AppendLine($"// Path: {peEntry.Path}");
-			builder.AppendLine($"// Size: {peEntry.FileLength:N0} bytes");
-			builder.AppendLine();
-			AppendPeStructures(builder, peEntry);
-			return new DecompileResponse(
-				GetLabel(node),
-				"csharp",
-				builder.ToString(),
-				Array.Empty<TextSpanDto>(),
-				Array.Empty<DiagnosticDto>());
-		}
-
 		// A gutter click has to land on an exact IL offset, not on "the method that owns this line": the engine
 		// refuses an offset that is not a sequence point. CreateSequencePoints over the tree that was just printed
 		// gives the IL range of every statement together with the line(s) it was printed on, and the ILFunction
@@ -2527,6 +2521,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 
 		/// <summary>Prints the tree so ILSpy records the line and column of every node.</summary>
 		internal static void RenderWithLocations(SyntaxTree syntaxTree, SpanTextOutput output, DecompilerSettings settings) {
+			DnSpyCSharpTransform.AfterDecompile(syntaxTree, settings);
 			var tokenWriter = TokenWriter.WrapInWriterThatSetsLocationsInAST(new LocationTokenWriter(output, settings));
 			syntaxTree.AcceptVisitor(new CSharpOutputVisitor(tokenWriter, settings.CSharpFormattingOptions));
 		}
@@ -2565,6 +2560,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					PEStreamOptions.PrefetchMetadata,
 					settings.ApplyWindowsRuntimeProjections ? System.Reflection.Metadata.MetadataReaderOptions.Default : System.Reflection.Metadata.MetadataReaderOptions.None);
 				var decompiler = new CSharpDecompiler(file, fileResolver, settings) { CancellationToken = cancellationToken };
+				decompiler.AstTransforms.Add(new DnSpyCSharpTransform(module.Module));
 				return new CSharpDecompilerSession(decompiler);
 			}
 
@@ -2593,6 +2589,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				try {
 					var resolver = GacFallbackAssemblyResolver.Create(module.Path, snapshotFile, throwOnError: false);
 					var decompiler = new CSharpDecompiler(snapshotFile, resolver, settings) { CancellationToken = cancellationToken };
+					decompiler.AstTransforms.Add(new DnSpyCSharpTransform(module.Module));
 					return new CSharpDecompilerSession(decompiler, snapshotFile, snapshotStream);
 				}
 				catch {
@@ -2685,18 +2682,23 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		internal static System.Reflection.Metadata.EntityHandle ToEntityHandle(IMDTokenProvider provider) =>
 			MetadataTokens.EntityHandle(unchecked((int)provider.MDToken.Raw));
 
-		DecompileResponse DecompileIL(NodeEntry node) {
-			var document = ILFormatter.Format(node, this, ResolveILDefinition(node));
-			return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, Array.Empty<DiagnosticDto>()) {
-				CodeStatements = document.Statements,
-				BlockStructures = document.BlockStructures,
-				LineSeparators = document.LineSeparators,
-			};
+		/// <summary>
+		/// The IL document. A PE, ELF or metadata structure and a file with no metadata are not code, and their IL
+		/// document is the comment that names them, as it always was; everything else is dnSpy's IL decompiler's.
+		/// </summary>
+		DecompileResponse DecompileIL(NodeEntry node, DecompilerSettingsDto? settings, CancellationToken cancellationToken) {
+			if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord
+				or NodeKind.Elf or NodeKind.ElfStructure)
+				return ILCommentDocument(node, GetLabel(node));
+			// A PE-only or unreadable file has no metadata, so it has no IL either. Its own name is what the C#
+			// document shows as well.
+			if (node.AsModuleEntry is null && node.Module is IModuleEntry entry)
+				return ILCommentDocument(node, Path.GetFileName(entry.Path));
+			return DecompileILDocument(node, settings, withCSharp: false, cancellationToken);
 		}
 
-		/// <summary>The definition span target of a member the IL view declares — its node, module and token.</summary>
-		Func<IMemberDef, SpanTarget?>? ResolveILDefinition(NodeEntry node) =>
-			node.AsModuleEntry is { } module ? member => ResolveInModule(module, member.MDToken.Raw) : null;
+		DecompileResponse ILCommentDocument(NodeEntry node, string comment) =>
+			new(GetDocumentTitle(node), "il", $"// {comment}" + Environment.NewLine, Array.Empty<TextSpanDto>(), Array.Empty<DiagnosticDto>());
 
 		/// <summary>
 		/// A PE structure is a header of the image rather than code, so there is no IL to interleave — and no
@@ -2717,7 +2719,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			Array.Empty<TextSpanDto>(),
 			[new DiagnosticDto("info", "An ELF structure has no IL; open it as C# to see its fields.")]);
 
-		DecompileResponse DecompileILWithCSharp(NodeEntry node, CancellationToken cancellationToken) {
+		DecompileResponse DecompileILWithCSharp(NodeEntry node, DecompilerSettingsDto? settings, CancellationToken cancellationToken) {
 			if (node.Kind is NodeKind.PE or NodeKind.PeStructure)
 				return DecompilePeStructureIl(node);
 			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
@@ -2739,23 +2741,13 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					Array.Empty<TextSpanDto>(),
 					[new DiagnosticDto("info", description)]);
 			}
-			var settings = new DecompilerSettings {
-				UsingDeclarations = false,
-			};
 			try {
-				using var session = CreateCSharpDecompilerSession(moduleEntry, settings, cancellationToken);
-				var sourceProvider = new DecompiledSourceProvider(session.Decompiler, settings, cancellationToken);
-				var document = ILFormatter.Format(node, this, ResolveILDefinition(node), sourceProvider.GetStatements);
-				var diagnostics = session.Decompiler.Errors
-					.Select(error => new DiagnosticDto("warning", error.ToString()))
-					.ToArray();
-				return new DecompileResponse(GetDocumentTitle(node), "il", document.Text, document.Spans, diagnostics) {
-					CodeStatements = document.Statements,
-					BlockStructures = document.BlockStructures,
-					LineSeparators = document.LineSeparators,
-				};
+				return DecompileILDocument(node, settings, withCSharp: true, cancellationToken);
 			}
 			catch (OperationCanceledException) {
+				throw;
+			}
+			catch (RpcException) {
 				throw;
 			}
 			catch (Exception ex) {
@@ -2763,8 +2755,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		async Task<DecompileResponse> DecompileVisualBasicAsync(NodeEntry node, CancellationToken cancellationToken) {
-			var csharp = DecompileCSharp(node, null, cancellationToken);
+		async Task<DecompileResponse> DecompileVisualBasicAsync(NodeEntry node, DecompilerSettingsDto? settingsDto, CancellationToken cancellationToken) {
+			var csharp = DecompileCSharp(node, settingsDto, cancellationToken, visualBasic: true);
 			return await VisualBasicConversion.ConvertAsync(csharp, node.Kind is NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event, cancellationToken).ConfigureAwait(false);
 		}
 
@@ -4892,58 +4884,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			}
 		}
 
-		sealed class DecompiledSourceProvider(
-			CSharpDecompiler decompiler,
-			DecompilerSettings settings,
-			CancellationToken cancellationToken) {
-			public IReadOnlyList<ILSourceStatement> GetStatements(MethodDef method) {
-				if (!method.HasBody)
-					return Array.Empty<ILSourceStatement>();
-				cancellationToken.ThrowIfCancellationRequested();
-				var syntaxTree = decompiler.Decompile([ToEntityHandle(method)]);
-				var output = new SpanTextOutput(_ => null);
-				syntaxTree.AcceptVisitor(new CSharpOutputVisitor(new TextTokenWriter(output, settings), settings.CSharpFormattingOptions));
-				var source = output.ToString();
-				var methodToken = method.MDToken.Raw;
-				var statements = decompiler.CreateSequencePoints(syntaxTree)
-					.Where(pair => Workspace.GetBodyMethodToken(pair.Key) == methodToken)
-					.SelectMany(pair => pair.Value)
-					.Where(point => !point.IsHidden && point.EndOffset > point.Offset)
-					.Select(point => new ILSourceStatement(point.Offset, point.EndOffset, ExtractSource(source, point.StartLine, point.StartColumn, point.EndLine, point.EndColumn)))
-					.Where(statement => !string.IsNullOrWhiteSpace(statement.Text))
-					.Distinct()
-					.OrderBy(statement => statement.Offset)
-					.ThenBy(statement => statement.EndOffset)
-					.ToArray();
-				if (statements.Length != 0)
-					return statements;
-
-				var fallback = source.Trim();
-				return fallback.Length == 0
-					? Array.Empty<ILSourceStatement>()
-					: [new ILSourceStatement(0, int.MaxValue, fallback)];
-			}
-
-			static string ExtractSource(string source, int startLine, int startColumn, int endLine, int endColumn) {
-				var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
-				if (startLine <= 0 || endLine < startLine || startLine > lines.Length)
-					return string.Empty;
-				endLine = Math.Min(endLine, lines.Length);
-				var firstLine = startLine - 1;
-				var lastLine = endLine - 1;
-				var firstColumn = Math.Clamp(startColumn - 1, 0, lines[firstLine].Length);
-				var lastColumn = Math.Clamp(endColumn - 1, 0, lines[lastLine].Length);
-				if (firstLine == lastLine)
-					return lines[firstLine][firstColumn..Math.Max(firstColumn, lastColumn)].Trim();
-
-				var result = new List<string> { lines[firstLine][firstColumn..] };
-				for (var line = firstLine + 1; line < lastLine; line++)
-					result.Add(lines[line]);
-				result.Add(lines[lastLine][..lastColumn]);
-				return string.Join('\n', result).Trim();
-			}
-		}
-
 		internal sealed class ModuleEntry(string path, ModuleDefMD module, long? fileLength = null) : IModuleEntry {
 			public string Id { get; set; } = string.Empty;
 			/// <summary>The file the module was read from. A module dnSpy's Create Assembly or Create NetModule made
@@ -5060,7 +5000,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// client follows on demand.
 		/// </summary>
 		internal readonly record struct SpanTarget(string? NodeId, string? ModulePath, int? MetadataToken);
-		readonly record struct ILSourceStatement(int Offset, int EndOffset, string Text);
 		sealed class NodeEntry(string id, string key, NodeKind kind, object value, object module) {
 			public string Id { get; } = id;
 			/// <summary>
@@ -5153,302 +5092,6 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			PropertyReference,
 			EventReference,
 			FieldReference,
-		}
-
-		/// <summary>The IL view's text and what dnSpy's IL disassembler records beside it.</summary>
-		internal sealed record ILDocument(string Text, IReadOnlyList<TextSpanDto> Spans, IReadOnlyList<CodeStatementDto> Statements, IReadOnlyList<BlockStructureDto> BlockStructures, IReadOnlyList<int> LineSeparators);
-
-		/// <summary>
-		/// The IL view. Beside the text it records what dnSpy's disassembler does: a statement per instruction —
-		/// the IL view's sequence points, which a bookmark, a hex lookup or a search hit at the caret resolves
-		/// to — a definition span over the name of every member it declares, which is where a token bookmark
-		/// sits, and a reference span over the member an instruction names, which is what the caret is put on
-		/// when the analyzer shows a use in a method. Every line goes through <see cref="WriteLine"/>, so the line
-		/// a statement is recorded at is the one its text lands on.
-		/// </summary>
-		sealed class ILFormatter {
-			readonly StringBuilder builder = new();
-			readonly List<TextSpanDto> spans = [];
-			readonly List<CodeStatementDto> statements = [];
-			readonly List<BlockStructureDto> blockStructures = [];
-			readonly List<int> lineSeparators = [];
-			readonly string? modulePath;
-			readonly Workspace workspace;
-			readonly Func<IMemberDef, SpanTarget?>? resolveDefinition;
-			readonly Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider;
-			// What the instructions name is found the way the analyzer finds it, among what is loaded: drawing a
-			// method does not load the assemblies its calls go to.
-			AnalyzerHost? referenceHost;
-			int line = 1;
-
-			ILFormatter(string? modulePath, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider) {
-				this.modulePath = modulePath;
-				this.workspace = workspace;
-				this.resolveDefinition = resolveDefinition;
-				this.sourceProvider = sourceProvider;
-			}
-
-			public static ILDocument Format(NodeEntry node, Workspace workspace, Func<IMemberDef, SpanTarget?>? resolveDefinition = null, Func<MethodDef, IReadOnlyList<ILSourceStatement>>? sourceProvider = null) {
-				var formatter = new ILFormatter(node.AsModuleEntry?.Path, workspace, resolveDefinition, sourceProvider);
-				formatter.FormatNode(node);
-				return new ILDocument(formatter.builder.ToString(), formatter.spans, formatter.statements, formatter.blockStructures, formatter.lineSeparators);
-			}
-
-			void FormatNode(NodeEntry node) {
-				// A PE node and its structures are headers of the image, not code, so the node's own name is
-				// all there is to say about them. The ELF structures are the same thing.
-				if (node.Kind is NodeKind.PE or NodeKind.PeStructure or NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord
-					or NodeKind.Elf or NodeKind.ElfStructure) {
-					WriteLine($"// {workspace.GetLabel(node)}");
-					return;
-				}
-				switch (node.Value) {
-					case ModuleDef module:
-						WriteLine($"// {module.Assembly?.FullName ?? module.Name.String}");
-						WriteLine($".module {module.Name}");
-						foreach (var type in module.Types.Where(t => !t.IsGlobalModuleType))
-							FormatTypeHeader(type);
-						break;
-					case NamespaceValue ns:
-						WriteLine($"// namespace {ns.Name}");
-						foreach (var type in ns.Types)
-							FormatType(type);
-						break;
-					case TypeDef type:
-						FormatType(type);
-						break;
-					case MethodDef method:
-						FormatMethod(method);
-						break;
-					case FieldDef field:
-						FormatField(field, string.Empty);
-						break;
-					case PropertyDef property:
-						FormatProperty(property);
-						break;
-					case EventDef @event:
-						FormatEvent(@event);
-						break;
-					case AssemblyRef reference:
-						WriteLine($".assembly extern {reference.Name}");
-						WriteLine("{");
-						WriteLine($"  .ver {reference.Version}");
-						WriteLine("}");
-						break;
-					case Resource resource:
-						WriteLine($".mresource {resource.Attributes} '{resource.Name}'");
-						break;
-					// A PE-only or unreadable file has no metadata, so it has no IL either. Its own name is
-					// what the C# document shows as well, and it beats the generic error below.
-					case IModuleEntry entry:
-						WriteLine($"// {Path.GetFileName(entry.Path)}");
-						break;
-					default:
-						throw new RpcException(ErrorCodes.UnsupportedDocument, "This tree node has no IL representation.");
-				}
-			}
-
-			void WriteLine(string text) {
-				builder.AppendLine(text);
-				// A name is written as it is in the metadata, and nothing stops a name from holding a line break.
-				line += 1 + text.Count(ch => ch == '\n');
-			}
-
-			/// <summary>A line declaring a member: the definition span covers the name, as dnSpy's disassembler writes it.</summary>
-			void WriteDefinitionLine(string prefix, string name, string suffix, IMemberDef member) {
-				if (name.Length > 0 && resolveDefinition?.Invoke(member) is { } target)
-					spans.Add(new TextSpanDto(builder.Length + prefix.Length, name.Length, "definition", target.NodeId, target.ModulePath, target.MetadataToken) {
-						Color = MetadataTextColors.Of(member),
-					});
-				WriteLine(prefix + name + suffix);
-			}
-
-			void FormatTypeHeader(TypeDef type) => WriteDefinitionLine($".class {type.Attributes} ", type.FullName, string.Empty, type);
-
-			void FormatType(TypeDef type) {
-				FormatTypeHeader(type);
-				var blockStart = builder.Length;
-				WriteLine("{");
-				foreach (var field in type.Fields)
-					FormatField(field, "  ");
-				// dnSpy's disassembler puts a separator under the last field, and under every method's end.
-				if (type.HasFields)
-					lineSeparators.Add(builder.Length - Environment.NewLine.Length);
-				foreach (var method in type.Methods) {
-					WriteLine(string.Empty);
-					FormatMethod(method, "  ");
-				}
-				var blockEnd = builder.Length;
-				WriteLine("}");
-				blockStructures.Add(new BlockStructureDto(blockStart, blockEnd, type.IsInterface ? "interface" : type.IsValueType || type.IsEnum ? "valueType" : "type"));
-			}
-
-			void FormatField(FieldDef field, string indent) =>
-				WriteDefinitionLine($"{indent}.field {field.Attributes} {field.FieldType.FullName} ", field.Name, string.Empty, field);
-
-			void FormatProperty(PropertyDef property) {
-				WriteDefinitionLine($".property {property.PropertySig?.RetType.FullName ?? "<unknown>"} ", property.Name, string.Empty, property);
-				foreach (var method in new[] { property.GetMethod, property.SetMethod }.Concat(property.OtherMethods).OfType<MethodDef>().Distinct()) {
-					WriteLine(string.Empty);
-					FormatMethod(method);
-				}
-			}
-
-			void FormatEvent(EventDef @event) {
-				WriteDefinitionLine($".event {@event.EventType.FullName} ", @event.Name, string.Empty, @event);
-				foreach (var method in new[] { @event.AddMethod, @event.RemoveMethod, @event.InvokeMethod }.Concat(@event.OtherMethods).OfType<MethodDef>().Distinct()) {
-					WriteLine(string.Empty);
-					FormatMethod(method);
-				}
-			}
-
-			void FormatMethod(MethodDef method, string indent = "") {
-				WriteDefinitionLine($"{indent}.method {method.Attributes} {method.ReturnType.FullName} ", method.Name, FormatParameterList(method), method);
-				var blockStart = builder.Length + indent.Length;
-				WriteLine($"{indent}{{");
-				if (method.HasBody) {
-					WriteLine($"{indent}  .maxstack {method.Body.MaxStack}");
-					if (method.Body.HasVariables) {
-						WriteLine($"{indent}  .locals {string.Join(", ", method.Body.Variables.Select(v => $"[{v.Index}] {v.Type.FullName}"))}");
-					}
-					var sources = sourceProvider?.Invoke(method) ?? Array.Empty<ILSourceStatement>();
-					var sourceIndex = 0;
-					var instructions = method.Body.Instructions;
-					var token = unchecked((int)method.MDToken.Raw);
-					var description = method.FullName;
-					var prefix = $"{indent}  ";
-					for (var index = 0; index < instructions.Count; index++) {
-						var instruction = instructions[index];
-						while (sourceIndex < sources.Count && sources[sourceIndex].Offset <= instruction.Offset) {
-							if (instruction.Offset < sources[sourceIndex].EndOffset)
-								AppendSourceComment(prefix, sources[sourceIndex].Text);
-							sourceIndex++;
-						}
-						var label = $"{prefix}IL_{instruction.Offset:X4}: ";
-						var head = $"{label}{instruction.OpCode.Name,-12} ";
-						var operand = FormatOperand(instruction.Operand);
-						var text = (head + operand).TrimEnd();
-						spans.Add(new TextSpanDto(builder.Length + label.Length, instruction.OpCode.Name.Length, "reference") {
-							Color = TextColors.OpCode,
-							OpCode = instruction.OpCode.Name,
-						});
-						AddOperandReference(builder.Length + head.Length, operand, instruction.Operand, method.MDToken.Raw);
-						// dnSpy's IL view has a statement per instruction: the line covers the instruction's bytes
-						// and nothing else, from its offset to the next one's.
-						if (modulePath is not null) {
-							var end = index + 1 < instructions.Count ? instructions[index + 1].Offset : instruction.Offset + (uint)instruction.GetSize();
-							statements.Add(new CodeStatementDto(
-								line,
-								line,
-								prefix.Length + 1,
-								text.Length + 1,
-								unchecked((int)instruction.Offset),
-								unchecked((int)end),
-								unchecked((int)instruction.Offset),
-								modulePath,
-								token,
-								token,
-								description,
-								false));
-						}
-						WriteLine(text);
-					}
-				}
-				var blockEnd = builder.Length + indent.Length;
-				WriteLine($"{indent}}}");
-				blockStructures.Add(new BlockStructureDto(blockStart, blockEnd, "method"));
-				lineSeparators.Add(blockEnd);
-			}
-
-			/// <summary>
-			/// A reference span over what an instruction names: a member's own name in its full name, a type's
-			/// whole name — the stretch dnSpy's disassembler writes as a reference to it. An operand that names
-			/// nothing the workspace can place gets none.
-			/// </summary>
-			void AddOperandReference(int start, string text, object? operand, uint methodToken = 0) {
-				// dnSpy's disassembler writes a local and a parameter operand as a reference to it too, which is what
-				// ties the instructions that use one together for the highlighter.
-				if (operand is Local or Parameter && text.Length > 0) {
-					var (kind, index, color) = operand is Local local ? ("V", local.Index, TextColors.Local) : ("A", ((Parameter)operand).Index, TextColors.Parameter);
-					spans.Add(new TextSpanDto(start, text.Length, "reference") {
-						Color = color,
-						LocalId = $"{methodToken:X8}:{kind}{index.ToString(CultureInfo.InvariantCulture)}",
-					});
-					return;
-				}
-				if (operand is not IMDTokenProvider || text.Length == 0)
-					return;
-				referenceHost ??= new AnalyzerHost(workspace, null, loadOnDemand: false);
-				if (workspace.ILReferenceTarget(referenceHost, operand) is not { } target)
-					return;
-				var (offset, length) = (0, text.Length);
-				if (operand is IMemberRef member && (member.IsMethod || member.IsField)) {
-					var name = member.Name.String;
-					var at = text.IndexOf("::" + name, StringComparison.Ordinal);
-					if (name.Length > 0 && at >= 0)
-						(offset, length) = (at + 2, name.Length);
-				}
-				spans.Add(new TextSpanDto(start + offset, length, "reference", target.NodeId, target.ModulePath, target.MetadataToken) {
-					Color = OperandColor(operand),
-				});
-			}
-
-			/// <summary>The color an operand's name is written in: its definition's when it is one, and what its
-			/// signature tells of it when it is a reference — the disassembler colors without loading anything.</summary>
-			string OperandColor(object operand) => operand switch {
-				IMemberDef definition => MetadataTextColors.Of(definition),
-				ITypeDefOrRef type => workspace.TypeColor(type),
-				IMethod { MethodSig: { } signature } method => method.Name == ".ctor" || method.Name == ".cctor"
-					? workspace.TypeColor(method.DeclaringType)
-					: signature.HasThis ? TextColors.InstanceMethod : TextColors.StaticMethod,
-				IField => TextColors.InstanceField,
-				_ => TextColors.Text,
-			};
-
-			void AppendSourceComment(string indent, string source) {
-				WriteLine(string.Empty);
-				foreach (var sourceLine in source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
-					WriteLine($"{indent}// {sourceLine.TrimEnd()}");
-				WriteLine(string.Empty);
-			}
-
-			static string FormatOperand(object? operand) => operand switch {
-				null => string.Empty,
-				string text => QuoteString(text),
-				Instruction instruction => $"IL_{instruction.Offset:X4}",
-				IList<Instruction> instructions => string.Join(", ", instructions.Select(i => $"IL_{i.Offset:X4}")),
-				IMemberRef member => member.FullName,
-				IType type => type.FullName,
-				Local local => $"V_{local.Index}",
-				Parameter parameter => parameter.Name ?? $"A_{parameter.Index}",
-				float value => value.ToString("R", CultureInfo.InvariantCulture),
-				double value => value.ToString("R", CultureInfo.InvariantCulture),
-				IFormattable value => value.ToString(null, CultureInfo.InvariantCulture),
-				_ => operand.ToString() ?? string.Empty,
-			};
-
-			/// <summary>A string operand in quotes, with every control character escaped — an instruction is one line,
-			/// whatever the string it loads.</summary>
-			static string QuoteString(string text) {
-				var quoted = new StringBuilder(text.Length + 2).Append('"');
-				foreach (var ch in text) {
-					switch (ch) {
-						case '\\': quoted.Append(@"\\"); break;
-						case '"': quoted.Append("\\\""); break;
-						case '\n': quoted.Append(@"\n"); break;
-						case '\r': quoted.Append(@"\r"); break;
-						case '\t': quoted.Append(@"\t"); break;
-						case '\0': quoted.Append(@"\0"); break;
-						default:
-							if (char.IsControl(ch) || ch is '\u0085' or '\u2028' or '\u2029')
-								quoted.Append(@"\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
-							else
-								quoted.Append(ch);
-							break;
-					}
-				}
-				return quoted.Append('"').ToString();
-			}
 		}
 	}
 

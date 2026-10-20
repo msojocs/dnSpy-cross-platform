@@ -1,12 +1,11 @@
 import Editor from './CodeEditor'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LoaderCircle } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
-import { isLocalSpan, isNavigableSpan, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { isLocalSpan, isNavigableSpan, type AddressReference, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { ilSelectionOf } from './il-selection'
-import { bookmarkMarkers, breakpointPositionInDocument, breakpointStatementsOf, codeStatementAt, findNode, lineBreakpointAt, lineBreakpointsAt, memoryModulePathOf, statementOfLocation, useAppStore } from '../app-store'
+import { bookmarkMarkers, breakpointPositionInDocument, breakpointStatementsOf, codeStatementAt, findNode, isBamlDocumentLanguage, lineBreakpointAt, lineBreakpointsAt, memoryModulePathOf, statementOfLocation, useAppStore } from '../app-store'
 import { breakpointDecorations, callStackDecorations } from '../debugger-markers'
 import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
 import type { Bookmark, BookmarkDocument, HexBodyKind, MethodBreakpointTarget } from '../app-store'
@@ -20,13 +19,15 @@ import {
   nextReference, opCodeUrl, referenceHighlights, spanAtCaret, spanAtClick, type ReferenceHighlight, type TextRange,
 } from '../document-viewer'
 import { copyWithFormatting } from '../document-clipboard'
+import { useDocumentAttachments } from '../document-attachments'
 import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
 import { DsIcon } from './DsIcon'
+import { WaitAdorner } from './WaitAdorner'
 import { BreakpointGlyphPopup, breakpointToolTip, toolTipMethodText } from './BreakpointGlyphPopup'
 import { showDebugMenu } from './DebugToolWindows'
 import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } from './CodeEditorContextMenu'
 import { GoToLineDialog } from './EditDialogs'
-import { useAppOptions, type BlockStructureLineKind } from './app-options'
+import { loadAppOptions, saveAppOptions, useAppOptions, type BlockStructureLineKind } from './app-options'
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './document-viewer-options'
 import type { CreatedKind, HexShowKind } from './edit-menu'
 
@@ -56,6 +57,10 @@ const rangeOf = (model: TextModel, start: number, length: number): { startLineNu
   const to = model.getPositionAt(start + length)
   return { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column }
 }
+
+/** The label a document that is no code wears beside it: what kind of text the tab shows. */
+const documentLanguageLabel = (language: string): string =>
+  language === 'xml' ? 'XAML/XML' : language === 'xaml' ? 'XAML' : language === 'baml' ? 'BAML' : language
 
 /**
  * The spans as the viewer draws them: each in the color class dnSpy's decompiler wrote it in — the semantic
@@ -113,6 +118,8 @@ export interface DocumentViewCommands {
    * local is followed by the viewer itself unless it goes to a new tab, which only the shell can open.
    */
   onFollowReference(target: TextSpan, newTab: boolean): void
+  /** Follows an RVA or a file offset a token comment writes: the hex editor of its file, at that place. */
+  onFollowAddress(address: AddressReference): void
   /** Records where the caret is in this tab's history, before the viewer moves it somewhere else in the document. */
   onRecordHistory(): void
   onStartDebug(): void
@@ -427,13 +434,18 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   moveCaretToRef.current = moveCaretTo
 
   /**
-   * dnSpy's DocumentViewerControl.GoTo: an opcode opens its page; a local moves the caret to its declaration
-   * (a new tab gets a copy of the document for that); a member the document defines is shown where it is
+   * dnSpy's DocumentViewerControl.GoTo: an opcode opens its page; an address the hex editor; a local moves the
+   * caret to its declaration (a new tab gets a copy of the document for that); a member the document defines is shown where it is
    * defined, and any other member is followed into this tab or a new one. Every move is a step in the history.
    */
   const goTo = (span: TextSpan, newTab: boolean, followLocalReferences: boolean): void => {
     if (span.opCode) {
       commandsRef.current.onOpenUrl(opCodeUrl(span.opCode))
+      return
+    }
+    // dnSpy's HexAddressReferenceFileTabContentCreator: an address opens the hex editor rather than a document.
+    if (span.address) {
+      commandsRef.current.onFollowAddress(span.address)
       return
     }
     if (isLocalSpan(span)) {
@@ -745,6 +757,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       onCopyIlBytes: () => void useAppStore.getState().copyIlBytes(ilSelectionOf(documentRef.current, selection)),
       onFind: () => void editor?.getAction('actions.find')?.run(),
       onIncrementalSearch: () => startIncrementalSearchRef.current(true),
+      // A BAML entry's tab — the only document whose language is XAML or BAML records — toggles the BAML page's
+      // Disassemble BAML, which BamlRefresher then writes the tab again for.
+      bamlDocument: isBamlDocumentLanguage(documentRef.current?.language ?? ''),
+      disassembleBaml: loadAppOptions().baml.disassembleBaml,
+      onToggleDisassembleBaml: () => {
+        const options = loadAppOptions()
+        saveAppOptions({ ...options, baml: { ...options.baml, disassembleBaml: !options.baml.disassembleBaml } })
+      },
       onOpenHex: () => commandsRef.current.onOpenHex(),
       onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
       onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
@@ -933,6 +953,15 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const { fontFamily: editorFontFamily, fontSize: baseFontSize } = useCategoryFont('textEditor')
 
   const editorFontSize = Math.max(1, Math.round(baseFontSize * zoom) / 100)
+  // dnSpy's AddUIElement and AddButton: a resource's pictures and its Save button, drawn between the lines. The
+  // button saves the node the way the tree's Save command does (SaveResources.Save of the deserialized data).
+  useDocumentAttachments(editorReady ? editorRef.current : undefined, document?.loading ? undefined : document?.attachments, document?.text, {
+    zoom,
+    fontSize: editorFontSize,
+    saveLabel: t('Save'),
+    spaceWidth: () => (monacoRef.current && editorRef.current?.getOption(monacoRef.current.editor.EditorOption.fontInfo).spaceWidth) || 0,
+    onSave: (nodeId) => { void referenceNodeOf(nodeId).then((node) => node && useAppStore.getState().saveResource([node], false)) },
+  })
   // dnSpy's text view keeps its lines taller than the font unless "Don't add extra line spacing" is on.
   const lineHeight = Math.round(editorFontSize * (advanced.minimumLineSpacing ? 1.25 : 1.55))
   // One object for as long as nothing in it changes: the editor is handed it again on every render, and a new
@@ -978,9 +1007,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     ? 'vb'
     : document.language === 'il'
       ? 'il'
-      : document.language === 'plaintext'
+      : document.language === 'plaintext' || document.language === 'baml'
         ? 'plaintext'
-        : document.language === 'xml'
+        : document.language === 'xml' || document.language === 'xaml'
           ? 'xml'
           : 'csharp'
   const editorTheme = monacoThemeName(theme, transparentBackground)
@@ -1001,7 +1030,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       }}
     >
       <div className="document-toolbar">
-        {!['csharp', 'visual-basic', 'il'].includes(document.language) && <span className="document-language-label">{document.language === 'xml' ? 'XAML/XML' : document.language}</span>}
+        {!['csharp', 'visual-basic', 'il'].includes(document.language) && <span className="document-language-label">{documentLanguageLabel(document.language)}</span>}
         {document.diagnostics.length > 0 && (
           <span className="document-diagnostic" title={document.diagnostics.map((diagnostic) => diagnostic.message).join('\n')}>
             {/* The port's own count of the decompiler's warnings, in dnSpy's StatusWarning image. */}
@@ -1019,7 +1048,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       </div>
       <div className={['editor-host', menuOpen ? 'code-menu-open' : '', ctrlDown ? 'ctrl-down' : ''].filter(Boolean).join(' ')}>
         {document.loading ? (
-          <div className="loading-state"><LoaderCircle className="spin" size={18} /> {t('Loading')}</div>
+          // dnSpy's WaitAdorner: "Decompiling..." and a Cancel button that calls the decompilation off.
+          <WaitAdorner message={t('Decompiling...')} onCancel={() => useAppStore.getState().cancelDocument(documentId)} />
         ) : (
           <Editor
             path={`${viewId}.${editorLanguage}`}

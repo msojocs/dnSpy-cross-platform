@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import { isLocalSpan, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
+import { isLocalSpan, type AddressReference, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
 import { buildSession, debugSessionIds, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession, codeStatementAt, type MethodBreakpointTarget, type BreakpointSettings } from './app-store'
 import { useShallow } from 'zustand/react/shallow'
@@ -11,8 +11,8 @@ import { DELETE_COMMANDS, DELETE_QUESTION_ID, deletionTargets } from './componen
 import { normalizeZoom, zoomIn, zoomOut } from './zoom'
 import { CloseGlyph } from './components/DsGlyphs'
 import { DsIcon } from './components/DsIcon'
-import { loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
-import { AssemblyExplorer, resolveAnalyzeTargets } from './components/AssemblyExplorer'
+import { APP_OPTIONS_CHANGED_EVENT, loadAppOptions, saveAppOptions, useAppOptions } from './components/app-options'
+import { AssemblyExplorer, GROUP_FOLDER_KINDS, resolveAnalyzeTargets } from './components/AssemblyExplorer'
 import { hasEmptyNamespaceSibling as namespaceHasEmptySibling, type AssemblyExplorerCommands } from './components/AssemblyExplorerContextMenu'
 import { MenuBar } from './components/MenuBar'
 import type { ThemeName } from './components/app-options'
@@ -33,6 +33,8 @@ import { AssemblyOptionsDialog, ModuleOptionsDialog } from './components/Assembl
 import { SaveModuleOptionsDialog } from './components/SaveModuleOptionsDialog'
 import { SaveModulesDialog } from './components/SaveModulesDialog'
 import { NetModuleOptionsDialog } from './components/NetModuleOptionsDialog'
+import { ExportToProjectDialog } from './components/ExportToProjectDialog'
+import { canExportToProject } from './components/export-project'
 import { EditCodeDialog } from './components/EditCodeDialog'
 import { BreakpointSettingsDialog } from './components/BreakpointSettingsDialog'
 import { HexView, ModuleInfoView } from './components/SpecialDocuments'
@@ -65,6 +67,7 @@ import { caretPosition, documentEditorScrollTop, findInActiveDocumentEditor, foc
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './components/document-viewer-options'
 import { positionAt } from './document-viewer'
 import { translate, useLanguage } from './localization'
+import { documentIdOf, documentTitleOf, documentToolTipOf, nodeIdsOfDocument, topLevelSelection } from './document-ids'
 
 /**
  * What a document tab draws for the node it shows: dnSpy's AsmEditor hex nodes are not text — a PE header, the
@@ -77,9 +80,11 @@ const DocumentPane = ({ documentId, zoomStyle, onShowHex, renderCode }: {
   onShowHex(moduleId: string, offset: number, length: number): void
   renderCode(): React.ReactNode
 }): React.ReactNode => {
-  const nodeId = useAppStore((state) => state.documents[documentId]?.nodeId)
+  // A hex structure shows itself only in a tab of its own; beside other nodes it is text (IDecompileSelf is asked
+  // of a lone node only).
+  const nodeId = useAppStore((state) => (state.documents[documentId]?.nodeIds?.length ?? 1) === 1 ? state.documents[documentId]?.nodeId : undefined)
   const kind = useAppStore((state) => {
-    const id = state.documents[documentId]?.nodeId
+    const id = (state.documents[documentId]?.nodeIds?.length ?? 1) === 1 ? state.documents[documentId]?.nodeId : undefined
     return id ? findNode(state, id)?.kind : undefined
   })
   if (nodeId && kind && HEX_STRUCTURE_KINDS.has(kind))
@@ -420,6 +425,8 @@ export const App = (): React.JSX.Element => {
   const [runProgramDialogOpen, setRunProgramDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [gacDialogOpen, setGacDialogOpen] = useState(false)
+  // dnSpy's Export to Project, with the tree's selection it was started on.
+  const [exportProjectNodeIds, setExportProjectNodeIds] = useState<string[]>()
   const [openListDialogOpen, setOpenListDialogOpen] = useState(false)
   const [windowsDialogOpen, setWindowsDialogOpen] = useState(false)
   const [optionsDialogCategory, setOptionsDialogCategory] = useState<'environment' | 'decompiler' | 'debugger' | undefined>(undefined)
@@ -1631,29 +1638,44 @@ export const App = (): React.JSX.Element => {
    * no document (the start page, a hex view) takes the document in its place. Answers with the id of the tab
    * the document ended up in, which is the view a caret placed afterwards has to land in.
    */
-  const addDocumentTab = async (node: TreeNode, recordHistory = true, language?: DecompilerLanguage, newTab = false, intoTab?: TabNode): Promise<string | undefined> => {
+  const addDocumentTab = async (shownNodes: TreeNode | TreeNode[], recordHistory = true, language?: DecompilerLanguage, newTab = false, intoTab?: TabNode): Promise<string | undefined> => {
+    // dnSpy's tab shows an array of nodes: the top-level selection decompiles into one document.
+    const nodes = Array.isArray(shownNodes) ? shownNodes : [shownNodes]
+    if (nodes.length === 0)
+      return undefined
     const { workspaceId, workspaceGeneration } = useAppStore.getState()
     const front = intoTab ?? (newTab ? undefined : frontDocumentTab())
     const target = front && DOCUMENT_COMPONENTS.includes(front.getComponent() ?? '') && front.getComponent() !== 'start' ? front : undefined
     const shown = documentIdOfTab(target)
     const shownDocument = shown ? useAppStore.getState().documents[shown] : undefined
+    const documentId = documentIdOf(nodes.map((node) => node.id))
     // The node the tab already shows, in the language asked for, is not decompiled again: there is nothing to
-    // show that it does not show already, or will once the decompilation under way is done.
-    const alreadyShown = shown === node.id && shownDocument !== undefined
+    // show that it does not show already, or will once the decompilation under way is done. A document whose
+    // decompilation was canceled or failed is decompiled again, the way dnSpy shows a node anew.
+    const alreadyShown = shown === documentId && shownDocument !== undefined
       && (language === undefined || shownDocument.requestedLanguage === language)
+      && shownDocument.failure === undefined
       && (shownDocument.loading === true || shownDocument.diagnostics.every((diagnostic) => diagnostic.severity !== 'error'))
-    if (target && recordHistory && shown && shown !== node.id)
+    if (target && recordHistory && shown && shown !== documentId)
       recordTabHistory(target)
+    // A tab that moves on to another document calls off what it was still decompiling — unless another tab
+    // shows that document too.
+    if (target && shown && shown !== documentId && useAppStore.getState().documents[shown]?.loading
+      && !getDocumentTabs(model).some((tab) => tab !== target && documentIdOfTab(tab) === shown))
+      useAppStore.getState().cancelDocument(shown)
     // The document goes into its tab at once, loading — dnSpy shows a tab decompiling — so whatever asks for it
     // next finds it there rather than opening it a second time.
-    const opening = alreadyShown ? Promise.resolve(node.id) : openDocument(node, language)
-    const documentId = node.id
-    const titleOf = (): string => useAppStore.getState().documents[documentId]?.title || node.label
+    const opening = alreadyShown ? Promise.resolve(documentId) : useAppStore.getState().openNodesDocument(nodes, language)
+    // A group folder is labelled from dnSpy's resources, in the UI language, in its tab as in the tree.
+    const titleOf = (): string => nodes.length === 1 && GROUP_FOLDER_KINDS.has(nodes[0].kind)
+      ? t(nodes[0].label)
+      : useAppStore.getState().documents[documentId]?.title || documentTitleOf(nodes)
+    const toolTipOf = (): string => useAppStore.getState().documents[documentId]?.toolTip ?? documentToolTipOf(nodes)
     let tabId: string
     if (target) {
       tabId = target.getId()
       if (shown !== documentId || target.getComponent() !== 'document')
-        model.doAction(Actions.updateNodeAttributes(tabId, { name: titleOf(), component: 'document', config: { documentId } }))
+        model.doAction(Actions.updateNodeAttributes(tabId, { name: titleOf(), helpText: toolTipOf(), component: 'document', config: { documentId } }))
       if (!target.isSelected())
         model.doAction(Actions.selectTab(tabId))
     } else {
@@ -1665,6 +1687,7 @@ export const App = (): React.JSX.Element => {
         type: 'tab',
         id: tabId,
         name: titleOf(),
+        helpText: toolTipOf(),
         component: 'document',
         config: { documentId },
       }, targetTabSet.getId(), DockLocation.CENTER, -1, true))
@@ -1688,6 +1711,34 @@ export const App = (): React.JSX.Element => {
       forceLayoutUpdate((value) => value + 1)
     }
     return tabId
+  }
+
+  /**
+   * dnSpy's FollowReference to a member — TreeNodeReferenceDocumentTabContentProvider: a state machine's MoveNext
+   * stands for the method it was made from, and with DecompileFullType on the document is the outermost type the
+   * member is declared in, with the caret on the member's definition. Answers the document and the tab it went to.
+   */
+  const followNode = async (nodeId: string, newTab: boolean, intoTab?: TabNode): Promise<{ documentId: string; viewId: string } | undefined> => {
+    const workspaceId = useAppStore.getState().workspaceId
+    if (!workspaceId)
+      return undefined
+    const decompileFullType = loadAppOptions().environmentGeneral.decompileFullType
+    const resolved = await window.dnSpy.resolveDocumentNode(workspaceId, nodeId, decompileFullType)
+      .catch(() => ({ documentNodeId: nodeId, definitionNodeId: nodeId }))
+    const node = findNode(useAppStore.getState(), resolved.documentNodeId) ?? await window.dnSpy.getNode(workspaceId, resolved.documentNodeId)
+    const viewId = await addDocumentTab(node, true, undefined, newTab, newTab ? undefined : intoTab)
+    if (!viewId)
+      return undefined
+    useAppStore.getState().requestCaret({ documentId: node.id, viewId, line: 1, column: 1, definitionNodeId: resolved.definitionNodeId, center: true })
+    return { documentId: node.id, viewId }
+  }
+
+  /** The nodes a document id names — one, or the nodes of a multi-selection — read from the tree or the backend. */
+  const nodesOfDocument = async (workspaceId: string, documentId: string): Promise<TreeNode[]> => {
+    const nodes: TreeNode[] = []
+    for (const nodeId of nodeIdsOfDocument(documentId))
+      nodes.push(findNode(useAppStore.getState(), nodeId) ?? await window.dnSpy.getNode(workspaceId, nodeId))
+    return nodes
   }
 
   /** The document tab that shows a node, the one in front first — where a step of the debugger lands. */
@@ -1727,15 +1778,7 @@ export const App = (): React.JSX.Element => {
       const nodeId = await state.resolveReferenceTarget(span)
       if (!nodeId)
         return
-      let shownId = nodeId
-      if (loadAppOptions().environmentGeneral.decompileFullType) {
-        const path = await window.dnSpy.getNodePath(workspaceId, nodeId).catch(() => undefined)
-        shownId = path?.nodes.find((candidate) => candidate.kind === 'type')?.id ?? nodeId
-      }
-      const node = findNode(useAppStore.getState(), shownId) ?? await window.dnSpy.getNode(workspaceId, shownId)
-      const tabId = await addDocumentTab(node, true, undefined, newTab, newTab ? undefined : source)
-      if (tabId)
-        useAppStore.getState().requestCaret({ documentId: node.id, viewId: tabId, line: 1, column: 1, definitionNodeId: nodeId, center: true })
+      await followNode(nodeId, newTab, source)
     } catch (reason) {
       appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
     }
@@ -1769,10 +1812,10 @@ export const App = (): React.JSX.Element => {
     if (!workspaceId)
       return
     try {
-      const node = findNode(useAppStore.getState(), entry.documentId) ?? await window.dnSpy.getNode(workspaceId, entry.documentId)
-      const viewId = await addDocumentTab(node, false, entry.language, false, tab)
+      const nodes = await nodesOfDocument(workspaceId, entry.documentId)
+      const viewId = await addDocumentTab(nodes, false, entry.language, false, tab)
       if (viewId)
-        useAppStore.getState().requestCaret({ documentId: node.id, viewId, line: entry.line ?? 1, column: entry.column ?? 1, scrollTop: entry.scrollTop })
+        useAppStore.getState().requestCaret({ documentId: entry.documentId, viewId, line: entry.line ?? 1, column: entry.column ?? 1, scrollTop: entry.scrollTop })
     } catch (reason) {
       appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
     }
@@ -2055,8 +2098,7 @@ export const App = (): React.JSX.Element => {
   const openNodeId = async (nodeId: string): Promise<void> => {
     if (!workspaceId) return
     try {
-      const node = await window.dnSpy.getNode(workspaceId, nodeId)
-      await addDocumentTab(node)
+      await addDocumentTab(await nodesOfDocument(workspaceId, nodeId))
     } catch (reason) {
       useAppStore.getState().appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
     }
@@ -2068,8 +2110,8 @@ export const App = (): React.JSX.Element => {
     if (!workspaceId)
       return undefined
     try {
-      const node = await window.dnSpy.getNode(workspaceId, nodeId)
-      await addDocumentTab(node)
+      // A bookmark set in a tab of several nodes names that tab's document.
+      await addDocumentTab(await nodesOfDocument(workspaceId, nodeId))
       return nodeId
     } catch {
       return undefined
@@ -2082,8 +2124,7 @@ export const App = (): React.JSX.Element => {
     if (!workspaceId)
       return undefined
     try {
-      const node = await window.dnSpy.getNode(workspaceId, nodeId)
-      await addDocumentTab(node, true, undefined, true)
+      await addDocumentTab(await nodesOfDocument(workspaceId, nodeId), true, undefined, true)
       return nodeId
     } catch (reason) {
       useAppStore.getState().appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
@@ -2153,8 +2194,8 @@ export const App = (): React.JSX.Element => {
 
   // The store cannot open tabs or tool windows itself, so it calls back into the shell. Handlers are
   // read through a ref because both close over the current workspace and layout.
-  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab })
-  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab }
+  const shellCallbacksRef = useRef({ openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab, followNode })
+  shellCallbacksRef.current = { openBookmarkTarget, openNodeInNewTab, showToolWindow, restoreSession, revealDocumentTarget, followCommandLine, applyCommandLine, closeRequested, openDisassemblyTab, followNode }
 
   // dnSpy's App.SwitchToOtherInstance, seen from the window that keeps the single instance lock: the second
   // process's command line arrives here the way this one's did, and is carried out on the window that is up.
@@ -2166,6 +2207,7 @@ export const App = (): React.JSX.Element => {
 
   useEffect(() => {
     setOpenNodeById((nodeId) => shellCallbacksRef.current.openBookmarkTarget(nodeId))
+    useAppStore.getState().setFollowNodeById((nodeId) => shellCallbacksRef.current.followNode(nodeId, false).then((opened) => opened?.documentId).catch(() => undefined))
     setOpenNodeInNewTabById((nodeId) => shellCallbacksRef.current.openNodeInNewTab(nodeId))
     setOpenToolWindow((tabId) => shellCallbacksRef.current.showToolWindow(tabId))
     setRevealDocument((nodeId) => shellCallbacksRef.current.revealDocumentTarget(nodeId))
@@ -2175,11 +2217,25 @@ export const App = (): React.JSX.Element => {
       useAppStore.getState().setOpenDisassemblyTab(undefined)
       useAppStore.getState().setOpenAttachDialog(undefined)
       setOpenNodeById(undefined)
+      useAppStore.getState().setFollowNodeById(undefined)
       setOpenNodeInNewTabById(undefined)
       setOpenToolWindow(undefined)
       setRevealDocument(undefined)
     }
   }, [setOpenNodeById, setOpenNodeInNewTabById, setOpenToolWindow, setRevealDocument])
+
+  // dnSpy's DecompilerAppSettingsModifiedListener and BamlRefresher: once the options dialog saved, the tabs whose
+  // decompiler reads a page that changed are decompiled again.
+  useEffect(() => {
+    let previous = loadAppOptions()
+    const optionsChanged = (): void => {
+      const before = previous
+      previous = loadAppOptions()
+      void useAppStore.getState().refreshDocumentsForOptions(before, previous, orderedDocumentKeys(model).order)
+    }
+    window.addEventListener(APP_OPTIONS_CHANGED_EVENT, optionsChanged)
+    return () => window.removeEventListener(APP_OPTIONS_CHANGED_EVENT, optionsChanged)
+  }, [model])
 
   // dnSpy selects a document's nodes in the explorer whenever its tab comes to the front, and that is
   // what follows a reference the user clicked, a bookmark, a search result or a step: each of them just
@@ -2194,7 +2250,23 @@ export const App = (): React.JSX.Element => {
     const explorer = model.getNodeById('explorer')
     if (!(explorer instanceof TabNode) || !explorer.isSelected())
       return
-    void useAppStore.getState().revealNode(activeDocumentId)
+    const nodeIds = nodeIdsOfDocument(activeDocumentId)
+    if (nodeIds.length === 1) {
+      void useAppStore.getState().revealNode(activeDocumentId)
+      return
+    }
+    // A tab of several nodes selects all of them (OnNewTabContentShownDelay), unless they are the selection already.
+    const selected = new Set(useAppStore.getState().selectedNodes.map((node) => node.id))
+    if (nodeIds.every((nodeId) => selected.has(nodeId)))
+      return
+    void (async () => {
+      for (const nodeId of nodeIds)
+        await useAppStore.getState().revealNode(nodeId)
+      const state = useAppStore.getState()
+      const nodes = nodeIds.flatMap((nodeId) => findNode(state, nodeId) ?? [])
+      if (nodes.length > 0)
+        state.selectNodes(nodes, nodes[0])
+    })()
   }, [activeDocumentId, model])
 
   // The one place the previous session comes back. It runs once the backend can answer, and puts the
@@ -2317,6 +2389,31 @@ export const App = (): React.JSX.Element => {
       return
     showHexAt(moduleId, offset, length)
     addSpecialTab('hex', target)
+  }
+
+  /**
+   * dnSpy's HexAddressReferenceFileTabContentCreator: following an RVA or a file offset a token comment writes opens
+   * the hex editor of the file it names on it — an RVA turned into the file offset its section puts it at. A file
+   * the workspace does not hold, or an RVA no section holds, goes nowhere.
+   */
+  const followAddress = async (address: AddressReference): Promise<void> => {
+    const state = useAppStore.getState()
+    const normalize = (path: string): string => path.replaceAll('\\', '/').toLowerCase()
+    const module = address.modulePath ? state.modules.find((candidate) => normalize(candidate.path) === normalize(address.modulePath!)) : undefined
+    if (!module || !state.workspaceId)
+      return
+    let offset = address.address
+    if (address.isRva) {
+      try {
+        offset = (await window.dnSpy.resolveHexPosition(state.workspaceId, module.id, 'rva', address.address)).offset
+      }
+      catch (error) {
+        appendOutput(t('Navigation failed: {message}', { message: error instanceof Error ? error.message : String(error) }))
+        return
+      }
+    }
+    if (offset >= 0)
+      showHexRange(module.id, offset, address.length)
   }
 
   /** The node whose module Go to MD Table Row looks in: the open code document's, else the selection's. */
@@ -2479,12 +2576,16 @@ export const App = (): React.JSX.Element => {
   // The tree's selection, shown in the tab in front — dnSpy's DocumentTabService.ShowNodes. A key held down walks
   // the rows faster than they decompile, so the row the selection settles on is the one shown.
   const showSelectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const showSelectedNode = (node: TreeNode): void => {
+  const showSelectedNode = (node: TreeNode): void => showSelectedNodes([node])
+  // DocumentTabService.DocumentTreeView_SelectionChanged: the whole top-level selection is shown, as one document.
+  const showSelectedNodes = (nodes: TreeNode[]): void => {
     clearTimeout(showSelectionTimer.current)
+    const wanted = documentIdOf(nodes.map((node) => node.id))
     showSelectionTimer.current = setTimeout(() => {
-      const selected = useAppStore.getState().selectedNode
-      if (selected?.id === node.id)
-        void addDocumentTab(node)
+      const state = useAppStore.getState()
+      const selected = topLevelSelection(state.selectedNodes, state.parents)
+      if (selected.length > 0 && documentIdOf(selected.map((node) => node.id)) === wanted)
+        void addDocumentTab(selected)
     }, 30)
   }
 
@@ -2493,6 +2594,7 @@ export const App = (): React.JSX.Element => {
     // focus goes to it.
     onOpenNode: (node) => { void addDocumentTab(node).then((tabId) => { if (tabId) focusDocumentEditor(tabId) }) },
     onShowNode: (node) => showSelectedNode(node),
+    onShowNodes: (nodes) => showSelectedNodes(nodes),
     onOpenInNewTab: (node) => { void openNodeInNewTab(node.id) },
     onDeleteNode: (node) => deleteSelected(node),
     onEditNode: (node) => openEditNode(node),
@@ -2584,6 +2686,7 @@ export const App = (): React.JSX.Element => {
     // dnSpy's document viewer follows a reference into its own tab, or — Ctrl, Ctrl+F12, "Open in New Tab" —
     // into a tab of its own.
     onFollowReference: (target, newTab) => { void followReference(target, newTab, viewId) },
+    onFollowAddress: (address) => { void followAddress(address) },
     onRecordHistory: () => recordViewHistory(viewId),
     onGoToEntryPoint: (node) => { void goToSpecialNode(node, 'entryPoint') },
     onGoToGlobalCctor: (node) => { void goToSpecialNode(node, 'globalCctor') },
@@ -2630,13 +2733,13 @@ export const App = (): React.JSX.Element => {
   // The analyzer goes to a row's member, or to the method it was found in, through the same tabs the tree
   // opens documents in; the caret it then places needs the tab the document landed in.
   const analyzerCommands: AnalyzerPaneCommands = {
+    // dnSpy follows a row's member the way it follows any reference: DecompileFullType and a state machine's
+    // MoveNext decide what the tab shows, and the caret goes to the member.
     openNode: async (nodeId, newTab) => {
       if (!workspaceId)
         return undefined
       try {
-        const node = await window.dnSpy.getNode(workspaceId, nodeId)
-        const viewId = await addDocumentTab(node, true, undefined, newTab)
-        return viewId ? { documentId: node.id, viewId } : undefined
+        return await followNode(nodeId, newTab)
       } catch (reason) {
         appendOutput(t('Navigation failed: {message}', { message: reason instanceof Error ? reason.message : String(reason) }))
         return undefined
@@ -2761,6 +2864,8 @@ export const App = (): React.JSX.Element => {
         onCloseOldInMemoryModules={() => void closeOldInMemoryModules()}
         hasOldInMemoryModules={oldInMemoryModuleIds.length > 0}
         dirty={dirty}
+        canExportToProject={Boolean(workspaceId) && canExportToProject(selectedNodes, treeParents, treeRoots)}
+        onExportToProject={() => setExportProjectNodeIds(useAppStore.getState().selectedNodes.map((node) => node.id))}
         onSave={() => void saveActiveDocument()}
         onSaveModule={() => void saveModule()}
         onSaveAll={() => void saveAllModules()}
@@ -2996,6 +3101,12 @@ export const App = (): React.JSX.Element => {
                 const document = config?.documentId ? state.documents[config.documentId] : undefined
                 return Boolean(document && !document.loading && !state.busy)
               },
+              // BamlTabSaver.MenuHeader: a BAML entry's tab saves its XAML, or its records when disassembled.
+              saveHeader: (tab) => {
+                const config = tab.getConfig() as { documentId?: string } | undefined
+                const language = config?.documentId ? useAppStore.getState().documents[config.documentId]?.language : undefined
+                return language === 'xaml' ? t('Save XAML...') : language === 'baml' ? t('Save BAML...') : undefined
+              },
               canClone: (tab) => tab.getComponent() === 'document',
               onSave: (tab) => {
                 const config = tab.getConfig() as { documentId?: string } | undefined
@@ -3128,6 +3239,14 @@ export const App = (): React.JSX.Element => {
       {debugProgramDialogOpen && <DebugProgramDialog onClose={() => setDebugProgramDialogOpen(false)} />}
       {runProgramDialogOpen && <DebugProgramDialog mode="run" onClose={() => setRunProgramDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
+      {exportProjectNodeIds && workspaceId && (
+        <ExportToProjectDialog
+          workspaceId={workspaceId}
+          nodeIds={exportProjectNodeIds}
+          language={defaultLanguage}
+          onClose={() => setExportProjectNodeIds(undefined)}
+        />
+      )}
       {gacDialogOpen && (
         <OpenFromGacDialog
           onClose={() => setGacDialogOpen(false)}

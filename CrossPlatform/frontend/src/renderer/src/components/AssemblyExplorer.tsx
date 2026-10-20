@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import type { TextPart, TreeNode } from '../../../shared/protocol'
 import { tokenParts } from '../analyzer-model'
+import { topLevelSelection } from '../document-ids'
 import { findNode, memoryModulePathOf, useAppStore } from '../app-store'
 import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
@@ -233,7 +234,7 @@ const KINDS_WITH_TOKEN = new Set(['type', 'assemblyreference', 'basetype', 'deri
  * The group folders dnSpy labels from its resource table rather than from the node. Their labels are
  * translated here; a type's own hierarchy rows wear the name of the type they name, and are left alone.
  */
-const GROUP_FOLDER_KINDS = new Set(['referencesgroup', 'resourcesgroup', 'typereferencesgroup', 'basetypefolder', 'derivedtypesfolder'])
+export const GROUP_FOLDER_KINDS = new Set(['referencesgroup', 'resourcesgroup', 'typereferencesgroup', 'basetypefolder', 'derivedtypesfolder'])
 
 const formatMetadataToken = (token: number): string =>
   `@${(token >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
@@ -488,10 +489,13 @@ const TreeRow = memo(({ node, depth, display, onActivate, onShow, onContextMenu 
         tabIndex={selected ? 0 : -1}
         title={node.toolTip ?? node.description ?? label}
         onClick={(event) => {
+          // A selection that grows or shrinks is shown as it now is, one document for all of it.
           if (event.ctrlKey || event.metaKey) {
             selectNode(node, { toggle: true })
+            onShow(node)
           } else if (event.shiftKey) {
             selectNode(node, { range: true, rows: visibleRows(useAppStore.getState(), display) })
+            onShow(node)
           } else {
             selectNode(node)
             // The tab follows the tree's selection, which the first click of a double click has already made.
@@ -597,26 +601,28 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
   const chordUntil = useRef(0)
 
   /**
-   * dnSpy's ActivateItem: a row that names something elsewhere selects what it names, the way
-   * DocumentTabService.NodeActivated does; a group folder is a heading with nothing to open; any other row
-   * opens. A row that names a definition the workspace cannot reach — a type in an assembly nothing on this
-   * machine provides — has nowhere to go, and opens as the row it is.
+   * dnSpy's DocumentTabService follows the tree: the top-level selection is shown in the active tab — one row
+   * as its own document, several as one document of all of them (DocumentTreeNodeDecompiler). A group folder
+   * is shown too: NodeDecompiler writes what it holds.
    */
-  /** dnSpy's DocumentTabService follows the tree: a row the user selects alone is shown in the active tab.
-   *  A group folder is a heading with nothing to show. */
   const show = useCallback((node: TreeNode): void => {
-    if (GROUP_FOLDER_KINDS.has(node.kind))
-      return
     const store = useAppStore.getState()
-    if (store.selectedNodes.length === 1 && store.selectedNode?.id === node.id)
-      commandsRef.current.onShowNode?.(node)
+    const selection = topLevelSelection(store.selectedNodes, store.parents)
+    if (selection.length > 1 && commandsRef.current.onShowNodes)
+      commandsRef.current.onShowNodes(selection)
+    else if (selection.length === 1 && (selection[0].id === node.id || selection[0].id === store.selectedNode?.id))
+      commandsRef.current.onShowNode?.(selection[0])
   }, [])
 
+  /**
+   * dnSpy's ActivateItem: a row that names something elsewhere selects what it names, the way
+   * DocumentTabService.NodeActivated does; any other row opens. A row that names a definition the workspace
+   * cannot reach — a type in an assembly nothing on this machine provides — has nowhere to go, and opens as the
+   * row it is.
+   */
   const activate = useCallback((node: TreeNode): void => {
     const store = useAppStore.getState()
     store.selectNode(node)
-    if (GROUP_FOLDER_KINDS.has(node.kind))
-      return
     if (!ACTIVATED_KINDS.has(node.kind)) {
       commandsRef.current.onOpenNode(node)
       return
@@ -691,10 +697,11 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
    */
   const onTreeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>): void => {
     const before = useAppStore.getState().selectedNode?.id
+    const selectionBefore = useAppStore.getState().selectedNodes
     onTreeKeyDownCore(event)
-    // A key that moved the selection to another row moves the active tab along with it.
+    // A key that moved the selection to another row — or grew it, or shrank it — moves the active tab along with it.
     const after = useAppStore.getState().selectedNode
-    if (after && after.id !== before)
+    if (after && (after.id !== before || useAppStore.getState().selectedNodes !== selectionBefore))
       show(after)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activate, show])

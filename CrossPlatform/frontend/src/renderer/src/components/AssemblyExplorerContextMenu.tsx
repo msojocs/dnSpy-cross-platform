@@ -20,8 +20,10 @@ export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'se
    *  click or Enter on the row runs. */
   onOpenNode(node: TreeNode): void
   /** Shows a row the user selected in the active tab — dnSpy's DocumentTabService following the tree's
-   *  selection. Only a selection of one row is shown. */
+   *  selection. */
   onShowNode?(node: TreeNode): void
+  /** Shows the tree's top-level selection in the active tab as one document — a selection of several rows. */
+  onShowNodes?(nodes: TreeNode[]): void
   /** Follows the node in a tab of its own — dnSpy's `OpenNewTabInternal`. */
   onOpenInNewTab?(node: TreeNode): void
   /** Removes whole documents from the tree — dnSpy's `RemoveAssemblyCommand`, over the selected roots. */

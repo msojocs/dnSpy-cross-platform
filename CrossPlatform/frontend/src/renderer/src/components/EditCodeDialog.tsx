@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CompilerDiagnostic, CompilerLanguage, CompilerMode, TreeNode } from '../../../shared/protocol'
 import { compilerLanguageFor, compilerSettingsFor, useAppStore } from '../app-store'
+import { loadAppOptions } from './app-options'
+import { decompilerSettingsOf } from '../decompiler-settings'
 import { useLanguage } from '../localization'
 import CodeEditor from './CodeEditor'
 import { CloseGlyph } from './DsGlyphs'
@@ -59,7 +61,9 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
         .catch((reason: unknown) => { if (!cancelled) setFailure(reason instanceof Error ? reason.message : String(reason)) })
     }
     else if (sourceNodeId) {
-      void window.dnSpy.decompile(workspaceId, sourceNodeId, language === 'visualBasic' ? 'visualBasic' : 'cSharp')
+      // The decompiler settings the options pages hold, so the source the editor opens with is the text the
+      // document tab shows rather than the backend's defaults.
+      void window.dnSpy.decompile(workspaceId, sourceNodeId, language === 'visualBasic' ? 'visualBasic' : 'cSharp', decompilerSettingsOf(loadAppOptions()))
         .then((document) => { if (!cancelled) setSource(document.text) })
         .catch((reason: unknown) => { if (!cancelled) setFailure(reason instanceof Error ? reason.message : String(reason)) })
     }

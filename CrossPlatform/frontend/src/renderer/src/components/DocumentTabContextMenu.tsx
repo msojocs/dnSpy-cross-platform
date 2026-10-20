@@ -1,3 +1,4 @@
+import { documentShowsNode } from '../document-ids'
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import {
   Actions,
@@ -45,6 +46,8 @@ export interface DocumentTabGroupState {
 interface DocumentTabMenuOptions {
   t(message: string): string
   canSave(tab: TabNode): boolean
+  /** ITabSaver.MenuHeader: what the tab's saver calls its command — "Save Code..." unless a saver of its own names it. */
+  saveHeader?(tab: TabNode): string | undefined
   canClone(tab: TabNode): boolean
   onSave(tab: TabNode): void
   onModelChanged(): void
@@ -190,7 +193,8 @@ export const closeDocumentTab = (tab: TabNode): void => {
 export const closeDocumentTabsFor = (model: Model, documentId: string): void => {
   for (const tab of getDocumentTabSets(model).flatMap(allTabs)) {
     const config = tab.getConfig() as { documentId?: string; moduleId?: string } | undefined
-    if (tab.isCloseable() && (config?.documentId === documentId || config?.moduleId === documentId))
+    // A tab of several nodes goes with any one of them.
+    if (tab.isCloseable() && ((config?.documentId !== undefined && documentShowsNode(config.documentId, documentId)) || config?.moduleId === documentId))
       model.doAction(Actions.deleteTab(tab.getId()))
   }
 }
@@ -273,7 +277,7 @@ export const buildDocumentTabMenuItems = (
     options.onModelChanged()
   }
   const items: PopupMenuEntry[] = [
-    menuItem('save-code', options.t('Save Code...'), <MenuEntryIcon name="Save" />, () => options.onSave(tab), !state.canSave, 'Ctrl+S'),
+    menuItem('save-code', options.saveHeader?.(tab) ?? options.t('Save Code...'), <MenuEntryIcon name="Save" />, () => options.onSave(tab), !state.canSave, 'Ctrl+S'),
     menuItem('close', options.t('Close'), null, changed(() => closeDocumentTab(tab)), !state.canClose, 'Ctrl+F4'),
     menuItem('close-all', options.t('Close All Tabs'), <MenuEntryIcon name="CloseDocumentGroup" />, changed(() => closeAllDocumentTabs(tab.getModel())), !state.canCloseAll),
     menuItem('close-others', options.t('Close All But This'), null, changed(() => closeOtherDocumentTabs(tab)), !state.canCloseOthers),

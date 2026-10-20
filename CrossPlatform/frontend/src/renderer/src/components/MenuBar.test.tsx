@@ -168,9 +168,8 @@ afterEach(() => {
 
 describe('MenuBar', () => {
   it('mirrors the upstream File menu layout', () => {
-    // Nothing modified, nothing recently opened and no module left over from a process, which is the state that greys
-    // Save, Save All, Recent Files and Close Old In-Memory Modules. Export to Project, which this port does not have,
-    // stays in place, disabled.
+    // Nothing modified, nothing recently opened, no module left over from a process and nothing exportable selected,
+    // which is the state that greys Export to Project, Save, Save All, Recent Files and Close Old In-Memory Modules.
     renderMenuWith({ dirty: false })
     expect(openMenu('File')).toEqual([
       'Export to Project...',
@@ -204,6 +203,22 @@ describe('MenuBar', () => {
     // dnSpy never greys the restart entry — it is clickable or not there at all.
     expect(screen.getByRole('menuitem', { name: /^Restart as Administrator/ })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: /^Exit/ })).toBeEnabled()
+  })
+
+  it('exports the selection to a project when it names a module, as dnSpy\'s ExportProjectCommand does', () => {
+    const onExportToProject = vi.fn()
+    renderMenuWith({ canExportToProject: true, onExportToProject })
+    openMenu('File')
+    const entry = screen.getByRole('menuitem', { name: /^Export to Project/ })
+    expect(entry).toBeEnabled()
+    fireEvent.click(entry)
+    expect(onExportToProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('greys Export to Project when the selection names no module', () => {
+    renderMenuWith({ canExportToProject: false, onExportToProject: vi.fn() })
+    openMenu('File')
+    expect(screen.getByRole('menuitem', { name: /^Export to Project/ })).toBeDisabled()
   })
 
   it('closes the modules read out of a process that is no longer debugged, as dnSpy\'s Close Old In-Memory Modules does', () => {

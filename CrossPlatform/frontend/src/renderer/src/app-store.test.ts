@@ -18,6 +18,12 @@ describe('suggestCodeFilename', () => {
     ['Example', 'il', 'Example.il'],
     ['View.xaml', 'xml', 'View.xaml.xml'],
     ['Resource', 'plaintext', 'Resource.txt'],
+    // BamlTabSaver: a BAML entry saves as its XAML, or as its records when disassembled (BamlResourceElementNode.GetFilename).
+    ['view.baml', 'xaml', 'view.xaml'],
+    ['view.baml', 'baml', 'view.baml'],
+    ['themes/generic.baml', 'xaml', 'generic.xaml'],
+    ['view.xaml', 'baml', 'view.baml'],
+    ['view.bin', 'xaml', 'view.bin.xaml'],
   ])('uses the current document language for %s', (title, language, expected) => {
     expect(suggestCodeFilename(title, language)).toBe(expected)
   })

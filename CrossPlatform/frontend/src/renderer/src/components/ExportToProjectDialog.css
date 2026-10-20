@@ -1,0 +1,91 @@
+/* dnSpy's ExportToProjectDlg: a 400 pixel wide window sized to its content — a three-column grid of the labels, the
+   boxes and the buttons or check box beside them, the check boxes under it and the message about the files, or the
+   error log in their place once an export has logged something; the progress bar sits beside Export and Cancel. */
+.export-project-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(96vw, 460px);
+}
+
+.export-project-body {
+  min-height: 0;
+  padding: 5px 10px 0 5px;
+  overflow: auto;
+}
+
+.export-project-settings {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.export-project-settings > input:not([type="checkbox"]),
+.export-project-settings > select {
+  min-width: 0;
+  height: 25px;
+  padding: 0 6px;
+  border: 1px solid var(--wpf-CommonControlsTextBoxBorder);
+  background: var(--wpf-CommonControlsTextBoxBackground);
+  color: var(--wpf-CommonControlsTextBoxText);
+}
+
+/* WPF's validation template: the box goes red and its tooltip says why. */
+.export-project-settings > input[aria-invalid="true"] {
+  border-color: var(--wpf-CommonControlsTextBoxBorderError);
+}
+
+.export-project-settings > button {
+  min-width: 27px;
+  height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--wpf-CommonControlsButtonBorder);
+  background: var(--wpf-CommonControlsButton);
+  color: var(--wpf-CommonControlsButtonText);
+}
+
+.export-project-settings > input[type="checkbox"] {
+  justify-self: start;
+}
+
+.export-project-check {
+  display: flex;
+  grid-column: 1 / span 2;
+  align-items: center;
+  gap: 6px;
+  padding-left: 5px;
+}
+
+.export-project-check:has(input:disabled) {
+  opacity: 0.6;
+}
+
+.export-project-message {
+  grid-column: 1 / span 3;
+  padding: 5px 5px 0;
+  white-space: normal;
+}
+
+.export-project-errors {
+  display: grid;
+  grid-template-rows: auto minmax(160px, 1fr);
+  gap: 5px;
+  padding-left: 5px;
+}
+
+.export-project-errors > textarea {
+  min-height: 160px;
+  resize: vertical;
+  border: 1px solid var(--wpf-CommonControlsTextBoxErrorBackground);
+  background: var(--wpf-CommonControlsTextBoxErrorBackground);
+  color: var(--wpf-CommonControlsTextBoxErrorForeground);
+}
+
+.export-project-progress {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+}

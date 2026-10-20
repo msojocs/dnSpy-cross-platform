@@ -10,6 +10,7 @@ using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.Metadata;
 using dnlib.DotNet;
+using dnSpy.Backend.Core.ProjectExport;
 
 namespace dnSpy.Cli;
 
@@ -56,7 +57,7 @@ sealed class DecompilerRunner(LoadedModule module, CommandLineOptions options) {
 	}
 
 	void WriteVisualBasic(ColorTextWriter writer, EntityHandle handle) {
-		var csharpText = VisualBasicConversion.PrepareCSharp(RenderCSharp(handle, indentString: IndentationString));
+		var csharpText = VisualBasicConverterFixes.PrepareCSharp(RenderCSharp(handle, indentString: IndentationString));
 		var conversion = CodeConverter.ConvertAsync(
 			new CodeWithOptions(csharpText).WithTypeReferences(),
 			CancellationToken.None).GetAwaiter().GetResult();
@@ -66,7 +67,7 @@ sealed class DecompilerRunner(LoadedModule module, CommandLineOptions options) {
 				writer.WriteLine("' " + line);
 			return;
 		}
-		var vb = VisualBasicConversion.PrepareVB(VisualBasicConversion.PrepareConvertedVB(conversion.ConvertedCode));
+		var vb = VisualBasicConverterFixes.PrepareVB(VisualBasicConverterFixes.PrepareConvertedVB(conversion.ConvertedCode));
 		new VisualBasicColorWriter(writer).Write(vb);
 		if (!vb.EndsWith('\n'))
 			writer.WriteLine();

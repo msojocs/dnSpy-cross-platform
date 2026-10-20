@@ -29,7 +29,7 @@ const opcodes = [
 
 const directives = [
   '.addon', '.algorithm', '.assembly', '.backing', '.class', '.corflags', '.custom', '.data', '.emitbyte',
-  '.entrypoint', '.event', '.export', '.field', '.file', '.fire', '.get', '.hash', '.imagebase', '.language',
+  '.entrypoint', '.event', '.export', '.field', '.file', '.fire', '.get', '.hash', '.imagebase', '.interfaceimpl', '.language',
   '.line', '.locale', '.locals', '.manifestres', '.maxstack', '.method', '.module', '.mresource', '.namespace',
   '.other', '.override', '.pack', '.param', '.permission', '.permissionset', '.property', '.publickey',
   '.publickeytoken', '.removeon', '.set', '.size', '.stackreserve', '.subsystem', '.try', '.ver', '.vtentry',
@@ -42,16 +42,17 @@ const typeKeywords = [
 ]
 
 const modifiers = [
-  'abstract', 'algorithm', 'alignment', 'ansi', 'any', 'assembly', 'auto', 'autochar', 'beforefieldinit',
-  'bytearray', 'catch', 'cdecl', 'cil', 'default', 'endfault', 'endfilter', 'endfinally', 'enum', 'error',
-  'explicit', 'extends', 'extern', 'famandassem', 'family', 'famorassem', 'fault', 'field', 'final', 'finally',
-  'forwardref', 'fromunmanaged', 'handler', 'hidebysig', 'hresult', 'implements', 'implicitcom', 'import', 'in',
-  'initonly', 'instance', 'interface', 'internalcall', 'literal', 'managed', 'marshal', 'method', 'modopt', 'modreq',
+  'abstract', 'aggressiveinlining', 'aggressiveoptimization', 'algorithm', 'alignment', 'ansi', 'any', 'assembly',
+  'auto', 'autochar', 'beforefieldinit', 'bestfit', 'byreflike', 'bytearray', 'catch', 'charmaperror', 'constraint', 'cdecl', 'cil', 'default', 'endfault', 'endfilter', 'endfinally', 'enum', 'error',
+  'explicit', 'extends', 'extern', 'famandassem', 'family', 'famorassem', 'fault', 'field', 'filter', 'final', 'finally',
+  'flags', 'forwarder', 'forwardref', 'fromunmanaged', 'handler', 'hidebysig', 'hresult', 'implements', 'implicitcom', 'import', 'in',
+  'init', 'initonly', 'instance', 'interface', 'internalcall', 'literal', 'managed', 'marshal', 'method', 'modopt', 'modreq',
   'nested', 'newslot', 'noinlining', 'nomangle', 'nometadata', 'noncasdemand', 'noncasinheritance',
-  'noncaslinkdemand', 'notserialized', 'opt', 'out', 'permitonly', 'pinned', 'pinvokeimpl', 'preservesig',
-  'private', 'privatescope', 'public', 'request', 'reqmin', 'reqopt', 'reqrefuse', 'rtspecialname', 'runtime',
-  'sealed', 'sequential', 'serializable', 'specialname', 'static', 'stdcall', 'struct', 'synchronized', 'thiscall',
-  'tls', 'to', 'try', 'unicode', 'unmanaged', 'vararg', 'virtual', 'winapi',
+  'noncaslinkdemand', 'nooptimization', 'notserialized', 'nullref', 'opt', 'out', 'permitonly', 'pinned', 'pinvokeimpl', 'preservesig',
+  'private', 'privatescope', 'property', 'public', 'reqsecobj', 'request', 'reqmin', 'reqopt', 'reqrefuse', 'rtspecialname', 'runtime',
+  'securitymitigations', 'sealed', 'sequential', 'serializable', 'specialname', 'static', 'stdcall', 'strict',
+  'struct', 'synchronized', 'thiscall', 'tls', 'to', 'try', 'type', 'unicode', 'unmanaged', 'unmanagedexp', 'vararg',
+  'virtual', 'winapi', 'windowsruntime',
 ]
 
 export const ilLanguage: languages.IMonarchLanguage = {
@@ -83,14 +84,23 @@ export const ilLanguage: languages.IMonarchLanguage = {
       [/\b(?:V|A)_[0-9]+\b/, 'variable'],
       [/\[[^\]\r\n]+\]/, 'type.identifier'],
       [/"/, 'string', '@string'],
-      [/'(?:[^'\\]|\\.)*'/, 'string'],
+      // ilasm quotes a name that is no identifier in single quotes (`'<Code>k__BackingField'`); strings take double.
+      [/'(?:[^'\\]|\\.)*'/, 'identifier.member'],
       [/0x[0-9a-f]+|[0-9a-f]{8}(?=\s*\})/, 'number.hex'],
       [/[+-]?(?:\d+\.\d*|\.\d+)(?:e[+-]?\d+)?/, 'number.float'],
       [/[+-]?\d+/, 'number'],
       [/([a-z_$?@<][\w$?@.`<>]*)(::)([a-z_$?@<][\w$?@.`<>]*)/, ['type.identifier', 'delimiter', 'identifier.member']],
       [/<Module>/, 'type.identifier'],
       [/<[^>\r\n]+>[\w$?@.`]*/, 'identifier.member'],
-      [/[a-z_$?@<][\w$?@.`<>]*(?=\s*\()/, 'identifier.member'],
+      // A name before a parenthesis is a method's — unless it is a keyword that takes one: `.locals init (`,
+      // `marshal(`, `modopt(`, `pinvokeimpl(`.
+      [/[a-z_$?@<][\w$?@.`<>]*(?=\s*\()/, {
+        cases: {
+          '@typeKeywords': 'type.keyword',
+          '@modifiers': 'keyword.modifier',
+          '@default': 'identifier.member',
+        },
+      }],
       [/[a-z_$?@<][\w$?@`<>]*(?:\.[a-z_$?@<][\w$?@`<>]*)+/, 'type.identifier'],
       [/[a-z_$?@][\w$?@`]*(?:<[^>\r\n]+>)/, 'type.identifier'],
       [/[a-z_$?@][\w$?@.`]*/, {

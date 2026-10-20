@@ -69,8 +69,8 @@ interface DecompiledMethod {
 /**
  * Where following a match in a method body puts the caret (SearchService.GoTo): at the start of the
  * statement the instruction it was found at belongs to — in IL, whose statements are the instructions, at the
- * instruction itself. Nothing when the document has no statement for it: the Visual Basic view, a conversion of
- * the C# text that carries no statement map.
+ * instruction itself. Nothing when the document has no statement for it — a document whose language carries no
+ * statement map (Visual Basic recovers one from the conversion, so it follows like C#).
  */
 export const findSearchResultCaret = (document: DecompiledMethod, methodToken: number, ilOffset: number): { line: number; column: number } | undefined => {
   const modulePath = document.codeStatements?.find((statement) => statement.metadataToken === methodToken)?.modulePath

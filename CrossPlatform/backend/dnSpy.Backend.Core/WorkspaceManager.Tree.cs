@@ -83,7 +83,7 @@ public sealed partial class WorkspaceManager {
 	}, cancellationToken);
 
 	public Task<ResourceItemsResponse> GetResourceItemsAsync(ResourceItemsRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetResourceItems(request.NodeIds, request.Raw, cancellationToken), cancellationToken);
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetResourceItems(request.NodeIds, request.Raw, cancellationToken, request.Baml), cancellationToken);
 
 	public Task<FindResourceResponse> FindResourceAsync(FindResourceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.FindResource(request), cancellationToken);

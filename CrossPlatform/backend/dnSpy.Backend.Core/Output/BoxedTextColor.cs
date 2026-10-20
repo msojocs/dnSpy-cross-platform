@@ -1,0 +1,89 @@
+namespace dnSpy.Backend.Core.Output;
+
+/// <summary>
+/// dnSpy's <c>BoxedTextColor</c>: the color class a piece of output is written in. They are the names
+/// <see cref="dnSpy.Backend.Contracts.TextColors"/> uses on the wire, so a color the ported code writes is the
+/// one the client already maps to its theme.
+/// </summary>
+static class BoxedTextColor {
+	public const string Text = "text";
+	public const string Operator = "operator";
+	public const string Punctuation = "punctuation";
+	public const string Number = "number";
+	public const string Comment = "comment";
+	public const string Keyword = "keyword";
+	public const string String = "string";
+	public const string VerbatimString = "verbatimString";
+	public const string Char = "char";
+	public const string Namespace = "namespace";
+	public const string Type = "type";
+	public const string SealedType = "sealedType";
+	public const string StaticType = "staticType";
+	public const string Delegate = "delegate";
+	public const string Enum = "enum";
+	public const string Interface = "interface";
+	public const string ValueType = "valueType";
+	public const string Module = "module";
+	public const string TypeGenericParameter = "typeGenericParameter";
+	public const string MethodGenericParameter = "methodGenericParameter";
+	public const string InstanceMethod = "instanceMethod";
+	public const string StaticMethod = "staticMethod";
+	public const string ExtensionMethod = "extensionMethod";
+	public const string InstanceField = "instanceField";
+	public const string EnumField = "enumField";
+	public const string LiteralField = "literalField";
+	public const string StaticField = "staticField";
+	public const string InstanceEvent = "instanceEvent";
+	public const string StaticEvent = "staticEvent";
+	public const string InstanceProperty = "instanceProperty";
+	public const string StaticProperty = "staticProperty";
+	public const string Local = "local";
+	public const string Parameter = "parameter";
+	public const string PreprocessorKeyword = "preprocessorKeyword";
+	public const string PreprocessorText = "preprocessorText";
+	public const string Label = "label";
+	public const string OpCode = "opCode";
+	public const string ILDirective = "ilDirective";
+	public const string ILModule = "ilModule";
+	public const string ExcludedCode = "excludedCode";
+	public const string XmlDocCommentAttributeName = "xmlDocCommentAttributeName";
+	public const string XmlDocCommentAttributeQuotes = "xmlDocCommentAttributeQuotes";
+	public const string XmlDocCommentAttributeValue = "xmlDocCommentAttributeValue";
+	public const string XmlDocCommentCDataSection = "xmlDocCommentCDataSection";
+	public const string XmlDocCommentComment = "xmlDocCommentComment";
+	public const string XmlDocCommentDelimiter = "xmlDocCommentDelimiter";
+	public const string XmlDocCommentEntityReference = "xmlDocCommentEntityReference";
+	public const string XmlDocCommentName = "xmlDocCommentName";
+	public const string XmlDocCommentProcessingInstruction = "xmlDocCommentProcessingInstruction";
+	public const string XmlDocCommentText = "xmlDocCommentText";
+	public const string XmlAttribute = "xmlAttribute";
+	public const string XmlAttributeQuotes = "xmlAttributeQuotes";
+	public const string XmlAttributeValue = "xmlAttributeValue";
+	public const string XmlCDataSection = "xmlCDataSection";
+	public const string XmlComment = "xmlComment";
+	public const string XmlDelimiter = "xmlDelimiter";
+	public const string XmlKeyword = "xmlKeyword";
+	public const string XmlName = "xmlName";
+	public const string XmlProcessingInstruction = "xmlProcessingInstruction";
+	public const string XmlText = "xmlText";
+	public const string XamlAttribute = "xamlAttribute";
+	public const string XamlAttributeQuotes = "xamlAttributeQuotes";
+	public const string XamlAttributeValue = "xamlAttributeValue";
+	public const string XamlCDataSection = "xamlCDataSection";
+	public const string XamlComment = "xamlComment";
+	public const string XamlDelimiter = "xamlDelimiter";
+	public const string XamlKeyword = "xamlKeyword";
+	public const string XamlMarkupExtensionClass = "xamlMarkupExtensionClass";
+	public const string XamlMarkupExtensionParameterName = "xamlMarkupExtensionParameterName";
+	public const string XamlMarkupExtensionParameterValue = "xamlMarkupExtensionParameterValue";
+	public const string XamlName = "xamlName";
+	public const string XamlProcessingInstruction = "xamlProcessingInstruction";
+	public const string XamlText = "xamlText";
+	public const string Assembly = "assembly";
+	public const string AssemblyExe = "assemblyExe";
+	public const string AssemblyModule = "assemblyModule";
+	public const string DirectoryPart = "directoryPart";
+	public const string FileNameNoExtension = "fileNameNoExtension";
+	public const string FileExtension = "fileExtension";
+	public const string Error = "error";
+}

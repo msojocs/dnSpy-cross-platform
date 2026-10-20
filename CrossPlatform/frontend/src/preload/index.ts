@@ -41,7 +41,7 @@ const api: DnSpyApi = {
   listGacAssemblies: () => ipcRenderer.invoke('gac:list'),
   getGacDetails: (path) => ipcRenderer.invoke('gac:getDetails', path),
   listDefaultDocumentLists: () => ipcRenderer.invoke('documentList:defaults'),
-  getResourceItems: (workspaceId, nodeIds, raw) => ipcRenderer.invoke('resource:getItems', workspaceId, nodeIds, raw),
+  getResourceItems: (workspaceId, nodeIds, raw, baml) => ipcRenderer.invoke('resource:getItems', workspaceId, nodeIds, raw, baml),
   getResourceItemNames: (workspaceId, nodeIds) => ipcRenderer.invoke('resource:getItemNames', workspaceId, nodeIds),
   selectMember: (workspaceId, paths, member) => ipcRenderer.invoke('tree:selectMember', workspaceId, paths, member),
   findResource: (workspaceId, nodeId) => ipcRenderer.invoke('resource:find', workspaceId, nodeId),
@@ -49,12 +49,14 @@ const api: DnSpyApi = {
   findByToken: (workspaceId, nodeId, token) => ipcRenderer.invoke('tree:findByToken', workspaceId, nodeId, token),
   loadDependencies: (workspaceId, nodeId, recursive) => ipcRenderer.invoke('workspace:loadDependencies', workspaceId, nodeId, recursive),
   showItemInFolder: (path) => ipcRenderer.invoke('app:showItemInFolder', path),
-  saveResource: (workspaceId, nodeIds, raw, useSubDirs) => ipcRenderer.invoke('edit:saveResource', workspaceId, nodeIds, raw, useSubDirs),
+  saveResource: (workspaceId, nodeIds, raw, useSubDirs, baml) => ipcRenderer.invoke('edit:saveResource', workspaceId, nodeIds, raw, useSubDirs, baml),
   getRoots: (workspaceId) => ipcRenderer.invoke('tree:roots', workspaceId),
   getChildren: (workspaceId, nodeId) => ipcRenderer.invoke('tree:children', workspaceId, nodeId),
   getNode: (workspaceId, nodeId) => ipcRenderer.invoke('tree:node', workspaceId, nodeId),
   getNodePath: (workspaceId, nodeId) => ipcRenderer.invoke('tree:nodePath', workspaceId, nodeId),
-  decompile: (workspaceId, nodeId, language: DecompilerLanguage, settings?: unknown) => ipcRenderer.invoke('document:decompile', workspaceId, nodeId, language, settings),
+  decompile: (workspaceId, nodeId, language: DecompilerLanguage, settings?: unknown, requestKey?: string) => ipcRenderer.invoke('document:decompile', workspaceId, nodeId, language, settings, requestKey),
+  cancelDecompile: (requestKey) => ipcRenderer.invoke('document:cancelDecompile', requestKey),
+  resolveDocumentNode: (workspaceId, nodeId, decompileFullType) => ipcRenderer.invoke('document:resolveNode', workspaceId, nodeId, decompileFullType),
   findMember: (workspaceId, modulePath, metadataToken) => ipcRenderer.invoke('document:findMember', workspaceId, modulePath, metadataToken),
   quickInfo: (workspaceId, request) => ipcRenderer.invoke('document:quickInfo', workspaceId, request),
   formatBookmarkLocations: (workspaceId, locations, format) => ipcRenderer.invoke('bookmarks:formatLocations', workspaceId, locations, format),
@@ -138,6 +140,17 @@ const api: DnSpyApi = {
     ipcRenderer.on('module:saveProgress', listener)
     return () => ipcRenderer.removeListener('module:saveProgress', listener)
   },
+  getExportProjectInfo: (workspaceId, nodeIds) => ipcRenderer.invoke('project:getExportInfo', workspaceId, nodeIds),
+  exportProject: (request, requestKey) => ipcRenderer.invoke('project:export', request, requestKey),
+  cancelExportProject: (requestKey) => ipcRenderer.invoke('project:cancelExport', requestKey),
+  onExportProjectProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]): void => callback(progress)
+    ipcRenderer.on('project:exportProgress', listener)
+    return () => ipcRenderer.removeListener('project:exportProgress', listener)
+  },
+  pickExportDirectory: (currentDirectory) => ipcRenderer.invoke('dialog:pickExportDirectory', currentDirectory),
+  isExistingFile: (path) => ipcRenderer.invoke('fs:isExistingFile', path),
+  openExportedProject: (path) => ipcRenderer.invoke('shell:openExportedProject', path),
   pickSaveFileName: (defaultPath, kind, extension) => ipcRenderer.invoke('dialog:pickSaveFileName', defaultPath, kind, extension),
   validateSaveFileName: (fileName) => ipcRenderer.invoke('dialog:validateSaveFileName', fileName),
   askExitUnsaved: (count) => ipcRenderer.invoke('app:askExitUnsaved', count),

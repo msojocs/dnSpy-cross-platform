@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Xml.Linq;
 using ICSharpCode.BamlDecompiler;
@@ -11,37 +13,99 @@ using ICSharpCode.Decompiler.CSharp.Transforms;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 
-namespace dnSpy.Cli;
+namespace dnSpy.Backend.Core.ProjectExport;
 
 /// <summary>
-/// Exports the loaded modules the way dnSpy's MSBuildProjectCreator does: one directory and project
-/// per module, the decompiled files inside, a solution beside them. The files themselves come from
-/// ICSharpCode.Decompiler's project decompiler; the switches dnSpy's exporter has and ILSpy's does
-/// not — resources kept raw, .resx off, BAML decompiled to XAML, project references between the
-/// decompiled modules, the solution's project guids — are applied here.
+/// Exports modules the way dnSpy's MSBuildProjectCreator does: one directory and project per module, the
+/// decompiled files inside, a solution beside them. The files themselves come from ICSharpCode.Decompiler's
+/// project decompiler; the switches dnSpy's exporter has and ILSpy's does not — resources kept raw, .resx off,
+/// BAML decompiled to XAML, project references between the decompiled modules, the solution's project guids —
+/// are applied here. dnSpy.Console's export and the GUI's Export to Project both run through this.
 /// </summary>
-sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedModule> modules, Action<string> error) {
-	public void Export() {
-		var outputDirectory = options.OutputDirectory ?? throw new ConsoleErrorException(ConsoleStrings.MissingOutputDir);
-		Directory.CreateDirectory(outputDirectory);
+public sealed class ProjectExporter(ProjectExportOptions options, IReadOnlyList<ProjectExportModule> modules, Action<string> error, IProjectExportProgress? progress = null) {
+	readonly List<string> projectFilenames = [];
+	int totalProgress;
+
+	/// <summary>The project files written, in the order the modules were exported.</summary>
+	public IReadOnlyList<string> ProjectFilenames => projectFilenames;
+
+	/// <summary>The solution's full path when one was asked for — dnSpy's MSBuildProjectCreator.SolutionFilename.</summary>
+	public string? SolutionFilename => string.IsNullOrEmpty(options.SolutionFilename) ? null : Path.Combine(options.Directory, options.SolutionFilename);
+
+	/// <summary>
+	/// The C# settings a language is written from. Visual Basic is a conversion of C#, and the converter cannot
+	/// express C#'s nullable-reference annotations, so those are decompiled away first. The converter has no primary
+	/// constructors of its own: turning ILSpy's syntax off only makes it write the captured parameter as
+	/// `&lt;name&gt;P`, which is not C# either, so that setting stays on.
+	/// </summary>
+	public static DecompilerSettings SettingsForLanguage(DecompilerSettings source, bool visualBasic) {
+		var settings = source.Clone();
+		if (visualBasic)
+			settings.NullableReferenceTypes = false;
+		return settings;
+	}
+
+	/// <summary>
+	/// Writes every project, then the solution. A module that fails is reported and the others are still written,
+	/// as dnSpy's creator logs a failed project and goes on; a cancellation stops the export where it is.
+	/// </summary>
+	public async Task ExportAsync(CancellationToken cancellationToken) {
+		if (string.IsNullOrEmpty(options.Directory))
+			throw new InvalidOperationException("The export needs a destination folder.");
+		Directory.CreateDirectory(options.Directory);
 		AssignProjectNames();
 		AssignProjectGuids();
-		foreach (var module in modules) {
+
+		// dnSpy's maximum is every file job, every project file and the solution; the code files a module will get
+		// are counted the way the project decompiler groups them.
+		var decompilers = modules.Select(CreateDecompiler).ToArray();
+		var fileCounts = new int[modules.Count];
+		for (var i = 0; i < modules.Count; i++) {
 			try {
-				ExportModule(module, outputDirectory);
+				fileCounts[i] = decompilers[i].CountCodeFiles(modules[i].File);
 			}
-			catch (ConsoleErrorException) {
-				throw;
-			}
-			catch (Exception ex) {
-				error(string.Format(CultureInfo.CurrentCulture, "Failed to create project for '{0}': {1}", module.Path, ex.Message));
+			catch (Exception ex) when (ex is not OperationCanceledException) {
+				fileCounts[i] = 0;
 			}
 		}
-		if (options.CreateSolutionFile && !string.IsNullOrEmpty(options.SolutionName))
-			new SolutionWriter(options, modules, error).Write(Path.Combine(outputDirectory, options.SolutionName));
+		var writeSolution = SolutionFilename is not null;
+		var maxProgress = fileCounts.Sum() + modules.Count + (writeSolution ? 1 : 0);
+		progress?.SetMaxProgress(Math.Max(1, maxProgress));
+
+		for (var i = 0; i < modules.Count; i++) {
+			cancellationToken.ThrowIfCancellationRequested();
+			var module = modules[i];
+			var start = totalProgress;
+			var fileCount = fileCounts[i];
+			decompilers[i].ProgressIndicator = new FileProgress(completed => Report(start + Math.Min(fileCount, completed)));
+			try {
+				await ExportModuleAsync(module, decompilers[i], cancellationToken).ConfigureAwait(false);
+			}
+			catch (Exception ex) when (ex is not OperationCanceledException) {
+				error(string.Format(CultureInfo.CurrentCulture, "Failed to create project for '{0}': {1}", module.Path, ex.Message));
+			}
+			Report(start + fileCount + 1);
+		}
+		if (writeSolution) {
+			cancellationToken.ThrowIfCancellationRequested();
+			new SolutionWriter(options, modules, error).Write(SolutionFilename!);
+			Report(maxProgress);
+		}
+	}
+
+	void Report(int value) {
+		int current;
+		do {
+			current = Volatile.Read(ref totalProgress);
+			if (value <= current)
+				return;
+		} while (Interlocked.CompareExchange(ref totalProgress, value, current) != current);
+		progress?.SetProgress(value);
+	}
+
+	sealed class FileProgress(Action<int> report) : IProgress<DecompilationProgress> {
+		public void Report(DecompilationProgress value) => report(value.UnitsCompleted);
 	}
 
 	void AssignProjectNames() {
@@ -68,30 +132,43 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 		return string.IsNullOrWhiteSpace(sanitized) ? "module" : sanitized;
 	}
 
+	/// <summary>
+	/// dnSpy's ExportTask: with a project guid, the modules in path order get it and the guids that count on from
+	/// its last eight hex digits; without one, every project gets a new guid.
+	/// </summary>
 	void AssignProjectGuids() {
-		var guidText = options.ProjectGuid.ToString();
+		if (options.ProjectGuid is not { } projectGuid) {
+			foreach (var module in modules)
+				module.ProjectGuid = Guid.NewGuid();
+			return;
+		}
+		var guidText = projectGuid.ToString();
 		var number = uint.Parse(guidText.Substring(28, 8), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
 		var format = guidText[..28] + "{0:X8}";
 		foreach (var module in modules.OrderBy(module => module.Path, StringComparer.InvariantCultureIgnoreCase))
-			module.ProjectGuid = new Guid(string.Format(CultureInfo.InvariantCulture, format, number++));
+			module.ProjectGuid = new Guid(string.Format(CultureInfo.InvariantCulture, format, unchecked(number++)));
 	}
 
-	void ExportModule(LoadedModule module, string outputDirectory) {
-		var projectDirectory = Path.Combine(outputDirectory, module.ProjectDirectoryName);
-		Directory.CreateDirectory(projectDirectory);
-		var settings = DecompilerSettingsFactory.ForLanguage(options.Settings, options.Language.Kind);
+	ExportWholeProjectDecompiler CreateDecompiler(ProjectExportModule module) {
+		var settings = SettingsForLanguage(options.Settings, options.Language == ProjectExportLanguage.VisualBasic);
 		settings.UseSdkStyleProjectFormat = options.SdkProject;
-		settings.CSharpFormattingOptions.IndentationString = options.Spaces <= 0 ? "\t" : new string(' ', options.Spaces);
+		settings.CSharpFormattingOptions.IndentationString = options.IndentationString;
 		settings.ThrowOnAssemblyResolveErrors = false;
 		IProjectFileWriter projectWriter = options.SdkProject ? ProjectFileWriterSdkStyle.Default : ProjectFileWriterDefault.Instance;
-		var decompiler = new CliWholeProjectDecompiler(settings, module.Resolver, projectWriter, module.Resolver, null, options);
-		if (options.NumberOfThreads != 0)
+		var decompiler = new ExportWholeProjectDecompiler(settings, module.Resolver, projectWriter, module.Classifier, null, options);
+		if (options.NumberOfThreads > 0)
 			decompiler.MaxDegreeOfParallelism = options.NumberOfThreads;
+		return decompiler;
+	}
 
-		var projectFileName = module.ProjectDirectoryName + options.Language.ProjectFileExtension;
+	async Task ExportModuleAsync(ProjectExportModule module, ExportWholeProjectDecompiler decompiler, CancellationToken cancellationToken) {
+		var projectDirectory = Path.Combine(options.Directory, module.ProjectDirectoryName);
+		Directory.CreateDirectory(projectDirectory);
+
+		var projectFileName = module.ProjectDirectoryName + options.ProjectFileExtension;
 		var projectPath = Path.Combine(projectDirectory, projectFileName);
 		var projectText = new StringWriter();
-		var projectId = decompiler.DecompileProject(module.File, projectDirectory, projectText, CancellationToken.None);
+		var projectId = decompiler.DecompileProject(module.File, projectDirectory, projectText, cancellationToken);
 		module.PlatformName = string.IsNullOrEmpty(projectId.PlatformName) ? "AnyCPU" : projectId.PlatformName;
 		foreach (var decompilerError in decompiler.Errors)
 			error(decompilerError.Message);
@@ -99,22 +176,20 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 			error(extraError);
 
 		var document = PostProcessProject(projectText.ToString(), module);
-		if (options.Language.Kind == ConsoleLanguageKind.VisualBasic) {
-			ConvertToVisualBasic(module, projectDirectory, document);
-			var vbProjectPath = Path.ChangeExtension(projectPath, ".vbproj");
-			File.WriteAllText(vbProjectPath, document.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-			return;
-		}
-		File.WriteAllText(projectPath, document.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+		if (options.Language == ProjectExportLanguage.VisualBasic)
+			await ConvertToVisualBasicAsync(module, projectDirectory, document, cancellationToken).ConfigureAwait(false);
+		await File.WriteAllTextAsync(projectPath, document.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken).ConfigureAwait(false);
+		projectFilenames.Add(projectPath);
 	}
 
-	XDocument PostProcessProject(string text, LoadedModule module) {
+	XDocument PostProcessProject(string text, ProjectExportModule module) {
 		var document = XDocument.Parse(text);
 		var root = document.Root ?? throw new InvalidOperationException("The project file is empty.");
 		var ns = root.Name.Namespace;
 		var siblings = modules
 			.Where(sibling => sibling != module)
-			.ToDictionary(sibling => sibling.AssemblyOrModuleName, StringComparer.OrdinalIgnoreCase);
+			.GroupBy(sibling => sibling.AssemblyOrModuleName, StringComparer.OrdinalIgnoreCase)
+			.ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
 		var propertyGroup = root.Elements(ns + "PropertyGroup").FirstOrDefault();
 		if (propertyGroup is null) {
@@ -143,7 +218,7 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 				if (siblings.TryGetValue(simpleName, out var sibling)) {
 					reference.Remove();
 					projectReferences.Add(new XElement(ns + "ProjectReference",
-						new XAttribute("Include", Path.Combine("..", sibling.ProjectDirectoryName, sibling.ProjectDirectoryName + options.Language.ProjectFileExtension))));
+						new XAttribute("Include", Path.Combine("..", sibling.ProjectDirectoryName, sibling.ProjectDirectoryName + options.ProjectFileExtension))));
 					continue;
 				}
 				if (!options.AddCorlibReference && IsCorlib(simpleName))
@@ -182,22 +257,24 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 	/// is as good as that converter is — the code is faithful, but designer code and XAML code-behind
 	/// are best-effort.
 	/// </summary>
-	void ConvertToVisualBasic(LoadedModule module, string projectDirectory, XDocument document) {
+	async Task ConvertToVisualBasicAsync(ProjectExportModule module, string projectDirectory, XDocument document, CancellationToken cancellationToken) {
+		var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 		foreach (var csFile in Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories).ToArray()) {
+			cancellationToken.ThrowIfCancellationRequested();
 			var vbFile = Path.ChangeExtension(csFile, ".vb");
 			try {
-				var text = VisualBasicConversion.PrepareCSharp(File.ReadAllText(csFile));
-				var conversion = CodeConverter.ConvertAsync(new CodeWithOptions(text).WithTypeReferences(), CancellationToken.None).GetAwaiter().GetResult();
+				var text = VisualBasicConverterFixes.PrepareCSharp(await File.ReadAllTextAsync(csFile, cancellationToken).ConfigureAwait(false));
+				var conversion = await CodeConverter.ConvertAsync(new CodeWithOptions(text).WithTypeReferences(), cancellationToken).ConfigureAwait(false);
 				if (conversion.Success)
-					File.WriteAllText(vbFile, VisualBasicConversion.PrepareVB(VisualBasicConversion.PrepareConvertedVB(conversion.ConvertedCode)), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+					await File.WriteAllTextAsync(vbFile, VisualBasicConverterFixes.PrepareVB(VisualBasicConverterFixes.PrepareConvertedVB(conversion.ConvertedCode)), utf8, cancellationToken).ConfigureAwait(false);
 				else {
-					File.WriteAllText(vbFile, "' " + string.Join("\n' ", conversion.GetExceptionsAsString().Split('\n')), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+					await File.WriteAllTextAsync(vbFile, "' " + string.Join("\n' ", conversion.GetExceptionsAsString().Split('\n')), utf8, cancellationToken).ConfigureAwait(false);
 					error(string.Format(CultureInfo.CurrentCulture, "Failed to convert '{0}' to Visual Basic: {1}", csFile, conversion.GetExceptionsAsString()));
 				}
 			}
-			catch (Exception ex) {
+			catch (Exception ex) when (ex is not OperationCanceledException) {
 				error(string.Format(CultureInfo.CurrentCulture, "Failed to convert '{0}' to Visual Basic: {1}", csFile, ex.Message));
-				File.WriteAllText(vbFile, "' Visual Basic conversion failed: " + ex.Message, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+				await File.WriteAllTextAsync(vbFile, "' Visual Basic conversion failed: " + ex.Message, utf8, cancellationToken).ConfigureAwait(false);
 			}
 			File.Delete(csFile);
 		}
@@ -220,11 +297,10 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 			element.Remove();
 
 		var hasXaml = Directory.EnumerateFiles(projectDirectory, "*.xaml", SearchOption.AllDirectories).Any();
-		var hasWinForms = module.Module.GetAssemblyRefs().Any(reference => reference.Name == "System.Windows.Forms");
 		if (options.SdkProject) {
 			if (hasXaml && propertyGroup.Element(ns + "UseWPF") is null)
 				propertyGroup.Add(new XElement(ns + "UseWPF", "true"));
-			if (hasWinForms && propertyGroup.Element(ns + "UseWindowsForms") is null)
+			if (module.ReferencesWindowsForms && propertyGroup.Element(ns + "UseWindowsForms") is null)
 				propertyGroup.Add(new XElement(ns + "UseWindowsForms", "true"));
 		}
 		else {
@@ -252,13 +328,13 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 	/// dnSpy's exporter exposes. BAML entries become XAML pages, which is what dnSpy's project export
 	/// does and what makes the exported WPF project build without the original .baml files.
 	/// </summary>
-	sealed class CliWholeProjectDecompiler(
+	sealed class ExportWholeProjectDecompiler(
 		DecompilerSettings settings,
 		IAssemblyResolver resolver,
 		IProjectFileWriter projectWriter,
 		IAssemblyReferenceClassifier classifier,
 		IDebugInfoProvider? debugInfoProvider,
-		CommandLineOptions options)
+		ProjectExportOptions options)
 		: WholeProjectDecompiler(settings, resolver, projectWriter, classifier, debugInfoProvider) {
 		MetadataFile? module;
 		string? entryPointType;
@@ -271,11 +347,43 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 		/// <summary>What failed inside the overrides; the base class keeps its own list private.</summary>
 		public List<string> ExtraErrors { get; } = [];
 
+		/// <summary>The code files the project decompiler will write for the module: its top-level types, grouped by
+		/// the file each goes to. A type found only while decompiling another may add one or two more.</summary>
+		public int CountCodeFiles(MetadataFile file) =>
+			file.Metadata.GetTopLevelTypeDefinitions()
+				.Where(handle => IncludeTypeWhenDecompilingProject(file, handle))
+				.Select(handle => {
+					var type = file.Metadata.GetTypeDefinition(handle);
+					return GetFileNameForType(file.Metadata.GetString(type.Namespace), file.Metadata.GetString(type.Name), ".cs");
+				})
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.Count();
+
 		protected override CSharpDecompiler CreateDecompiler(DecompilerTypeSystem ts) {
 			var decompiler = base.CreateDecompiler(ts);
 			if (xamlTypes.Count > 0)
 				decompiler.AstTransforms.Add(new RemoveXamlGeneratedMembers(xamlTypes));
+			// The C# page's options dnSpy's fork has and the package does not, which its project files are written with too.
+			if (Settings is DnSpyDecompilerSettings && DnlibModule(ts.MainModule.MetadataFile) is { } dnlibModule)
+				decompiler.AstTransforms.Add(new DnSpyCSharpTransform(dnlibModule));
 			return decompiler;
+		}
+
+		// The rows of the module being exported, for the token comments: read once from the image ILSpy reads.
+		dnlib.DotNet.ModuleDef? dnlibModule;
+
+		dnlib.DotNet.ModuleDef? DnlibModule(MetadataFile? file) {
+			if (dnlibModule is not null || file is not PEFile peFile)
+				return dnlibModule;
+			try {
+				var image = peFile.Reader.GetEntireImage();
+				dnlibModule = dnlib.DotNet.ModuleDefMD.Load(image.GetContent().ToArray());
+				dnlibModule.Location = peFile.FileName;
+			}
+			catch (Exception) {
+				dnlibModule = null;
+			}
+			return dnlibModule;
 		}
 
 		protected override IEnumerable<ProjectItemInfo> WriteResourceFilesInProject(MetadataFile metadataFile) {
@@ -339,8 +447,8 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 				if (!string.IsNullOrEmpty(xamlDirectory))
 					CreateDirectory(Path.Combine(TargetDirectory, xamlDirectory));
 				var path = Path.Combine(TargetDirectory, xamlName);
-				using (var writer = new StreamWriter(path, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-					result.Xaml.Save(writer);
+				// BamlDecompiler.Decompile: the XAML as XamlOutputCreator writes it, UTF-8 without a byte order mark.
+				File.WriteAllText(path, XamlOutputCreator.CreateText(result.Xaml, options.XamlOutput), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 				var isApplicationDefinition = result.TypeName is { } typeName && entryPointType is not null && string.Equals(typeName.FullName, entryPointType, StringComparison.Ordinal);
 				if (result.TypeName is { } codeBehind)
 					xamlTypes.Add(codeBehind.FullName);
@@ -395,7 +503,7 @@ sealed class ProjectExporter(CommandLineOptions options, IReadOnlyList<LoadedMod
 }
 
 /// <summary>Writes the .sln the project export puts beside its projects, or the .slnx form.</summary>
-sealed class SolutionWriter(CommandLineOptions options, IReadOnlyList<LoadedModule> modules, Action<string> error) {
+sealed class SolutionWriter(ProjectExportOptions options, IReadOnlyList<ProjectExportModule> modules, Action<string> error) {
 	public void Write(string filename) {
 		try {
 			var directory = Path.GetDirectoryName(filename);
@@ -523,16 +631,15 @@ sealed class SolutionWriter(CommandLineOptions options, IReadOnlyList<LoadedModu
 	}
 
 	SolutionProject[] SortedProjects() {
-		var languageGuid = options.Language.Kind == ConsoleLanguageKind.VisualBasic
+		var languageGuid = options.Language == ProjectExportLanguage.VisualBasic
 			? new Guid("F184B08F-C81C-45F6-A57F-5ABD9991F28F")
 			: new Guid("FAE04EC0-301F-11D3-BF4B-00C04F79EFBC");
-		var projectExtension = options.Language.ProjectFileExtension ?? ".csproj";
 		return [.. modules
 			.OrderBy(module => module.IsDll ? 1 : 0)
 			.ThenBy(module => module.ProjectDirectoryName, StringComparer.OrdinalIgnoreCase)
 			.Select(module => new SolutionProject(
 				module.ProjectDirectoryName,
-				module.ProjectDirectoryName + projectExtension,
+				module.ProjectDirectoryName + options.ProjectFileExtension,
 				module.ProjectGuid,
 				languageGuid,
 				module.PlatformName))];

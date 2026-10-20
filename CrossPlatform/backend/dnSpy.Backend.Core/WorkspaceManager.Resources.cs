@@ -1,6 +1,4 @@
-using System.Formats.Nrbf;
 using System.Globalization;
-using System.Runtime.Serialization;
 using System.Text;
 using System.Xml;
 using dnlib.DotNet;
@@ -8,6 +6,7 @@ using dnlib.DotNet.Emit;
 using dnlib.DotNet.Resources;
 using dnlib.IO;
 using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Core.Output;
 using ICSharpCode.BamlDecompiler;
 
 namespace dnSpy.Backend.Core;
@@ -52,9 +51,11 @@ public sealed partial class WorkspaceManager {
 						return ResourceShape.Image;
 					return IsBaml(data) ? ResourceShape.Baml : ResourceShape.BuiltIn;
 				case BinaryResourceData binary:
-					if (SerializedImageData(binary) is not null)
+					if (ImageResources.GetImageData(binary) is not null)
 						return ResourceShape.SerializedImage;
-					return IsType(binary.TypeName, "System.Windows.Forms", "ImageListStreamer") ? ResourceShape.ImageList : ResourceShape.UnknownSerialized;
+					// SerializedImageListStreamerResourceElementNodeProvider takes the entry only when its "Data"
+					// field can be read out of it; any other ImageListStreamer is just another serialized object.
+					return ImageResources.GetImageListStreamerData(binary) is not null ? ResourceShape.ImageList : ResourceShape.UnknownSerialized;
 				default:
 					return ResourceShape.BuiltIn;
 			}
@@ -63,13 +64,13 @@ public sealed partial class WorkspaceManager {
 		static readonly string[] ImageExtensions = [".png", ".gif", ".bmp", ".dib", ".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi", ".ico", ".cur"];
 
 		/// <summary>dnSpy's ImageResourceNodeProvider.CouldBeImage: an image file extension, or the header of a
-		/// BMP, GIF, PNG, ICO or CUR file.</summary>
+		/// BMP, GIF, PNG, ICO or CUR file. A JPEG file is known by its extension only.</summary>
 		static bool CouldBeImage(string name, byte[] data) {
 			foreach (var extension in ImageExtensions) {
 				if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
 					return true;
 			}
-			return ImageMimeType(data) is not null;
+			return ImageMimeType(data) is { } mime && mime != "image/jpeg";
 		}
 
 		/// <summary>The image format a file's header names, as a MIME type, or null when it names none. JPEG has
@@ -111,67 +112,6 @@ public sealed partial class WorkspaceManager {
 			if (BitConverter.ToUInt32(data, 0) >> 1 != signature.Length)
 				return false;
 			return Encoding.Unicode.GetString(data, 4, signature.Length * 2) == signature;
-		}
-
-		/// <summary>Whether a serialized entry's type is the named type of the named assembly, whatever version
-		/// the name carries — SerializedImageUtilities.CheckType.</summary>
-		static bool IsType(string typeName, string assembly, string type) {
-			var comma = typeName.IndexOf(',');
-			var name = (comma < 0 ? typeName : typeName[..comma]).Trim();
-			if (name != $"{assembly}.{type}" && !(assembly == "System.Windows.Forms" && name == $"System.Windows.Forms.{type}"))
-				return false;
-			if (comma < 0)
-				return true;
-			var assemblyName = typeName[(comma + 1)..].Split(',')[0].Trim();
-			return assemblyName.Equals(assembly, StringComparison.OrdinalIgnoreCase);
-		}
-
-		/// <summary>
-		/// The image file a serialized System.Drawing.Bitmap or Icon carries — SerializedImageUtilities.GetImageData.
-		/// A BinaryFormatter payload is read with the NRBF decoder, which never instantiates a type; the
-		/// stream and type-converter formats carry the file itself, the latter maybe behind an OLE header.
-		/// </summary>
-		static byte[]? SerializedImageData(BinaryResourceData binary) {
-			var isBitmap = IsType(binary.TypeName, "System.Drawing", "Bitmap");
-			var isIcon = !isBitmap && IsType(binary.TypeName, "System.Drawing", "Icon");
-			if (!isBitmap && !isIcon)
-				return null;
-			switch (binary.Format) {
-				case SerializationFormat.BinaryFormatter:
-					return DeserializeToByteArray(binary.Data, isBitmap ? "System.Drawing.Bitmap" : "System.Drawing.Icon", isBitmap ? "Data" : "IconData");
-				case SerializationFormat.ActivatorStream:
-					return binary.Data;
-				case SerializationFormat.TypeConverterByteArray:
-					return isBitmap ? StripOleHeader(binary.Data) ?? binary.Data : binary.Data;
-				default:
-					return null;
-			}
-		}
-
-		static byte[]? DeserializeToByteArray(byte[] data, string typeName, string fieldName) {
-#pragma warning disable SYSLIB5005 // Nrbf API is experimental
-			try {
-				if (NrbfDecoder.Decode(new MemoryStream(data, writable: false)) is not ClassRecord record || record.TypeName.FullName != typeName)
-					return null;
-				var member = record.MemberNames.FirstOrDefault(name => name.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
-				if (member is null || record.GetArrayRecord(member) is not { } array || array.TypeName.FullName != "System.Byte[]")
-					return null;
-				return (byte[])array.GetArray(typeof(byte[]));
-			}
-			catch (Exception ex) when (ex is SerializationException or NotSupportedException or InvalidCastException or ArgumentException or IOException or EndOfStreamException or FormatException or OverflowException) {
-				return null;
-			}
-#pragma warning restore SYSLIB5005
-		}
-
-		// ImageConverter.GetBitmapStream: an OLE object header in front of the bitmap, "PBrush" inside it.
-		static byte[]? StripOleHeader(byte[] data) {
-			if (data.Length <= 18 || (short)(data[0] | data[1] << 8) != 0x1C15)
-				return null;
-			var headerSize = (short)(data[2] | data[3] << 8);
-			if (data.Length <= headerSize + 18 || Encoding.ASCII.GetString(data, headerSize + 12, 6) != "PBrush")
-				return null;
-			return data[78..];
 		}
 
 		/// <summary>The Resources folder, sorted the way dnSpy's ResourceTreeNodeGroup sorts it: by name, then by
@@ -266,39 +206,60 @@ public sealed partial class WorkspaceManager {
 			: Lines(ResourceLabel(node), (node.Module as IModuleEntry)?.Path);
 
 		/// <summary>
-		/// What dnSpy's WriteShort says about a resource after its name: its size or where it lives, then its
-		/// kind and its visibility — "(1,234 bytes, Embedded, Public)".
+		/// A resource's line without the comment syntax and the offset — ResourceNode.WriteShort: the escaped name,
+		/// then its size or where it lives, its kind and its attributes — "name (1234 bytes, Embedded, Public)".
 		/// </summary>
-		static string DescribeResource(Resource resource) {
+		static string DescribeResource(Resource resource) => IdentifierEscaper.Escape(resource.Name) + ResourceLineTail(resource);
+
+		/// <summary>What ResourceNode.WriteShort writes after a resource's name.</summary>
+		static string ResourceLineTail(Resource resource) {
 			var extra = resource switch {
-				EmbeddedResource embedded => string.Format(CultureInfo.InvariantCulture, "{0} bytes", embedded.Length),
+				EmbeddedResource embedded => string.Format(CultureInfo.CurrentCulture, "{0} bytes", embedded.Length),
 				AssemblyLinkedResource linked => linked.Assembly?.FullName,
-				LinkedResource linked => $"{linked.File?.Name}, {(linked.File?.ContainsNoMetadata == true ? "ContainsNoMetaData" : "ContainsMetaData")}, {Convert.ToHexString(linked.File?.HashValue ?? []).ToLowerInvariant()}",
+				LinkedResource linked => $"{linked.File?.Name}, {(linked.File?.ContainsNoMetadata == true ? "ContainsNoMetaData" : "ContainsMetaData")}, {SimpleTypeConverter.ByteArrayToString(linked.File?.HashValue)}",
 				_ => null,
 			};
-			return $"{resource.Name} ({(extra is null ? string.Empty : $"{extra}, ")}{resource.ResourceType}, {resource.Attributes & ManifestResourceAttributes.VisibilityMask})";
+			return $" ({(extra is null ? string.Empty : $"{extra}, ")}{resource.ResourceType}, {resource.Attributes})";
 		}
 
-		/// <summary>ResourceElementNode.ValueString: what an entry is, after its name and an equals sign.</summary>
+		/// <summary>
+		/// ResourceElementNode.ValueString: what an entry is, after its name and an equals sign — written the way
+		/// dnSpy's SimpleTypeConverter writes a value: a string or a char quoted and escaped, an integer in hex above 9,
+		/// an array by its length and a serialized object by its length and its type.
+		/// </summary>
 		static string EntryValueString(ResourceElement element) {
 			var data = element.ResourceData;
 			if (data is BuiltInResourceData builtIn) {
+				var value = builtIn.Data;
 				return builtIn.Code switch {
 					ResourceTypeCode.Null => "null",
-					ResourceTypeCode.String => (string)builtIn.Data,
-					ResourceTypeCode.Boolean => (bool)builtIn.Data ? "true" : "false",
-					ResourceTypeCode.ByteArray or ResourceTypeCode.Stream => string.Format(CultureInfo.InvariantCulture, "{0} bytes", ((byte[])builtIn.Data).Length),
-					_ => Convert.ToString(builtIn.Data, CultureInfo.InvariantCulture) ?? string.Empty,
+					ResourceTypeCode.String => SimpleTypeConverter.ToString((string)value, false),
+					ResourceTypeCode.Boolean => SimpleTypeConverter.ToString((bool)value),
+					ResourceTypeCode.Char => SimpleTypeConverter.ToString((char)value),
+					ResourceTypeCode.Byte => SimpleTypeConverter.ToString((byte)value),
+					ResourceTypeCode.SByte => SimpleTypeConverter.ToString((sbyte)value),
+					ResourceTypeCode.Int16 => SimpleTypeConverter.ToString((short)value),
+					ResourceTypeCode.UInt16 => SimpleTypeConverter.ToString((ushort)value),
+					ResourceTypeCode.Int32 => SimpleTypeConverter.ToString((int)value),
+					ResourceTypeCode.UInt32 => SimpleTypeConverter.ToString((uint)value),
+					ResourceTypeCode.Int64 => SimpleTypeConverter.ToString((long)value),
+					ResourceTypeCode.UInt64 => SimpleTypeConverter.ToString((ulong)value),
+					ResourceTypeCode.Single => SimpleTypeConverter.ToString((float)value),
+					ResourceTypeCode.Double => SimpleTypeConverter.ToString((double)value),
+					ResourceTypeCode.Decimal => SimpleTypeConverter.ToString((decimal)value),
+					ResourceTypeCode.DateTime => SimpleTypeConverter.ToString((DateTime)value),
+					ResourceTypeCode.TimeSpan => SimpleTypeConverter.ToString((TimeSpan)value),
+					ResourceTypeCode.ByteArray or ResourceTypeCode.Stream => string.Format(CultureInfo.CurrentCulture, "{0} bytes", ((byte[])value).Length),
+					_ => data.ToString() ?? string.Empty,
 				};
 			}
 			if (data is BinaryResourceData binary)
-				return string.Format(CultureInfo.InvariantCulture, "{0} bytes, Type = {1}", binary.Data.Length, binary.TypeName);
+				return string.Format(CultureInfo.CurrentCulture, "{0} bytes, Type = {1}", binary.Data.Length, binary.TypeName);
 			return data.ToString() ?? string.Empty;
 		}
 
-		static string DescribeResourceEntry(ResourceEntryValue value) => $"{value.Name} = {Truncate(EntryValueString(value.Element), 50_000)}";
-
-		static string Truncate(string text, int length) => text.Length <= length ? text : text[..length] + "[...]";
+		/// <summary>An entry's line without the comment syntax and the offset — ResourceElementNode.WriteShort.</summary>
+		static string DescribeResourceEntry(ResourceEntryValue value) => $"{IdentifierEscaper.Escape(value.Name)} = {IdentifierEscaper.Truncate(EntryValueString(value.Element), 50000)}";
 
 		// An image attachment travels base64 inside one JSON-RPC message, so one that would make the message
 		// too large is not sent; the line under it still says what the resource is.
@@ -306,77 +267,35 @@ public sealed partial class WorkspaceManager {
 
 		/// <summary>
 		/// The document a resource row shows — NodeDecompiler for a resource node. A row that can show itself
-		/// does (IDecompileSelf): text is shown as text, BAML as XAML. Everything else writes dnSpy's comment
-		/// line, with the picture an image holds above it and the Save button under a resource's line, and a
-		/// .resources file adds the line of every entry it holds.
+		/// does (IDecompileSelf): text is shown as text, BAML as XAML. Everything else writes its WriteShort line —
+		/// with the picture an image holds, the Save button under a resource's line — and a .resources file adds
+		/// the line of every entry it holds (see WorkspaceManager.ResourceDocuments.cs).
 		/// </summary>
-		DecompileResponse DecompileResource(NodeEntry node, DecompilerLanguage language, CancellationToken cancellationToken) {
+		/// <remarks><paramref name="writeShort"/> asks for the resource's short form alone (ResourceNode.WriteShort), the
+		/// way NodeDecompiler writes a resource into the Resources folder's document or a tab of several nodes: a row
+		/// that would show itself writes its line instead.</remarks>
+		DecompileResponse DecompileResource(NodeEntry node, DecompilerLanguage language, DecompilerSettingsDto? settings, CancellationToken cancellationToken, bool writeShort = false) {
 			var title = GetLabel(node);
-			var comment = language == DecompilerLanguage.VisualBasic ? "'" : "//";
-			var text = new StringBuilder();
-			var attachments = new List<DocumentAttachmentDto>();
-			var line = 1;
-			void WriteComment(string content) {
-				text.Append(comment).Append(' ').Append(content).Append('\n');
-				line++;
-			}
-			void AttachImage(byte[]? data, string name) {
-				if (data is null || data.Length > MaxAttachedImageLength)
-					return;
-				var mime = ImageMimeType(data) ?? (name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" : null);
-				if (mime is not null)
-					attachments.Add(new DocumentAttachmentDto(line - 1, DocumentAttachmentKinds.Image, Convert.ToBase64String(data), mime));
-			}
-			void AttachSaveButton() => attachments.Add(new DocumentAttachmentDto(line - 1, DocumentAttachmentKinds.SaveButton, NodeId: node.Id));
-			void WriteEntry(ResourceEntryValue entry) {
-				switch (ShapeOf(entry.Element)) {
-					case ResourceShape.Image:
-						var image = (byte[])((BuiltInResourceData)entry.Element.ResourceData).Data;
-						AttachImage(image, entry.Name);
-						WriteComment($"= {UnescapeName(entry.Name)}");
-						break;
-					case ResourceShape.SerializedImage:
-						AttachImage(SerializedImageData((BinaryResourceData)entry.Element.ResourceData), entry.Name);
-						WriteComment(DescribeResourceEntry(entry));
-						break;
-					default:
-						WriteComment(DescribeResourceEntry(entry));
-						break;
-				}
-			}
-
+			var output = new ResourceDocumentOutput(language, settings);
 			if (node.Value is ResourceEntryValue value) {
 				var shape = ShapeOf(value.Element);
-				if (shape == ResourceShape.Baml)
-					return DecompileBaml(node, value, cancellationToken);
-				if (shape == ResourceShape.BuiltIn && value.Element.ResourceData is BuiltInResourceData builtIn) {
+				if (!writeShort && shape == ResourceShape.Baml)
+					return DecompileBaml(node, value, settings?.Baml, cancellationToken);
+				if (!writeShort && shape == ResourceShape.BuiltIn && value.Element.ResourceData is BuiltInResourceData builtIn) {
 					if (builtIn.Code == ResourceTypeCode.String)
 						return new DecompileResponse(title, "plaintext", (string)builtIn.Data, [], []);
 					if (builtIn.Code is ResourceTypeCode.ByteArray or ResourceTypeCode.Stream && TextDocument(title, value.Name, (byte[])builtIn.Data) is { } textDocument)
 						return textDocument;
 				}
-				WriteEntry(value);
+				WriteResourceEntry(output, node);
 			}
 			else {
 				var resource = (Resource)node.Value;
-				var shape = ShapeOf(resource);
-				if (shape == ResourceShape.Unknown && resource is EmbeddedResource textual && TextDocument(title, resource.Name, ReadResourceBytes(textual)) is { } textDocument)
+				if (!writeShort && ShapeOf(resource) == ResourceShape.Unknown && resource is EmbeddedResource textual && TextDocument(title, resource.Name, ReadResourceBytes(textual)) is { } textDocument)
 					return textDocument;
-				if (shape == ResourceShape.Image)
-					AttachImage(ReadResourceBytes((EmbeddedResource)resource), resource.Name);
-				WriteComment(DescribeResource(resource));
-				if (resource is EmbeddedResource)
-					AttachSaveButton();
-				if (shape == ResourceShape.ResourceSet) {
-					foreach (var child in GetEmbeddedResourceChildren(node)) {
-						cancellationToken.ThrowIfCancellationRequested();
-						WriteEntry((ResourceEntryValue)child.Value);
-					}
-				}
+				WriteResourceNode(output, node, cancellationToken);
 			}
-			return new DecompileResponse(title, language == DecompilerLanguage.VisualBasic ? "visual-basic" : "csharp", text.ToString(), [], []) {
-				Attachments = attachments,
-			};
+			return output.ToResponse(title);
 		}
 
 		/// <summary>
@@ -401,31 +320,83 @@ public sealed partial class WorkspaceManager {
 			}
 		}
 
-		static string GuessResourceLanguage(string name) => Path.GetExtension(name).ToLowerInvariant() switch {
-			".xaml" or ".xml" => "xml",
-			".json" => "json",
-			".cs" or ".csx" => "csharp",
-			".vb" or ".vbx" => "visual-basic",
-			".il" => "il",
-			_ => "plaintext",
-		};
-
-		DecompileResponse DecompileBaml(NodeEntry node, ResourceEntryValue value, CancellationToken cancellationToken) {
-			var title = GetLabel(node);
+		/// <summary>
+		/// ContentTypesHelper.TryGetContentTypeStringByExtension over the cleaned name's extension: the languages dnSpy
+		/// has a viewer for, and plain text for any other file.
+		/// </summary>
+		static string GuessResourceLanguage(string name) {
+			string extension;
 			try {
-				return new DecompileResponse(title, "xml", DecompileBamlToXaml(node.AsModuleEntry!, (byte[])((BuiltInResourceData)value.Element.ResourceData).Data, cancellationToken), [], []);
+				extension = Path.GetExtension(CleanName(name));
+			}
+			catch (ArgumentException) {
+				extension = ".txt";
+			}
+			return extension.ToUpperInvariant() switch {
+				".XAML" or ".XML" => "xml",
+				".CS" or ".CSX" => "csharp",
+				".VB" or ".VBX" => "visual-basic",
+				".IL" => "il",
+				_ => "plaintext",
+			};
+		}
+
+		/// <summary>
+		/// BamlResourceElementNode.Decompile: with Disassemble BAML on, the BAML's records (dnSpy's BamlDnSpy content
+		/// type, language <c>baml</c>); otherwise the XAML it decompiles to, written the way the BAML page asks
+		/// (XamlOutputCreator; dnSpy's Xaml content type, language <c>xaml</c>).
+		/// </summary>
+		DecompileResponse DecompileBaml(NodeEntry node, ResourceEntryValue value, BamlDecompilerSettingsDto? settings, CancellationToken cancellationToken) {
+			var title = GetLabel(node);
+			var baml = (byte[])((BuiltInResourceData)value.Element.ResourceData).Data;
+			if (settings?.DisassembleBaml == true) {
+				try {
+					var output = DisassembleBaml(node.AsModuleEntry!, baml, cancellationToken);
+					return output.ToResponse(title, "baml", null);
+				}
+				catch (Exception ex) when (ex is not OperationCanceledException) {
+					return new DecompileResponse(title, "baml", string.Empty, [], [new DiagnosticDto("error", ex.Message)]);
+				}
+			}
+			try {
+				return new DecompileResponse(title, "xaml", DecompileBamlToXaml(node.AsModuleEntry!, baml, settings, cancellationToken), [], []);
 			}
 			catch (Exception ex) when (ex is not OperationCanceledException) {
-				return new DecompileResponse(title, "xml", string.Empty, [], [new DiagnosticDto("error", ex.Message)]);
+				return new DecompileResponse(title, "xaml", string.Empty, [], [new DiagnosticDto("error", ex.Message)]);
 			}
 		}
 
-		static string DecompileBamlToXaml(ModuleEntry module, byte[] baml, CancellationToken cancellationToken) {
+		/// <summary>
+		/// dnSpy's BamlDisassembler over the BAML's records, every write in the color it was written in. An id a record
+		/// defines and the records that use it are tied together inside the document; a type or member the BAML names
+		/// is followed the way the IL view follows it.
+		/// </summary>
+		DocumentOutput DisassembleBaml(ModuleEntry module, byte[] baml, CancellationToken cancellationToken) {
+			var host = new AnalyzerHost(this, null, loadOnDemand: false);
+			var output = new DocumentOutput((reference, flags, color, start, length) => ILSpanOf(module, host, reference, flags, color, start, length)) { ColorsEveryWrite = true };
+			Baml.BamlDisassemblerEntry.Disassemble(module.Module, baml, output, cancellationToken);
+			return output;
+		}
+
+		static string DecompileBamlToXaml(ModuleEntry module, byte[] baml, BamlDecompilerSettingsDto? settings, CancellationToken cancellationToken) {
 			var decompiler = new XamlDecompiler(module.Path, new BamlDecompilerSettings { ThrowOnAssemblyResolveErrors = false }) {
 				CancellationToken = cancellationToken,
 			};
 			using var stream = new MemoryStream(baml, writable: false);
-			return decompiler.Decompile(stream).Xaml.ToString();
+			return XamlOutputCreator.CreateText(decompiler.Decompile(stream).Xaml, settings);
+		}
+
+		/// <summary>
+		/// BamlResourceElementNode.GetFilename: a BAML entry saves as <c>.baml</c> when it is disassembled and as
+		/// <c>.xaml</c> otherwise — the other one of the two extensions is replaced, any other name gets it added.
+		/// </summary>
+		static string BamlFileName(string name, bool disassemble) {
+			var (otherExtension, targetExtension) = disassemble ? (".xaml", ".baml") : (".baml", ".xaml");
+			if (name.EndsWith(otherExtension, StringComparison.OrdinalIgnoreCase))
+				return name[..^otherExtension.Length] + targetExtension;
+			if (name.EndsWith(targetExtension, StringComparison.OrdinalIgnoreCase))
+				return name;
+			return name + targetExtension;
 		}
 
 		/// <summary>
@@ -438,14 +409,14 @@ public sealed partial class WorkspaceManager {
 		/// The files the nodes save as — dnSpy's Save and Raw Save (SaveResources over IResourceDataProvider). A
 		/// resources folder on its own stands for the resources in it.
 		/// </summary>
-		public ResourceItemsResponse GetResourceItems(IReadOnlyList<string> nodeIds, bool raw, CancellationToken cancellationToken) {
+		public ResourceItemsResponse GetResourceItems(IReadOnlyList<string> nodeIds, bool raw, CancellationToken cancellationToken, BamlDecompilerSettingsDto? baml = null) {
 			var selected = nodeIds.Select(GetNode).ToList();
 			if (selected is [{ Kind: NodeKind.ResourcesGroup } folder])
 				selected = [.. GetResourceChildren(folder)];
 			var items = new List<ResourceDataResponse>();
 			foreach (var node in selected) {
 				cancellationToken.ThrowIfCancellationRequested();
-				foreach (var (name, data) in ResourceItems(node, raw, cancellationToken))
+				foreach (var (name, data) in ResourceItems(node, raw, cancellationToken, baml))
 					items.Add(new ResourceDataResponse(name, Convert.ToBase64String(data)));
 			}
 			return new ResourceItemsResponse(items);
@@ -488,17 +459,17 @@ public sealed partial class WorkspaceManager {
 		static string DeserializedEntryName(ResourceEntryValue entry) =>
 			ShapeOf(entry.Element) == ResourceShape.Baml ? Path.ChangeExtension(entry.Name, ".xaml") : entry.Name;
 
-		IEnumerable<(string Name, byte[] Data)> ResourceItems(NodeEntry node, bool raw, CancellationToken cancellationToken) {
+		IEnumerable<(string Name, byte[] Data)> ResourceItems(NodeEntry node, bool raw, CancellationToken cancellationToken, BamlDecompilerSettingsDto? baml = null) {
 			switch (node.Value) {
 				case ResourceEntryValue entry when raw:
 					yield return (entry.Name, SerializedEntryBytes(entry.Element));
 					break;
 				case ResourceEntryValue entry:
-					yield return DeserializedEntry(node, entry, cancellationToken);
+					yield return DeserializedEntry(node, entry, cancellationToken, baml);
 					break;
 				case EmbeddedResource resource when !raw && ShapeOf(resource) == ResourceShape.ResourceSet:
 					foreach (var child in GetEmbeddedResourceChildren(node))
-						yield return DeserializedEntry(child, (ResourceEntryValue)child.Value, cancellationToken);
+						yield return DeserializedEntry(child, (ResourceEntryValue)child.Value, cancellationToken, baml);
 					break;
 				case EmbeddedResource resource:
 					yield return (resource.Name.String, ReadResourceBytes(resource));
@@ -508,22 +479,30 @@ public sealed partial class WorkspaceManager {
 
 		/// <summary>
 		/// An entry saved as its value: a string as UTF-8 text with a byte order mark (dnSpy writes it through a
-		/// StreamWriter), bytes as they are, an image as its file, BAML as the XAML it decompiles to, a
-		/// serialized object as its serialized bytes and any other value as the text dnSpy shows for it.
+		/// StreamWriter), bytes as they are, an image as its file, BAML as the XAML it decompiles to (its records, as
+		/// .baml, with Disassemble BAML on), a serialized object as its serialized bytes and any other value as the
+		/// text dnSpy shows for it.
 		/// </summary>
-		(string, byte[]) DeserializedEntry(NodeEntry node, ResourceEntryValue entry, CancellationToken cancellationToken) {
+		(string, byte[]) DeserializedEntry(NodeEntry node, ResourceEntryValue entry, CancellationToken cancellationToken, BamlDecompilerSettingsDto? baml = null) {
 			var element = entry.Element;
 			switch (ShapeOf(element)) {
 				case ResourceShape.Baml:
-					var xamlName = Path.ChangeExtension(entry.Name, ".xaml");
+					var bamlData = (byte[])((BuiltInResourceData)element.ResourceData).Data;
+					var disassemble = baml?.DisassembleBaml == true;
 					try {
-						return (xamlName, Utf8WithBom(DecompileBamlToXaml(node.AsModuleEntry!, (byte[])((BuiltInResourceData)element.ResourceData).Data, cancellationToken)));
+						var text = disassemble
+							? DisassembleBaml(node.AsModuleEntry!, bamlData, cancellationToken).ToString()
+							: DecompileBamlToXaml(node.AsModuleEntry!, bamlData, baml, cancellationToken);
+						return (BamlFileName(entry.Name, disassemble), Utf8WithBom(text));
 					}
 					catch (Exception ex) when (ex is not OperationCanceledException) {
 						return (entry.Name, (byte[])((BuiltInResourceData)element.ResourceData).Data);
 					}
 				case ResourceShape.SerializedImage:
-					return (entry.Name, SerializedImageData((BinaryResourceData)element.ResourceData) ?? ((BinaryResourceData)element.ResourceData).Data);
+					return (entry.Name, ImageResources.GetImageData((BinaryResourceData)element.ResourceData) ?? ((BinaryResourceData)element.ResourceData).Data);
+				// SerializedImageListStreamerResourceElementNodeImpl saves the list's "Data" bytes, not the serialized object.
+				case ResourceShape.ImageList:
+					return (entry.Name, ImageResources.GetImageListStreamerData((BinaryResourceData)element.ResourceData)!);
 			}
 			return element.ResourceData switch {
 				BuiltInResourceData { Code: ResourceTypeCode.Null } => (entry.Name, []),

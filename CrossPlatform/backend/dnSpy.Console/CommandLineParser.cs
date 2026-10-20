@@ -1,22 +1,11 @@
 using System.Globalization;
+using dnSpy.Backend.Core.ProjectExport;
 using ICSharpCode.Decompiler;
 
 namespace dnSpy.Cli;
 
 /// <summary>A command line error; like dnSpy's ErrorException, it makes the console print the help.</summary>
 sealed class ConsoleErrorException(string message) : Exception(message);
-
-internal enum ProjectVersion {
-	VS2005,
-	VS2008,
-	VS2010,
-	VS2012,
-	VS2013,
-	VS2015,
-	VS2017,
-	VS2019,
-	VS2022,
-}
 
 internal sealed class CommandLineOptions {
 	public bool IsRecursive;

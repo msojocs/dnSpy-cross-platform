@@ -89,7 +89,8 @@ describe('EditCodeDialog', () => {
     render(<EditCodeDialog node={node} mode="editMethod" sourceNodeId={typeNode.id} theme="dark" onClose={() => undefined} />)
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Edit Method (Visual Basic)')
     await screen.findByLabelText('Source')
-    expect(window.dnSpy.decompile).toHaveBeenCalledWith('ws', 't1', 'visualBasic')
+    // With the options pages' decompiler settings, so the source is the text the document tab shows.
+    expect(window.dnSpy.decompile).toHaveBeenCalledWith('ws', 't1', 'visualBasic', expect.objectContaining({ cSharp: expect.objectContaining({ anonymousMethods: true }), baml: expect.objectContaining({ disassembleBaml: false }) }))
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }))
     await waitFor(() => expect(harness.compileSource).toHaveBeenCalledWith('ws', 'm1', 'editMethod', expect.any(String), undefined, 'visualBasic', expect.objectContaining({ optionExplicit: true, optionInfer: true })))
     useAppStore.setState({ defaultLanguage: 'cSharp' })

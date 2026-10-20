@@ -102,6 +102,11 @@ export interface CodeEditorMenuContext extends HexMenuContext {
   onFind?(): void
   /** dnSpy's Incremental Search, Ctrl+I: what is typed next is looked for from the caret as it is typed. */
   onIncrementalSearch?(): void
+  /** The document is a BAML entry's (its XAML, or its records): the one tab DisassembleBamlCommand shows on. */
+  bamlDocument?: boolean
+  /** BamlSettings.DisassembleBaml, which the command shows checked. */
+  disassembleBaml?: boolean
+  onToggleDisassembleBaml?(): void
 }
 
 type CodeMenuIcon = (ctx: CodeEditorMenuContext) => ReactNode
@@ -127,6 +132,8 @@ interface CodeMenuEntry {
 // 2000 (resources, which a code document never offers), 13000 (reloading method bodies, which this
 // engine has no command for) and 10000/12000 (the metadata table document's own groups).
 const GROUP_TABS = 0
+// dnSpy.BamlDecompiler's GROUP_CTX_FILES_BAML_OPTIONS.
+const GROUP_BAML_OPTIONS = 500
 const GROUP_DEBUG = 1000
 const GROUP_ASMED_DELETE = 3000
 const GROUP_ASMED_NEW = 4000
@@ -312,6 +319,10 @@ const CODE_ENTRIES: CodeMenuEntry[] = [
   // caret — `OpenReferenceInNewTabCtxMenuCommand` is visible only when the caret names one — so it
   // shows on a reference and nowhere else.
   { group: GROUP_TABS, order: 0, key: 'open-in-new-tab', icon: noImage, label: (ctx) => ctx.t('Open in New Tab'), shortcut: (ctx) => (ctx.openInNewTabFromKeyboard ? 'Ctrl+F12' : ctx.t('Ctrl+Click')), visible: (ctx) => ctx.referenceTarget !== undefined && isNavigableSpan(ctx.referenceTarget) && ctx.onOpenInNewTab !== undefined, run: (ctx) => { const target = ctx.referenceTarget; if (target) ctx.onOpenInNewTab?.(target) } },
+
+  // 500 — BAML options (dnSpy.BamlDecompiler's DisassembleBamlCommand): on a BAML entry's tab only, checked while
+  // the records are shown instead of the XAML.
+  { group: GROUP_BAML_OPTIONS, order: 0, key: 'disassemble-baml', icon: (ctx) => <MenuEntryIcon name="WPFFile" checked={ctx.disassembleBaml === true} />, label: (ctx) => ctx.t('Disassemble BAML'), visible: (ctx) => ctx.bamlDocument === true && ctx.onToggleDisassembleBaml !== undefined, run: (ctx) => ctx.onToggleDisassembleBaml?.() },
 
   // 1000 — Debugger (GROUP_CTX_DOCVIEWER_DEBUG)
   // dnSpy's first entry debugs the exe of the document's module ("Debug <module.exe>"). This port has a

@@ -63,6 +63,9 @@ interface MenuBarProps {
   hasOldInMemoryModules?: boolean
   /** Whether an edit is unsaved, which is what enables the File menu's Save and Save All. */
   dirty: boolean
+  /** dnSpy's ExportProjectCommand.IsEnabled, and the command itself. */
+  canExportToProject?: boolean
+  onExportToProject?(): void
   onSave(): void
   onSaveModule(): void
   onSaveAll(): void
@@ -272,6 +275,8 @@ export const MenuBar = ({
   onCloseOldInMemoryModules,
   hasOldInMemoryModules,
   dirty,
+  canExportToProject,
+  onExportToProject,
   onSave,
   onSaveModule,
   onSaveAll,
@@ -496,6 +501,8 @@ export const MenuBar = ({
       dirty,
       elevated,
       recentFiles,
+      canExportToProject,
+      onExportToProject,
       onOpen,
       onOpenFromGac,
       onOpenList,

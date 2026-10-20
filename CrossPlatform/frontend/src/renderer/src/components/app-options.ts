@@ -52,10 +52,9 @@ export interface EnvironmentFontSettings {
 }
 
 /**
- * Upstream's `CSharpDecompilerSettingsPage`, backed by ICSharpCode.Decompiler's
- * `DecompilerSettings`. The first block is read off the shipped 11.1.0 build; the
- * rest are dnSpy additions that no longer exist there, so their defaults could not be
- * verified from this checkout and are the conventional ILSpy choices.
+ * Upstream's `CSharpDecompilerSettingsPage`, backed by dnSpy's ILSpy fork's `DecompilerSettings` (dnSpyEx/ILSpy
+ * at the submodule's commit), whose defaults these are. The package the backend decompiles with has the first block
+ * itself; the rest are the fork's, which the backend writes on top of the package's output.
  */
 export interface CSharpDecompilerSettings {
   anonymousMethods: boolean
@@ -604,16 +603,17 @@ export const defaultAppOptions: AppOptions = {
       fullyQualifyAllTypes: false,
       fullyQualifyAmbiguousTypeNames: true,
       removeEmptyDefaultConstructors: true,
-      showTokenAndRvaComments: false,
+      // dnSpy's ILSpy fork's defaults (its DecompilerSettings), which the C# page starts from.
+      showTokenAndRvaComments: true,
       sortMembers: false,
       forceShowAllMembers: false,
       sortSystemUsingStatementsFirst: true,
-      useSourceCodeOrder: false,
-      oneCustomAttributePerLine: false,
+      useSourceCodeOrder: true,
+      oneCustomAttributePerLine: true,
       allowFieldInitializers: true,
-      typeAddInternalModifier: false,
-      memberAddPrivateModifier: false,
-      hexadecimalNumbers: true,
+      typeAddInternalModifier: true,
+      memberAddPrivateModifier: true,
+      hexadecimalNumbers: false,
       emitCalliAsInvocationExpression: false,
       insertParenthesesForReadability: true,
       decompilationOrder: ['nestedTypes', 'fields', 'events', 'properties', 'methods'],

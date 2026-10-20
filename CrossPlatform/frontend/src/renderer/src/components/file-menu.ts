@@ -8,6 +8,10 @@ export interface FileMenuContext {
   hasModule: boolean
   /** Whether an edit is unsaved. dnSpy gates Save and Save All on there being something to write. */
   dirty: boolean
+  /** dnSpy's ExportProjectCommand.IsEnabled: the tree's selection names a module that can be exported. */
+  canExportToProject?: boolean
+  /** Opens the Export to Project dialog for the tree's selection. */
+  onExportToProject?(): void
   /** Whether the app already has elevated rights; "Restart as Administrator" only makes sense if not. */
   elevated: boolean
   /** The files the user opened before, most recent first — dnSpy's AssemblyExplorerMostRecentlyUsedList. */
@@ -72,13 +76,13 @@ export const recentFileLabel = (path: string): string =>
 
 /**
  * dnSpy's File menu (AppMenus.cs + the ExportMenuItem registrations across dnSpy.Documents.Tabs,
- * dnSpy.AsmEditor and MainApp), in the order its Group and Order values give. Entries this port has no
- * command for — Export to Project — keep dnSpy's place and render disabled,
- * so the menu still reads as dnSpy's.
+ * dnSpy.AsmEditor and MainApp), in the order its Group and Order values give.
  */
 const FILE_ENTRIES: FileEntry[] = [
   // 0 — Save
-  { group: GROUP_SAVE, order: 0, icon: 'Solution', label: (ctx) => ctx.t('Export to Project...'), enabled: () => false },
+  // dnSpy's ExportProjectCommand (SaveCommands.cs): enabled when the selection resolves to a module — there is always
+  // a language that can write a project.
+  { group: GROUP_SAVE, order: 0, icon: 'Solution', label: (ctx) => ctx.t('Export to Project...'), enabled: (ctx) => ctx.canExportToProject === true, action: (ctx) => ctx.onExportToProject?.() },
   // "Save" is ApplicationCommands.Save, which has no Header of its own: the header is the command's own
   // text, and its gesture is SaveKey (Ctrl+S).
   { group: GROUP_SAVE, order: 10, icon: 'Save', label: (ctx) => ctx.t('Save'), shortcut: 'Ctrl+S', enabled: (ctx) => ctx.hasWorkspace && ctx.dirty, action: (ctx) => ctx.onSave() },

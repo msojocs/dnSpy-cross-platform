@@ -249,6 +249,8 @@ export interface CSharpDecompilerSettings {
   hexadecimalNumbers: boolean
   emitCalliAsInvocationExpression: boolean
   insertParenthesesForReadability: boolean
+  /** DecompilationObject0..4: the order a type's members are written in, by kind. */
+  decompilationOrder?: string[]
 }
 
 export interface ILDecompilerSettings {
@@ -259,11 +261,14 @@ export interface ILDecompilerSettings {
   sortMembers: boolean
   showPdbInfo: boolean
   hexadecimalNumbers: boolean
+  /** dnSpy's ILSettings.MaxStringLength: kept in the settings file, not on the page; the backend's default when absent. */
+  maxStringLength?: number
 }
 
 export interface BamlDecompilerSettings {
   newLineOnAttributes: boolean
   useTabs: boolean
+  disassembleBaml: boolean
 }
 
 export interface DecompilerSettings {
@@ -279,6 +284,28 @@ export interface DecompileRequest {
   nodeId: string
   language: DecompilerLanguage
   settings?: DecompilerSettings
+}
+
+/** One document of several nodes, written one after another — dnSpy's DocumentTreeNodeDecompiler. */
+export interface DecompileNodesRequest {
+  workspaceId: string
+  nodeIds: string[]
+  language: DecompilerLanguage
+  settings?: DecompilerSettings
+}
+
+/** The node whose document a followed reference opens, and the node the caret goes to in it. */
+export interface ResolveDocumentNodeResponse {
+  documentNodeId: string
+  definitionNodeId: string
+}
+
+/** dnSpy's AddressReference: a place in a file, as an RVA or a file offset; `modulePath` null for the document's own module. */
+export interface AddressReference {
+  modulePath?: string | null
+  isRva: boolean
+  address: number
+  length: number
 }
 
 export interface TextSpan {
@@ -305,15 +332,18 @@ export interface TextSpan {
   isWrite?: boolean
   /** An IL opcode: following it opens the opcode's documentation, and its Quick Info describes it. */
   opCode?: string | null
+  /** An RVA or file offset written as a reference, which the hex editor opens at. */
+  address?: AddressReference | null
 }
 
 /**
  * Whether a span names somewhere to go. A reference inside the workspace carries the node; a reference
  * into a module the workspace does not hold carries that module's file and token instead, which the
  * backend follows on demand — so it is a target just the same, and the editor draws it as one. A local
- * or parameter names a place in this same document through its `localId`, and an opcode its page.
+ * or parameter names a place in this same document through its `localId`, an opcode its page, and an
+ * address (a token comment's RVA or file offset) a place in the hex editor.
  */
-export const isNavigableSpan = (span: TextSpan): boolean => Boolean(span.targetNodeId || span.targetModulePath || span.localId || span.opCode)
+export const isNavigableSpan = (span: TextSpan): boolean => Boolean(span.targetNodeId || span.targetModulePath || span.localId || span.opCode || span.address)
 
 /** Whether the span is a local variable or a parameter rather than a metadata member. */
 export const isLocalSpan = (span: TextSpan): boolean => Boolean(span.localId)
@@ -363,6 +393,22 @@ export interface DecompileResponse {
   lineSeparators?: number[] | null
   /** The keywords "Highlight related keywords" ties together. */
   relatedKeywords?: KeywordReference[] | null
+  /** What a resource's document shows besides text: its pictures and its Save button. */
+  attachments?: DocumentAttachment[] | null
+}
+
+/**
+ * Something a document shows between its lines — dnSpy's `AddUIElement` and `AddButton`. `afterLine` is the
+ * 1-based line it goes under (0 puts it above the first one). An `image` carries the picture in `base64Data`
+ * with its `mimeType`; an `imageList` carries the "Data" bytes of a serialized ImageListStreamer, whose images
+ * are decoded here; a `saveButton` saves the resource `nodeId` names.
+ */
+export interface DocumentAttachment {
+  afterLine: number
+  kind: 'image' | 'imageList' | 'saveButton'
+  base64Data?: string | null
+  mimeType?: string | null
+  nodeId?: string | null
 }
 
 /**
@@ -2169,7 +2215,7 @@ export interface DnSpyApi {
   /** The lists Open List offers beside the user's own: one per .NET shared framework on this machine. */
   listDefaultDocumentLists(): Promise<DocumentListsResponse>
   /** The bytes several resource nodes hold — what Save Resource writes, one file per item. */
-  getResourceItems(workspaceId: string, nodeIds: string[], raw: boolean): Promise<ResourceItemsResponse>
+  getResourceItems(workspaceId: string, nodeIds: string[], raw: boolean, baml?: BamlDecompilerSettings): Promise<ResourceItemsResponse>
   /** The names those files would have, both ways, for the Save commands' headers. */
   getResourceItemNames(workspaceId: string, nodeIds: string[]): Promise<ResourceItemNamesResponse>
   /** The node a command line's `--select` names in the files at `paths`: a token, "N:" and a namespace, or an
@@ -2197,7 +2243,7 @@ export interface DnSpyApi {
    * files; `raw` writes an entry's serialized bytes instead of its value, and `useSubDirs` keeps the directories
    * in the names when several go into a folder. Answers the files written — none when a dialog was cancelled.
    */
-  saveResource(workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs?: boolean): Promise<string[]>
+  saveResource(workspaceId: string, nodeIds: string[], raw: boolean, useSubDirs?: boolean, baml?: BamlDecompilerSettings): Promise<string[]>
   /** dnSpy's "The file hasn't been saved yet. Do you want to save it before continuing?" for `count` files: save
    *  them first, let them go unsaved, or call the command off. */
   askSaveModified(count: number): Promise<'save' | 'discard' | 'cancel'>
@@ -2213,7 +2259,18 @@ export interface DnSpyApi {
    * node that hangs off no root.
    */
   getNodePath(workspaceId: string, nodeId: string): Promise<TreeNodesResponse>
-  decompile(workspaceId: string, nodeId: string, language: DecompilerLanguage, settings?: DecompilerSettings): Promise<DecompileResponse>
+  /**
+   * Decompiles a node — or, given several, the document dnSpy writes for a multi-selection: each node in turn with
+   * an empty line between them. `requestKey` names the request to `cancelDecompile`, which calls it off.
+   */
+  decompile(workspaceId: string, nodeId: string | string[], language: DecompilerLanguage, settings?: DecompilerSettings, requestKey?: string): Promise<DecompileResponse>
+  /** Calls off the decompilation `decompile` was asked for under `requestKey` — the tab's Cancel button. */
+  cancelDecompile(requestKey: string): Promise<void>
+  /**
+   * Where following a member reference goes — dnSpy's TreeNodeReferenceDocumentTabContentProvider: a state machine's
+   * MoveNext stands for its kickoff method, and with `decompileFullType` the document is the outermost type.
+   */
+  resolveDocumentNode(workspaceId: string, nodeId: string, decompileFullType: boolean): Promise<ResolveDocumentNodeResponse>
   /** Resolves a target by module path and token, since node ids are session-local. A module the workspace does not hold is opened on demand. */
   findMember(workspaceId: string, modulePath: string, metadataToken: number): Promise<FindMemberResponse>
   /** The Quick Info for a reference under the cursor: the member as the document's language writes it, and its XML documentation. */
@@ -2363,6 +2420,19 @@ export interface DnSpyApi {
   saveDocuments(workspaceId: string, documents: SaveDocumentRequest[], requestKey: string): Promise<SaveDocumentsResponse>
   cancelSave(requestKey: string): Promise<void>
   onSaveProgress(callback: (progress: SaveDocumentsProgress) => void): () => void
+  /** What dnSpy's Export to Project command works out before its dialog opens: the modules the selection names. */
+  getExportProjectInfo(workspaceId: string, nodeIds: string[]): Promise<ExportProjectInfo>
+  /** Runs the export of the Export to Project dialog. Progress and the errors logged so far arrive on
+   *  `onExportProjectProgress` under `requestKey`, which `cancelExportProject` stops the run by. */
+  exportProject(request: ExportProjectRequest, requestKey: string): Promise<ExportProjectResponse>
+  cancelExportProject(requestKey: string): Promise<void>
+  onExportProjectProgress(callback: (progress: ExportProjectProgress) => void): () => void
+  /** The folder picker behind the dialog's "...": dnSpy's PickDirectory, starting at the folder the box names. */
+  pickExportDirectory(currentDirectory?: string): Promise<string | undefined>
+  /** Whether a file is in the way of the destination folder — dnSpy's Error_FileAlreadyExists check. */
+  isExistingFile(path: string): Promise<boolean>
+  /** "Open project": the solution or project the export wrote, with the app the system opens it with. */
+  openExportedProject(path: string): Promise<void>
   /** The save picker behind the "..." of the Save Module window's file name: a .NET module, or any file for a
    *  document saved as bytes. */
   pickSaveFileName(defaultPath: string, kind: 'module' | 'any', extension?: string): Promise<string | undefined>
@@ -2695,4 +2765,49 @@ export interface CodeIndentationResponse {
 export interface CodeSelectionRangesResponse {
   /** For each position asked about, the spans around it, innermost first. */
   ranges: CodeSpan[][]
+}
+
+/** dnSpy's ProjectVersion, in its order — the names its Version combo box lists. */
+export const projectVersions = ['VS2005', 'VS2008', 'VS2010', 'VS2012', 'VS2013', 'VS2015', 'VS2017', 'VS2019', 'VS2022'] as const
+export type ProjectVersion = typeof projectVersions[number]
+
+/** What the Export to Project command works out before its dialog opens. `modulePaths` empty: nothing to export. */
+export interface ExportProjectInfo {
+  modulePaths: string[]
+  solutionFilename: string
+  dontReferenceStdLib: boolean
+}
+
+/** The Export to Project dialog's options. `solutionFilename` null: no solution; `projectGuid` null: a new guid per project. */
+export interface ExportProjectRequest {
+  workspaceId: string
+  nodeIds: string[]
+  directory: string
+  solutionFilename: string | null
+  projectVersion: ProjectVersion
+  useSdkStyleProjectFormat: boolean
+  language: Extract<DecompilerLanguage, 'cSharp' | 'visualBasic'>
+  projectGuid: string | null
+  dontReferenceStdLib: boolean
+  unpackResources: boolean
+  createResX: boolean
+  decompileXaml: boolean
+  settings?: DecompilerSettings
+}
+
+/** How far an export has got, and the errors it logged since the last notification. */
+export interface ExportProjectProgress {
+  requestKey: string
+  progress: number
+  maxProgress: number
+  errors: string[]
+}
+
+/** The outcome of an export: its error log, what it wrote, and the file "open project" opens. */
+export interface ExportProjectResponse {
+  canceled: boolean
+  errors: string[]
+  projectFilenames: string[]
+  solutionFilename: string | null
+  fileToOpen: string | null
 }

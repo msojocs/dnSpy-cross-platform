@@ -189,6 +189,10 @@ internal sealed class JsonRpcServer {
 				return await workspaces.GetNodePathAsync(DeserializeParams<NodeRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DocumentDecompile:
 				return await workspaces.DecompileAsync(DeserializeParams<DecompileRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DocumentDecompileNodes:
+				return await workspaces.DecompileNodesAsync(DeserializeParams<DecompileNodesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DocumentResolveNode:
+				return await workspaces.ResolveDocumentNodeAsync(DeserializeParams<ResolveDocumentNodeRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DocumentFindMember:
 				return await workspaces.FindMemberAsync(DeserializeParams<FindMemberRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DocumentQuickInfo:
@@ -250,6 +254,8 @@ internal sealed class JsonRpcServer {
 				return await workspaces.GetAssemblyAttributesSourceAsync(DeserializeParams<CompilerAssemblyAttributesRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.CompilerCompile:
 				return await workspaces.CompileSourceAsync(DeserializeParams<CompileSourceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.CompilerMerge:
+				return await workspaces.MergeAssemblyAsync(DeserializeParams<MergeAssemblyRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditGetOptions:
 				return await workspaces.GetOptionsAsync(DeserializeParams<GetNodeOptionsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.EditCreate:
@@ -311,6 +317,15 @@ internal sealed class JsonRpcServer {
 			}
 			case RpcMethods.DocumentGetIlBytes:
 				return await workspaces.GetIlBytesAsync(DeserializeParams<IlBytesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ProjectGetExportInfo:
+				return await workspaces.GetExportProjectInfoAsync(DeserializeParams<ExportProjectInfoRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.ProjectExport: {
+				var export = DeserializeParams<ExportProjectRequest>(request);
+				return await workspaces.ExportProjectAsync(
+					export,
+					export.ProgressToken is null ? null : progress => WriteNotificationAsync(RpcMethods.ProjectExportProgress, progress),
+					cancellationToken).ConfigureAwait(false);
+			}
 			case RpcMethods.WorkspaceCreate:
 				return workspaces.CreateWorkspace();
 			case RpcMethods.AssemblyCreate:

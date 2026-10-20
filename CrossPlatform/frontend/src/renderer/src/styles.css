@@ -684,6 +684,58 @@ select:focus-visible,
   pointer-events: none;
 }
 
+/* What dnSpy's AddUIElement and AddButton put into a resource's document — a picture, the images of an image
+   list, the Save button — in a strip between two lines (document-attachments.ts). */
+.document-attachment-frame {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.document-attachment-zone {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: max-content;
+}
+
+.document-attachment-image,
+.document-attachment-image-list {
+  display: flex;
+  align-items: flex-end;
+}
+
+.document-attachment-zone img {
+  display: block;
+  flex: none;
+}
+
+/* WPF's TextEditorButton: the theme's Button, at least 75 wide and 23 high, with the arrow cursor. */
+.document-attachment-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wpf-CommonControlsButtonBorder);
+  background: var(--wpf-CommonControlsButton);
+  color: var(--wpf-CommonControlsButtonText);
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "Noto Sans CJK SC", system-ui, sans-serif;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.document-attachment-button:hover {
+  border-color: var(--wpf-CommonControlsButtonBorderHover);
+  background: var(--wpf-CommonControlsButtonHover);
+  color: var(--wpf-CommonControlsButtonHoverText);
+}
+
+.document-attachment-button:active {
+  border-color: var(--wpf-CommonControlsButtonBorderPressed);
+  background: var(--wpf-CommonControlsButtonPressed);
+  color: var(--wpf-CommonControlsButtonPressedText);
+}
+
 /* What Incremental Search has been typed so far, in the view's own row. */
 .document-incremental-search {
   color: var(--text-muted);
@@ -758,6 +810,46 @@ select:focus-visible,
 .start-view {
   background: var(--bg);
   color: var(--wpf-EnvironmentForeground);
+}
+
+/* dnSpy's WaitAdorner over a tab that decompiles, in the theme's DecompilerTextViewWaitAdorner colors. It fades in
+   over half a second, which keeps a document that is ready at once from flashing it. */
+.wait-adorner {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wpf-DecompilerTextViewWaitAdornerBackground, var(--surface));
+  color: var(--wpf-DecompilerTextViewWaitAdornerForeground, var(--text));
+  animation: wait-adorner-fade-in 0.5s linear;
+}
+
+@keyframes wait-adorner-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.wait-adorner-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.wait-adorner-message {
+  font-size: 14pt;
+}
+
+.wait-adorner-progress {
+  min-width: 200px;
+  height: 16px;
+  margin: 4px 0;
+}
+
+.modal-actions.wait-adorner-actions {
+  min-height: 0;
+  padding: 0;
 }
 
 .command-button {

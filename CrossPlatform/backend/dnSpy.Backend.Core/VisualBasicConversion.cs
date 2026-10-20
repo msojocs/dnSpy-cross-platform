@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Core.ProjectExport;
 using ICSharpCode.CodeConverter;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
@@ -40,6 +41,9 @@ static partial class VisualBasicConversion {
 	public static async Task<DecompileResponse> ConvertAsync(DecompileResponse csharp, bool memberOnly, CancellationToken cancellationToken) {
 		var statements = csharp.CodeStatements ?? [];
 		var marked = Mark(csharp.Text, statements);
+		// The same textual repairs the project export and the console apply: nullability attributes the converter
+		// chokes on, and the spellings it invents for what VB has no syntax for.
+		marked = VisualBasicConverterFixes.PrepareCSharp(marked);
 		if (memberOnly)
 			marked = WrapMember(marked);
 		var conversion = await CodeConverter.ConvertAsync(new CodeWithOptions(marked).WithTypeReferences(), cancellationToken).ConfigureAwait(false);
@@ -58,6 +62,7 @@ static partial class VisualBasicConversion {
 		var converted = conversion.ConvertedCode;
 		if (memberOnly)
 			converted = UnwrapMember(converted);
+		converted = VisualBasicConverterFixes.PrepareVB(VisualBasicConverterFixes.PrepareConvertedVB(converted));
 		var (text, placed, members) = TakeMarkers(converted);
 		return new DecompileResponse(csharp.Title, "visual-basic", text, Array.Empty<TextSpanDto>(), diagnostics) {
 			CodeStatements = statements.Count == 0 ? null : MapStatements(text, statements, placed, members, cancellationToken),

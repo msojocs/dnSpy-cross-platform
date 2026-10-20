@@ -43,6 +43,29 @@ describe('IL Monaco language', () => {
       expect(tokenAt(compilerNames.indexOf('{') + 1)).toBe('constant.module-id.il')
       expect(tokenAt(compilerNames.indexOf('::') + 2)).toBe('identifier.member.il')
       expect(tokenAt(compilerNames.lastIndexOf('>'))).toBe('identifier.member.il')
+
+      // What dnSpy's disassembler writes around the instructions: the bytes comment, the exception blocks,
+      // custom attributes and the locals.
+      const typesOf = (line: string): string[] => monaco.editor.tokenize(line, languageId)[0].map((token) => token.type)
+      const bytes = '/* 0x000003B8 2A           */ IL_0000: ret'
+      const [bytesTokens] = monaco.editor.tokenize(bytes, languageId)
+      expect(bytesTokens[0].type).toBe('comment.il')
+      expect(bytesTokens.find((token) => token.offset === bytes.indexOf('IL_'))?.type).toBe('constant.offset.il')
+      expect(typesOf('.try')).toEqual(['keyword.directive.il'])
+      // ilasm's single quotes make a name of what is no identifier; strings are in double quotes.
+      expect(typesOf("'<Code>k__BackingField'")).toEqual(['identifier.member.il'])
+      expect(typesOf('ldstr "text"')).toContain('string.il')
+      expect(typesOf('} // end .try')).toEqual(expect.arrayContaining(['comment.il']))
+      expect(typesOf('catch [System.Runtime]System.Exception')).toContain('keyword.modifier.il')
+      expect(typesOf('filter')).toEqual(['keyword.modifier.il'])
+      expect(typesOf('.custom instance void [System.Runtime]System.FlagsAttribute::.ctor() = (')).toEqual(expect.arrayContaining([
+        'keyword.directive.il',
+        'keyword.modifier.il',
+        'type.keyword.il',
+      ]))
+      const locals = monaco.editor.tokenize('.locals init (', languageId)[0]
+      expect(locals.map((token) => token.type)).toEqual(expect.arrayContaining(['keyword.directive.il', 'keyword.modifier.il']))
+      expect(locals.find((token) => token.offset === '.locals '.length)?.type).toBe('keyword.modifier.il')
     }
     finally {
       tokenRegistration.dispose()

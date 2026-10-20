@@ -33,11 +33,11 @@ public sealed partial class WorkspaceManager {
 	public Task<CompilerSourceResponse> GetAssemblyAttributesSourceAsync(CompilerAssemblyAttributesRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetAssemblyAttributesSourceAsync(request.NodeId, request.Language, cancellationToken), cancellationToken);
 
-	public Task MergeAssemblyAsync(MergeAssemblyRequest request, CancellationToken cancellationToken) =>
-		GetWorkspace(request.WorkspaceId).RunAsync(w => {
+	public async Task<bool> MergeAssemblyAsync(MergeAssemblyRequest request, CancellationToken cancellationToken) =>
+		await GetWorkspace(request.WorkspaceId).RunAsync(w => {
 			w.QueueMergeAssembly(request);
 			return true;
-		}, cancellationToken);
+		}, cancellationToken).ConfigureAwait(false);
 
 	sealed partial class Workspace {
 		/// <summary>
@@ -55,12 +55,18 @@ public sealed partial class WorkspaceManager {
 				source = session.Decompiler.DecompileModuleAndAssemblyAttributesToString();
 			if (language != CompilerLanguages.VisualBasic)
 				return new CompilerSourceResponse(source);
-			// The Visual Basic view is the C# one converted, and so is what its Edit Assembly Attributes opens with. The
-			// converter cannot take a file of attributes alone, so a placeholder type rides along and is taken off again.
-			// Module-level attributes trip the converter, so they go through it as assembly ones and get their target
-			// back afterwards.
+			return new CompilerSourceResponse(await AttributesToVisualBasicAsync(source, cancellationToken).ConfigureAwait(false));
+		}
+
+		/// <summary>
+		/// C# that is only attributes (and the usings they need) as Visual Basic — what the Visual Basic view shows for an
+		/// assembly or a module and what its Edit Assembly Attributes opens with. The converter cannot take a file of
+		/// attributes alone, so a placeholder type rides along and is taken off again. Module-level attributes trip
+		/// the converter, so they go through it as assembly ones and get their target back afterwards.
+		/// </summary>
+		internal static async Task<string> AttributesToVisualBasicAsync(string source, CancellationToken cancellationToken) {
 			const string Placeholder = "DnSpyAssemblyAttributesPlaceholder";
-			var csharp = source.Replace("[module:", "[assembly: DnSpyModuleTarget, ", StringComparison.Ordinal);
+			var csharp = ProjectExport.VisualBasicConverterFixes.PrepareCSharp(source).Replace("[module:", "[assembly: DnSpyModuleTarget, ", StringComparison.Ordinal);
 			var converted = await ConvertToVisualBasicAsync(new DecompileResponse(string.Empty, "csharp", $"{csharp}\ninternal class {Placeholder} {{ }}\n", [], []), cancellationToken).ConfigureAwait(false);
 			var lines = converted.Text.Split('\n').ToList();
 			var start = lines.FindIndex(line => line.Contains($"Class {Placeholder}", StringComparison.Ordinal));
@@ -72,7 +78,7 @@ public sealed partial class WorkspaceManager {
 			var text = string.Join('\n', lines)
 				.Replace("<Assembly: DnSpyModuleTarget, Assembly: ", "<Module: ", StringComparison.Ordinal)
 				.Replace("<Assembly: DnSpyModuleTarget, ", "<Module: ", StringComparison.Ordinal);
-			return new CompilerSourceResponse(text.TrimEnd() + "\n");
+			return text.TrimEnd() + "\n";
 		}
 
 		/// <summary>

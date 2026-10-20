@@ -11,17 +11,18 @@ public sealed class DecompilationConcurrencyTests : IDisposable {
 	readonly string directory = Path.Combine(Path.GetTempPath(), $"dnspy-decompile-{Guid.NewGuid():N}");
 
 	[Fact]
-	public async Task TreeRequestsCompleteWhileAssemblyDecompilationIsRunning() {
+	public async Task TreeRequestsCompleteWhileTypeDecompilationIsRunning() {
 		var (workspace, root) = await OpenLargeAssemblyAsync();
 		var module = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, root.Id), TestContext.Current.CancellationToken)).Nodes);
 		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace" && node.Label == "Slow");
+		var type = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, space.Id), TestContext.Current.CancellationToken)).Nodes);
 		using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, root.Id, DecompilerLanguage.CSharp), cancellation.Token);
+		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, type.Id, DecompilerLanguage.CSharp), cancellation.Token);
 		try {
 			var children = await manager.GetChildrenAsync(new NodeRequest(workspace, space.Id), TestContext.Current.CancellationToken)
 				.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 			Assert.Equal("ManyMethods", Assert.Single(children.Nodes).Label);
-			Assert.False(decompilation.IsCompleted, "The tree must respond before the assembly document finishes.");
+			Assert.False(decompilation.IsCompleted, "The tree must respond before the type document finishes.");
 		}
 		finally {
 			await cancellation.CancelAsync();
@@ -36,7 +37,7 @@ public sealed class DecompilationConcurrencyTests : IDisposable {
 		var space = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, module.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace" && node.Label == "Slow");
 		var type = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(workspace, space.Id), TestContext.Current.CancellationToken)).Nodes);
 		using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, root.Id, DecompilerLanguage.CSharp), cancellation.Token);
+		var decompilation = manager.DecompileAsync(new DecompileRequest(workspace, type.Id, DecompilerLanguage.CSharp), cancellation.Token);
 		try {
 			var edit = await manager.BeginEditAsync(new BeginEditRequest(workspace), TestContext.Current.CancellationToken);
 			await manager.QueueRenameAsync(new RenameEditRequest(workspace, edit.TransactionId, type.Id, "Renamed"), TestContext.Current.CancellationToken);

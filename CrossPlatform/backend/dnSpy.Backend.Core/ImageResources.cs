@@ -110,7 +110,7 @@ internal static class ImageResources {
 			var array = record.GetArrayRecord(fieldName);
 			return array is not null && array.TypeName.FullName == "System.Byte[]" ? (byte[])array.GetArray(typeof(byte[])) : null;
 		}
-		catch (Exception ex) when (ex is SerializationException or NotSupportedException or InvalidOperationException or ArgumentException or KeyNotFoundException or EndOfStreamException) {
+		catch (Exception ex) when (ex is SerializationException or NotSupportedException or InvalidOperationException or ArgumentException or KeyNotFoundException or IOException or InvalidCastException or FormatException or OverflowException) {
 			return null;
 		}
 	}

@@ -240,13 +240,15 @@ public sealed class BookmarkTests : IDisposable {
 				Assert.False(statement.IsHidden);
 			}
 
-			// The method's name on its .method line is a definition, named by node, module and token.
-			var definition = Assert.Single(document.Spans, span => span.Kind == "definition");
+			// The method's name on its .method header is a definition, named by node, module and token. The other
+			// definitions — the parameters, the locals, the labels — are the document's own, tied by a local id.
+			var definition = Assert.Single(document.Spans, span => span.Kind == "definition" && span.LocalId is null);
 			Assert.Equal("Calculate", document.Text.Substring(definition.Start, definition.Length));
 			Assert.Equal(found.NodeId, definition.TargetNodeId);
 			Assert.Equal(DebugTargetPath, definition.TargetModulePath);
 			Assert.Equal(unchecked((int)calculate), definition.TargetMetadataToken);
-			Assert.StartsWith(".method", document.Text[..definition.Start].Split('\n')[^1], StringComparison.Ordinal);
+			// dnSpy writes the attributes on the .method line and the signature on the one after it.
+			Assert.StartsWith(".method", document.Text[..definition.Start].Split('\n')[^2], StringComparison.Ordinal);
 		}
 	}
 
@@ -258,14 +260,15 @@ public sealed class BookmarkTests : IDisposable {
 
 		var document = await manager.DecompileAsync(new DecompileRequest(opened.WorkspaceId, found.NodeId!, DecompilerLanguage.IL), TestContext.Current.CancellationToken);
 
-		var names = document.Spans.Where(span => span.Kind == "definition").Select(span => document.Text.Substring(span.Start, span.Length)).ToArray();
-		Assert.Contains("DebugTarget.Program", names);
+		var names = document.Spans.Where(span => span.Kind == "definition" && span.LocalId is null).Select(span => document.Text.Substring(span.Start, span.Length)).ToArray();
+		// dnSpy writes a type's namespace as references to the namespace and its own name as the definition.
+		Assert.Contains("Program", names);
 		Assert.Contains("Main", names);
 		Assert.Contains("Calculate", names);
-		Assert.All(document.Spans.Where(span => span.Kind == "definition"), span => Assert.Equal(DebugTargetPath, span.TargetModulePath));
+		Assert.All(document.Spans.Where(span => span.Kind == "definition" && span.LocalId is null), span => Assert.Equal(DebugTargetPath, span.TargetModulePath));
 		// What an instruction names is a reference, which — as in C# — names a node of the workspace by its id alone.
 		var calculate = Assert.Single(document.Spans, span => span.Kind == "definition" && document.Text.Substring(span.Start, span.Length) == "Calculate");
-		var call = Assert.Single(document.Spans, span => span.Kind == "reference" && span.TargetNodeId == calculate.TargetNodeId);
+		var call = Assert.Single(document.Spans, span => span.Kind == "reference" && span.TargetNodeId == calculate.TargetNodeId && document.Text.Substring(span.Start, span.Length) == "Calculate");
 		Assert.Equal("Calculate", document.Text.Substring(call.Start, call.Length));
 		Assert.Null(call.TargetModulePath);
 		// Every method's instructions are in the table, each on its own line.

@@ -238,34 +238,34 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	[Fact]
-	public async Task DecompileWholeModule_ProducesCodeStatements() {
+	public async Task DecompileWholeType_ProducesCodeStatements() {
 		// The contracts assembly is nearly all primary-constructor records and constants, so almost none of it has
-		// a body to map. The workspace manager's own module is the opposite: every one of its types is code.
+		// a body to map. The workspace manager is the opposite: it and its nested types are all code. A module
+		// document is only its header and attributes (dnSpy's AddAssembly with onlyAssemblyLevel), so the largest
+		// document with statements is a type's.
 		var opened = await manager.OpenAsync(
 			new OpenWorkspaceRequest([typeof(WorkspaceManager).Assembly.Location]),
 			TestContext.Current.CancellationToken);
-		var roots = await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
-		var module = Assert.Single(roots.Nodes);
+		var type = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Core", "WorkspaceManager");
 
 		var csharp = await manager.DecompileAsync(
-			new DecompileRequest(opened.WorkspaceId, module.Id, DecompilerLanguage.CSharp),
+			new DecompileRequest(opened.WorkspaceId, type.Id, DecompilerLanguage.CSharp),
 			TestContext.Current.CancellationToken);
 
 		var statements = Assert.IsAssignableFrom<IReadOnlyList<CodeStatementDto>>(csharp.CodeStatements);
 		AssertStatementsLookSane(statements, csharp.Text);
 
-		// The module document has to cover every body in it, not only the types the user happened to expand.
+		// The type document has to cover every body in it, nested types included.
 		var bodies = statements.Where(statement => !statement.IsHidden).Select(statement => statement.MetadataToken).Distinct().Count();
-		Assert.True(bodies > 100, $"The whole-module statement map covers only {bodies} method bodies.");
+		Assert.True(bodies > 100, $"The whole-type statement map covers only {bodies} method bodies.");
 		Assert.Contains(statements, statement => statement.Description.Contains("dnSpy.Backend.Core.WorkspaceManager::", StringComparison.Ordinal));
 
-		// A breakpoint must land on the same IL offset whichever document it was set from, so the module map has
+		// A breakpoint must land on the same IL offset whichever document it was set from, so the type map has
 		// to agree with what the standalone method view of the same body reports.
-		var type = await FindTypeAsync(opened.WorkspaceId, "dnSpy.Backend.Core", "WorkspaceManager");
 		var members = await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, type.Id), TestContext.Current.CancellationToken);
-		var moduleIdentities = statements.Where(statement => !statement.IsHidden).Select(statement => (statement.MetadataToken, statement.IlOffset)).ToHashSet();
+		var typeIdentities = statements.Where(statement => !statement.IsHidden).Select(statement => (statement.MetadataToken, statement.IlOffset)).ToHashSet();
 		// Constructors are the one exception and are checked against a plain method instead: a field initializer
-		// is written on the field, so the module document maps its IL to the field declaration while the method
+		// is written on the field, so the type document maps its IL to the field declaration while the method
 		// document maps the same IL to the constructor body. Only the initializers' offsets line up between them.
 		// A constructor row is named after its type, so it is told apart by that name rather than by ".ctor".
 		foreach (var member in members.Nodes.Where(node => node.Kind == "method" && !node.Label.StartsWith("WorkspaceManager(", StringComparison.Ordinal) && !node.Label.StartsWith('.'))) {
@@ -275,7 +275,7 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			var body = (view.CodeStatements ?? []).Where(statement => !statement.IsHidden).ToArray();
 			if (body.Length == 0)
 				continue;
-			Assert.All(body, statement => Assert.Contains((statement.MetadataToken, statement.IlOffset), moduleIdentities));
+			Assert.All(body, statement => Assert.Contains((statement.MetadataToken, statement.IlOffset), typeIdentities));
 			// A plain method's IL lives in the token the user sees, not in a generated state machine.
 			Assert.Equal(body[0].MetadataToken, body[0].SourceMethodToken);
 			Assert.EndsWith(".dll", body[0].ModulePath, StringComparison.OrdinalIgnoreCase);
@@ -1401,10 +1401,41 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		var xaml = await manager.DecompileAsync(
 			new DecompileRequest(opened.WorkspaceId, baml.Id, DecompilerLanguage.CSharp),
 			TestContext.Current.CancellationToken);
-		Assert.Equal("xml", xaml.Language);
+		Assert.Equal("xaml", xaml.Language);
 		Assert.False(xaml.Diagnostics.Any(diagnostic => diagnostic.Severity == "error"), $"BAML decompilation failed: {string.Join("; ", xaml.Diagnostics.Select(diagnostic => diagnostic.Message))}");
 		Assert.Contains("UserControl", xaml.Text, StringComparison.Ordinal);
 		Assert.Contains("BAML fixture", xaml.Text, StringComparison.Ordinal);
+		// dnSpy's defaults (BamlSettings): tabs, one attribute per line, no XML declaration.
+		var lines = xaml.Text.Split('\n');
+		Assert.DoesNotContain("<?xml", xaml.Text, StringComparison.Ordinal);
+		Assert.Contains(lines, line => line.StartsWith('\t'));
+		Assert.DoesNotContain(lines, line => line.StartsWith("  ", StringComparison.Ordinal));
+		var rootElement = lines.First(line => line.StartsWith("<UserControl", StringComparison.Ordinal));
+		Assert.DoesNotContain("xmlns", rootElement, StringComparison.Ordinal);
+
+		// The BAML page's two layout options.
+		var spaced = await manager.DecompileAsync(
+			new DecompileRequest(opened.WorkspaceId, baml.Id, DecompilerLanguage.CSharp) { Settings = new DecompilerSettingsDto(Baml: new BamlDecompilerSettingsDto(NewLineOnAttributes: false, UseTabs: false)) },
+			TestContext.Current.CancellationToken);
+		var spacedLines = spaced.Text.Split('\n');
+		Assert.DoesNotContain(spacedLines, line => line.StartsWith('\t'));
+		Assert.Contains(spacedLines, line => line.StartsWith("    <", StringComparison.Ordinal));
+		Assert.Contains("xmlns", spacedLines.First(line => line.StartsWith("<UserControl", StringComparison.Ordinal)), StringComparison.Ordinal);
+
+		// Disassemble BAML: the records instead, each painted in the color its writer gave it.
+		var records = await manager.DecompileAsync(
+			new DecompileRequest(opened.WorkspaceId, baml.Id, DecompilerLanguage.CSharp) { Settings = new DecompilerSettingsDto(Baml: new BamlDecompilerSettingsDto(DisassembleBaml: true)) },
+			TestContext.Current.CancellationToken);
+		Assert.Equal("baml", records.Language);
+		Assert.Contains("DocumentStart", records.Text, StringComparison.Ordinal);
+		Assert.Contains("DocumentEnd", records.Text, StringComparison.Ordinal);
+		Assert.Contains(records.Spans, span => span.Color is not null && span.Color != "text");
+
+		// Save writes what the tab shows, under the name dnSpy gives it.
+		var saved = await manager.GetResourceItemsAsync(new ResourceItemsRequest(opened.WorkspaceId, [baml.Id], false) { Baml = new BamlDecompilerSettingsDto(DisassembleBaml: true) }, TestContext.Current.CancellationToken);
+		Assert.EndsWith(".baml", Assert.Single(saved.Items).Name, StringComparison.OrdinalIgnoreCase);
+		var savedXaml = await manager.GetResourceItemsAsync(new ResourceItemsRequest(opened.WorkspaceId, [baml.Id], false), TestContext.Current.CancellationToken);
+		Assert.EndsWith(".xaml", Assert.Single(savedXaml.Items).Name, StringComparison.OrdinalIgnoreCase);
 	}
 
 	/// <summary>
@@ -2288,8 +2319,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			var document = await manager.DecompileAsync(
 				new DecompileRequest(opened.WorkspaceId, root.Id, DecompilerLanguage.CSharp),
 				TestContext.Current.CancellationToken);
-			Assert.Equal($"// {Path.GetFileName(path)}", document.Text.TrimEnd());
-			Assert.Contains(document.Diagnostics, diagnostic => diagnostic.Severity == "info");
+			// NodeDecompiler.Decompile(UnknownDocumentNode) writes the file's full path, and nothing more.
+			Assert.Equal($"// {path}", document.Text.TrimEnd());
 
 			// dnSpy saves a file it can only show as bytes the way its hex editor does, so writing it back in place
 			// with no patches on it leaves the file as it was.
@@ -2352,19 +2383,33 @@ public sealed class WorkspaceManagerTests : IDisposable {
 			// dnSpy's PE document wears the image an assembly would, and this image is no DLL.
 			Assert.Equal("AssemblyExe", root.Icon);
 
+			// NodeDecompiler.Decompile(PEDocumentNode): the file's full path and the image's timestamp, in every
+			// language — the headers are the PE node's document.
 			var document = await manager.DecompileAsync(
 				new DecompileRequest(opened.WorkspaceId, root.Id, DecompilerLanguage.CSharp),
 				TestContext.Current.CancellationToken);
-			Assert.Contains("Machine:", document.Text, StringComparison.Ordinal);
-			Assert.Contains("(x86)", document.Text, StringComparison.Ordinal);
-			Assert.Contains("Windows Console", document.Text, StringComparison.Ordinal);
-			Assert.Contains(".text", document.Text, StringComparison.Ordinal);
-
-			// No .NET metadata, so there is no IL to show, and the document says that instead of failing.
+			var lines = document.Text.TrimEnd().Split('\n');
+			Assert.Equal(2, lines.Length);
+			Assert.Equal($"// {path}", lines[0]);
+			Assert.StartsWith("// Timestamp: 60000000 (", lines[1], StringComparison.Ordinal);
 			var il = await manager.DecompileAsync(
 				new DecompileRequest(opened.WorkspaceId, root.Id, DecompilerLanguage.ILWithCSharp),
 				TestContext.Current.CancellationToken);
-			Assert.Contains("does not contain .NET metadata", il.Text, StringComparison.Ordinal);
+			Assert.Equal(document.Text, il.Text);
+			Assert.Equal("il", il.Language);
+			var visualBasic = await manager.DecompileAsync(
+				new DecompileRequest(opened.WorkspaceId, root.Id, DecompilerLanguage.VisualBasic),
+				TestContext.Current.CancellationToken);
+			Assert.StartsWith($"' {path}", visualBasic.Text, StringComparison.Ordinal);
+
+			var pe = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, root.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "pe");
+			var headers = await manager.DecompileAsync(
+				new DecompileRequest(opened.WorkspaceId, pe.Id, DecompilerLanguage.CSharp),
+				TestContext.Current.CancellationToken);
+			Assert.Contains("Machine:", headers.Text, StringComparison.Ordinal);
+			Assert.Contains("(x86)", headers.Text, StringComparison.Ordinal);
+			Assert.Contains("Windows Console", headers.Text, StringComparison.Ordinal);
+			Assert.Contains(".text", headers.Text, StringComparison.Ordinal);
 		}
 		finally {
 			File.Delete(path);
@@ -2866,10 +2911,10 @@ public sealed class WorkspaceManagerTests : IDisposable {
 				(await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes);
 			Assert.Equal("unknowndocument", root.Kind);
 			Assert.False(root.HasChildren);
-			Assert.Contains(
-				$"// {Path.GetFileName(path)}",
-				await DocumentTextAsync(opened.WorkspaceId, root.Id),
-				StringComparison.Ordinal);
+			// NodeDecompiler.Decompile(UnknownDocumentNode) writes the file's full path.
+			Assert.Equal(
+				$"// {path}",
+				(await DocumentTextAsync(opened.WorkspaceId, root.Id)).TrimEnd());
 		}
 		finally {
 			File.Delete(path);

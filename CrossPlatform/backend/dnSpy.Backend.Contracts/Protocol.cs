@@ -27,6 +27,10 @@ public static class RpcMethods {
 	/// </summary>
 	public const string TreeGetNodePath = "tree/getNodePath";
 	public const string DocumentDecompile = "document/decompile";
+	/// <summary>The document and the definition a followed member reference opens — <see cref="ResolveDocumentNodeRequest"/>.</summary>
+	public const string DocumentResolveNode = "document/resolveNode";
+	/// <summary>One document of several nodes — <see cref="DecompileNodesRequest"/>.</summary>
+	public const string DocumentDecompileNodes = "document/decompileNodes";
 	public const string DocumentFindMember = "document/findMember";
 	/// <summary>A member's Quick Info — signature and XML documentation — for the viewer's hover tooltip.</summary>
 	public const string DocumentQuickInfo = "document/quickInfo";
@@ -262,6 +266,14 @@ public static class RpcMethods {
 	public const string MetadataFindRecord = "metadata/findRecord";
 	/// <summary>dnSpy's Copy as Text on a metadata table's rows.</summary>
 	public const string MetadataTableText = "metadata/tableText";
+	/// <summary>What dnSpy's Export to Project command works out before its dialog opens: the modules the selection
+	/// names and the solution name it suggests. Answered with an <see cref="ExportProjectInfoResponse"/>.</summary>
+	public const string ProjectGetExportInfo = "project/getExportInfo";
+	/// <summary>Exports the selection's modules to projects — the work dnSpy's Export to Project dialog runs.
+	/// Cancellable, and it reports its progress and errors as it goes.</summary>
+	public const string ProjectExport = "project/export";
+	/// <summary>A notification: how far project/export has got, and the errors it logged since the last one.</summary>
+	public const string ProjectExportProgress = "project/exportProgress";
 }
 
 public static class ErrorCodes {
@@ -373,7 +385,9 @@ public sealed record DecompileRequest(string WorkspaceId, string NodeId, Decompi
 }
 
 /// <summary>
-/// C# and Visual Basic decompiler settings, matching ICSharpCode.Decompiler's DecompilerSettings.
+/// C# and Visual Basic decompiler settings: dnSpy's C# page (CSharpVBDecompilerSettings over its ILSpy fork's
+/// DecompilerSettings), with the fork's defaults. <paramref name="DecompilationOrder"/> is the order a type's members
+/// are written in by kind (DecompilationObject0..4): "nestedTypes", "fields", "events", "properties", "methods".
 /// </summary>
 public sealed record CSharpDecompilerSettingsDto(
 	bool AnonymousMethods = true,
@@ -387,18 +401,19 @@ public sealed record CSharpDecompilerSettingsDto(
 	bool FullyQualifyAllTypes = false,
 	bool FullyQualifyAmbiguousTypeNames = true,
 	bool RemoveEmptyDefaultConstructors = true,
-	bool ShowTokenAndRvaComments = false,
+	bool ShowTokenAndRvaComments = true,
 	bool SortMembers = false,
 	bool ForceShowAllMembers = false,
 	bool SortSystemUsingStatementsFirst = true,
-	bool UseSourceCodeOrder = false,
-	bool OneCustomAttributePerLine = false,
+	bool UseSourceCodeOrder = true,
+	bool OneCustomAttributePerLine = true,
 	bool AllowFieldInitializers = true,
-	bool TypeAddInternalModifier = false,
-	bool MemberAddPrivateModifier = false,
-	bool HexadecimalNumbers = true,
+	bool TypeAddInternalModifier = true,
+	bool MemberAddPrivateModifier = true,
+	bool HexadecimalNumbers = false,
 	bool EmitCalliAsInvocationExpression = false,
-	bool InsertParenthesesForReadability = true);
+	bool InsertParenthesesForReadability = true,
+	IReadOnlyList<string>? DecompilationOrder = null);
 
 /// <summary>
 /// IL decompiler settings.
@@ -410,14 +425,16 @@ public sealed record ILDecompilerSettingsDto(
 	bool ShowILComments = false,
 	bool SortMembers = false,
 	bool ShowPdbInfo = true,
-	bool HexadecimalNumbers = false);
+	bool HexadecimalNumbers = false,
+	int MaxStringLength = 20000);
 
 /// <summary>
-/// BAML decompiler settings.
+/// BAML decompiler settings (dnSpy's BamlSettings): how the XAML is written, or the BAML records instead.
 /// </summary>
 public sealed record BamlDecompilerSettingsDto(
 	bool NewLineOnAttributes = true,
-	bool UseTabs = true);
+	bool UseTabs = true,
+	bool DisassembleBaml = false);
 
 /// <summary>
 /// Combined decompiler settings for all languages.
@@ -475,7 +492,19 @@ public sealed record TextSpanDto(
 	/// one opens the opcode's documentation page and its Quick Info describes it.
 	/// </summary>
 	public string? OpCode { get; init; }
+
+	/// <summary>
+	/// An RVA or a file offset dnSpy writes as a reference — the "RVA:" and "File Offset:" of a token comment,
+	/// a resource's offset. Following one opens the hex editor there.
+	/// </summary>
+	public AddressDto? Address { get; init; }
 }
+
+/// <summary>
+/// dnSpy's <c>AddressReference</c>: a place in a file, as an RVA or as a file offset. <paramref name="ModulePath"/> is the
+/// file; null for the document's own module.
+/// </summary>
+public sealed record AddressDto(string? ModulePath, bool IsRva, long Address, long Length);
 
 /// <summary>
 /// One sequence point of the decompiled text: the line(s) it covers and the IL range it maps to.
@@ -576,13 +605,16 @@ public sealed record DocumentQuickInfoResponse(IReadOnlyList<TextPartDto> Parts,
 /// Something a document shows between its lines — dnSpy's <c>AddUIElement</c> and <c>AddButton</c>.
 /// <paramref name="AfterLine"/> is the 1-based line it goes under (0 puts it above the first one).
 /// <paramref name="Kind"/> is <see cref="DocumentAttachmentKinds.Image"/>, with the picture in
-/// <paramref name="Base64Data"/> and its <paramref name="MimeType"/>, or <see cref="DocumentAttachmentKinds.SaveButton"/>,
-/// which saves the resource <paramref name="NodeId"/> names.
+/// <paramref name="Base64Data"/> and its <paramref name="MimeType"/>, <see cref="DocumentAttachmentKinds.ImageList"/>,
+/// with the "Data" bytes of a serialized ImageListStreamer in <paramref name="Base64Data"/> (the client decodes every
+/// image of the list out of them), or <see cref="DocumentAttachmentKinds.SaveButton"/>, which saves the resource
+/// <paramref name="NodeId"/> names.
 /// </summary>
 public sealed record DocumentAttachmentDto(int AfterLine, string Kind, string? Base64Data = null, string? MimeType = null, string? NodeId = null);
 
 public static class DocumentAttachmentKinds {
 	public const string Image = "image";
+	public const string ImageList = "imageList";
 	public const string SaveButton = "saveButton";
 }
 
@@ -1909,7 +1941,10 @@ public sealed record DocumentListsResponse(IReadOnlyList<DocumentListDto> Lists)
 /// its value (a string as UTF-8 text, an image as the image file, BAML as XAML) and a .resources file as one
 /// file per entry. A resources folder stands for every resource in it.
 /// </summary>
-public sealed record ResourceItemsRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, bool Raw);
+public sealed record ResourceItemsRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, bool Raw) {
+	/// <summary>The BAML page's settings: how a BAML entry is written when it saves as XAML or as its records.</summary>
+	public BamlDecompilerSettingsDto? Baml { get; init; }
+}
 
 /// <summary>The files to write; a name may carry a directory part, which the "use sub dirs" variant keeps.</summary>
 public sealed record ResourceItemsResponse(IReadOnlyList<ResourceDataResponse> Items);
@@ -3034,3 +3069,79 @@ public static class MemoryModuleFiles {
 	public static bool Contains(string path) =>
 		!string.IsNullOrEmpty(path) && Path.GetFullPath(path).StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
 }
+
+// ---------------------------------------------------------------------------------------------
+// dnSpy's Export to Project (SaveCommands.ExportProjectCommand and its ExportToProjectDlg). Appended after everything
+// else so the metadata tokens of the types above do not move.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>The tree nodes the Export to Project command was started on — dnSpy's TopLevelSelection.</summary>
+public sealed record ExportProjectInfoRequest(string WorkspaceId, IReadOnlyList<string> NodeIds);
+
+/// <summary>
+/// What the command works out before the dialog opens. <paramref name="ModulePaths"/> are the modules that will be
+/// exported — every module of each selected node's assembly, or the module itself when it has no assembly — and the
+/// command does nothing when there are none. <paramref name="SolutionFilename"/> is dnSpy's GetSolutionFilename (the
+/// first exe's name, else the first dll's, with ".sln"); <paramref name="DontReferenceStdLib"/> is set when one of
+/// them is the core library.
+/// </summary>
+public sealed record ExportProjectInfoResponse(IReadOnlyList<string> ModulePaths, string SolutionFilename, bool DontReferenceStdLib);
+
+/// <summary>
+/// The dialog's options. <paramref name="SolutionFilename"/> is null when "create solution" is off;
+/// <paramref name="ProjectVersion"/> is one of dnSpy's ProjectVersion names ("VS2010"); <paramref name="Language"/> is
+/// C# or Visual Basic; <paramref name="ProjectGuid"/> is the first project's guid, or null for a new one per project.
+/// </summary>
+public sealed record ExportProjectRequest(
+	string WorkspaceId,
+	IReadOnlyList<string> NodeIds,
+	string Directory,
+	string? SolutionFilename,
+	string ProjectVersion,
+	bool UseSdkStyleProjectFormat,
+	DecompilerLanguage Language,
+	string? ProjectGuid,
+	bool DontReferenceStdLib,
+	bool UnpackResources,
+	bool CreateResX,
+	bool DecompileXaml,
+	DecompilerSettingsDto? Settings = null,
+	string? ProgressToken = null);
+
+/// <summary>
+/// dnSpy's IMSBuildProgressListener and its error logger in one notification: <paramref name="Progress"/> steps of
+/// <paramref name="MaxProgress"/> done, and the errors logged since the last notification.
+/// </summary>
+public sealed record ExportProjectProgressNotification(string ProgressToken, int Progress, int MaxProgress, IReadOnlyList<string> Errors);
+
+/// <summary>
+/// The outcome of an export. <paramref name="Errors"/> is the whole error log (the dialog stays open to show it when
+/// there is one); <paramref name="FileToOpen"/> is the solution, or the first project without one — what dnSpy opens
+/// when "open project" is ticked.
+/// </summary>
+public sealed record ExportProjectResponse(bool Canceled, IReadOnlyList<string> Errors, IReadOnlyList<string> ProjectFilenames, string? SolutionFilename, string? FileToOpen);
+
+// The records below are kept at the end of the file: the e2e suites pin metadata tokens of members declared
+// above, which a record added in front of them would move.
+
+/// <summary>
+/// One document of several nodes — dnSpy decompiles the tree's whole top-level selection into one tab
+/// (DocumentTreeNodeDecompiler), each node in turn with an empty line between them, in the order they are given.
+/// </summary>
+public sealed record DecompileNodesRequest(string WorkspaceId, IReadOnlyList<string> NodeIds, DecompilerLanguage Language) {
+	/// <summary>Decompiler settings to use for this request. When null, the backend uses default settings.</summary>
+	public DecompilerSettingsDto? Settings { get; init; }
+}
+
+/// <summary>
+/// Where following a reference to the member <paramref name="NodeId"/> goes — dnSpy's
+/// TreeNodeReferenceDocumentTabContentProvider: a state machine's <c>MoveNext</c> stands for the method it was
+/// made from, and with <paramref name="DecompileFullType"/> the document is the outermost type the member is in.
+/// </summary>
+public sealed record ResolveDocumentNodeRequest(string WorkspaceId, string NodeId, bool DecompileFullType = true);
+
+/// <summary>
+/// The node whose document a followed reference opens, and the node the caret goes to in it: the same node for
+/// anything but a member shown inside its type or a state machine's method.
+/// </summary>
+public sealed record ResolveDocumentNodeResponse(string DocumentNodeId, string DefinitionNodeId);

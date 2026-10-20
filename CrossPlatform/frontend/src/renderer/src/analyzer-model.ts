@@ -170,7 +170,8 @@ interface DecompiledMethod {
  * there on the first reference to what the instruction names, or at the statement's start when the text
  * names it some other way. That holds in C# and in IL, whose statement is the instruction itself and whose
  * reference is the member the instruction names. Nothing when the document has no statement for it: a result
- * without an offset, or the Visual Basic view, a conversion of the C# text that carries no statement map.
+ * without an offset, or a document whose language carries no statement map (Visual Basic recovers one from
+ * the conversion, so it follows like C#).
  */
 export const findReferenceCaret = (document: DecompiledMethod, source: AnalyzerSource): { line: number; column: number } | undefined => {
   const ilOffset = source.ilOffset

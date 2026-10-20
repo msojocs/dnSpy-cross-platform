@@ -1,5 +1,6 @@
 import { DockLocation, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
 import { describe, expect, it, vi } from 'vitest'
+import { render } from '@testing-library/react'
 import {
   buildDocumentTabMenuItems,
   cloneDocumentTab,
@@ -69,6 +70,27 @@ describe('DocumentTabContextMenu', () => {
       canCreateVerticalGroup: false,
     })
     expect(menuKeys(model, tab)).toEqual(['save-code', 'close', 'close-all', 'close-others', 'new-tab'])
+  })
+
+  it('names the save command after the tab\'s saver, Save Code... unless it has its own', () => {
+    const model = createModel(1)
+    const tab = getTab(model, 'doc:1')
+    const state = getDocumentTabMenuState(tab, true, true)!
+    const label = (saveHeader?: (tab: TabNode) => string | undefined): string => {
+      const items = buildDocumentTabMenuItems(tab, state, {
+        t: (message) => message, canSave: () => true, canClone: () => true, saveHeader, onSave: vi.fn(), onModelChanged: vi.fn(),
+        moveTabToGroup: vi.fn(), moveGroup: vi.fn(), closeGroup: vi.fn(), closeOtherGroups: vi.fn(), mergeGroups: vi.fn(), arrangeGroups: vi.fn(),
+      })
+      const save = items.find((item) => item.key === 'save-code') as { content: React.ReactNode }
+      const { container, unmount } = render(<>{save.content}</>)
+      const text = container.textContent ?? ''
+      unmount()
+      return text
+    }
+    expect(label()).toContain('Save Code...')
+    expect(label(() => undefined)).toContain('Save Code...')
+    // BamlTabSaver.MenuHeader.
+    expect(label(() => 'Save XAML...')).toContain('Save XAML...')
   })
 
   it('clones the active document with a unique id and the same document config', () => {

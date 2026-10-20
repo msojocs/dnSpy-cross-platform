@@ -852,6 +852,83 @@ export interface HexFindResponse {
   offset: number
 }
 
+/** One span `DefaultHexStructureInfoProvider.GetFields` yields: the field under the mouse, or a part of its
+ * structure (a sub-structure, or the whole structure when it has none). */
+export interface HexStructureFieldSpan {
+  offset: number
+  length: number
+  kind: 'currentField' | 'subStructure' | 'structure'
+}
+
+/** A hex tooltip: dnSpy's image name and the tooltip's sections, each a run of classified text. */
+export interface HexToolTip {
+  image: string | null
+  sections: TextPart[][]
+}
+
+/** What the hex view shows when the mouse rests on a byte: the field's tooltip and the spans it highlights. */
+export interface HexToolTipInfoResponse {
+  fields: HexStructureFieldSpan[]
+  toolTip: HexToolTip | null
+}
+
+/** One choice of dnSpy's Edit Field submenu; the numbers are decimal strings, since they may need 64 bits. */
+export interface HexEditFieldItem {
+  name: string
+  mask: string
+  value: string
+  isFlag: boolean
+}
+
+/** A flags or enum field the caret is on, which the Edit Field submenu edits. */
+export interface HexEditField {
+  offset: number
+  size: number
+  value: string
+  kind: 'flags' | 'enum'
+  items: HexEditFieldItem[]
+}
+
+/** Where Go to Code or Structure goes: a method body to the method's code, a PE structure to its tree node. */
+export interface HexCodeReference {
+  kind: 'method' | 'node'
+  nodeId: string | null
+  modulePath: string | null
+  metadataToken: number | null
+  ilOffset: number | null
+}
+
+/** What the structures of the file say about the byte under the caret. */
+export interface HexPositionInfoResponse {
+  file: HexRange | null
+  nestedFile: HexRange | null
+  structure: HexRange | null
+  editField: HexEditField | null
+  rva: number | null
+  fileOffset: number
+  fieldReference: HexRange | null
+  reference: HexCodeReference | null
+}
+
+/** A search in a module's file: the pattern `hex-search.ts` builds, the range and dnSpy's find options. */
+export interface HexSearchRequest {
+  base64Pattern: string
+  base64Mask: string | null
+  base64Alternate: string | null
+  charLengths: number[] | null
+  rangeStart: number
+  rangeEnd: number
+  start: number
+  reverse: boolean
+  wrap: boolean
+  noOverlaps: boolean
+  maxResults: number
+}
+
+export interface HexSearchResponse {
+  offsets: number[]
+}
+
 export interface ModuleInfoResponse {
   name: string
   path: string
@@ -2332,6 +2409,12 @@ export interface DnSpyApi {
   goToHexMetadata(workspaceId: string, moduleId: string, kind: HexMetadataKind, value: number): Promise<HexGoToMetadataResponse>
   /** One Find step: the offset the pattern was found at, or -1. */
   findHex(workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean): Promise<HexFindResponse>
+  /** dnSpy's hex search over a module's file: the matches of a pattern, in FindAll's order. */
+  searchHex(workspaceId: string, moduleId: string, request: HexSearchRequest): Promise<HexSearchResponse>
+  /** The structure field a byte belongs to: its tooltip and the spans the hex view highlights. */
+  getHexToolTipInfo(workspaceId: string, moduleId: string, position: number): Promise<HexToolTipInfoResponse>
+  /** The file, structure, field and references at a byte, for the hex view's commands. */
+  getHexPositionInfo(workspaceId: string, moduleId: string, position: number): Promise<HexPositionInfoResponse>
   /** Saves a byte range of the file to a file the user picks — dnSpy's Save Selection. Answers the path
    * written, or undefined when the dialog was cancelled. */
   saveHexSelection(workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string): Promise<string | undefined>

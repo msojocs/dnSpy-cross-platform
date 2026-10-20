@@ -3,7 +3,7 @@ import { languageChoices, useLanguage, type LanguagePreference } from '../locali
 import { buildEditMenu, type ActiveDocument, type CreatedKind, type HexShowKind, type MenuItem } from './edit-menu'
 import { buildFileMenu } from './file-menu'
 import type { HexBodyKind } from '../app-store'
-import type { HexRange, HexTargetResponse, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
+import type { AddressReference, HexRange, HexTargetResponse, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import { WindowControls } from './WindowControls'
 import { MenuEntryIcon } from './DsIcon'
 import { SubmenuArrowGlyph } from './DsGlyphs'
@@ -108,6 +108,9 @@ interface MenuBarProps {
   /** Where the hex commands point for the selection, and for the code document's caret. */
   hexTarget?: HexTargetResponse
   hexStatement?: { moduleId: string; range: HexRange }
+  /** The address reference under the code document's caret. */
+  hexAddress?: AddressReference
+  onShowAddress?(address: AddressReference): void
   onOpenHex(): void
   onShowHexAt(kind: HexShowKind): void
   onHexWriteBody(kind: HexBodyKind): void
@@ -314,6 +317,8 @@ export const MenuBar = ({
   onReplaceMethodBodyWithStub,
   hexTarget,
   hexStatement,
+  hexAddress,
+  onShowAddress,
   canGoToMdTableRow,
   mdTableRowToken,
   onGoToMdTableRow,
@@ -569,6 +574,8 @@ export const MenuBar = ({
       onReplaceMethodBodyWithStub,
       hexTarget,
       hexStatement,
+      addressReference: hexAddress,
+      onShowAddress,
       mdTable: activeDocument === 'md-table' ? mdTableCommands : undefined,
       canGoToMdTableRow,
       mdTableRowToken,

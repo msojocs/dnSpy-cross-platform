@@ -31,22 +31,23 @@ describe('MemoryPane', () => {
   it('is the hex editor over the process\'s memory, with unmapped pages shown as ??', async () => {
     const { container } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalledWith('session', '0x0', 64 * 1024))
-    const firstLine = () => container.querySelector('.hex-line .hex-values')?.textContent ?? ''
+    const firstLine = () => container.querySelector('.hex-line')?.textContent ?? ''
     await waitFor(() => expect(firstLine()).toContain('??'))
     // A 16 MiB window onto a 64-bit address space: the offset column is an address.
-    expect(container.querySelector('.hex-address')!.textContent).toMatch(/^0+$/)
+    expect(container.querySelector('.hex-offset')!.textContent).toMatch(/^0+$/)
   })
 
   it('moves its window along when the caret walks off the end of it', async () => {
     const { container } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
     const view = container.querySelector<HTMLElement>('.hex-content')!
-    fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
     readDebugMemory.mockClear()
+    fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
     fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-    // The caret went one line past the window's last byte; the window is centred on it now, so it starts 8 MiB in.
+    // The view reached the window's end, so the window moved on — 8 MiB in — and the caret went one line past
+    // the old window's last byte.
     await waitFor(() => expect(readDebugMemory.mock.calls.some(([, address]) => BigInt(address) >= 0x800000n)).toBe(true))
-    await waitFor(() => expect(container.querySelector('.hex-status-offset')!.textContent).toMatch(/0*100000F$/i))
+    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
   })
 
   it('says why there is nothing to show while the process runs', () => {

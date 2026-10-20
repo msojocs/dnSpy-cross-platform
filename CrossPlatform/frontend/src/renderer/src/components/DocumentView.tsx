@@ -876,6 +876,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
         const options = loadAppOptions()
         saveAppOptions({ ...options, baml: { ...options.baml, disassembleBaml: !options.baml.disassembleBaml } })
       },
+      addressReference: span?.address ?? undefined,
+      onShowAddress: (address) => commandsRef.current.onFollowAddress(address),
       onOpenHex: () => commandsRef.current.onOpenHex(),
       onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
       onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
@@ -1302,6 +1304,21 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               editor.addCommand(monaco.KeyCode.Enter, () => followAtCaret(false), '!findWidgetVisible && !findInputFocussed')
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12, () => followAtCaret(true))
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => followAtCaret(true), '!findWidgetVisible && !findInputFocussed')
+              // dnSpy's OpenHexEditorCommand.ExecuteCommand, Ctrl+X: the address reference under the caret, else
+              // the statement's instructions, else the PE structure the document is, else the document's file.
+              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX, () => {
+                const offset = referenceOffsetAtCaret()
+                const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
+                const state = useAppStore.getState()
+                if (span?.address)
+                  commandsRef.current.onFollowAddress(span.address)
+                else if (state.hexStatement && !state.hexTarget?.method)
+                  commandsRef.current.onShowHexAt('statement')
+                else if (state.hexTarget?.structure)
+                  commandsRef.current.onShowHexAt('structure')
+                else
+                  commandsRef.current.onOpenHex()
+              })
               // dnSpy's MoveToNextReference and MoveToPreviousReference — Tab and Ctrl+Shift+Down, Shift+Tab and
               // Ctrl+Shift+Up — and MoveToNextDefinition and MoveToPreviousDefinition, Alt+Down and Alt+Up.
               const moveReference = (forward: boolean): void => {

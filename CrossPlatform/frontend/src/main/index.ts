@@ -681,6 +681,9 @@ const registerIpc = (): void => {
   ipcMain.handle('hex:resolvePosition', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/resolvePosition', { workspaceId, moduleId, kind, value }))
   ipcMain.handle('hex:goToMetadata', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/goToMetadata', { workspaceId, moduleId, kind, value }))
   ipcMain.handle('hex:find', (_event, workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean) => requireBackend().invoke('hex/find', { workspaceId, moduleId, base64Pattern, start, reverse, wrap }))
+  ipcMain.handle('hex:search', (_event, workspaceId: string, moduleId: string, request: Record<string, unknown>) => requireBackend().invoke('hex/search', { workspaceId, moduleId, ...request }))
+  ipcMain.handle('hex:toolTipInfo', (_event, workspaceId: string, moduleId: string, position: number) => requireBackend().invoke('hex/getToolTipInfo', { workspaceId, moduleId, position }))
+  ipcMain.handle('hex:positionInfo', (_event, workspaceId: string, moduleId: string, position: number) => requireBackend().invoke('hex/getPositionInfo', { workspaceId, moduleId, position }))
   // dnSpy's Hex Editor › Save Selection: the bytes are read back in the same bounded chunks the view uses
   // and written to the file the user picks, so a selection of any size saves without being held twice.
   ipcMain.handle('hex:saveSelection', async (_event, workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string) => {

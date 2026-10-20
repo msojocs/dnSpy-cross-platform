@@ -33,41 +33,43 @@ export interface HexValueFormatInfo {
 
 /**
  * The format list with the widths dnSpy's formatters use. `"FF"`, `"FFFF"` and `"-80"` set the hex widths;
- * the decimal ones share `MAX_LENGTH` (21, the widest Int64), which is why every decimal cell is equally wide.
+ * a decimal cell is as wide as the widest value of its type (`MAX_LENGTH`: `byte.MaxValue`, `int.MinValue`…),
+ * a Single and a Double as wide as sign, digits, separator and exponent (`MaxSingleFormattedLength`,
+ * `MaxDoubleFormattedLength`).
  */
 export const HEX_VALUE_FORMATS: readonly HexValueFormatInfo[] = [
   { format: 'hexByte', label: 'Byte (hex)', byteCount: 1, formattedLength: 2 },
-  { format: 'decimalByte', label: 'Byte (decimal)', byteCount: 1, formattedLength: 21 },
+  { format: 'decimalByte', label: 'Byte (decimal)', byteCount: 1, formattedLength: 3 },
   { format: 'hexUInt16', label: 'UInt16 (hex)', byteCount: 2, formattedLength: 4 },
-  { format: 'decimalUInt16', label: 'UInt16 (decimal)', byteCount: 2, formattedLength: 21 },
+  { format: 'decimalUInt16', label: 'UInt16 (decimal)', byteCount: 2, formattedLength: 5 },
   { format: 'hexUInt16Be', label: 'UInt16 (hex, big endian)', byteCount: 2, formattedLength: 4 },
-  { format: 'decimalUInt16Be', label: 'UInt16 (decimal, big endian)', byteCount: 2, formattedLength: 21 },
+  { format: 'decimalUInt16Be', label: 'UInt16 (decimal, big endian)', byteCount: 2, formattedLength: 5 },
   { format: 'hexUInt32', label: 'UInt32 (hex)', byteCount: 4, formattedLength: 8 },
-  { format: 'decimalUInt32', label: 'UInt32 (decimal)', byteCount: 4, formattedLength: 21 },
+  { format: 'decimalUInt32', label: 'UInt32 (decimal)', byteCount: 4, formattedLength: 10 },
   { format: 'hexUInt32Be', label: 'UInt32 (hex, big endian)', byteCount: 4, formattedLength: 8 },
-  { format: 'decimalUInt32Be', label: 'UInt32 (decimal, big endian)', byteCount: 4, formattedLength: 21 },
+  { format: 'decimalUInt32Be', label: 'UInt32 (decimal, big endian)', byteCount: 4, formattedLength: 10 },
   { format: 'hexUInt64', label: 'UInt64 (hex)', byteCount: 8, formattedLength: 16 },
-  { format: 'decimalUInt64', label: 'UInt64 (decimal)', byteCount: 8, formattedLength: 21 },
+  { format: 'decimalUInt64', label: 'UInt64 (decimal)', byteCount: 8, formattedLength: 20 },
   { format: 'hexUInt64Be', label: 'UInt64 (hex, big endian)', byteCount: 8, formattedLength: 16 },
-  { format: 'decimalUInt64Be', label: 'UInt64 (decimal, big endian)', byteCount: 8, formattedLength: 21 },
+  { format: 'decimalUInt64Be', label: 'UInt64 (decimal, big endian)', byteCount: 8, formattedLength: 20 },
   { format: 'hexSByte', label: 'SByte (hex)', byteCount: 1, formattedLength: 3 },
-  { format: 'decimalSByte', label: 'SByte (decimal)', byteCount: 1, formattedLength: 21 },
+  { format: 'decimalSByte', label: 'SByte (decimal)', byteCount: 1, formattedLength: 4 },
   { format: 'hexInt16', label: 'Int16 (hex)', byteCount: 2, formattedLength: 5 },
-  { format: 'decimalInt16', label: 'Int16 (decimal)', byteCount: 2, formattedLength: 21 },
+  { format: 'decimalInt16', label: 'Int16 (decimal)', byteCount: 2, formattedLength: 6 },
   { format: 'hexInt16Be', label: 'Int16 (hex, big endian)', byteCount: 2, formattedLength: 5 },
-  { format: 'decimalInt16Be', label: 'Int16 (decimal, big endian)', byteCount: 2, formattedLength: 21 },
+  { format: 'decimalInt16Be', label: 'Int16 (decimal, big endian)', byteCount: 2, formattedLength: 6 },
   { format: 'hexInt32', label: 'Int32 (hex)', byteCount: 4, formattedLength: 9 },
-  { format: 'decimalInt32', label: 'Int32 (decimal)', byteCount: 4, formattedLength: 21 },
+  { format: 'decimalInt32', label: 'Int32 (decimal)', byteCount: 4, formattedLength: 11 },
   { format: 'hexInt32Be', label: 'Int32 (hex, big endian)', byteCount: 4, formattedLength: 9 },
-  { format: 'decimalInt32Be', label: 'Int32 (decimal, big endian)', byteCount: 4, formattedLength: 21 },
+  { format: 'decimalInt32Be', label: 'Int32 (decimal, big endian)', byteCount: 4, formattedLength: 11 },
   { format: 'hexInt64', label: 'Int64 (hex)', byteCount: 8, formattedLength: 17 },
-  { format: 'decimalInt64', label: 'Int64 (decimal)', byteCount: 8, formattedLength: 21 },
+  { format: 'decimalInt64', label: 'Int64 (decimal)', byteCount: 8, formattedLength: 20 },
   { format: 'hexInt64Be', label: 'Int64 (hex, big endian)', byteCount: 8, formattedLength: 17 },
-  { format: 'decimalInt64Be', label: 'Int64 (decimal, big endian)', byteCount: 8, formattedLength: 21 },
+  { format: 'decimalInt64Be', label: 'Int64 (decimal, big endian)', byteCount: 8, formattedLength: 20 },
   { format: 'single', label: 'Single', byteCount: 4, formattedLength: 13 },
   { format: 'singleBe', label: 'Single (big endian)', byteCount: 4, formattedLength: 13 },
-  { format: 'double', label: 'Double', byteCount: 8, formattedLength: 23 },
-  { format: 'doubleBe', label: 'Double (big endian)', byteCount: 8, formattedLength: 23 },
+  { format: 'double', label: 'Double', byteCount: 8, formattedLength: 22 },
+  { format: 'doubleBe', label: 'Double (big endian)', byteCount: 8, formattedLength: 22 },
   { format: 'bit8', label: '8 Bits', byteCount: 1, formattedLength: 8 },
 ]
 
@@ -76,52 +78,9 @@ const valueFormatByFormat = new Map(HEX_VALUE_FORMATS.map((info) => [info.format
 export const hexValueFormatInfo = (format: HexValuesFormat): HexValueFormatInfo =>
   valueFormatByFormat.get(format) ?? HEX_VALUE_FORMATS[0]
 
-/** Everything about how the lines are drawn, gathered the way dnSpy's `HexBufferLineFormatterOptions` is. */
-export interface HexLineFormatOptions {
-  /** Bytes one line holds; 0 asks for "fit to width", which the view works out from its own width. */
-  bytesPerLine: number
-  /** Bytes in a group; 0 means dnSpy's default of 8. */
-  groupSize: number
-  showOffset: boolean
-  showValues: boolean
-  showAscii: boolean
-  offsetFormat: HexOffsetFormatKind
-  /** Bits the offset is written in; 0 picks the narrowest width that holds the last offset. */
-  offsetBitSize: number
-  valuesLowerCaseHex: boolean
-  offsetLowerCaseHex: boolean
-  valuesFormat: HexValuesFormat
-}
-
-export const defaultHexLineFormat = (): HexLineFormatOptions => ({
-  bytesPerLine: 16,
-  groupSize: 8,
-  showOffset: true,
-  showValues: true,
-  showAscii: true,
-  offsetFormat: 'hex',
-  offsetBitSize: 0,
-  valuesLowerCaseHex: false,
-  offsetLowerCaseHex: false,
-  valuesFormat: 'hexByte',
-})
-
 /** dnSpy's `HexBufferLineFormatterOptions` limits: 0 means fit-to-width, 1024 the most bytes a line takes. */
 export const MAX_BYTES_PER_LINE = 1024
 export const MAX_OFFSET_BIT_SIZE = 64
-
-/** The narrowest offset width that holds the last address, in dnSpy's 8, 16, 24 … 64 steps. */
-export function offsetBitSizeFor(length: number): number {
-  const last = Math.max(0, length - 1)
-  if (last <= 0xFF) return 8
-  if (last <= 0xFFFF) return 16
-  if (last <= 0xFFFFFF) return 24
-  if (last <= 0xFFFFFFFF) return 32
-  if (last <= 0xFF_FFFFFFFF) return 40
-  if (last <= 0xFFFF_FFFFFFFF) return 48
-  if (last <= 0xFFFFFF_FFFFFFFF) return 56
-  return 64
-}
 
 const offsetAffixes = (format: HexOffsetFormatKind): { prefix: string, suffix: string } => {
   switch (format) {
@@ -136,7 +95,8 @@ const offsetAffixes = (format: HexOffsetFormatKind): { prefix: string, suffix: s
 /** An offset the way dnSpy's `HexOffsetFormatter` writes it — hex digits between its affixes. */
 export function formatHexOffset(offset: number, bitSize: number, format: HexOffsetFormatKind, lowerCase: boolean): string {
   const digits = Math.max(1, Math.ceil(bitSize / 4))
-  const text = (offset >>> 0).toString(16).padStart(digits, '0').slice(-digits)
+  // Offsets past 4 GiB are plain numbers here, so they are written without a 32-bit cast.
+  const text = Math.max(0, Math.floor(offset)).toString(16).padStart(digits, '0').slice(-digits)
   const { prefix, suffix } = offsetAffixes(format)
   return prefix + (lowerCase ? text.toLowerCase() : text.toUpperCase()) + suffix
 }
@@ -146,61 +106,6 @@ export function offsetTextLength(bitSize: number, format: HexOffsetFormatKind): 
   const { prefix, suffix } = offsetAffixes(format)
   return prefix.length + Math.max(1, Math.ceil(bitSize / 4)) + suffix.length
 }
-
-/**
- * dnSpy's `CalculateBytesPerLine`: how many bytes fit in `charsPerLine` characters once the offset column
- * and the separators between columns are paid for. With both the values and the ASCII column shown the two
- * share what is left — `VC * VL + (VC - 1)` for the values plus `VC * VB` for the ASCII — and the answer is
- * a whole number of value cells.
- */
-export function bytesPerLineForWidth(charsPerLine: number, options: HexLineFormatOptions, bitSize: number): number {
-  const info = hexValueFormatInfo(options.valuesFormat)
-  const columnCount = (options.showOffset ? 1 : 0) + (options.showValues ? 1 : 0) + (options.showAscii ? 1 : 0)
-  if (columnCount === 0)
-    return 1
-  let fixedLength = columnCount - 1
-  if (options.showOffset)
-    fixedLength += offsetTextLength(bitSize, options.offsetFormat)
-  if (fixedLength >= charsPerLine)
-    return options.showValues ? info.byteCount : 1
-  const remaining = charsPerLine - fixedLength
-  if (options.showValues && options.showAscii) {
-    const cells = Math.floor((remaining + 1) / (info.formattedLength + 1 + info.byteCount))
-    return Math.max(1, cells) * info.byteCount
-  }
-  if (options.showValues) {
-    const cells = Math.floor((remaining + 1) / (info.formattedLength + 1))
-    return Math.max(1, cells) * info.byteCount
-  }
-  return Math.max(1, remaining)
-}
-
-/** The bytes a line holds once the value format's cell width and dnSpy's limits have been applied. */
-export function resolveBytesPerLine(options: HexLineFormatOptions, bitSize: number, charsPerLine: number): number {
-  const info = hexValueFormatInfo(options.valuesFormat)
-  let bytes = options.bytesPerLine
-  if (bytes === 0)
-    bytes = bytesPerLineForWidth(charsPerLine, options, bitSize)
-  if (bytes % info.byteCount !== 0)
-    bytes = bytes - bytes % info.byteCount + info.byteCount
-  if (bytes > MAX_BYTES_PER_LINE)
-    bytes = Math.floor(MAX_BYTES_PER_LINE / info.byteCount) * info.byteCount
-  return Math.max(info.byteCount, bytes)
-}
-
-/** The group size dnSpy settles on: 8 when none was asked for, never more than a line, a value multiple. */
-export function resolveGroupSize(options: HexLineFormatOptions, bytesPerLine: number): number {
-  const info = hexValueFormatInfo(options.valuesFormat)
-  let group = options.groupSize === 0 ? 8 : options.groupSize
-  if (group > bytesPerLine)
-    group = bytesPerLine
-  group = Math.ceil(group / info.byteCount) * info.byteCount
-  return group > 0 ? group : bytesPerLine
-}
-
-/** The index a cell's group alternates between, which is what colors every other group. */
-export const groupIndexOf = (byteOffsetInLine: number, groupSize: number): number =>
-  Math.floor(byteOffsetInLine / groupSize) & 1
 
 /** The little- or big-endian unsigned value of a cell, or undefined when the bytes are not all there. */
 const readUnsigned = (bytes: Uint8Array, index: number, byteCount: number, bigEndian: boolean): bigint | undefined => {
@@ -237,9 +142,9 @@ export function formatGeneral(value: number, precision: number): string {
   return `${trimmed}E${power < 0 ? '-' : '+'}${Math.abs(power).toString().padStart(2, '0')}`
 }
 
-/** dnSpy's decimal cells are right-aligned in a 21-character column (`MAX_LENGTH`). */
-const decimalOf = (value: bigint | undefined): string =>
-  value === undefined ? invalidValue(21) : value.toString(10).padStart(21, ' ')
+/** dnSpy's decimal cells are right-aligned in a column as wide as the type's widest value (`MAX_LENGTH`). */
+const decimalOf = (value: bigint | undefined, width: number): string =>
+  value === undefined ? invalidValue(width) : value.toString(10).padStart(width, ' ')
 
 /**
  * One value cell exactly as dnSpy's `HexValueFormatter` writes it, padding included. `bytes` starts at the
@@ -276,35 +181,36 @@ export function formatHexValue(bytes: Uint8Array, index: number, format: HexValu
     const text = Number.isNaN(value) ? 'NaN' : value === Infinity ? 'Inf' : value === -Infinity ? '-Inf' : formatGeneral(value, byteCount === 4 ? 7 : 15)
     return text.length > info.formattedLength ? text.slice(0, info.formattedLength - 1) + '?' : text.padStart(info.formattedLength, ' ')
   }
+  const width = info.formattedLength
   switch (format) {
     case 'hexByte': return hex()
-    case 'decimalByte': return decimalOf(unsigned())
+    case 'decimalByte': return decimalOf(unsigned(), width)
     case 'hexUInt16': return hex()
-    case 'decimalUInt16': return decimalOf(unsigned())
+    case 'decimalUInt16': return decimalOf(unsigned(), width)
     case 'hexUInt16Be': return hex(true)
-    case 'decimalUInt16Be': return decimalOf(unsigned(true))
+    case 'decimalUInt16Be': return decimalOf(unsigned(true), width)
     case 'hexUInt32': return hex()
-    case 'decimalUInt32': return decimalOf(unsigned())
+    case 'decimalUInt32': return decimalOf(unsigned(), width)
     case 'hexUInt32Be': return hex(true)
-    case 'decimalUInt32Be': return decimalOf(unsigned(true))
+    case 'decimalUInt32Be': return decimalOf(unsigned(true), width)
     case 'hexUInt64': return hex()
-    case 'decimalUInt64': return decimalOf(unsigned())
+    case 'decimalUInt64': return decimalOf(unsigned(), width)
     case 'hexUInt64Be': return hex(true)
-    case 'decimalUInt64Be': return decimalOf(unsigned(true))
+    case 'decimalUInt64Be': return decimalOf(unsigned(true), width)
     case 'hexSByte': return signedHex()
-    case 'decimalSByte': return decimalOf(signed())
+    case 'decimalSByte': return decimalOf(signed(), width)
     case 'hexInt16': return signedHex()
-    case 'decimalInt16': return decimalOf(signed())
+    case 'decimalInt16': return decimalOf(signed(), width)
     case 'hexInt16Be': return signedHex(true)
-    case 'decimalInt16Be': return decimalOf(signed(true))
+    case 'decimalInt16Be': return decimalOf(signed(true), width)
     case 'hexInt32': return signedHex()
-    case 'decimalInt32': return decimalOf(signed())
+    case 'decimalInt32': return decimalOf(signed(), width)
     case 'hexInt32Be': return signedHex(true)
-    case 'decimalInt32Be': return decimalOf(signed(true))
+    case 'decimalInt32Be': return decimalOf(signed(true), width)
     case 'hexInt64': return signedHex()
-    case 'decimalInt64': return decimalOf(signed())
+    case 'decimalInt64': return decimalOf(signed(), width)
     case 'hexInt64Be': return signedHex(true)
-    case 'decimalInt64Be': return decimalOf(signed(true))
+    case 'decimalInt64Be': return decimalOf(signed(true), width)
     case 'single': return floating(4, false)
     case 'singleBe': return floating(4, true)
     case 'double': return floating(8, false)
@@ -320,75 +226,92 @@ export function formatHexValue(bytes: Uint8Array, index: number, format: HexValu
 /** The ASCII column's character for a byte: what it stands for when printable, '.' when it is not. */
 export const asciiOf = (byte: number): string => byte >= 0x20 && byte <= 0x7E ? String.fromCharCode(byte) : '.'
 
-/** The byte at `offset`, read out of the chunk that starts at `chunkStart`; undefined outside the chunk. */
-export const byteAt = (bytes: Uint8Array, chunkStart: number, offset: number): number | undefined => {
-  const index = offset - chunkStart
-  return index >= 0 && index < bytes.length ? bytes[index] : undefined
+/** The edits dnSpy's value formatters take: the hex and bit formats can be typed over, the decimal and floating
+ * point ones cannot (`HexValueFormatter.CanEdit`). */
+export const canEditValues = (format: HexValuesFormat): boolean =>
+  format.startsWith('hex') || format === 'bit8'
+
+const isBigEndianFormat = (format: HexValuesFormat): boolean => format.endsWith('Be')
+const isSignedHexFormat = (format: HexValuesFormat): boolean => /^hex(SByte|Int)/.test(format)
+
+/**
+ * `HexValueFormatter.GetBufferSpan`: the byte a character of a cell stands for, relative to the cell's first byte.
+ * The unsigned hex formats map each pair of digits to its own byte — the last one first in little endian order —
+ * and every other format answers the cell's first byte.
+ */
+export function valueByteIndex(format: HexValuesFormat, cellPosition: number): number {
+  const info = hexValueFormatInfo(format)
+  if (info.byteCount === 1 || !/^hexUInt/.test(format) || cellPosition < 0 || cellPosition >= info.byteCount * 2)
+    return 0
+  return isBigEndianFormat(format) ? Math.floor(cellPosition / 2) : (info.byteCount - Math.floor(cellPosition / 2) - 1) % info.byteCount
 }
 
-/** A selection, as the first byte covered and one past the last one — possibly empty. */
-export interface HexSelection {
-  start: number
-  end: number
-}
-
-/** The selection the caret and the anchor name, whichever way round they are. */
-export const selectionBetween = (anchor: number, caret: number): HexSelection =>
-  anchor <= caret ? { start: anchor, end: caret + 1 } : { start: caret, end: anchor + 1 }
-
-/** A cell of the dump: its text, which group it belongs to, and the byte it starts at. */
-export interface HexCellVm {
-  text: string
-  group: number
-  byteOffset: number
-}
-
-/** A row of the dump, ready to render: the address and the cells of the columns that are shown. */
-export interface HexLineVm {
-  offset: number
-  address: string
-  values: HexCellVm[]
-  ascii: HexCellVm[]
+const hexDigit = (character: string): number => {
+  if (character.length !== 1)
+    return -1
+  const code = character.charCodeAt(0)
+  if (code >= 0x30 && code <= 0x39) return code - 0x30
+  if (code >= 0x41 && code <= 0x46) return code - 0x41 + 10
+  if (code >= 0x61 && code <= 0x66) return code - 0x61 + 10
+  return -1
 }
 
 /**
- * One line of the dump. `bytes` is the chunk the line was read from, so a line the chunk only partly covers
- * still gets its address and the cells the chunk holds; the rest read as dnSpy's unreadable cells.
+ * `HexValueFormatter.Edit`: what typing `character` at `cellPosition` of a cell writes, given the cell's bytes as
+ * they are now. Answers the bytes to write, relative to the cell's first byte, or undefined when the character
+ * cannot go there.
  */
-export function lineOf(
-  bytes: Uint8Array,
-  chunkStart: number,
-  offset: number,
-  fileLength: number,
-  lineFormat: HexLineFormatOptions,
-  bytesPerLine: number,
-): HexLineVm {
-  const info = hexValueFormatInfo(lineFormat.valuesFormat)
-  const groupSize = resolveGroupSize(lineFormat, bytesPerLine)
-  const count = Math.min(bytesPerLine, Math.max(0, fileLength - offset))
-  const values: HexCellVm[] = []
-  if (lineFormat.showValues) {
-    for (let i = 0; i < count; i += info.byteCount) {
-      const index = offset + i - chunkStart
-      const cellBytes = index >= 0 && index < bytes.length
-        ? bytes.subarray(index, Math.min(bytes.length, index + info.byteCount))
-        : new Uint8Array(0)
-      values.push({ text: formatHexValue(cellBytes, 0, lineFormat.valuesFormat, lineFormat.valuesLowerCaseHex), group: groupIndexOf(i, groupSize), byteOffset: i })
+export function editValueCell(format: HexValuesFormat, cellBytes: Uint8Array, cellPosition: number, character: string): { offset: number; data: Uint8Array } | undefined {
+  const info = hexValueFormatInfo(format)
+  if (!canEditValues(format) || cellPosition < 0 || cellPosition >= info.formattedLength)
+    return undefined
+  if (format === 'bit8') {
+    // EditBit: the eight characters are the bits from the highest down.
+    if (character !== '0' && character !== '1')
+      return undefined
+    if (cellBytes.length < 1)
+      return undefined
+    const bit = (8 - (cellPosition & 7) - 1) & 7
+    const value = (cellBytes[0] & ~(1 << bit)) | (Number(character) << bit)
+    return { offset: Math.floor(cellPosition / 8), data: Uint8Array.of(value & 0xFF) }
+  }
+  if (isSignedHexFormat(format)) {
+    // EditSignedHex: the sign and the digits are edited as text and read back as a number that saturates.
+    if (cellBytes.length < info.byteCount)
+      return undefined
+    if (cellPosition === 0 ? !['+', ' ', '-'].includes(character) : hexDigit(character) < 0)
+      return undefined
+    const text = formatHexValue(cellBytes, 0, format, false)
+    const edited = text.slice(0, cellPosition) + character + text.slice(cellPosition + 1)
+    const negative = edited[0] === '-'
+    let magnitude = BigInt(0)
+    for (let i = 1; i < edited.length; i++)
+      magnitude = (magnitude << BigInt(4)) | BigInt(hexDigit(edited[i]))
+    const bits = BigInt(info.byteCount * 8)
+    const max = (BigInt(1) << (bits - BigInt(1))) - BigInt(1)
+    let value: bigint
+    if (negative)
+      value = magnitude > max + BigInt(1) ? -(max + BigInt(1)) : -magnitude
+    else
+      value = magnitude > max ? max : magnitude
+    const unsignedValue = BigInt.asUintN(info.byteCount * 8, value)
+    const data = new Uint8Array(info.byteCount)
+    for (let i = 0; i < info.byteCount; i++) {
+      const byte = Number((unsignedValue >> BigInt(8 * i)) & BigInt(0xFF))
+      data[isBigEndianFormat(format) ? info.byteCount - 1 - i : i] = byte
     }
+    return { offset: 0, data }
   }
-  const ascii: HexCellVm[] = []
-  if (lineFormat.showAscii) {
-    for (let i = 0; i < count; i++) {
-      const byte = byteAt(bytes, chunkStart, offset + i)
-      ascii.push({ text: byte === undefined ? ' ' : asciiOf(byte), group: groupIndexOf(i, groupSize), byteOffset: i })
-    }
-  }
-  return {
-    offset,
-    address: lineFormat.showOffset ? formatHexOffset(offset, lineFormat.offsetBitSize, lineFormat.offsetFormat, lineFormat.offsetLowerCaseHex) : '',
-    values,
-    ascii,
-  }
+  // EditUnsignedHexLittleEndian / EditUnsignedHexBigEndian: one nibble of one byte.
+  const digit = hexDigit(character)
+  if (digit < 0)
+    return undefined
+  const index = isBigEndianFormat(format) ? Math.floor(cellPosition / 2) : (info.byteCount - Math.floor(cellPosition / 2) - 1) % info.byteCount
+  if (index >= cellBytes.length)
+    return undefined
+  const old = cellBytes[index]
+  const value = (cellPosition & 1) === 0 ? (old & 0x0F) | (digit << 4) : (old & 0xF0) | digit
+  return { offset: index, data: Uint8Array.of(value) }
 }
 
 /** dnSpy's hexadecimal clipboard text: two digits per byte and nothing in between. */
@@ -406,12 +329,13 @@ export function csharpArrayText(bytes: Uint8Array, upper: boolean): string {
   return `new byte[] {\n${rows.join(',\n')}\n};\n`
 }
 
-/** dnSpy's `HexEditorOperationsImpl.CopyVisualBasicArray`. */
+/** dnSpy's `HexEditorOperationsImpl.CopyVisualBasicArray`: every row but the last ends in a comma, and every
+ * row — the last one too — in the line continuation. */
 export function visualBasicArrayText(bytes: Uint8Array, upper: boolean): string {
   const rows: string[] = []
   for (let i = 0; i < bytes.length; i += 16)
     rows.push('\t' + Array.from(bytes.subarray(i, i + 16), (value) => '&H' + hexText(Uint8Array.of(value), upper)).join(', '))
-  return `New Byte() { _\n${rows.join(', _\n')}, _\n}\n`
+  return `New Byte() { _\n${rows.join(', _\n')} _\n}\n`
 }
 
 /** A `0x` number of the width its bytes hold, as every Copy Special number is written. */
@@ -421,17 +345,17 @@ export function hexNumberText(value: number | bigint, digits?: number): string {
 }
 
 /**
- * Parses what dnSpy accepts as hexadecimal bytes — `4D5A`, `4D 5A`, `4d 5a`, with `?` meaning a zero
- * nibble — and answers undefined for anything that is not one. Whitespace may sit between any two digits.
+ * dnSpy's `ClipboardUtils.HexStringToByteArray`: pairs of hexadecimal digits with nothing in between, `?`
+ * meaning a zero nibble; anything else — an odd length, a space — is not bytes. An empty text is no bytes,
+ * which only the blob paste accepts.
  */
 export function parseHexBytes(text: string): Uint8Array | undefined {
-  const digits = text.replace(/\s+/g, '')
-  if (digits.length === 0 || digits.length % 2 !== 0)
+  if (text.length % 2 !== 0)
     return undefined
-  const bytes = new Uint8Array(digits.length / 2)
-  for (let i = 0; i < digits.length; i += 2) {
-    const high = nibbleOf(digits[i])
-    const low = nibbleOf(digits[i + 1])
+  const bytes = new Uint8Array(text.length / 2)
+  for (let i = 0; i < text.length; i += 2) {
+    const high = nibbleOf(text[i])
+    const low = nibbleOf(text[i + 1])
     if (high < 0 || low < 0)
       return undefined
     bytes[i / 2] = (high << 4) | low
@@ -439,19 +363,7 @@ export function parseHexBytes(text: string): Uint8Array | undefined {
   return bytes
 }
 
-const nibbleOf = (character: string): number => {
-  if (character === '?')
-    return 0
-  const value = Number.parseInt(character, 16)
-  return Number.isFinite(value) && value >= 0 && value <= 15 ? value : -1
-}
-
-/** A Find pattern: hexadecimal bytes when they parse as such, the text's bytes otherwise. */
-export function findPatternBytes(text: string): Uint8Array | undefined {
-  if (text.trim() === '')
-    return undefined
-  return parseHexBytes(text) ?? new TextEncoder().encode(text)
-}
+const nibbleOf = (character: string): number => character === '?' ? 0 : hexDigit(character)
 
 /** The 7-bit encoded length a string's bytes are prefixed with, which "Paste UTF8 String" writes. */
 export function sevenBitLengthPrefix(length: number): Uint8Array {

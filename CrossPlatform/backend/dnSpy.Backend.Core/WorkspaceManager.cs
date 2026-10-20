@@ -1520,6 +1520,22 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// between — the one hex structure a client is handed without having listed its parents (Go to MD Table Row).
 			if (node.Kind is NodeKind.TablesStream or NodeKind.MetadataTable or NodeKind.MetadataRecord)
 				return GetMetadataNodePath(node);
+			// A PE structure node hangs off its PE node, whose key its own key starts with — the one hex structure
+			// node besides those of the tables a client is handed without having listed its parents (Go to Code or
+			// Structure in the hex view). The PE node of a native PE document hangs off the document's root.
+			if (node.Kind == NodeKind.PeStructure) {
+				var key = node.Key;
+				var cut = key.LastIndexOf(':');
+				cut = cut <= 0 ? -1 : key.LastIndexOf(':', cut - 1);
+				if (cut < 0 || !nodeIdsByKey.TryGetValue(key[..cut], out var peId) || !nodes.TryGetValue(peId, out var peNode))
+					return [];
+				var above = GetNodePathCore(peNode);
+				return above.Count == 0 ? [] : [.. above, node];
+			}
+			if (node.Kind == NodeKind.PE && node.AsPeOnlyModuleEntry is not null) {
+				var rootKey = node.Key.EndsWith(":pe", StringComparison.Ordinal) ? node.Key[..^3] : string.Empty;
+				return nodeIdsByKey.TryGetValue(rootKey, out var rootId) && nodes.TryGetValue(rootId, out var peRoot) ? [peRoot, node] : [];
+			}
 			if (node.AsModuleEntry is not { } module)
 				return [];
 			// A type hierarchy node hangs off the type whose chain it lists, and that type is not named by
@@ -3051,6 +3067,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			case EmbeddedResource value:
 				resource = ResolveResourceTarget(value);
 				break;
+			case ResourceEntryValue value when node.AsModuleEntry is { } owner:
+				resource = ResolveResourceElementTarget(owner, value);
+				break;
 			}
 			return new HexTargetResponse(moduleEntry.Id, moduleEntry.FileLength, method, fieldInitialValue, resource, structure, structureData);
 		}
@@ -3082,6 +3101,23 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		static HexRangeDto? ResolveResourceTarget(EmbeddedResource resource) {
 			var reader = resource.CreateReader();
 			return reader.Length == 0 ? null : new HexRangeDto(reader.StartOffset, reader.Length);
+		}
+
+		/// <summary>
+		/// The bytes of one element of a .resources file (dnSpy's ResourceElementNode.FileOffset and Length, which
+		/// TVShowResourceInHexEditorCommand opens): its data, from where the element's type code starts to where its
+		/// value ends, in the module's file. Only while the resource is still read from the file — once an edit has
+		/// rewritten the .resources file it lives in memory, and an offset into it would lead the hex editor astray
+		/// (WriteEntryOffsetComment draws the same line). A rewrite replaces the module's resource, and the rows of the
+		/// entries it did not touch keep naming the one that was replaced, so the resource the row names has to still be
+		/// the module's. dnSpy leaves the command off for an offset of 0.
+		/// </summary>
+		static HexRangeDto? ResolveResourceElementTarget(ModuleEntry module, ResourceEntryValue entry) {
+			if (!module.Module.Resources.Any(resource => ReferenceEquals(resource, entry.Owner)) || entry.Owner.CreateReader().StartOffset == 0)
+				return null;
+			var data = entry.Element.ResourceData;
+			var start = (uint)data.StartOffset;
+			return start == 0 ? null : new HexRangeDto(start, (uint)data.EndOffset - start);
 		}
 
 		/// <summary>

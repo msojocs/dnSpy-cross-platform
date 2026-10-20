@@ -1330,143 +1330,311 @@ select:focus-visible,
   background: var(--surface);
 }
 
-/* The hex editor: a scrollable dump over a status bar, with the find bar and the context menu floating
-   over it. dnSpy's colours come from the theme's hex text entries. */
+/* dnSpy's hex view: the left margins, the text area and the two scroll bars, the zoom box at the start of the
+   horizontal one. Every colour is the theme's hex classification it is drawn with in dnSpy. */
 .hex-view {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 22px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   height: 100%;
-  background: var(--surface);
+  overflow: hidden;
+  background: var(--tcbg-hextext, var(--surface));
+  color: var(--tc-hextext, var(--text));
+  white-space: pre;
+}
+
+.hex-view-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hex-glyph-margin {
+  flex: none;
+  background: var(--tcbg-hexglyphmargin, var(--surface-2));
+}
+
+.hex-selection-margin {
+  flex: none;
+  cursor: default;
 }
 
 .hex-content {
-  min-width: max-content;
-  min-height: 0;
-  margin: 0;
-  padding: 8px 12px;
-  overflow: auto;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   outline: none;
-  user-select: text;
-  background: var(--tcbg-hextext, var(--surface));
-  color: var(--tc-hextext, var(--text));
-  line-height: 20px;
-  white-space: pre;
   cursor: text;
+  user-select: none;
 }
 
-.hex-content:focus {
-  outline: none;
+.hex-scroll-layer {
+  position: absolute;
+  inset: 0 auto 0 0;
 }
 
-/* One row of the dump. Rendering it a row at a time is what lets a single byte be marked, which a
-   whole-dump text node could not do. */
-.hex-line {
-  height: 20px;
-  white-space: pre;
+.hex-marker-layer,
+.hex-text-layer,
+.hex-caret-layer {
+  position: absolute;
+  inset: 0;
 }
 
-/* The gutter between the drawn rows and the lines that are scrolled past, which is what makes the
-   scrollbar's size the file's size. */
-.hex-spacer {
+.hex-caret-layer {
   pointer-events: none;
 }
 
-.hex-values {
-  padding-left: 1ch;
+.hex-line {
+  position: absolute;
+  white-space: pre;
 }
 
-.hex-ascii {
-  padding-left: 1ch;
+.hex-colorized .hex-offset { color: var(--tc-hexoffset, inherit); }
+.hex-colorized .hex-byte0 { color: var(--tc-hexbyte0, inherit); }
+.hex-colorized .hex-byte1 { color: var(--tc-hexbyte1, inherit); }
+.hex-colorized .hex-ascii { color: var(--tc-hexascii, inherit); }
+.hex-colorized .hex-byte-error { color: var(--tc-hexbyteerror, inherit); }
+
+.hex-marker {
+  position: absolute;
+  box-sizing: border-box;
 }
 
-.hex-address {
-  color: var(--text-muted, var(--text));
-  opacity: 0.75;
-}
-
-/* Every other group of bytes wears the shared textual colour, the way dnSpy alternates them. */
-.hex-byte.hex-group-1 {
-  opacity: 0.85;
-}
-
-.hex-column-lines .hex-values {
-  border-left: 1px solid var(--border);
-  margin-left: 1ch;
-}
-
-.hex-column-lines .hex-ascii {
-  border-left: 1px solid var(--border);
-  margin-left: 1ch;
-}
-
-/* Marked with the same colour the menus and selection use, so it reads as the current selection. */
-.hex-byte-marked {
-  background: var(--selection);
-}
-
-/* The hit range a "Show ... in Hex Editor" command named, and the selection in the caret's column. */
-.hex-byte-selected {
-  background: var(--tcbg-hexselected, var(--selection));
-}
-
-.hex-highlight-current-line .hex-current-line {
+.hex-current-line {
+  border: 1px solid var(--tcfg-hexcurrentline, transparent);
   background: var(--tcbg-hexcurrentline, transparent);
 }
 
-.hex-byte-caret {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+.hex-current-line-no-focus {
+  border: 1px solid var(--tcfg-hexcurrentlinenofocus, transparent);
+  background: var(--tcbg-hexcurrentlinenofocus, transparent);
 }
 
-.hex-status {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 8px;
-  border-top: 1px solid var(--border);
-  background: var(--wpf-EnvironmentWindowBackgroundColor, var(--surface));
-  color: var(--text-muted, var(--text));
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
+.hex-selection { background: var(--tcbg-hexselection, var(--selection)); }
+.hex-inactive-selection { background: var(--tcbg-hexinactiveselectedtext, var(--selection)); }
+.hex-find-match { background: var(--tcbg-hexfindmatchhighlightmarker, var(--selection)); }
+.hex-current-value-cell { background: var(--tcbg-hexcurrentvaluecell, transparent); }
+.hex-current-ascii-cell { background: var(--tcbg-hexcurrentasciicell, transparent); }
+
+.hex-tooltip-current-field {
+  border: 1px solid var(--tcfg-hextooltipservicecurrentfield, transparent);
+  background: var(--tcbg-hextooltipservicecurrentfield, transparent);
 }
 
-.hex-status-offset {
-  font-family: var(--font-family-monospace, monospace);
+.hex-tooltip-field0 {
+  border: 1px solid var(--tcfg-hextooltipservicefield0, transparent);
+  background: var(--tcbg-hextooltipservicefield0, transparent);
 }
 
-/* dnSpy's Find control floats in the dump's top right corner. */
-.hex-find {
+.hex-tooltip-field1 {
+  border: 1px solid var(--tcfg-hextooltipservicefield1, transparent);
+  background: var(--tcbg-hextooltipservicefield1, transparent);
+}
+
+/* HexCaretLayer: a block over the character in overwrite mode (the brush at half opacity), a bar otherwise; the
+   other column's caret is an underline of its cell. */
+.hex-caret {
   position: absolute;
-  top: 6px;
-  right: 18px;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 4px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: 0 2px 6px rgb(0 0 0 / 25%);
+  background: var(--tcbg-hexcaret, var(--text));
 }
 
-.hex-find input {
-  width: 200px;
-  height: 22px;
-  padding: 0 5px;
+.hex-caret-overwrite {
+  opacity: 0.5;
+}
+
+.hex-caret-inactive {
+  background: var(--tcbg-hexinactivecaret, var(--text));
+}
+
+/* ColumnLineSeparators: solid between the columns, 3px dashes between the value groups. */
+.hex-column-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hex-column-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.hex-column-line0 { border-left: 1px solid var(--tcfg-hexcolumnline0, var(--border)); }
+.hex-column-line1 { border-left: 1px solid var(--tcfg-hexcolumnline1, var(--border)); }
+.hex-column-group-line0 { border-left: 1px dashed var(--tcfg-hexcolumnlinegroup0, var(--border)); }
+.hex-column-group-line1 { border-left: 1px dashed var(--tcfg-hexcolumnlinegroup1, var(--border)); }
+
+.hex-vscroll {
+  flex: none;
+  width: 17px;
+  overflow-x: hidden;
+  overflow-y: scroll;
+}
+
+.hex-hscroll-row {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  height: 17px;
+}
+
+.hex-hscroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: scroll;
+  overflow-y: hidden;
+}
+
+.hex-scroll-corner {
+  flex: none;
+  width: 17px;
+}
+
+/* ZoomControlMargin: a 60px editable box. */
+.hex-zoom-control input {
+  width: 60px;
+  height: 100%;
+  padding: 0 3px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: inherit;
+  font: inherit;
+  font-family: var(--font-family-ui, inherit);
+  font-size: 11px;
 }
 
-.hex-find-status {
-  padding-right: 4px;
-  color: var(--error, #d9534f);
+/* HexQuickInfoPresenterControl: the QuickInfo brushes, the image beside the first section. */
+.hex-tooltip {
+  position: absolute;
+  z-index: 20;
+  max-width: 700px;
+  padding: 1px 8px 0 6px;
+  border: 1px solid var(--wpf-QuickInfoBorder, var(--border));
+  background: var(--wpf-QuickInfoBackground, var(--surface-2));
+  color: var(--wpf-QuickInfoForeground, var(--text));
+  font-family: var(--font-family-ui, inherit);
+  font-size: 12px;
+  white-space: pre-wrap;
+  pointer-events: auto;
 }
 
-/* The context menu is the menu bar's popup, pinned where the right-click landed. */
+.hex-tooltip-signature {
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 4px 0;
+}
+
+.hex-tooltip-section {
+  padding: 0 0 4px;
+}
+
+/* The hex SearchControl, in the view's top right corner. */
+.hex-search-control {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 15;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  padding: 0 4px 0 0;
+  background: var(--wpf-EnvironmentCommandBar, var(--surface));
+  color: var(--wpf-SystemColorsMenuText, var(--text));
+  font-family: var(--font-family-ui, inherit);
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.hex-search-toggle {
+  grid-row: 1;
+  grid-column: 1;
+  width: 21px;
+  height: 21px;
+  margin: 4px 0 0 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  stroke: var(--wpf-EnvironmentDropDownGlyph, currentColor);
+}
+
+.hex-search-toggle svg {
+  transform: rotate(-90deg);
+}
+
+.hex-search-toggle.expanded svg {
+  transform: none;
+}
+
+.hex-search-row {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0 4px;
+}
+
+.hex-search-text {
+  width: 200px;
+  height: 21px;
+  padding: 0 4px;
+  border: 1px solid var(--wpf-CommonControlsTextBoxBorder, var(--border));
+  background: var(--wpf-CommonControlsTextBoxBackground, var(--surface));
+  color: var(--wpf-CommonControlsTextBoxText, inherit);
+}
+
+.hex-search-text.not-found {
+  border-color: var(--wpf-CommonControlsTextBoxBorderError, red);
+  background: var(--wpf-CommonControlsTextBoxErrorBackground, pink);
+  color: var(--wpf-CommonControlsTextBoxErrorForeground, black);
+}
+
+.hex-search-text.searching {
+  border-color: var(--wpf-HexSearchingTextBoxBorder, var(--border));
+  background: var(--wpf-HexSearchingTextBoxBackground, var(--surface));
+  color: var(--wpf-HexSearchingTextBoxForeground, inherit);
+}
+
+.hex-search-button {
+  width: 21px;
+  height: 21px;
+}
+
+.hex-search-close {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  fill: currentColor;
+}
+
+.hex-search-close:hover {
+  border-color: var(--wpf-ToolBarButtonHoverBorder);
+  background: var(--wpf-ToolBarButtonHover);
+}
+
+.hex-search-options select {
+  flex: 1;
+  height: 21px;
+}
+
+.hex-search-focus-bar {
+  grid-column: 1 / span 2;
+  height: 4px;
+  margin-top: 4px;
+  background: var(--wpf-EnvironmentFileTabInactiveBorder, var(--border));
+}
+
+.hex-search-control:focus-within .hex-search-focus-bar {
+  background: var(--wpf-EnvironmentFileTabSelectedBorder, var(--accent));
+}
+
 .hex-context-menu {
   position: fixed;
   z-index: 200;
@@ -1474,7 +1642,38 @@ select:focus-visible,
 
 .hex-dialog {
   min-width: 360px;
-  max-width: 460px;
+  max-width: 520px;
+}
+
+.hex-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hex-dialog-row .hex-field {
+  flex: 1;
+}
+
+.hex-dialog-row .hex-field > span:first-child,
+.hex-dialog-grid .hex-field > span:first-child {
+  width: auto;
+  min-width: 90px;
+}
+
+.hex-dialog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 10px;
+}
+
+.hex-kind-box {
+  height: 22px;
+  min-width: 200px;
+}
+
+.hex-dialog-footer-check {
+  margin-right: auto;
 }
 
 .hex-dialog-body {

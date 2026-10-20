@@ -862,7 +862,7 @@ const hexEditorGroups = (base: string): PageSpec[] => [
         id: 'zoom',
         titleKey: 'Zoom',
         controls: [
-          { kind: 'checkbox', path: `${base}.advanced.mouseWheelZoom`, labelKey: 'Mouse wheel zoom' },
+          { kind: 'checkbox', path: `${base}.advanced.enableMouseWheelZoom`, labelKey: 'Mouse wheel zoom' },
           { kind: 'checkbox', path: `${base}.advanced.zoomControl`, labelKey: 'Zoom control' },
         ],
       },

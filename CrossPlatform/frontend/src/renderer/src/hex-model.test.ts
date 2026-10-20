@@ -1,32 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
-  bytesPerLineForWidth,
   compressedUIntPrefix,
   csharpArrayText,
-  defaultHexLineFormat,
+  editValueCell,
   formatHexOffset,
   formatHexValue,
   hexNumberText,
   hexText,
-  lineOf,
-  offsetBitSizeFor,
   offsetTextLength,
   parseHexBytes,
-  resolveBytesPerLine,
-  resolveGroupSize,
-  selectionBetween,
   sevenBitLengthPrefix,
+  valueByteIndex,
   visualBasicArrayText,
 } from './hex-model'
 
 describe('offset formatting', () => {
-  it('narrows the column to the file the way dnSpy calculates the bit size', () => {
-    // The width follows the last address, which is one less than the length.
-    expect(offsetBitSizeFor(0x10)).toBe(8)
-    expect(offsetBitSizeFor(0x101)).toBe(16)
-    expect(offsetBitSizeFor(0x1_0001)).toBe(24)
-    expect(offsetBitSizeFor(0x1_000_001)).toBe(32)
-    expect(offsetBitSizeFor(0x1_0000_0001)).toBe(40)
+  it('writes an offset past 4 GiB without losing its high digits', () => {
+    expect(formatHexOffset(0x1_2345_6789, 40, 'hex', false)).toBe('0123456789')
   })
 
   it('writes every offset format dnSpy offers, upper or lower case', () => {
@@ -40,49 +30,13 @@ describe('offset formatting', () => {
   })
 })
 
-describe('line layout', () => {
-  it('fits bytes to the width the way CalculateBytesPerLine does', () => {
-    const options = defaultHexLineFormat()
-    // Offset(4) + values(2 chars + 1 separator each) + ascii(1 each), with two separators between columns.
-    // 68 chars: 4 offset + 1 separator + 47 values + 1 separator + 16 ASCII leaves (68 - 6 + 1) / 4 = 15.
-    expect(bytesPerLineForWidth(68, options, 16)).toBe(15)
-    // 20 chars leave 14 after the 4-digit offset and the separators; the values and ASCII share them —
-    // (14 + 1) / (2 + 1 + 1) = 3 cells — so three bytes is the most that fits.
-    expect(bytesPerLineForWidth(20, options, 16)).toBe(3)
-  })
-
-  it('rounds the line and the group to the value format', () => {
-    const options = { ...defaultHexLineFormat(), bytesPerLine: 10, groupSize: 3, valuesFormat: 'hexUInt32' as const }
-    expect(resolveBytesPerLine(options, 32, 80)).toBe(12)
-    expect(resolveGroupSize(options, 12)).toBe(4)
-    // Fit-to-width keeps the value cell whole.
-    expect(resolveBytesPerLine({ ...options, bytesPerLine: 0 }, 32, 40)).toBe(8)
-  })
-
-  it('draws a line of address, bytes and ASCII', () => {
-    const bytes = Uint8Array.from([0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x41, 0x42])
-    const line = lineOf(bytes, 0, 0, 10, { ...defaultHexLineFormat(), offsetBitSize: 16 }, 16)
-    expect(line.address).toBe('0000')
-    expect(line.values.map((cell) => cell.text)).toEqual(['4D', '5A', '90', '00', '03', '00', '00', '00', '41', '42'])
-    expect(line.ascii.map((cell) => cell.text).join('')).toBe('MZ......AB')
-    // The second group of eight is the alternating one.
-    expect(line.values[7].group).toBe(0)
-    expect(line.values[8].group).toBe(1)
-  })
-
-  it('shows unreadable bytes as dnSpy’s question marks', () => {
-    const line = lineOf(new Uint8Array(0), 0, 0, 16, { ...defaultHexLineFormat(), offsetBitSize: 16 }, 16)
-    expect(line.values.every((cell) => cell.text === '??')).toBe(true)
-    expect(line.ascii.every((cell) => cell.text === ' ')).toBe(true)
-  })
-})
-
 describe('value formats', () => {
   it('writes hex and decimal cells of the width dnSpy gives them', () => {
     const bytes = Uint8Array.from([0xFF])
     expect(formatHexValue(bytes, 0, 'hexByte', false)).toBe('FF')
     expect(formatHexValue(bytes, 0, 'hexByte', true)).toBe('ff')
-    expect(formatHexValue(bytes, 0, 'decimalByte', false)).toBe('255'.padStart(21, ' '))
+    expect(formatHexValue(bytes, 0, 'decimalByte', false)).toBe('255')
+    expect(formatHexValue(Uint8Array.of(7), 0, 'decimalSByte', false)).toBe('   7')
     expect(formatHexValue(bytes, 0, 'hexSByte', false)).toBe('-01')
     expect(formatHexValue(bytes, 0, 'bit8', false)).toBe('11111111')
   })
@@ -91,8 +45,8 @@ describe('value formats', () => {
     const bytes = Uint8Array.from([0x01, 0x02, 0x03, 0x04])
     expect(formatHexValue(bytes, 0, 'hexUInt32', false)).toBe('04030201')
     expect(formatHexValue(bytes, 0, 'hexUInt32Be', false)).toBe('01020304')
-    expect(formatHexValue(bytes, 0, 'decimalUInt16', false)).toBe('513'.padStart(21, ' '))
-    expect(formatHexValue(bytes, 0, 'decimalUInt16Be', false)).toBe('258'.padStart(21, ' '))
+    expect(formatHexValue(bytes, 0, 'decimalUInt16', false)).toBe('  513')
+    expect(formatHexValue(bytes, 0, 'decimalUInt16Be', false)).toBe('  258')
   })
 
   it('writes a single as dnSpy’s G6 and an unreadable cell when the bytes are missing', () => {
@@ -115,17 +69,19 @@ describe('copy and paste', () => {
     expect(csharpArrayText(bytes, true)).toBe(
       'new byte[] {\n\t0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,\n\t0x10\n};\n',
     )
-    expect(visualBasicArrayText(Uint8Array.from([1, 2]), true)).toBe('New Byte() { _\n\t&H01, &H02, _\n}\n')
+    expect(visualBasicArrayText(Uint8Array.from([1, 2]), true)).toBe('New Byte() { _\n\t&H01, &H02 _\n}\n')
   })
 
-  it('reads hex bytes with any spacing and refuses what is not hex', () => {
+  it('reads hex bytes the way ClipboardUtils does and refuses what is not hex', () => {
     expect(parseHexBytes('4D5A')).toEqual(Uint8Array.from([0x4D, 0x5A]))
-    expect(parseHexBytes('4d 5a')).toEqual(Uint8Array.from([0x4D, 0x5A]))
+    expect(parseHexBytes('4d5a')).toEqual(Uint8Array.from([0x4D, 0x5A]))
+    // No spacing: dnSpy reads the clipboard two characters at a time.
+    expect(parseHexBytes('4d 5a')).toBeUndefined()
     // '?' is a zero nibble, as in dnSpy's own parser.
     expect(parseHexBytes('?F')).toEqual(Uint8Array.from([0x0F]))
     expect(parseHexBytes('4D5')).toBeUndefined()
     expect(parseHexBytes('ZZ')).toBeUndefined()
-    expect(parseHexBytes('')).toBeUndefined()
+    expect(parseHexBytes('')).toEqual(new Uint8Array(0))
   })
 
   it('writes the length prefixes the special pastes use', () => {
@@ -137,10 +93,21 @@ describe('copy and paste', () => {
   })
 })
 
-describe('selection', () => {
-  it('covers the bytes between the anchor and the caret, either way round', () => {
-    expect(selectionBetween(3, 5)).toEqual({ start: 3, end: 6 })
-    expect(selectionBetween(5, 3)).toEqual({ start: 3, end: 6 })
-    expect(selectionBetween(4, 4)).toEqual({ start: 4, end: 5 })
+describe('editing a value cell', () => {
+  it('types a nibble of the byte a digit stands for, little endian last byte first', () => {
+    expect(valueByteIndex('hexUInt16', 0)).toBe(1)
+    expect(valueByteIndex('hexUInt16', 3)).toBe(0)
+    expect(valueByteIndex('hexUInt16Be', 3)).toBe(1)
+    expect(editValueCell('hexByte', Uint8Array.of(0x12), 0, 'a')).toEqual({ offset: 0, data: Uint8Array.of(0xA2) })
+    expect(editValueCell('hexUInt16', Uint8Array.of(0x34, 0x12), 1, 'F')).toEqual({ offset: 1, data: Uint8Array.of(0x1F) })
+    expect(editValueCell('hexByte', Uint8Array.of(0x12), 0, 'g')).toBeUndefined()
+  })
+
+  it('edits a signed cell as text and saturates what it reads back', () => {
+    // " 7F" with its sign typed over becomes -0x7F.
+    expect(editValueCell('hexSByte', Uint8Array.of(0x7F), 0, '-')).toEqual({ offset: 0, data: Uint8Array.of(0x81) })
+    expect(editValueCell('hexSByte', Uint8Array.of(0x7F), 1, 'F')).toEqual({ offset: 0, data: Uint8Array.of(0x7F) })
+    expect(editValueCell('bit8', Uint8Array.of(0), 0, '1')).toEqual({ offset: 0, data: Uint8Array.of(0x80) })
+    expect(editValueCell('decimalByte', Uint8Array.of(0), 0, '1')).toBeUndefined()
   })
 })

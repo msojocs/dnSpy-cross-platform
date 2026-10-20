@@ -3290,12 +3290,11 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	/// <summary>
-	/// A structure read out of the image, or a resource, has no path from a root that names it — the PE
-	/// node above it does, and the difference is the point: the client is told "no" and keeps its own tree
-	/// rather than being handed a chain that leads nowhere.
+	/// A structure read out of the image names the PE node above it by its key, so its chain is the PE node's
+	/// and itself — the hex view's Go to Code or Structure hands the client a structure node it never listed.
 	/// </summary>
 	[Fact]
-	public async Task NodePath_StopsAtTheKindsWithNoChain() {
+	public async Task NodePath_ReachesAPeStructureThroughItsPeNode() {
 		var opened = await OpenContractsAssemblyAsync();
 		var pe = await FindPeNodeAsync(opened.WorkspaceId);
 		var pePath = await manager.GetNodePathAsync(new NodeRequest(opened.WorkspaceId, pe.Id), TestContext.Current.CancellationToken);
@@ -3303,7 +3302,8 @@ public sealed class WorkspaceManagerTests : IDisposable {
 
 		var structure = (await ChildrenAsync(opened.WorkspaceId, pe.Id))[0];
 		var structurePath = await manager.GetNodePathAsync(new NodeRequest(opened.WorkspaceId, structure.Id), TestContext.Current.CancellationToken);
-		Assert.Empty(structurePath.Nodes);
+		Assert.Equal(new[] { "assembly", "module", "pe", "pestructure" }, structurePath.Nodes.Select(node => node.Kind));
+		Assert.Equal(structure.Id, structurePath.Nodes[^1].Id);
 	}
 
 	/// <summary>

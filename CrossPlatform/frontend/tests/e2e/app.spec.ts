@@ -1027,9 +1027,9 @@ test.describe('the workspace shell', () => {
 
     await page.getByRole('menuitem', { name: 'Show Method Body in Hex Editor' }).click()
 
-    // The command marks the bytes it names, so the getter's own body is read off the dump before anything
+    // The command selects the bytes it names, so the getter's own body is read off the dump before anything
     // is written over it.
-    const marked = page.locator('.hex-byte-marked')
+    const marked = page.locator('.hex-byte[data-hex-column="values"][data-selected]')
     // The separator between bytes rides along with its own cell, and the last column of a row has none,
     // so the bytes are compared without it.
     const markedBytes = async (): Promise<string[]> => (await marked.allTextContents()).map((text) => text.trim())
@@ -1057,58 +1057,62 @@ test.describe('the workspace shell', () => {
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
   })
 
-  test('browses the hex editor: caret, Go to Position, Find and Select All', async () => {
+  test('browses the hex editor: caret, Go to Offset, Find, Select All, Quick Info and F12', async () => {
     await openAssemblyAndNamespace()
     const moduleRow = page.locator('.tree-row[data-kind="module"]').first()
     await moduleRow.click({ button: 'right' })
     await page.getByRole('menuitem', { name: 'Open Hex Editor' }).click()
 
     const hex = page.locator('.hex-content')
+    const view = page.locator('.hex-view')
     await expect(hex).toContainText('4D 5A')
-    // The whole file is one dump: the status bar names the address under the caret, not a page offset.
-    const statusOffset = page.locator('.hex-status-offset')
-    await expect(statusOffset).toHaveText(/^0*0$/)
+    // The whole file is one dump; the caret's offset is the file's, not a page's.
+    await expect(view).toHaveAttribute('data-caret', '0')
 
-    // The caret is a byte: the right arrow moves it one nibble, so two presses land on the second byte.
-    await page.locator('.hex-byte[data-hex-column="values"]').first().click()
+    // The caret is a nibble: the right arrow moves it half a byte, so two presses land on the second byte.
+    await hex.focus()
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowRight')
-    await expect(statusOffset).toHaveText(/^0*1$/)
+    await expect(view).toHaveAttribute('data-caret', '1')
 
-    // Go to Position takes an address, absolute by default, and moves the caret to it. A number without a
+    // Go to Offset takes an address, absolute by default, and moves the caret to it. A number without a
     // prefix is decimal — dnSpy's SimpleTypeConverter — so the hexadecimal one says so.
     await page.keyboard.press('Control+G')
-    const goto = page.getByRole('dialog', { name: 'Go to Position' })
-    await goto.getByLabel('Offset').fill('0x20')
+    const goto = page.getByRole('dialog', { name: 'Go to Offset' })
+    await goto.getByRole('textbox').fill('0x20')
     await goto.getByRole('button', { name: 'OK' }).click()
-    await expect(statusOffset).toHaveText(/^0*20$/)
+    await expect(view).toHaveAttribute('data-caret', String(0x20))
 
-    // Find searches the file for hexadecimal bytes and lands on the match.
+    // Find searches the file for hexadecimal bytes as they are typed and selects the match.
     await page.keyboard.press('Control+F')
-    // Exact: the two navigation buttons' labels ("Find Next", "Find Previous") contain "Find" too.
-    await page.getByRole('search').getByLabel('Find', { exact: true }).fill('4D5A')
-    await page.keyboard.press('Enter')
-    // Find continues after the caret, so the match is the next one in the file; what matters is that the
-    // bytes it named are selected and the status bar counts them.
-    await expect(page.locator('.hex-status')).toContainText('Sel: 0x')
-    await expect(page.locator('.hex-byte-selected')).not.toHaveCount(0)
+    await page.getByRole('search').getByRole('textbox', { name: 'Find', exact: true }).fill('4D5A')
+    await expect(view).toHaveAttribute('data-selection-end', /\d+/)
     await page.getByRole('search').getByRole('button', { name: 'Close' }).click()
 
-    // Select All covers the file, and the status bar counts it.
-    await page.locator('.hex-byte[data-hex-column="values"]').first().click()
+    // Select All covers the file.
+    await hex.focus()
     await page.keyboard.press('Control+A')
-    await expect(page.locator('.hex-status')).toContainText(/Sel: 0x0 - 0x[0-9A-F]+ \(\d[\d,]* bytes\)/)
+    await expect(view).toHaveAttribute('data-selection-start', '0')
 
-    // Go to Metadata follows a token to its table row.
+    // Go to Metadata follows a token to its table row: the caret lands on the row's first byte.
     await page.keyboard.press('Control+M')
     const metadata = page.getByRole('dialog', { name: 'Go to Metadata' })
-    // Exact role and name: the "Metadata token" radio's own label also contains "Token".
-    await metadata.getByRole('textbox', { name: 'Token' }).fill('02000088')
+    await metadata.getByRole('textbox', { name: 'Token' }).fill('0x02000002')
+    await expect(metadata.getByRole('button', { name: 'OK' })).toBeEnabled()
     await metadata.getByRole('button', { name: 'OK' }).click()
-    await expect(page.locator('.hex-status')).toContainText('Sel: 0x')
+    await expect(view).not.toHaveAttribute('data-caret', String(0x20))
 
-    // The hex tab is read-only for a module that has no edits, so the browse ends cleanly.
-    await page.keyboard.press('Escape')
+    // Quick Info over the DOS header's first field, and the structure under the mouse highlighted.
+    await page.keyboard.press('Control+Home')
+    const firstCell = page.locator('.hex-byte[data-hex-column="values"][data-hex-byte="0"]')
+    await firstCell.hover()
+    await expect(page.getByRole('tooltip')).toContainText('IMAGE_DOS_HEADER.e_magic')
+    await expect(page.locator('.hex-tooltip-current-field')).not.toHaveCount(0)
+
+    // F12 on e_magic goes to the DOS header's own node in the PE tree.
+    await hex.focus()
+    await page.keyboard.press('F12')
+    await expect(page.locator('.hex-structure-view')).toBeVisible()
   })
 
   test('deletes a type, renames the namespace and restores both with undo', async () => {
@@ -2664,10 +2668,10 @@ test.describe('the code viewer context menu', () => {
 
     await rightClickThrowAndCatch()
     await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Show Instructions in Hex Editor' }).click()
-    // The hex document marks the bytes the command named, so the mark is what says the tab really opened on
-    // the selected method's code rather than on the module at large.
-    await expect(page.locator('.hex-byte-marked').first()).toBeVisible()
-    await expect(page.getByRole('tab', { name: /\[Hex\]/ })).toBeVisible()
+    // The hex view selects the bytes the command named, so the selection is what says the tab really opened on
+    // the selected method's code rather than on the module at large. The tab is named after the file.
+    await expect(page.locator('.hex-byte[data-hex-column="values"][data-selected]').first()).toBeVisible()
+    await expect(page.getByRole('tab', { name: /^DebugTarget\.dll$/ })).toBeVisible()
   })
 
   test('follows the reference under the caret into a tab of its own', async () => {

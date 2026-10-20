@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐剩余差距（结构模型、Quick Info、F12、搜索替换、选项与会话恢复）后再次按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -50,7 +50,7 @@
 | 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
 | 反编译与语言 | ~92% | 22 | 4 | 0 | 1 | C#、IL、IL with C# 对齐 WPF：IL 为分支反汇编器的移植，C# 页的分支独有选项（token 注释、成员顺序、修饰符等）写在包的输出上，程序集/模块/命名空间节点照 WPF 只写头部与特性；BAML 选项与 Disassemble BAML、GUI 导出项目齐备；VB 仍是 C# 的转换，三个 C# 选项包不支持 |
 | 代码编辑器与文档标签 | 100% | 31 | 0 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info（含图标）、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；2026-10-20 补上选择边距、行压缩与虚拟空格，Text Viewer 页全部生效 |
-| Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
+| Hex 编辑器（浏览） | ~98% | 32 | 1 | 0 | 0 | 按 WPF 重写的视图：行布局、光标选区与全部快捷键、WPF 的右键菜单与对话框、查找/替换/增量查找、结构 Quick Info 与高亮、F12/Ctrl+F12/Edit Field、选项三页生效、标签随会话恢复；编码列表仍是子集 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
 | 字符串引用窗口 | 100% | 22 | 0 | 0 | 0 | 全部功能点对齐 WPF：三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新；来源列随工具栏语言经该反编译器的格式化器书写（VB 用自己的，IL 与 C# 同），C#/VB/IL 视图里跟随 ldstr 都定位到所在语句 |
 | dnSpy.Console 命令行 | ~92% | 11 | 2 | 0 | 0 | 跨平台 CLI 已就位：项目导出（SDK/传统工程、.sln/.slnx、GAC 与程序集解析、资源与 BAML 开关）、单个类型/成员输出（C#/VB/IL/IL with C#）、彩色与 `--spaces` 都对齐 WPF；语言选项是子集，VB 工程由 C# 转换而来 |
@@ -71,7 +71,7 @@
 | 改方法体 | 日常可用 | C# 源码编辑（方法、类、类成员、程序集特性、合并）与方法体三页编辑器都在；IL 编辑器可增删局部变量与异常处理器，撤销覆盖导入 |
 | 保存 | 日常可用 | 与 WPF 相同：Save Module 的五页写出选项，Save All 列出修改过的文档、有进度与取消；修改标记按保存点计算；新建的程序集与 NetModule 第一次保存时取得文件；退出时可「保存后退出」 |
 | 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件，C#/VB/IL 视图都能下）、单步（含跨 await）、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；Memory 与 Disassembly；可同时调多个 CoreCLR 进程；不支持 Mono/Unity |
-| 元数据表、Hex 修改 | 日常可用 | Hex 可滚动浏览、查找、复制、直接改字节并撤销，非 .NET 文件也能改写与保存；PE 头与元数据表是可编辑的表单与表格，表可排序、复制粘贴行；Hex 视图仍没有结构信息与 F12 |
+| 元数据表、Hex 修改 | 日常可用 | Hex 可滚动浏览、查找替换、复制、直接改字节并撤销，悬停显示 PE/元数据结构，F12 跳到代码或 PE 节点，非 .NET 文件也能改写与保存；PE 头与元数据表是可编辑的表单与表格，表可排序、复制粘贴行 |
 | 脚本、批处理导出 | 部分可用 | GUI 的 Export to Project 与独立的 `dnSpy.Console` 共用后端的导出实现（见 4.4、4.17）；REPL 仍不能操作已打开的程序集 |
 
 ## 2. 跨模块问题
@@ -79,7 +79,7 @@
 这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
 
 1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，WPF dnSpy 分支特有的 C# 选项（`ShowTokenAndRvaComments`、`SortMembers` 等）在包里不存在；2026-10-20 起它们由 `BE/DnSpyCSharpOptions.cs` 写在包的输出上，只剩包不允许改写法的三项（见 4.4）。BAML 页（2026-10-20 起）与 IL 页全部生效。仍改了没效果的是：
-   - Hex 编辑器的部分选项（文本编辑器的 Text Viewer 页已在 2026-10-19 全部由文档视图读取，2026-10-20 补上选择边距、行压缩与虚拟空格后全部生效，见 4.5；Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
+   - ~~Hex 编辑器的部分选项~~（2026-10-20 起 Hex 编辑器与 Memory 窗口两组的三页全部生效，见 4.7；文本编辑器的 Text Viewer 页 2026-10-20 起全部生效，见 4.5）、书签语法高亮、REPL；
    - General 的版本号与 PublicKeyToken 等程序集树页选项。
 
    Output 页的自动换行、行号、时间戳与时间格式（2026-10-17 起）、Environment › Font 页，以及调试器页与 Disassembler / Code Style 页（2026-10-17 起，经 `debug/setOptions` 交给引擎）已生效。
@@ -165,7 +165,7 @@
 | 从 GAC 打开 | `Documents/Tabs/Dialogs/OpenFromGACDlg.xaml` | `OpenFromGacDialog.tsx` | ✅ | 见 4.3 |
 | 主题 | `Themes/ThemeService.cs`、`Theme.cs`、`ColorInfos.cs`、`*.dntheme` | `FE/theme-service.ts`、`FE/themes.generated.ts`、`FE/monaco-theme.ts`、`MAIN/theme-files.ts`、`styles.css` | ✅ | 读 dnSpy 自带的四个 `.dntheme` 与 `Themes` 目录里的用户主题，颜色继承与默认值同 `Theme.cs`；界面按 WPF 资源键着色，代码视图的 Monaco 主题由主题生成；菜单与 General 页列出 `VisibleThemes`（高对比度主题只在系统高对比度时出现），系统高对比度切换时自动换主题并记下 |
 | 界面语言 | `Culture/CultureService.cs` | `FE/localization.tsx`、`FE/locales/*`、`FE/locales.generated.ts`、`shared/ui-locales.ts` | ✅ | 15 种，与 WPF 的 resx 相同；译文由 resx 生成，resx 没有的条目回落英文；View → Language 为「System」加各语言本族语名称；原生对话框的字符串同样按语言 |
-| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；Output 页的自动换行、行号与时间戳生效；Text Viewer 页（2026-10-19 起）由文档视图读取；仍有页面不生效的是 Hex 编辑器等 |
+| Options 对话框框架 | `Settings/Dialog/AppSettingsDlg.xaml` | `OptionsDialog.tsx`、`options-pages.ts`、`app-options.ts` | ✅ | 框架完整；反编译器设置现已传递给后端并生效（见第 2 节第 1 条更新）；Output 页的自动换行、行号与时间戳生效；Text Viewer 页（2026-10-19 起）由文档视图读取；Hex 编辑器三页（2026-10-20 起）由 hex 视图读取 |
 | Environment › General | `MainApp/Settings/GeneralAppSettingsPage.cs` | `options-pages.ts` | ✅ | Theme（列出所有可见主题）、Allow more than one instance、RestoreTabs、DecompileFullType、UseMemoryMappedIO 均已生效，「Enable all warning messages」按钮立即恢复被「不再提示」的消息；CheckForUpdates 没有对应功能，选项仍在（⛔） |
 | Environment › Font | `MainApp/Settings/FontAppSettingsPage.cs`、`Settings/Fonts/*` | `FE/components/FontOptions.tsx`、`FE/fonts.ts`、`MAIN/system-fonts.ts` | ✅ | 三个用户可见的外观类别（Hex Editor、Output Window、Text Editor）各配字体与字号，按主题分别保存；字体列表来自系统（Chromium 的本地字体接口，取不到时用 fontconfig），等宽加粗，Hex Editor 只列等宽；字号以磅显示、像素保存，范围同 `FilterFontSize` |
 | 背景图片 | `BackgroundImage/*` | `FE/components/BackgroundImage.tsx`、`MAIN/background-images.ts` | ✅ | 图片与文件夹路径、九个位置、四边百分比边距、偏移、不透明度、Stretch 与 StretchDirection、最大尺寸、缩放、随机轮播与间隔；主进程展开文件夹并把图片读成 data URL。图片开启时编辑器背景透明，图片显示在代码后面（dnSpy 画在每个文本视图里）；Hex 视图仍是不透明的 |
@@ -372,47 +372,49 @@
 
 ### 4.7 Hex 编辑器（浏览与交互）
 
-完成度约 84%（✅ 24 / 🟡 4 / ❌ 3）。WPF 范围：`WPF/Hex/`，以及 `AE/Hex/` 中的「Show in Hex Editor」等定位命令。从节点出发的 Hex 写入见 4.12。
+完成度约 98%（✅ 32 / 🟡 1）。WPF 范围：`WPF/Hex/`（编辑器、结构模型 `Hex/Files/**`、Quick Info、搜索、命令与选项页），以及 `AE/Hex/` 中的「Show in Hex Editor」等定位命令、`HexFileStructureInfoProviderImpl` 与 `HexViewUIStateSerializer`。从节点出发的 Hex 写入见 4.12。
 
-2026-10-18 按实现与测试复核。WPF 的编辑器模型已经移植：`hex-model.ts` 照 `HexBufferLineFormatterImpl`、`HexOffsetFormatter`、`HexValueFormatter` 与 `SettingsConstants` 做行布局（每行字节数含「适合宽度」、分组、33 种值格式、四种偏移格式、大小写、ASCII 列与不可读单元格），`FE/components/HexEditor.tsx` 是整文件可滚动的转储（按 64 KiB 分块按需读取，只画视口内的行），有光标、选区、直接键入、右键菜单、四个对话框与查找条。旧的分页只读视图已删除。
+2026-10-20 补齐剩余差距后按实现与测试复核（此前约 84%：✅ 24 / 🟡 4 / ❌ 3）。hex 视图按 WPF 的结构重写：`FE/hex-line.ts` 移植 `HexBufferLineFormatterImpl`/`HexBufferLine`（一行一个字符串，偏移、值、ASCII 之间各一个空格，每个单元格记下文本区间、分组与字节区间），`FE/hex-view-model.ts` 移植 `HexCaretImpl`、`HexSelectionImpl` 与 `HexEditorOperationsImpl` 的导航部分（光标按单元格内字符走，选区为锚点/活动点、结束不含，多字节格式对齐到整值），`FE/components/HexEditor.tsx` 按字符位置把选区、标记、当前行与光标画在文本上下层，`FE/hex-commands.ts` 是 `DefaultHexEditorCommandInfoProvider` 的全部快捷键（含 Ctrl+E、Ctrl+K 两段式）。后端 `BE/HexFiles/` 移植了 WPF 的整套文件结构模型（PE 头、COR20、元数据头与流、表记录、各堆记录、方法体与异常表、嵌入资源与 `.resources` 多文件资源，含嵌套文件），字节读自叠加了补丁的文件，模型按条目缓存，补丁、撤销重做与保存后重建。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Open Hex Editor | `AE/Hex/Commands.cs` | `hex-menu.ts`，RPC `hex/getLength`、`hex/readRange` | ✅ | 托管模块、PE-only、ELF 与未知文件都能打开并浏览（缺陷 #6 已修） |
+| Open Hex Editor | `AE/Hex/Commands.cs` | `hex-menu.ts`，RPC `hex/getLength`、`hex/readRange` | ✅ | 托管模块、PE-only、ELF 与未知文件；标签名为文件名、提示为路径（`HexViewDocumentTabContent`）；代码视图的 Ctrl+X 照 `OpenHexEditorCommand.ExecuteCommand` 依次试地址引用、当前语句、PE 结构、文档 |
 | Show Instructions in Hex Editor（当前语句） | 同上 | RPC `hex/resolveStatement` | ✅ | |
 | Show Instructions / Method Body / Initial Value | 同上 | RPC `hex/resolveTarget`、`BE/HexTargets.cs` | ✅ | |
-| Show in Hex Editor（资源） | 同上 | `ResolveResourceTarget` | 🟡 | 只认 EmbeddedResource，资源元素没有目标 |
-| Show in Hex Editor（地址引用） | 同上 | 隐藏 | ❌ | 代码里没有地址引用模型 |
+| Show in Hex Editor（资源） | 同上 | `ResolveResourceTarget` | ✅ | 嵌入资源与 `.resources` 里的资源元素（`ResourceElementNode.FileOffset`）；资源被改写后不再指向旧文件 |
+| Show in Hex Editor（地址引用） | 同上、`HexAddressReferenceFileTabContentProvider` | `hex-menu.ts` 的 order 10、`followAddress` | ✅ | 代码视图右键与 Edit 菜单在光标处于地址引用（资源文本的 `0x…` 偏移）时出现，其余 hex 定位命令随之隐藏；打开后照 WPF 选中范围、光标在首字节 |
 | Hex Write return true/false/空方法体 | 同上 | `edit/hexPatch` | ✅ | 与 4.12 重复计入 |
 | Hex Copy / Paste Method Body | 同上 | `hexCopyMethodBody` 等 | ✅ | 与 4.12 重复计入 |
-| 字节显示 | `Hex/Editor/WpfHexViewImpl.cs` | `hex-model.ts` 的 `lineOf`、`HexView` | ✅ | 每行字节数（含适合宽度）、值格式、分组、大小写、偏移格式、列开关与 ASCII 列 |
-| 滚动 | `Hex/Editor/HexViewScrollerImpl.cs` | `HexView` 的滚动与行虚拟化 | ✅ | 全文件连续滚动，滚轮、滚动条、方向键、PageUp/PageDown |
-| Go to Position | `Hex/Commands/GoToPositionDlg.xaml` | `HexGoToPositionDialog`、RPC `hex/resolvePosition` | ✅ | 绝对/文件/RVA/当前位置，可选「选中到新位置」；数字按 dnSpy 规则解析（十进制，`0x`/`&H`/`h` 为十六进制） |
-| Go to Metadata | `Hex/Commands/GoToMetadataDlg.xaml` | `HexGoToMetadataDialog`、RPC `hex/goToMetadata` | ✅ | 元数据标记、方法体、#Blob、#Strings、#US、#GUID；流与表的文件偏移由 dnlib 给出 |
-| Select | `Hex/Commands/SelectDlg.xaml` | `HexSelectDialog` | ✅ | 起点/终点或起点/长度，四种位置类型 |
-| 光标与选区 | `Hex/Editor/HexCaretImpl.cs`、`HexSelectionImpl.cs` | `HexView` 的 caret/anchor | ✅ | 点击、拖动、Shift+点击、方向键按半字节移动、Tab 切换列、Ctrl+A |
-| 直接键入改字节 | `Hex/Operations/HexEditorOperationsImpl.cs` | `hexWriteBytes` → `edit/hexPatch` | ✅ | 值列改半字节、ASCII 列按选项里的编码写字节；每次按键一次可撤销的事务 |
-| 撤销 / 重做 | `AE/Hex/HexBufferUndoRedo.cs` | `edit/undo`、`edit/redo` | ✅ | 字节写入是普通编辑事务，撤销后视图自动重读 |
-| 删除 / 清零 | `Hex/ContextMenuCommands/Commands.cs` | 右键的 Clear Byte / Clear Selected Bytes（Del） | ✅ | |
-| Fill Selection | 同上 | 右键的 Fill Selection... | ✅ | 按字节值填充，默认 0xFF |
-| Copy / Copy Special | 同上、`Hex/Operations/ClipboardUtils.cs` | 右键 Copy Special 子菜单 | ✅ | 十六进制、UTF-8、Unicode、C#/VB 数组、文本、偏移、UInt16/32/64（含大端）、文件偏移 |
-| Paste / Paste Special | 同上 | 右键 Paste Special 子菜单与 Ctrl+V | ✅ | 十六进制、UTF-8/Unicode 字符串（含 7 位长度前缀）、.NET 元数据 Blob |
-| 查找 / 替换 | `Hex/Editor/Search/HexViewSearchService.cs` | 查找条、RPC `hex/find` | 🟡 | 十六进制或文本、F3/Shift+F3、循环；没有替换与增量查找 |
-| 右键「每行字节数」「值格式」 | `Hex/ContextMenuCommands/Commands.cs` | `HexView` 的右键菜单 | ✅ | 每行字节数（适合宽度、8/16/32/48/64）与 33 种值格式，带勾选 |
-| 本地设置对话框 | `Hex/Commands/LocalSettingsDlg.xaml` | `HexLocalSettingsDialog` | ✅ | 列开关、起始/结束/基准位置、相对位置、偏移位数、每行字节数、值格式与偏移格式 |
-| Save Selection | `Hex/ContextMenuCommands/Commands.cs` | 右键 Save Selection...、IPC `hex:saveSelection` | ✅ | 原生保存对话框，按 1 MiB 分块读出后写盘 |
-| 只显示选中字节 | 同上 | 右键的 Show Only Selected Bytes / Show All Bytes（Ctrl+D、Ctrl+Shift+D） | ✅ | 视图限定在选区之内，行号与滚动随之重算 |
-| Refresh | 同上 | 右键 Refresh（F5） | ✅ | 丢弃分块缓存重新读取，编辑与撤销也会自动重读 |
-| 结构信息（悬停、结构高亮） | `Hex/Files/*`、`Hex/Intellisense/*` | 无 | ❌ | 没有 PE/元数据结构模型接到 hex 视图 |
-| F12 跳到代码、Follow 引用、Edit Field | `Hex/ContextMenuCommands/*` | 无 | ❌ | 依赖上一条的结构模型 |
-| 命中范围高亮 | `Hex/Editor/HexMarkerService.cs` | `.hex-byte-marked` | ✅ | 查找结果与「Show ... in Hex Editor」的范围内都标出 |
-| Hex 选项页 | `Hex/HexEditor/*AppSettingsPage.cs` | `HexView` 读取 `hexEditor.hexViewer` | 🟡 | 影响显示的那几项已生效（当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码、每行字节数默认值）；高亮当前值、结构高亮、滚动条与缩放页仍不生效 |
-| 当前行高亮、列分隔线、缩放 | `Hex/Editor/CurrentLineHighlighter.cs` 等 | `.hex-current-line`、`.hex-column-lines`，全局缩放 | ✅ | 前两项跟随选项页；缩放沿用文档标签的 Ctrl+滚轮 |
-| Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs` | `dnspy.hexViews.v1` | 🟡 | 每个文件的光标、选区、每行字节数与值格式在下次打开同一文件时恢复；标签本身仍只由 Reload All 重新打开，不随会话恢复 |
+| 字节显示 | `Hex/HexBufferLineFormatterImpl.cs`、`HexValueFormatter.cs` | `hex-line.ts`、`HexLines.tsx` | ✅ | 每行字节数（默认适合宽度）、33 种值格式（十进制与 Double 的列宽按 WPF 修正）、分组、大小写、偏移格式与位数、相对位置与基准；末行之后的单元格留空，不可读字节为 `?` 并用 HexByteError 色；`DefaultTagger` 的四种颜色，Colorize 选项可关 |
+| 滚动 | `Hex/Editor/HexViewScrollerImpl.cs` | `HexView` 的按行视口与自绘滚动条 | ✅ | 以行为单位，最后一行可滚到顶；滚轮每格 3 行，Shift+滚轮横滚；大文件的滚动条按比例映射；`EnsureSpanVisible` 不在视口时居中 |
+| Go to Offset | `Hex/Commands/GoToPositionDlg.xaml`、`HexCommandOperations.cs` | `HexGoToPositionDialog`、RPC `hex/resolvePosition` | ✅ | 照 WPF 版式：Offset 框 + 种类框（Ctrl+1–4），初值为光标处的 UInt32，Integer64VM 的有符号/无符号解析；「Select to new position」按 `UserValueToSelection` 选中 |
+| Go to Metadata | `Hex/Commands/GoToMetadataDlg.xaml`、`GoToMetadataVM.cs` | `HexGoToMetadataDialog`、RPC `hex/goToMetadata` | ✅ | 六种（Ctrl+1–6），输入时向后端校验，无效时 OK 灰掉；转到后光标在项起点、不选中 |
+| Select | `Hex/Commands/SelectDlg.xaml` | `HexSelectDialog` | ✅ | 起点/终点为 `HexPosition` 写法，两个种类框（位置 Ctrl+1–4、Position/Length Ctrl+O/Ctrl+L） |
+| 光标与选区 | `Hex/Editor/HexCaretImpl.cs`、`HexSelectionImpl.cs`、`DefaultHexViewMouseProcessor.cs` | `hex-view-model.ts`、`HexView` | ✅ | 单元格内逐字符移动、上下保持列、Ctrl+左右按值跳、Tab 换列；单击、Shift+单击、双击/Ctrl+单击选值、三击或点偏移列选行，拖动超出视口自动滚动；右键移动光标、点在选区外才清除选区；选区在两列同时画，失焦用非活动色；光标为覆写块（半透明）+另一列下划线，聚焦时闪烁 |
+| 直接键入改字节 | `Hex/Operations/HexEditorOperationsImpl.cs`、`HexValueFormatter.Edit` | `editValueCell` → `hexWriteBytes` | ✅ | 所有十六进制格式与 8 Bits 可改（有符号格式按文本改写再饱和），十进制与浮点不可改；ASCII 列按选项编码写字节；每次按键一个可撤销事务，不再往 Output 写消息 |
+| 撤销 / 重做 | `AE/Hex/HexBufferUndoRedo.cs` | `edit/undo`、`edit/redo` | ✅ | 撤销后已读的块标为过期，新数据到前仍显示旧字节，不闪 |
+| 删除 / 清零 | `Hex/ContextMenuCommands/Commands.cs` | Clear Byte / Clear Selected Bytes（Del） | ✅ | 无选区时清光标所在单元格并前移 |
+| Fill Selection | 同上 | 「Enter Value」询问框，默认 0xFF | ✅ | |
+| Copy / Copy Special | 同上、`Hex/Operations/ClipboardUtils.cs` | Copy Special 子菜单与快捷键 | ✅ | WPF 全部 17 项，含 Copy Value、Copy Absolute Offset、Copy RVA（后端换算）与 Copy File Offset；仅前六项需要选区；Copy Text 无选区时复制当前行；VB 数组末行不带逗号 |
+| Paste / Paste Special | 同上 | Paste Special 子菜单与 Ctrl+V/8/U/B、Ctrl+K Ctrl+8/U | ✅ | 十六进制按 `HexStringToByteArray`（两字符一字节、`?` 为 0）；只读时隐藏 |
+| 查找 / 替换 / 增量查找 | `Hex/Editor/Search/*`、`Hex/Operations/*SearchService.cs` | `HexSearchControl.tsx`、`use-hex-search.ts`、`hex-search.ts`，RPC `hex/search` | ✅ | WPF 搜索控件：替换开关、查找上/下一个、替换下一个/全部、Match case、Big endian 与 13 种数据类型（Alt+H/8/U）；输入即搜；`?` 半字节通配、字符串不区分大小写按字符匹配；FindAll 的正反向与回绕顺序；视口内所有匹配标出；Ctrl+F/Ctrl+H、Ctrl+I/Ctrl+Shift+I 增量查找、F3/Shift+F3、Ctrl+F3；设置跨视图保存 |
+| 右键「每行字节数」「值格式」 | `Hex/ContextMenuCommands/Commands.cs` | `hex-view-menu.ts` | ✅ | 菜单按 SHOW/EDIT/MISC/COPY/OPTS/FIND 分组与顺序，各项的显示与可用规则同 WPF；值格式名照 WPF 不翻译 |
+| 本地设置对话框 | `Hex/Commands/LocalSettingsDlg.xaml`、`LocalSettingsVM.cs` | `HexLocalSettingsDialog` | ✅ | 照 WPF 字段与 Default Settings / Reset 按钮；默认每行字节数为适合宽度；Ctrl+R 切换相对位置 |
+| Save Selection | `Hex/ContextMenuCommands/Commands.cs` | 右键与 Ctrl+Alt+S、IPC `hex:saveSelection` | ✅ | 文件视图可用；Memory 窗口里保持灰色 |
+| 只显示选中字节 | 同上 | Show Only Selected Bytes / Show All Bytes（Ctrl+D、Ctrl+Shift+D） | ✅ | 菜单项按 WPF 只在有选区/已收窄时出现 |
+| Refresh | 同上 | F5；右键项只在 Memory 窗口出现（`IsVolatile`） | ✅ | |
+| 结构信息（Quick Info、结构高亮） | `Hex/Files/*`、`Hex/Intellisense/*`、`HexToolTipService.cs` | RPC `hex/getToolTipInfo`、`HexToolTipView` | ✅ | 鼠标停 150 ms 弹出 WPF 的提示（图标 + 分节彩色文本，如 `IMAGE_DOS_HEADER.e_magic = 0x5A4D (23117)`、`Method 0x0600…`、`#Strings` 偏移与引用它的标记），离开该字段才消失；Ctrl+K Ctrl+I 在光标处弹出；提示期间当前字段与子结构/结构按 HexToolTipService 的三种颜色高亮 |
+| F12 跳到代码、Follow 引用、Edit Field | `HexEditorOperationsImpl.GoToCodeOrStructure`、`FollowFieldValueReference`、`EditFieldCommand.cs`、`HexReferenceConverterImpl` | RPC `hex/getPositionInfo` | ✅ | F12：方法体到该方法并定位到含此 IL 偏移的语句，PE 头字段与表记录到 PE 树里对应节点；Ctrl+F12 跟随数据目录、COR20、流头、`.resources` 偏移、异常子句、ManifestResource 等字段的值；Edit Field 子菜单列出标志/枚举字段的每一项并带勾选，点击照 WPF 改写字段；Select File / Nested File / Structure（Ctrl+E Ctrl+F/N/S） |
+| 查找结果与命中范围高亮 | `Hex/Editor/Search/HexMarkerTagger.cs` | `.hex-find-match` | ✅ | HexFindMatchHighlightMarker 色 |
+| 高亮当前值 | `Hex/Editor/CurrentValueHighlighter.cs` | `HexView` 的当前值标记 | ✅ | 无选区时，延迟 100 ms 标出视口内与光标单元格同值的单元格（值列/ASCII 列各自的颜色） |
+| 当前行高亮、列分隔线、边距、缩放、滚动条 | `CurrentLineHighlighter.cs`、`ColumnLineSeparators.cs`、`HexGlyphMargin.cs`、`LeftSelectionMargin.cs`、`ZoomControlMargin.cs` | `HexView` | ✅ | 当前行为视口宽的边框（失焦色不同，有选区时不画）；列线实线、组线 3px 虚线画在分隔字符中央；指示边距 17px、选择边距 10px（点选行、拖动扩展）；缩放是 hex 组自己的 ZoomLevel（Ctrl+滚轮、Ctrl+=/-/0、左下角缩放框），不再跟随标签缩放；水平/垂直滚动条可关 |
+| Hex 选项页 | `Hex/HexEditor/*AppSettingsPage.cs` | `HexView` 读取 `hexEditor.hexViewer`/`memoryWindow` | 🟡 | 三页全部生效（含高亮当前值、结构高亮、Colorize、行距、边距、缩放与滚动条，修正了 Mouse wheel zoom 的保存路径）；编码列表只有 UTF-8、UTF-16、UTF-16BE、ASCII、Latin-1 五种，WPF 列出 .NET 的全部编码 |
+| Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs`、`HexViewDocumentTabContentFactory` | `SavedSession.hexTabs`、`HexViewUiState` | ✅ | hex 标签按文件随会话恢复，带 WPF 的全部 UI 状态（列、起止与基准位置、相对位置、位数、值格式、每行字节数、光标两列位置、顶行、水平位置、选区）；Reload All 同样带回 |
+| 键盘命令 | `Hex/Editor/DefaultHexEditorCommandInfoProvider.cs`、`Hex/Commands/CommandInfoProvider.cs` | `hex-commands.ts` | ✅ | Home/End/Ctrl+Home/End、Ctrl+PageUp/Down（视口顶/底）、Ctrl+Up/Down 滚动、Alt+Up/Down（有效区起止）、Ctrl+W 选值、Ctrl+E A 交换锚点、Esc 清选区、Ctrl+Insert/Shift+Insert 等；视图处理的键不再落到全局（如 F5、Ctrl+K、Ctrl+B） |
 
-实现要点：后端新增 `hex/resolvePosition`、`hex/goToMetadata` 与 `hex/find`（`BE/WorkspaceManager.cs`），`hex/getLength` 与 `hex/readRange` 改为接受 `IModuleEntry`，因此 PE-only、ELF 与未知文件也能浏览；字节写入仍走 `edit/hexPatch`，一次按键一个事务。
+实现要点：新增 RPC `hex/getToolTipInfo`、`hex/getPositionInfo`、`hex/search`（记录追加在 `Protocol.cs` 末尾，e2e 钉死的 `RpcException @0200008D`、`get_Code @06000AD8` 未动；新增颜色 `TextColors.HexTableName`）；`hex/resolveTarget` 也回答资源元素；`tree/getNodePath` 现在为 PE 结构节点返回到 PE 节点的路径，F12 打开 PE 树节点要用它。前端的状态栏（WPF 没有）已去掉，测试改读视图根上的 `data-caret`、`data-selection-*` 与单元格的 `data-selected`。仍与 WPF 不同之处：Memory 窗口（4.13）还没有接入结构模型，悬停没有 Quick Info；复制不附带 HTML 格式；`HighlightActiveColumn` 与四种列线样式在 WPF 也没有界面，这里取默认值。
 
-测试：后端 `WorkspaceManagerTests.cs`（有界读取、目标解析、补丁读回、位置/元数据/查找、原生 PE 读取）；前端 `hex-model.test.ts`（行布局、值格式、偏移格式、复制/粘贴格式、查找解析）与 `SpecialDocuments.test.tsx`（渲染、分块读取、导航标记、按键、Ctrl+A、键入写字节、无分页）；e2e 覆盖 hex 写方法体并撤销、在 hex 中打开指令、光标移动、Go to Position、查找、Select All、Go to Metadata 与 `4D 5A` 断言。
+测试：后端 `HexStructureTests.cs`（19 个：提示文本与颜色、字段种类、文件/结构区间、RVA、字段引用、方法与节点引用、Edit Field、搜索的通配/大小写/正反向/回绕/不重叠、补丁与撤销后的重建、资源元素）与 `WorkspaceManagerTests.cs`；前端 `hex-line.test.ts`、`hex-view-model.test.ts`、`hex-search.test.ts`、`hex-model.test.ts`（值格式宽度、单元格编辑、剪贴板格式）、`hex-menu.test.ts`、`SpecialDocuments.test.tsx`（渲染、分组颜色、命令定位选中、键盘与 Shift 选区、Ctrl+A、键入写字节、Ctrl+F 经后端查找、Quick Info 与结构高亮）、`MemoryPane.test.tsx` 与会话的 `app-store.test.ts`；e2e 覆盖 hex 写方法体并撤销、在 hex 中打开指令、光标、Go to Offset、查找、Select All、Go to Metadata、Quick Info 与 F12 跳到 PE 节点。
 
 ### 4.8 元数据/PE 视图与本机反汇编
 
@@ -1035,7 +1037,7 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 2. ~~方法体编辑器支持局部变量与异常处理器，以及指令插入、移动和操作数选择器~~ 已完成（2026-10-18，见 4.12）。
 3. ~~调试器的表达式求值与 func-eval、对象字段展开（Watch、Autos、DebuggerDisplay、完整断点条件都依赖它）~~ 已完成（2026-10-17）。
 4. ~~Roslyn 源码编辑（Edit Method / Class (C#)），连带 ModuleImporter 与 Merge with Assembly~~ 已完成（2026-10-18）；编译设置页与 VB 编辑于 2026-10-19 补上。
-5. ~~元数据表子树与表格视图~~ 已完成（2026-10-19，见 4.8）；Hex 视图的结构信息与 F12 跳转仍未做（光标、选区与直接改写已于 2026-10-18 完成，见 4.7）。
+5. ~~元数据表子树与表格视图~~ 已完成（2026-10-19，见 4.8）；~~Hex 视图的结构信息与 F12 跳转~~ 已完成（2026-10-20，见 4.7）。
 6. ~~GUI 的 Export to Project 接线~~ 已完成（2026-10-20，导出实现移到后端与命令行共用，见 4.4、4.17）。
 7. ~~保存选项：保留 RID/堆、写 PDB、混合模式模块~~ 已完成（2026-10-18）；~~PE/Metadata/Cor20 覆盖页与 Save All 的进度/取消~~ 已完成（2026-10-19）。
 

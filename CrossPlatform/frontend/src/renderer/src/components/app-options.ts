@@ -360,6 +360,8 @@ export interface HexEditorPaneOptions {
   general: HexEditorGeneralSettings
   scrollBars: EditorScrollBarSettings
   advanced: HexEditorAdvancedSettings
+  /** dnSpy's `ZoomLevel` option of the group, in percent: every hex view of the group zooms together. */
+  zoomLevel: number
 }
 
 export interface AssemblyExplorerSettings {
@@ -573,6 +575,7 @@ const defaultHexEditor = (): HexEditorPaneOptions => ({
     enableMouseWheelZoom: true,
     zoomControl: true,
   },
+  zoomLevel: 100,
 })
 
 export const defaultAppOptions: AppOptions = {

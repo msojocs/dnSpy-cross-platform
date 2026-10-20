@@ -1,5 +1,5 @@
 import type { HexBodyKind } from '../app-store'
-import type { HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
+import type { AddressReference, HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
 import type { TranslationValues } from '../localization'
 import type { TreeNode } from '../../../shared/protocol'
 import { compilerCommandLanguage } from './compiler-language'
@@ -115,6 +115,9 @@ export interface EditMenuContext {
   /** The statement under the caret of the focused code document, which is what "Show Instructions in
    * Hex Editor" acts on when the selection is not a method. */
   hexStatement?: { moduleId: string; range: HexRange }
+  /** The address reference under the code document's caret, which Show in Hex Editor opens. */
+  addressReference?: AddressReference
+  onShowAddress?(address: AddressReference): void
   /** Opens the selected module in a hex tab. */
   onOpenHex(): void
   /** Opens the module in a hex tab and jumps to the bytes of this part of the selection. */

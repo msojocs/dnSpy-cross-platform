@@ -52,6 +52,7 @@ import { DecompilationCache, decompilationCache } from './decompilation-cache'
 import { decompilerRefreshOf, decompilerSettingsOf, settingsKeyOf } from './decompiler-settings'
 import { documentIdOf, documentShowsNode, documentTitleOf, documentToolTipOf, nodeIdsOfDocument } from './document-ids'
 import type { AppOptions } from './components/app-options'
+import type { HexViewUiState } from './components/HexEditor'
 
 export type { BreakpointConditionKind, BreakpointHitCountKind, BreakpointSettings }
 
@@ -309,6 +310,8 @@ interface AppState {
   /** The document tabs in the order the layout shows them, and the one that is selected. The shell owns
    * the layout and reports both here, because a restored session has to put the tabs back as they were. */
   documentOrder: string[]
+  /** The hex tabs in the layout, by module, with the view state each last reported — dnSpy's HexViewUIState. */
+  hexTabs: HexTabState[]
   activeDocumentId?: string
   /** True while the previous session is being put back. The churn that causes — a workspace arriving,
    * tabs being rebuilt — is not the user's state and must not be written over the archive. */
@@ -854,6 +857,10 @@ interface AppState {
   resolveReferenceTarget(target: TextSpan): Promise<string | undefined>
   /** Records the tab order and the selected tab, which the shell reads off the layout it owns. */
   setDocumentOrder(order: string[], active?: string): void
+  /** Records which modules have a hex tab, in tab order; a tab's state is kept while it is open. */
+  setHexTabs(moduleIds: string[]): void
+  /** A hex tab's view state, which the session keeps for the next run. */
+  setHexTabState(moduleId: string, state: HexViewUiState): void
   setRestoringSession(value: boolean): void
   /** dnSpy's `-l` and the language box: the language the next document is decompiled in, remembered for the
    * next start the way dnSpy's DecompilerServiceSettings remembers it. */
@@ -1129,6 +1136,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedNodes: [],
   documents: {},
   documentOrder: [],
+  hexTabs: [],
   restoringSession: false,
   defaultLanguage: loadDefaultLanguage(),
   assemblyListRevision: 0,
@@ -1967,7 +1975,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   hexWriteBytes: async (moduleId, offset, data, message) => {
     if (data.length === 0)
       return false
-    return writeHexPatch(get, set, moduleId, offset, bytesToBase64(data), message ?? t('Wrote {count} byte(s) at 0x{offset}.', { count: data.length, offset: offset.toString(16).toUpperCase() }))
+    // dnSpy's hex editor writes without a word to the Output window; only the commands that say what they did
+    // (the method body writers) pass a message.
+    return writeHexPatch(get, set, moduleId, offset, bytesToBase64(data), message)
   },
 
   replaceResource: async (node) => {
@@ -3750,6 +3760,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       : { documentOrder: order, activeDocumentId: active }
   )),
 
+  setHexTabs: (moduleIds) => set((state) => {
+    if (moduleIds.length === state.hexTabs.length && moduleIds.every((id, index) => id === state.hexTabs[index].moduleId))
+      return state
+    return { hexTabs: moduleIds.map((moduleId) => state.hexTabs.find((tab) => tab.moduleId === moduleId) ?? { moduleId }) }
+  }),
+
+  setHexTabState: (moduleId, hexState) => set((state) => {
+    const index = state.hexTabs.findIndex((tab) => tab.moduleId === moduleId)
+    const hexTabs = [...state.hexTabs]
+    if (index < 0)
+      hexTabs.push({ moduleId, state: hexState })
+    else
+      hexTabs[index] = { moduleId, state: hexState }
+    return { hexTabs }
+  }),
+
   setRestoringSession: (value) => set({ restoringSession: value }),
 
   setDefaultLanguage: (language) => {
@@ -5321,6 +5347,18 @@ export interface SavedSessionNode {
   expanded: boolean
 }
 
+/** A hex tab a session holds: the file it shows and its view state. */
+export interface SavedSessionHexTab {
+  path: string
+  state?: HexViewUiState
+}
+
+/** A hex tab of the layout: the module it shows and the state its view last reported. */
+export interface HexTabState {
+  moduleId: string
+  state?: HexViewUiState
+}
+
 export interface SavedSessionDocument {
   key: string
   language: DecompilerLanguage
@@ -5343,6 +5381,8 @@ export interface SavedSession {
   documents: SavedSessionDocument[]
   activeDocument?: string
   selectedNode?: string
+  /** dnSpy's HexViewDocumentTabContent with its HexViewUIState, by file. */
+  hexTabs?: SavedSessionHexTab[]
 }
 
 /** Expanded nodes this far into a session are beyond anything a person opens by hand; the cut keeps a
@@ -5362,12 +5402,28 @@ export function loadSession(): SavedSession | undefined {
       documents: Array.isArray(parsed.documents) ? parsed.documents.flatMap(toSavedDocument) : [],
       activeDocument: typeof parsed.activeDocument === 'string' ? parsed.activeDocument : undefined,
       selectedNode: typeof parsed.selectedNode === 'string' ? parsed.selectedNode : undefined,
+      hexTabs: Array.isArray(parsed.hexTabs) ? parsed.hexTabs.flatMap(toSavedHexTab) : [],
     }
   } catch {
     // A session that cannot be read is the same as one that was never written; starting clean is the
     // only sensible answer, and it must not stop the app from starting.
     return undefined
   }
+}
+
+const toSavedHexTab = (value: unknown): SavedSessionHexTab[] => {
+  const tab = value as { path?: unknown; state?: unknown } | null
+  if (typeof tab?.path !== 'string' || tab.path === '')
+    return []
+  // HexViewUIStateSerializer.Read: a state missing any of its values is no state at all.
+  const state = tab.state as Record<string, unknown> | undefined
+  const numbers = ['startPosition', 'endPosition', 'basePosition', 'offsetBitSize', 'bytesPerLine', 'valuesPosition', 'valuesCellPosition', 'asciiPosition', 'viewportLeft', 'topLinePosition', 'anchorPoint', 'activePoint']
+  const booleans = ['showOffsetColumn', 'showValuesColumn', 'showAsciiColumn', 'useRelativePositions']
+  const valid = typeof state === 'object' && state !== null
+    && numbers.every((key) => typeof state[key] === 'number')
+    && booleans.every((key) => typeof state[key] === 'boolean')
+    && typeof state.valuesFormat === 'string' && (state.activeColumn === 'values' || state.activeColumn === 'ascii')
+  return [{ path: tab.path, state: valid ? state as unknown as HexViewUiState : undefined }]
 }
 
 const toSavedNode = (value: unknown): SavedSessionNode[] => {
@@ -5392,6 +5448,7 @@ const toSavedDocument = (value: unknown): SavedSessionDocument[] => {
 /** The parts of the state a session is built from, named so the builder can be tested without a store. */
 export type SessionSource = Pick<AppState,
   'modules' | 'roots' | 'children' | 'parents' | 'expanded' | 'selectedNode' | 'documents' | 'documentOrder' | 'activeDocumentId'>
+  & Partial<Pick<AppState, 'hexTabs'>>
 
 /**
  * The session the current state would be restored from. Every node named here — a restored tab, the
@@ -5475,6 +5532,10 @@ export function buildSession(state: SessionSource): SavedSession {
     }),
     activeDocument: activeNode?.key,
     selectedNode: state.selectedNode?.key,
+    hexTabs: (state.hexTabs ?? []).flatMap((tab) => {
+      const module = state.modules.find((candidate) => candidate.id === tab.moduleId)
+      return module && !module.inMemory ? [{ path: module.path, state: tab.state }] : []
+    }),
   }
 }
 
@@ -5611,6 +5672,7 @@ useAppStore.subscribe((state, previous) => {
     || state.documents !== previous.documents
     || state.documentOrder !== previous.documentOrder
     || state.activeDocumentId !== previous.activeDocumentId
+    || state.hexTabs !== previous.hexTabs
     || state.restoringSession !== previous.restoringSession
   if (changed)
     scheduleSessionSave(state)
@@ -5851,7 +5913,7 @@ const writeHexPatch = async (
   nodeId: string,
   offset: number,
   base64Data: string,
-  message: string,
+  message?: string,
 ): Promise<boolean> => {
   const workspaceId = get().workspaceId
   if (!workspaceId)
@@ -5863,7 +5925,8 @@ const writeHexPatch = async (
     await window.dnSpy.patchHex(workspaceId, transactionId, nodeId, offset, base64Data)
     const committed = await window.dnSpy.commitEdit(workspaceId, transactionId)
     await refreshAfterEdit(get, set, committed)
-    get().appendOutput(message)
+    if (message)
+      get().appendOutput(message)
     return true
   } catch (error) {
     if (transactionId) {

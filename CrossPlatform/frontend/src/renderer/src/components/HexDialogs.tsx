@@ -1,46 +1,63 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { HexMetadataKind, HexPositionKind } from '../../../shared/protocol'
-import type { HexOffsetFormatKind, HexValuesFormat } from '../hex-model'
+import { HEX_VALUE_FORMATS, type HexValuesFormat } from '../hex-model'
 import { useLanguage } from '../localization'
 import { CloseGlyph } from './DsGlyphs'
 import { useModalLayer } from './modal-stack'
+import { formatNumberText } from './widgets/number-text'
 
 /**
- * The three dialogs of the hex editor that take a number — Go to Position, Go to Metadata and Select —
- * plus the local settings. They are dnSpy's `GoToPositionDlg`, `GoToMetadataDlg`, `SelectDlg` and
- * `LocalSettingsDlg`, with the same fields and the same kinds: the two that take an address offer
- * absolute, file, RVA and current-position modes, and every number is read the way dnSpy's
- * `SimpleTypeConverter` reads one — decimal, or hexadecimal after `0x`/`&H`/with an `h` suffix.
+ * The hex editor's dialogs — dnSpy's `GoToPositionDlg`, `GoToMetadataDlg`, `SelectDlg` and `LocalSettingsDlg` —
+ * laid out the way the XAML lays them out: a labelled number box beside a kind box whose entries carry their
+ * Ctrl gestures, and the buttons of each. Numbers are read and written the way their view models do it.
  */
 
-/** dnSpy's `SimpleTypeConverter.ParseUInt64`: decimal, or hexadecimal after `0x`, `&H` or an `h` suffix. */
-export function parseHexNumber(text: string): number | undefined {
-  const value = text.trim()
-  if (value === '')
-    return undefined
-  let digits = value
-  let radix = 10
-  if (/^0x/i.test(digits) || /^&H/i.test(digits)) {
-    digits = digits.slice(2)
-    radix = 16
+const digitSeparator = /_/g
+
+/** `SimpleTypeConverter.ParseUInt64`: decimal, or hexadecimal after `0x`/`&H`, `_` allowed anywhere. */
+export function parseUnsignedText(text: string, max = Number.MAX_SAFE_INTEGER): number | undefined {
+  const value = text.trim().replace(digitSeparator, '')
+  let parsed: number
+  if (/^(0x|&H)/i.test(value)) {
+    const digits = value.slice(2)
+    if (digits === '' || digits.trim() !== digits || !/^[0-9a-f]+$/i.test(digits))
+      return undefined
+    parsed = Number.parseInt(digits, 16)
   }
-  else if (/^[0-9A-Fa-f]+h$/i.test(digits)) {
-    digits = digits.slice(0, -1)
-    radix = 16
+  else {
+    if (!/^\+?\d+$/.test(value))
+      return undefined
+    parsed = Number.parseInt(value, 10)
   }
-  if (digits === '' || digits.trim() !== digits)
-    return undefined
-  const parsed = radix === 16 ? Number.parseInt(digits, 16) : Number.parseInt(digits, 10)
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined
+  return Number.isSafeInteger(parsed) && parsed <= max ? parsed : undefined
 }
 
-const Modal = ({ title, onClose, children, footer }: { title: string; onClose(): void; children: React.ReactNode; footer: React.ReactNode }): React.JSX.Element => {
+/** `SimpleTypeConverter.ParseInt64`, which `Integer64VM` tries before the unsigned parse: an optional minus. */
+export function parseSignedText(text: string): number | undefined {
+  const value = text.trim().replace(digitSeparator, '')
+  const negative = value.startsWith('-')
+  const magnitude = parseUnsignedText(negative ? value.slice(1) : value)
+  if (magnitude === undefined)
+    return undefined
+  return negative ? -magnitude : magnitude
+}
+
+/** The parse the hex editor's commands have always used; kept under its old name for the views that call it. */
+export const parseHexNumber = (text: string): number | undefined => parseUnsignedText(text)
+
+/** `HexPosition.ToString`: always hexadecimal, `0x` and upper case digits. */
+const hexPositionText = (value: number): string => `0x${value.toString(16).toUpperCase()}`
+
+/** `HexPosition.TryParse`: `0x`/`&H` hexadecimal or decimal, `_` allowed anywhere. */
+const parseHexPosition = (text: string): number | undefined => parseUnsignedText(text)
+
+const Modal = ({ title, onClose, onKeyDown, children, footer, className }: { title: string; onClose(): void; onKeyDown?(event: React.KeyboardEvent): void; children: React.ReactNode; footer: React.ReactNode; className?: string }): React.JSX.Element => {
   const dialog = useRef<HTMLDivElement>(null)
   const depth = useModalLayer(onClose)
   const { t } = useLanguage()
   return (
     <div className="modal-backdrop" role="presentation" style={{ zIndex: 120 + depth * 10 }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className="modal hex-dialog" role="dialog" aria-modal="true" aria-label={t(title)} ref={dialog}>
+      <div className={`modal hex-dialog ${className ?? ''}`} role="dialog" aria-modal="true" aria-label={t(title)} ref={dialog} onKeyDown={onKeyDown}>
         <div className="modal-title"><span>{t(title)}</span><button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button></div>
         <div className="hex-dialog-body">{children}</div>
         <div className="modal-actions">{footer}</div>
@@ -49,27 +66,38 @@ const Modal = ({ title, onClose, children, footer }: { title: string; onClose():
   )
 }
 
-/** One selectable line of a dnSpy kind list — a radio row with its gesture text. */
-const KindRow = ({ name, checked, label, shortcut, onChange }: { name: string; checked: boolean; label: string; shortcut?: string; onChange(): void }): React.JSX.Element => (
-  <label className="hex-kind-row">
-    <input type="radio" name={name} checked={checked} onChange={onChange} />
-    <span>{label}</span>
-    {shortcut && <span className="hex-kind-shortcut">{shortcut}</span>}
-  </label>
-)
+/** One entry of a kind box: its text and the gesture the dialog binds to it. */
+interface KindEntry<T> {
+  kind: T
+  text: string
+  gesture: string
+}
 
-const NumberField = ({ label, value, onChange, autoFocus }: { label: string; value: string; onChange(value: string): void; autoFocus?: boolean }): React.JSX.Element => (
-  <label className="hex-field">
-    <span>{label}</span>
-    <input autoFocus={autoFocus} value={value} onChange={(event) => onChange(event.target.value)} />
-  </label>
-)
+const KindBox = <T extends string,>({ label, entries, value, onChange }: { label: string; entries: KindEntry<T>[]; value: T; onChange(kind: T): void }): React.JSX.Element => {
+  const { t } = useLanguage()
+  return (
+    <select className="hex-kind-box" aria-label={label} value={value} onChange={(event) => onChange(event.target.value as T)}>
+      {entries.map((entry) => <option key={entry.kind} value={entry.kind}>{`${t(entry.text)}  ${entry.gesture}`}</option>)}
+    </select>
+  )
+}
 
-const POSITION_KINDS: { kind: HexPositionKind; label: string; shortcut: string }[] = [
-  { kind: 'absolute', label: 'Absolute position', shortcut: 'Ctrl+1' },
-  { kind: 'file', label: 'File position', shortcut: 'Ctrl+2' },
-  { kind: 'rva', label: 'RVA', shortcut: 'Ctrl+3' },
-  { kind: 'current', label: 'Current position', shortcut: 'Ctrl+4' },
+/** The Ctrl+digit (or Ctrl+letter) gestures a dialog binds to the entries of its kind boxes. */
+const gestureKey = (event: React.KeyboardEvent): string | undefined => {
+  if (!event.ctrlKey || event.altKey || event.shiftKey)
+    return undefined
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(event.code)?.[1]
+  if (digit)
+    return `Ctrl+${digit}`
+  const letter = /^Key([A-Z])$/.exec(event.code)?.[1]
+  return letter ? `Ctrl+${letter}` : undefined
+}
+
+const POSITION_KINDS: KindEntry<HexPositionKind>[] = [
+  { kind: 'absolute', text: 'Position', gesture: 'Ctrl+1' },
+  { kind: 'file', text: 'File', gesture: 'Ctrl+2' },
+  { kind: 'rva', text: 'RVA', gesture: 'Ctrl+3' },
+  { kind: 'current', text: 'Current Position', gesture: 'Ctrl+4' },
 ]
 
 export interface GoToPositionResult {
@@ -78,58 +106,101 @@ export interface GoToPositionResult {
   selectToNewPosition: boolean
 }
 
-export const HexGoToPositionDialog = ({ initial, onAccept, onClose }: { initial: number; onAccept(result: GoToPositionResult): void; onClose(): void }): React.JSX.Element => {
-  const [kind, setKind] = useState<HexPositionKind>('absolute')
-  const [text, setText] = useState(String(initial))
+/** dnSpy's Go to Offset: the box starts out with the UInt32 the caret is on, the way `GoToPositionVM` is made. */
+export const HexGoToPositionDialog = ({ initial, initialKind = 'absolute', onAccept, onClose }: { initial: number; initialKind?: HexPositionKind; onAccept(result: GoToPositionResult): void; onClose(): void }): React.JSX.Element => {
+  const [kind, setKind] = useState<HexPositionKind>(initialKind)
+  const [text, setText] = useState(formatNumberText(initial))
   const [selectToNewPosition, setSelectToNewPosition] = useState(false)
   const { t } = useLanguage()
-  const value = parseHexNumber(text)
+  // Integer64VM: a signed number first, so the current position can be moved backwards, then an unsigned one.
+  const value = parseSignedText(text) ?? parseUnsignedText(text)
   const accept = (): void => { if (value !== undefined) onAccept({ kind, value, selectToNewPosition }) }
   return (
     <Modal
-      title="Go to Position"
+      title="Go to Offset"
+      className="hex-goto-dialog"
       onClose={onClose}
-      footer={<><button onClick={onClose}>{t('Cancel')}</button><button className="primary" disabled={value === undefined} onClick={accept}>{t('OK')}</button></>}
+      onKeyDown={(event) => {
+        const entry = POSITION_KINDS.find((candidate) => candidate.gesture === gestureKey(event))
+        if (entry) { event.preventDefault(); setKind(entry.kind) }
+        else if (event.key === 'Enter' && !(event.target as HTMLElement).matches('button, select')) { event.preventDefault(); accept() }
+      }}
+      footer={(
+        <>
+          <label className="hex-check-row hex-dialog-footer-check"><input type="checkbox" checked={selectToNewPosition} onChange={(event) => setSelectToNewPosition(event.target.checked)} />{t('Select to new position')}</label>
+          <button className="primary" disabled={value === undefined} onClick={accept}>{t('OK')}</button>
+          <button onClick={onClose}>{t('Cancel')}</button>
+        </>
+      )}
     >
-      <div role="radiogroup" aria-label={t('Position')}>
-        {POSITION_KINDS.map((entry) => <KindRow key={entry.kind} name="hex-position-kind" checked={kind === entry.kind} label={t(entry.label)} shortcut={entry.shortcut} onChange={() => setKind(entry.kind)} />)}
+      <div className="hex-dialog-row">
+        <label className="hex-field"><span>{t('Offset')}</span><input autoFocus aria-invalid={value === undefined} value={text} onChange={(event) => setText(event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>
+        <KindBox<HexPositionKind> label={t('Position')} entries={POSITION_KINDS} value={kind} onChange={setKind} />
       </div>
-      <NumberField label={kind === 'rva' ? 'RVA' : 'Offset'} value={text} onChange={setText} autoFocus />
-      <label className="hex-check-row"><input type="checkbox" checked={selectToNewPosition} onChange={(event) => setSelectToNewPosition(event.target.checked)} />{t('Select to new position')}</label>
     </Modal>
   )
 }
-
-const METADATA_KINDS: { kind: HexMetadataKind; label: string; shortcut: string }[] = [
-  { kind: 'table', label: 'Metadata token', shortcut: 'Ctrl+1' },
-  { kind: 'memberRva', label: 'Method body', shortcut: 'Ctrl+2' },
-  { kind: 'blob', label: '#Blob', shortcut: 'Ctrl+3' },
-  { kind: 'strings', label: '#Strings', shortcut: 'Ctrl+4' },
-  { kind: 'us', label: '#US', shortcut: 'Ctrl+5' },
-  { kind: 'guid', label: '#GUID', shortcut: 'Ctrl+6' },
-]
 
 export interface GoToMetadataResult {
   kind: HexMetadataKind
   value: number
 }
 
-export const HexGoToMetadataDialog = ({ initial, onAccept, onClose }: { initial: number; onAccept(result: GoToMetadataResult): void; onClose(): void }): React.JSX.Element => {
+/**
+ * dnSpy's Go to Metadata: a token, an offset into a heap or a GUID index, checked against the file's metadata as
+ * it is typed (`OffsetTokenVM.CheckOffsetToken`) — here by asking the backend whether it names anything.
+ */
+export const HexGoToMetadataDialog = ({ initial, hasPeHeaders, validate, onAccept, onClose }: {
+  initial: number
+  hasPeHeaders: boolean
+  validate(kind: HexMetadataKind, value: number): Promise<boolean>
+  onAccept(result: GoToMetadataResult): void
+  onClose(): void
+}): React.JSX.Element => {
+  const kinds: KindEntry<HexMetadataKind>[] = [
+    { kind: 'table', text: 'Metadata Token', gesture: 'Ctrl+1' },
+    ...(hasPeHeaders ? [{ kind: 'memberRva' as const, text: 'Method Body', gesture: 'Ctrl+2' }] : []),
+    { kind: 'blob', text: '#Blob', gesture: 'Ctrl+3' },
+    { kind: 'strings', text: '#Strings', gesture: 'Ctrl+4' },
+    { kind: 'us', text: '#US', gesture: 'Ctrl+5' },
+    { kind: 'guid', text: '#GUID', gesture: 'Ctrl+6' },
+  ]
   const [kind, setKind] = useState<HexMetadataKind>('table')
-  const [text, setText] = useState(initial === 0 ? '' : `0x${initial.toString(16).toUpperCase()}`)
+  const [text, setText] = useState(formatNumberText(initial >>> 0))
+  const [valid, setValid] = useState<boolean | undefined>(undefined)
   const { t } = useLanguage()
-  const value = parseHexNumber(text)
-  const accept = (): void => { if (value !== undefined) onAccept({ kind, value }) }
+  const value = parseUnsignedText(text, 0xFFFFFFFF)
+  useEffect(() => {
+    let current = true
+    setValid(undefined)
+    if (value === undefined) {
+      setValid(false)
+      return
+    }
+    void validate(kind, value).then((answer) => { if (current) setValid(answer) }, () => { if (current) setValid(false) })
+    return () => { current = false }
+  }, [kind, value, validate])
+  const accept = (): void => { if (value !== undefined && valid) onAccept({ kind, value }) }
+  const label = kind === 'table' || kind === 'memberRva' ? 'Token' : kind === 'guid' ? 'Index' : 'Offset'
   return (
     <Modal
       title="Go to Metadata"
+      className="hex-goto-dialog"
       onClose={onClose}
-      footer={<><button onClick={onClose}>{t('Cancel')}</button><button className="primary" disabled={value === undefined} onClick={accept}>{t('OK')}</button></>}
+      onKeyDown={(event) => {
+        const entry = kinds.find((candidate) => candidate.gesture === gestureKey(event))
+        if (entry) { event.preventDefault(); setKind(entry.kind) }
+        else if (event.key === 'Enter' && !(event.target as HTMLElement).matches('button, select')) { event.preventDefault(); accept() }
+      }}
+      footer={<><span className="modal-action-spacer" /><button className="primary" disabled={!valid} onClick={accept}>{t('OK')}</button><button onClick={onClose}>{t('Cancel')}</button></>}
     >
-      <div role="radiogroup" aria-label={t('Metadata')}>
-        {METADATA_KINDS.map((entry) => <KindRow key={entry.kind} name="hex-metadata-kind" checked={kind === entry.kind} label={t(entry.label)} shortcut={entry.shortcut} onChange={() => setKind(entry.kind)} />)}
+      <div className="hex-dialog-row">
+        <label className="hex-field">
+          <span>{t(label)}</span>
+          <input autoFocus aria-label={t(label)} aria-invalid={valid === false} title={valid === false ? t('Invalid offset or metadata token') : undefined} value={text} onChange={(event) => setText(event.target.value)} onFocus={(event) => event.currentTarget.select()} />
+        </label>
+        <KindBox<HexMetadataKind> label={t('Metadata')} entries={kinds} value={kind} onChange={setKind} />
       </div>
-      <NumberField label={kind === 'table' || kind === 'memberRva' ? 'Token' : kind === 'guid' ? 'Index' : 'Offset'} value={text} onChange={setText} autoFocus />
     </Modal>
   )
 }
@@ -142,14 +213,20 @@ export interface SelectResult {
   mode: 'position' | 'length'
 }
 
+const POSITION_LENGTH_KINDS: KindEntry<'position' | 'length'>[] = [
+  { kind: 'position', text: 'Position', gesture: 'Ctrl+O' },
+  { kind: 'length', text: 'Length', gesture: 'Ctrl+L' },
+]
+
+/** dnSpy's Select: a start and an end (or a length), both written as `HexPosition`s. */
 export const HexSelectDialog = ({ start, end, onAccept, onClose }: { start: number; end: number; onAccept(result: SelectResult): void; onClose(): void }): React.JSX.Element => {
   const [kind, setKind] = useState<HexPositionKind>('absolute')
   const [mode, setMode] = useState<'position' | 'length'>('position')
-  const [startText, setStartText] = useState(String(start))
-  const [endText, setEndText] = useState(String(Math.max(start, end - 1)))
+  const [startText, setStartText] = useState(hexPositionText(start))
+  const [endText, setEndText] = useState(hexPositionText(end))
   const { t } = useLanguage()
-  const parsedStart = parseHexNumber(startText)
-  const parsedEnd = parseHexNumber(endText)
+  const parsedStart = parseHexPosition(startText)
+  const parsedEnd = parseHexPosition(endText)
   const accept = (): void => {
     if (parsedStart !== undefined && parsedEnd !== undefined)
       onAccept({ kind, start: parsedStart, end: parsedEnd, mode })
@@ -157,24 +234,29 @@ export const HexSelectDialog = ({ start, end, onAccept, onClose }: { start: numb
   return (
     <Modal
       title="Select"
+      className="hex-select-dialog"
       onClose={onClose}
-      footer={<><button onClick={onClose}>{t('Cancel')}</button><button className="primary" disabled={parsedStart === undefined || parsedEnd === undefined} onClick={accept}>{t('OK')}</button></>}
+      onKeyDown={(event) => {
+        const gesture = gestureKey(event)
+        const positionEntry = POSITION_KINDS.find((candidate) => candidate.gesture === gesture)
+        const modeEntry = POSITION_LENGTH_KINDS.find((candidate) => candidate.gesture === gesture)
+        if (positionEntry) { event.preventDefault(); setKind(positionEntry.kind) }
+        else if (modeEntry) { event.preventDefault(); setMode(modeEntry.kind) }
+        else if (event.key === 'Enter' && !(event.target as HTMLElement).matches('button, select')) { event.preventDefault(); accept() }
+      }}
+      footer={<><span className="modal-action-spacer" /><button className="primary" disabled={parsedStart === undefined || parsedEnd === undefined} onClick={accept}>{t('OK')}</button><button onClick={onClose}>{t('Cancel')}</button></>}
     >
-      <div role="radiogroup" aria-label={t('Position')}>
-        {POSITION_KINDS.map((entry) => <KindRow key={entry.kind} name="hex-select-kind" checked={kind === entry.kind} label={t(entry.label)} shortcut={entry.shortcut} onChange={() => setKind(entry.kind)} />)}
+      <div className="hex-dialog-grid">
+        <label className="hex-field"><span>{t('Start')}</span><input autoFocus aria-invalid={parsedStart === undefined} value={startText} onChange={(event) => setStartText(event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>
+        <label className="hex-field"><span>{t('End')}</span><input aria-invalid={parsedEnd === undefined} value={endText} onChange={(event) => setEndText(event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>
+        <KindBox<HexPositionKind> label={t('Position')} entries={POSITION_KINDS} value={kind} onChange={setKind} />
+        <KindBox<'position' | 'length'> label={t('End')} entries={POSITION_LENGTH_KINDS} value={mode} onChange={setMode} />
       </div>
-      <div role="radiogroup" aria-label={t('End')}>
-        <KindRow name="hex-select-mode" checked={mode === 'position'} label={t('End position')} shortcut="Ctrl+O" onChange={() => setMode('position')} />
-        <KindRow name="hex-select-mode" checked={mode === 'length'} label={t('Length')} shortcut="Ctrl+L" onChange={() => setMode('length')} />
-      </div>
-      <NumberField label={t('Start')} value={startText} onChange={setStartText} autoFocus />
-      <NumberField label={mode === 'position' ? t('End') : t('Length')} value={endText} onChange={setEndText} />
     </Modal>
   )
 }
 
-/** The local settings of one hex view — dnSpy's `LocalSettingsVM`: the columns it shows, the positions it
- * is limited to, and the line layout it draws with. */
+/** The local settings of one hex view — dnSpy's `LocalGroupOptions`. `endPosition` is exclusive. */
 export interface HexLocalSettings {
   showOffset: boolean
   showValues: boolean
@@ -186,106 +268,93 @@ export interface HexLocalSettings {
   offsetBitSize: number
   bytesPerLine: number
   valuesFormat: HexValuesFormat
-  offsetFormat: HexOffsetFormatKind
 }
 
-export const HexLocalSettingsDialog = ({ settings, fileLength, onAccept, onClose }: { settings: HexLocalSettings; fileLength: number; onAccept(settings: HexLocalSettings): void; onClose(): void }): React.JSX.Element => {
+const MIN_OFFSET_BIT_SIZE = 0
+const MAX_OFFSET_BIT_SIZE = 64
+const MIN_BYTES_PER_LINE = 0
+const MAX_BYTES_PER_LINE = 1024
+
+/** dnSpy's Local Hex Editor Settings, with its Default Settings and Reset buttons. */
+export const HexLocalSettingsDialog = ({ settings, defaults, onAccept, onClose }: { settings: HexLocalSettings; defaults: HexLocalSettings; onAccept(settings: HexLocalSettings): void; onClose(): void }): React.JSX.Element => {
   const { t } = useLanguage()
+  const textsOf = (from: HexLocalSettings): { start: string; end: string; base: string; bits: string; bytes: string } => ({
+    start: formatNumberText(from.startPosition),
+    end: formatNumberText(from.endPosition > 0 ? from.endPosition - 1 : from.endPosition),
+    base: formatNumberText(from.basePosition),
+    bits: formatNumberText(from.offsetBitSize),
+    bytes: formatNumberText(from.bytesPerLine),
+  })
   const [value, setValue] = useState(settings)
-  const [startText, setStartText] = useState(String(settings.startPosition))
-  const [endText, setEndText] = useState(String(Math.max(settings.startPosition, settings.endPosition - 1)))
-  const [baseText, setBaseText] = useState(String(settings.basePosition))
-  const [bytesText, setBytesText] = useState(String(settings.bytesPerLine))
-  const [offsetText, setOffsetText] = useState(String(settings.offsetBitSize))
-  const start = parseHexNumber(startText)
-  const end = parseHexNumber(endText)
-  const base = parseHexNumber(baseText)
-  const bytes = parseHexNumber(bytesText)
-  const bitSize = parseHexNumber(offsetText)
-  const valid = start !== undefined && end !== undefined && base !== undefined && bytes !== undefined && bitSize !== undefined
-    && start <= end && end < Math.max(1, fileLength) && bitSize <= 64
+  const [texts, setTexts] = useState(() => textsOf(settings))
+  const start = parseUnsignedText(texts.start)
+  const end = parseUnsignedText(texts.end)
+  const base = parseUnsignedText(texts.base)
+  const bits = parseUnsignedText(texts.bits)
+  const bytes = parseUnsignedText(texts.bytes)
+  const bitsValid = bits !== undefined && bits >= MIN_OFFSET_BIT_SIZE && bits <= MAX_OFFSET_BIT_SIZE
+  const bytesValid = bytes !== undefined && bytes >= MIN_BYTES_PER_LINE && bytes <= MAX_BYTES_PER_LINE
+  const valid = start !== undefined && end !== undefined && base !== undefined && bitsValid && bytesValid
   const set = <K extends keyof HexLocalSettings>(key: K, next: HexLocalSettings[K]): void => setValue((current) => ({ ...current, [key]: next }))
-  const accept = (): void => {
-    if (!valid)
-      return
-    onAccept({ ...value, startPosition: start!, endPosition: end! + 1, basePosition: base!, bytesPerLine: bytes!, offsetBitSize: bitSize! })
+  const current = (): HexLocalSettings | undefined => valid
+    ? { ...value, startPosition: start!, endPosition: end! + 1, basePosition: base!, offsetBitSize: bits!, bytesPerLine: bytes! }
+    : undefined
+  const initializeFrom = (from: HexLocalSettings): void => {
+    setValue(from)
+    setTexts(textsOf(from))
   }
+  const sameAsDefaults = (() => {
+    const now = current()
+    return now !== undefined && (Object.keys(defaults) as (keyof HexLocalSettings)[]).every((key) => now[key] === defaults[key])
+  })()
+  const accept = (): void => {
+    const result = current()
+    if (result)
+      onAccept(result)
+  }
+  const numberField = (label: string, key: keyof typeof texts, ok: boolean, tooltip?: string): React.JSX.Element => (
+    <label className="hex-field" title={tooltip}>
+      <span>{t(label)}</span>
+      <input aria-label={t(label)} aria-invalid={!ok} value={texts[key]} onChange={(event) => { const text = event.target.value; setTexts((old) => ({ ...old, [key]: text })) }} />
+    </label>
+  )
   return (
     <Modal
-      title="Hex Editor Settings"
+      title="Local Hex Editor Settings"
+      className="hex-local-settings-dialog"
       onClose={onClose}
-      footer={<><button onClick={() => setValue(settings)}>{t('Reinitialize')}</button><span className="modal-action-spacer" /><button onClick={onClose}>{t('Cancel')}</button><button className="primary" disabled={!valid} onClick={accept}>{t('OK')}</button></>}
+      onKeyDown={(event) => { if (event.key === 'Enter' && !(event.target as HTMLElement).matches('button, select')) { event.preventDefault(); accept() } }}
+      footer={(
+        <>
+          <button disabled={sameAsDefaults} onClick={() => initializeFrom(defaults)}>{t('Default Settings')}</button>
+          <span className="modal-action-spacer" />
+          <button className="primary" disabled={!valid} onClick={accept}>{t('OK')}</button>
+          <button onClick={onClose}>{t('Cancel')}</button>
+          <button onClick={() => initializeFrom(settings)}>{t('Reset')}</button>
+        </>
+      )}
     >
-      <fieldset className="hex-fieldset">
-        <legend>{t('Columns')}</legend>
-        <label className="hex-check-row"><input type="checkbox" checked={value.showOffset} onChange={(event) => set('showOffset', event.target.checked)} />{t('Offset')}</label>
-        <label className="hex-check-row"><input type="checkbox" checked={value.showValues} onChange={(event) => set('showValues', event.target.checked)} />{t('Values')}</label>
-        <label className="hex-check-row"><input type="checkbox" checked={value.showAscii} onChange={(event) => set('showAscii', event.target.checked)} />{t('ASCII')}</label>
-      </fieldset>
-      <fieldset className="hex-fieldset">
-        <legend>{t('Layout')}</legend>
-        <NumberField label={t('Bytes per line')} value={bytesText} onChange={setBytesText} />
-        <NumberField label={t('Offset size (bits)')} value={offsetText} onChange={setOffsetText} />
+      <div className="hex-dialog-grid">
+        {numberField('Start Offset', 'start', start !== undefined)}
+        {numberField('End Offset', 'end', end !== undefined)}
+        {numberField('Base Offset', 'base', base !== undefined, t("This value is added to start offset before it's shown on the screen"))}
+        {numberField('Offset Bit Size', 'bits', bitsValid)}
+        {numberField('Bytes per Line', 'bytes', bytesValid)}
         <label className="hex-field">
-          <span>{t('Values format')}</span>
+          <span>{t('Value Format')}</span>
           <select value={value.valuesFormat} onChange={(event) => set('valuesFormat', event.target.value as HexValuesFormat)}>
-            {VALUE_FORMAT_CHOICES.map((choice) => <option key={choice.value} value={choice.value}>{t(choice.label)}</option>)}
+            {/* SettingsConstants.ValueFormatList is written in English, untranslated. */}
+            {HEX_VALUE_FORMATS.map((choice) => <option key={choice.format} value={choice.format}>{choice.label}</option>)}
           </select>
         </label>
-        <label className="hex-field">
-          <span>{t('Offset format')}</span>
-          <select value={value.offsetFormat} onChange={(event) => set('offsetFormat', event.target.value as HexOffsetFormatKind)}>
-            <option value="hex">{t('6789ABCD')}</option>
-            <option value="cSharp">{t('0x6789ABCD')}</option>
-            <option value="vb">{t('&H6789ABCD')}</option>
-            <option value="masm">{t('6789ABCDh')}</option>
-          </select>
-        </label>
-      </fieldset>
-      <fieldset className="hex-fieldset">
-        <legend>{t('Positions')}</legend>
-        <NumberField label={t('Start')} value={startText} onChange={setStartText} />
-        <NumberField label={t('End')} value={endText} onChange={setEndText} />
-        <NumberField label={t('Base')} value={baseText} onChange={setBaseText} />
-        <label className="hex-check-row"><input type="checkbox" checked={value.useRelativePositions} onChange={(event) => set('useRelativePositions', event.target.checked)} />{t('Use relative positions')}</label>
-      </fieldset>
+        <label className="hex-check-row"><input type="checkbox" checked={value.showOffset} onChange={(event) => set('showOffset', event.target.checked)} />{t('Show Offset')}</label>
+        <label className="hex-check-row"><input type="checkbox" checked={value.showValues} onChange={(event) => set('showValues', event.target.checked)} />{t('Show Values')}</label>
+        <label className="hex-check-row"><input type="checkbox" checked={value.showAscii} onChange={(event) => set('showAscii', event.target.checked)} />{t('Show ASCII')}</label>
+        <label className="hex-check-row"><input type="checkbox" checked={value.useRelativePositions} onChange={(event) => set('useRelativePositions', event.target.checked)} />{t('Use Relative Offsets')}</label>
+      </div>
     </Modal>
   )
 }
 
-/** The value-format submenu and the local settings offer the same list, in dnSpy's order. */
-export const VALUE_FORMAT_CHOICES: { value: HexValuesFormat; label: string }[] = [
-  { value: 'hexByte', label: 'Byte (hex)' },
-  { value: 'decimalByte', label: 'Byte (decimal)' },
-  { value: 'hexUInt16', label: 'UInt16 (hex)' },
-  { value: 'decimalUInt16', label: 'UInt16 (decimal)' },
-  { value: 'hexUInt16Be', label: 'UInt16 (hex, big endian)' },
-  { value: 'decimalUInt16Be', label: 'UInt16 (decimal, big endian)' },
-  { value: 'hexUInt32', label: 'UInt32 (hex)' },
-  { value: 'decimalUInt32', label: 'UInt32 (decimal)' },
-  { value: 'hexUInt32Be', label: 'UInt32 (hex, big endian)' },
-  { value: 'decimalUInt32Be', label: 'UInt32 (decimal, big endian)' },
-  { value: 'hexUInt64', label: 'UInt64 (hex)' },
-  { value: 'decimalUInt64', label: 'UInt64 (decimal)' },
-  { value: 'hexUInt64Be', label: 'UInt64 (hex, big endian)' },
-  { value: 'decimalUInt64Be', label: 'UInt64 (decimal, big endian)' },
-  { value: 'hexSByte', label: 'SByte (hex)' },
-  { value: 'decimalSByte', label: 'SByte (decimal)' },
-  { value: 'hexInt16', label: 'Int16 (hex)' },
-  { value: 'decimalInt16', label: 'Int16 (decimal)' },
-  { value: 'hexInt16Be', label: 'Int16 (hex, big endian)' },
-  { value: 'decimalInt16Be', label: 'Int16 (decimal, big endian)' },
-  { value: 'hexInt32', label: 'Int32 (hex)' },
-  { value: 'decimalInt32', label: 'Int32 (decimal)' },
-  { value: 'hexInt32Be', label: 'Int32 (hex, big endian)' },
-  { value: 'decimalInt32Be', label: 'Int32 (decimal, big endian)' },
-  { value: 'hexInt64', label: 'Int64 (hex)' },
-  { value: 'decimalInt64', label: 'Int64 (decimal)' },
-  { value: 'hexInt64Be', label: 'Int64 (hex, big endian)' },
-  { value: 'decimalInt64Be', label: 'Int64 (decimal, big endian)' },
-  { value: 'single', label: 'Single' },
-  { value: 'singleBe', label: 'Single (big endian)' },
-  { value: 'double', label: 'Double' },
-  { value: 'doubleBe', label: 'Double (big endian)' },
-  { value: 'bit8', label: '8 Bits' },
-]
+/** The value-format submenu and the local settings offer the same list, in dnSpy's order and English words. */
+export const VALUE_FORMAT_CHOICES: { value: HexValuesFormat; label: string }[] = HEX_VALUE_FORMATS.map((info) => ({ value: info.format, label: info.label }))

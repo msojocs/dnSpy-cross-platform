@@ -1,4 +1,4 @@
-import type { HexRange, HexTargetResponse } from '../../../shared/protocol'
+import type { AddressReference, HexRange, HexTargetResponse } from '../../../shared/protocol'
 import type { HexBodyKind } from '../app-store'
 import type { TranslationValues } from '../localization'
 
@@ -31,6 +31,10 @@ export interface HexMenuContext {
   /** The statement under the caret of the focused code document, which is what "Show Instructions in
    * Hex Editor" acts on when the selection is not a method. */
   hexStatement?: { moduleId: string; range: HexRange }
+  /** The address reference under the caret of a code document — a file offset a resource's text writes. */
+  addressReference?: AddressReference
+  /** Opens the hex editor on an address reference. */
+  onShowAddress?(address: AddressReference): void
   /** Opens the selected module in a hex tab. */
   onOpenHex(): void
   /** Opens the module in a hex tab and jumps to the bytes of this part of the selection. */
@@ -62,9 +66,12 @@ const documentKinds = ['assembly', 'module', 'pedocument', 'elfdocument', 'unkno
 const isDocumentRow = (ctx: HexMenuContext): boolean =>
   ctx.selectionKind !== undefined && documentKinds.includes(ctx.selectionKind)
 
-// The item dnSpy shows only for a reference this port has no equivalent of — an address reference into a hex
-// editor, written in a code document. It stays in the table so the group keeps WPF's shape, but never shows.
-const never = (): boolean => false
+/**
+ * dnSpy's ShowAddressReferenceInHexEditorCommand: the caret is on an address reference. While it shows, the
+ * commands that would act on the document or the selection step aside — their GetAddressReference and
+ * GetDocumentNode answer null first thing when it is visible.
+ */
+const addressShows = (ctx: HexMenuContext): boolean => ctx.addressReference !== undefined && ctx.onShowAddress !== undefined
 
 /**
  * Whether a resolved hex target has a part to point at. The target arrives as JSON, where the parts a
@@ -80,7 +87,7 @@ const hasTarget = <T,>(part: T | null | undefined): part is T => part !== undefi
  * are never on screen together.
  */
 const statementCommandShows = (ctx: HexMenuContext): boolean =>
-  ctx.hexStatement !== undefined && !hasTarget(ctx.hexTarget?.method)
+  !addressShows(ctx) && ctx.hexStatement !== undefined && !hasTarget(ctx.hexTarget?.method)
 
 /**
  * dnSpy's GROUP_HEX, shared by the Edit menu (`edit-menu.ts`), the code viewer's context menu
@@ -92,16 +99,16 @@ const statementCommandShows = (ctx: HexMenuContext): boolean =>
 // Every command that opens the hex editor wears DsImages.Binary; the body writers and the copy and paste
 // commands have no image (dnSpy.AsmEditor/Hex/Commands.cs).
 export const hexMenuEntries: HexMenuEntry[] = [
-  { order: 0, icon: 'Binary', label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && (isDocumentRow(ctx) || ctx.documentAvailable === true), run: (ctx) => ctx.onOpenHex() },
+  { order: 0, icon: 'Binary', label: (ctx) => ctx.t('Open Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !addressShows(ctx) && !statementCommandShows(ctx) && (isDocumentRow(ctx) || ctx.documentAvailable === true), run: (ctx) => ctx.onOpenHex() },
   // An address reference inside a code document — dnSpy's ShowAddressReferenceInHexEditorCommand.
-  { order: 10, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: never, run: (ctx) => ctx.onShowHexAt('resource') },
+  { order: 10, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: addressShows, run: (ctx) => { if (ctx.addressReference) ctx.onShowAddress?.(ctx.addressReference) } },
   // The two "Show Instructions" commands are mutually exclusive upstream: this one runs off the
   // statement under the caret, the other off the selected method.
   { order: 20, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), shortcut: 'Ctrl+X', visible: statementCommandShows, run: (ctx) => ctx.onShowHexAt('statement') },
   // A node of the PE tree — a header, the tables stream, a metadata table or one of its rows: its own bytes.
-  { order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structure), run: (ctx) => ctx.onShowHexAt('structure') },
+  { order: 30, icon: 'Binary', label: (ctx) => ctx.t('Show in Hex Editor'), shortcut: 'Ctrl+X', visible: (ctx) => !addressShows(ctx) && !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structure), run: (ctx) => ctx.onShowHexAt('structure') },
   // A section header or a metadata stream: the data it describes.
-  { order: 40, icon: 'Binary', label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: (ctx) => !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structureData), run: (ctx) => ctx.onShowHexAt('structureData') },
+  { order: 40, icon: 'Binary', label: (ctx) => ctx.t('Show Data in Hex Editor'), visible: (ctx) => !addressShows(ctx) && !statementCommandShows(ctx) && hasTarget(ctx.hexTarget?.structureData), run: (ctx) => ctx.onShowHexAt('structureData') },
   { order: 50, icon: 'Binary', label: (ctx) => ctx.t('Show Instructions in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('instructions') },
   { order: 60, icon: 'Binary', label: (ctx) => ctx.t('Show Method Body in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.method), run: (ctx) => ctx.onShowHexAt('body') },
   { order: 70, icon: 'Binary', label: (ctx) => ctx.t('Show Initial Value in Hex Editor'), visible: (ctx) => hasTarget(ctx.hexTarget?.fieldInitialValue), run: (ctx) => ctx.onShowHexAt('fieldInitialValue') },

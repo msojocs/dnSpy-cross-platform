@@ -2366,6 +2366,18 @@ describe('session', () => {
     ])
   })
 
+  it('keeps a hex tab by its file, with the view state the tab reported', () => {
+    const state = {
+      showOffsetColumn: true, showValuesColumn: true, showAsciiColumn: false, startPosition: 0, endPosition: -1, basePosition: 0,
+      useRelativePositions: false, offsetBitSize: 0, valuesFormat: 'hexUInt16' as const, bytesPerLine: 0, activeColumn: 'ascii' as const,
+      valuesPosition: 0x40, valuesCellPosition: 0, asciiPosition: 0x41, viewportLeft: 0, topLinePosition: 0x40, anchorPoint: 0x41, activePoint: 0x41,
+    }
+    const session = buildSession(source({ hexTabs: [{ moduleId: 'n1', state }, { moduleId: 'gone' }] }))
+    expect(session.hexTabs).toEqual([{ path: '/A.dll', state }])
+    localStorage.setItem(sessionStorageKey, JSON.stringify(session))
+    expect(loadSession()?.hexTabs).toEqual([{ path: '/A.dll', state }])
+  })
+
   it('reads back exactly what it wrote', () => {
     const session = buildSession(source({ expanded: { n1: true }, documentOrder: ['n3'], documents: { n3: documentState('n3') } }))
     localStorage.setItem(sessionStorageKey, JSON.stringify(session))
@@ -2390,6 +2402,8 @@ describe('session', () => {
       nodes: [{ key: 'k', expanded: true }, { expanded: true }, null, { key: '' }],
       documents: [{ key: 'k', language: 'nonsense' }, { language: 'cSharp' }],
       activeDocument: 5,
+      // A hex tab whose view state is missing a value keeps its file but not the state (HexViewUIStateSerializer).
+      hexTabs: [{ path: '/A.dll', state: { showOffsetColumn: true } }, { state: {} }],
     }))
 
     expect(loadSession()).toEqual({
@@ -2397,6 +2411,7 @@ describe('session', () => {
       paths: ['/A.dll'],
       nodes: [{ key: 'k', expanded: true }],
       documents: [{ key: 'k', language: 'cSharp' }],
+      hexTabs: [{ path: '/A.dll', state: undefined }],
       activeDocument: undefined,
       selectedNode: undefined,
     })

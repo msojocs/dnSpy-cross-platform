@@ -57,64 +57,65 @@ afterEach(cleanup)
 /** The rows the view drew: only what fits the viewport, since the rest is scrolled to. */
 const lines = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.hex-line')]
 
-/** Waits until the drawn rows hold real bytes rather than the unreadable cells a chunk shows before it loads. */
+/** Waits until the drawn rows hold the file's bytes, which they do once the chunk under them is read. */
 const loadedLines = async (container: HTMLElement): Promise<HTMLElement[]> => {
-  await waitFor(() => expect(lines(container).length).toBeGreaterThan(0))
-  await waitFor(() => expect(container.querySelector('.hex-values')!.textContent).not.toContain('?'))
+  await waitFor(() => expect(container.querySelector('.hex-byte[data-hex-column="values"]')).not.toBeNull())
   return lines(container)
 }
 
+const view = (container: HTMLElement): HTMLElement => container.querySelector<HTMLElement>('.hex-view')!
+
 describe('HexView', () => {
-  it('draws the file as addresses, grouped bytes and an ASCII column', async () => {
+  it('draws the file as offsets, grouped bytes and an ASCII column', async () => {
     const { container } = render(<HexView moduleId={moduleId} />)
 
     const drawn = await loadedLines(container)
     // The first chunk is read once and every row on screen comes out of it.
-    expect(readHex).toHaveBeenCalledWith('w1', moduleId, 0, 64 * 1024)
+    expect(readHex).toHaveBeenCalledWith('w1', moduleId, 0, fileLength)
 
     const first = drawn[0]
     // dnSpy narrows the offset column to the file: 8 KiB needs four digits, not eight.
-    expect(first.querySelector('.hex-address')).toHaveTextContent('0000')
-    expect(first.querySelector('.hex-values')!.textContent).toContain('00 01 02 03')
+    expect(first.querySelector('.hex-offset')).toHaveTextContent('0000')
+    // One line of text: offset, values and ASCII separated by a space, as HexBufferLineFormatterImpl writes it.
+    expect(first.textContent).toContain('0000 00 01 02 03')
     // 0x00 is not printable, so the ASCII column of the first row is dots.
-    expect(first.querySelector('.hex-ascii')!.textContent).toBe('.'.repeat(16))
+    expect([...first.querySelectorAll('.hex-ascii')].map((cell) => cell.textContent).join('')).toBe('.'.repeat(16))
   })
 
-  it('writes two uppercase digits per byte, with dnSpy’s groups kept apart', async () => {
+  it('writes two uppercase digits per byte, with dnSpy’s groups in their two colours', async () => {
     const { container } = render(<HexView moduleId={moduleId} />)
     const drawn = await loadedLines(container)
 
-    const cells = [...drawn[0].querySelectorAll<HTMLElement>('.hex-values .hex-byte')]
+    const cells = [...drawn[0].querySelectorAll<HTMLElement>('.hex-byte[data-hex-column="values"]')]
     expect(cells).toHaveLength(16)
     expect(cells[0].textContent).toBe('00')
-    // dnSpy's default group size is 8, so the second half of the row is the odd group.
-    expect(cells[7].className).not.toContain('hex-group-1')
-    expect(cells[8].className).toContain('hex-group-1')
+    // dnSpy's default group size is 8, so the second half of the row is the other group.
+    expect(cells[7].className).toContain('hex-byte0')
+    expect(cells[8].className).toContain('hex-byte1')
   })
 
-  it('jumps to the range a hex command named and marks it', async () => {
-    // "Show ... in Hex Editor" names a file offset; the careet lands there and the range is marked. (jsdom
-    // lays nothing out, so a scroll cannot move the drawn rows; the offset chosen is on the first screen.)
+  it('selects the range a hex command named, the caret on its first byte', async () => {
+    // "Show ... in Hex Editor" names a file offset; dnSpy selects the bytes and puts the caret on the first one.
     act(() => { useAppStore.getState().showHexAt(moduleId, 0x120, 2) })
     const { container } = render(<HexView moduleId={moduleId} />)
 
-    const marked = () => [...container.querySelectorAll<HTMLElement>('.hex-byte-marked')]
-    await waitFor(() => expect(marked()).toHaveLength(2))
-    // The marked cells are drawn before the chunk under them has been read.
-    await waitFor(() => expect(marked().map((cell) => cell.textContent)).toEqual([
+    await waitFor(() => expect(view(container).dataset.selectionStart).toBe(String(0x120)))
+    expect(view(container).dataset.selectionEnd).toBe(String(0x122))
+    expect(view(container).dataset.caret).toBe(String(0x120))
+    const selected = () => [...container.querySelectorAll<HTMLElement>('[data-hex-column="values"][data-selected]')]
+    await waitFor(() => expect(selected().map((cell) => cell.textContent)).toEqual([
       fileByte(0x120).toString(16).toUpperCase().padStart(2, '0'),
       fileByte(0x121).toString(16).toUpperCase().padStart(2, '0'),
     ]))
-    expect(container.querySelector('.hex-status-offset')).toHaveTextContent('0120')
   })
 
   it('leaves another module’s tab where it was', async () => {
     act(() => { useAppStore.getState().showHexAt('other', 0x1500 + 3, 2) })
     const { container } = render(<HexView moduleId={moduleId} />)
 
-    await waitFor(() => expect(lines(container).length).toBeGreaterThan(0))
-    expect(readHex).toHaveBeenCalledWith('w1', moduleId, 0, 64 * 1024)
-    expect(container.querySelectorAll('.hex-byte-marked')).toHaveLength(0)
+    await loadedLines(container)
+    expect(readHex).toHaveBeenCalledWith('w1', moduleId, 0, fileLength)
+    expect(view(container).dataset.selectionStart).toBeUndefined()
   })
 
   it('reads the file again after an edit, so an undo shows up here', async () => {
@@ -130,28 +131,62 @@ describe('HexView', () => {
 
   it('moves the caret with the keyboard and selects with Shift', async () => {
     const { container } = render(<HexView moduleId={moduleId} />)
-    await waitFor(() => expect(lines(container).length).toBeGreaterThan(0))
+    await loadedLines(container)
     const content = container.querySelector<HTMLElement>('.hex-content')!
 
-    fireEvent.keyDown(content, { key: 'ArrowRight' })
-    fireEvent.keyDown(content, { key: 'ArrowRight' })
-    // Right moves a nibble at a time in the values column, so two presses land on the second nibble.
-    await waitFor(() => expect(container.querySelector('.hex-byte-caret')).not.toBeNull())
+    fireEvent.keyDown(content, { key: 'ArrowRight', code: 'ArrowRight' })
+    // Right moves a nibble at a time in the values column, so one press stays on the first byte.
+    expect(view(container).dataset.caret).toBe('0')
+    fireEvent.keyDown(content, { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(view(container).dataset.caret).toBe('1')
 
-    fireEvent.keyDown(content, { key: 'ArrowRight', shiftKey: true })
-    fireEvent.keyDown(content, { key: 'ArrowRight', shiftKey: true })
-    await waitFor(() => expect(container.querySelectorAll('.hex-byte-selected').length).toBeGreaterThan(0))
+    fireEvent.keyDown(content, { key: 'ArrowRight', code: 'ArrowRight', shiftKey: true })
+    fireEvent.keyDown(content, { key: 'ArrowDown', code: 'ArrowDown', shiftKey: true })
+    expect(view(container).dataset.selectionStart).toBe('1')
+    expect(view(container).dataset.selectionEnd).toBe(String(1 + 16 + 1))
   })
 
-  it('selects the whole file with Ctrl+A and shows the selection in the status bar', async () => {
+  it('selects the whole file with Ctrl+A', async () => {
     const { container } = render(<HexView moduleId={moduleId} />)
-    await waitFor(() => expect(lines(container).length).toBeGreaterThan(0))
+    await loadedLines(container)
 
-    // Monaco-style handlers key off `code`, so the synthetic event has to carry it too.
     fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'a', code: 'KeyA', ctrlKey: true })
 
-    await waitFor(() => expect(container.querySelector('.hex-status')!.textContent).toMatch(/\(\d[\d,]* bytes\)/))
-    expect(container.querySelectorAll('.hex-byte-selected').length).toBeGreaterThan(0)
+    expect(view(container).dataset.selectionStart).toBe('0')
+    expect(view(container).dataset.selectionEnd).toBe(String(fileLength))
+  })
+
+  it('opens the search control with Ctrl+F and finds through the backend', async () => {
+    const searchHex = vi.fn(async () => ({ offsets: [0x40] }))
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, searchHex } })
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+
+    fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'f', code: 'KeyF', ctrlKey: true })
+    const box = await screen.findByRole('textbox', { name: 'Find' })
+    fireEvent.change(box, { target: { value: '40 41' } })
+
+    await waitFor(() => expect(view(container).dataset.selectionStart).toBe(String(0x40)))
+    expect(searchHex).toHaveBeenCalledWith('w1', moduleId, expect.objectContaining({ base64Pattern: base64Of([0x40, 0x41]), maxResults: 1, wrap: true }))
+  })
+
+  it('shows Quick Info for the structure field under the mouse', async () => {
+    const getHexToolTipInfo = vi.fn(async () => ({
+      fields: [{ offset: 0, length: 2, kind: 'currentField' }, { offset: 0, length: 0x40, kind: 'structure' }],
+      toolTip: { image: 'FieldPublic', sections: [[{ text: 'IMAGE_DOS_HEADER', color: 'valueType' }, { text: '.', color: 'operator' }, { text: 'e_magic', color: 'instanceField' }]] },
+    }))
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, getHexToolTipInfo } })
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    const content = container.querySelector<HTMLElement>('.hex-content')!
+    // jsdom has no layout: the first value cell is at character 5 of the first row.
+    content.getBoundingClientRect = () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => ({}) })
+    fireEvent.mouseMove(content, { clientX: 2 + 5.5 * 13.333 * 0.6, clientY: 5, buttons: 0 })
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('IMAGE_DOS_HEADER.e_magic')
+    expect(getHexToolTipInfo).toHaveBeenCalledWith('w1', moduleId, 0)
+    // The structure under the mouse is highlighted, the field in its own colour.
+    expect(container.querySelector('.hex-tooltip-current-field')).not.toBeNull()
   })
 
   it('writes a typed hex digit through the edit transaction', async () => {

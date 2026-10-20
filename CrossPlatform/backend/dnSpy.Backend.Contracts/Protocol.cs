@@ -61,6 +61,14 @@ public static class RpcMethods {
 	public const string HexGoToMetadata = "hex/goToMetadata";
 	/// <summary>Finds a byte pattern in the file, from a start offset and in one direction, for Find.</summary>
 	public const string HexFind = "hex/find";
+	/// <summary>The fields to highlight and the tooltip for a position of the hex view — dnSpy's DefaultHexStructureInfoProvider
+	/// behind HexToolTipStructureSpanTagger.</summary>
+	public const string HexGetToolTipInfo = "hex/getToolTipInfo";
+	/// <summary>What the hex view's context menu needs for a position: Select File/Nested File/Structure, Copy RVA/File
+	/// Offset, Follow Field Value Reference (Ctrl+F12), Go to Code or Structure (F12) and Edit Field.</summary>
+	public const string HexGetPositionInfo = "hex/getPositionInfo";
+	/// <summary>dnSpy's HexSearchService.FindAll over a range of the file: a masked byte pattern or a case-insensitive string.</summary>
+	public const string HexSearch = "hex/search";
 	public const string EditHexPatch = "edit/hexPatch";
 	public const string ModuleGetInfo = "module/getInfo";
 	/// <summary>Edit Assembly / Edit Module and their write-backs.</summary>
@@ -1754,6 +1762,9 @@ public static class TextColors {
 	public const string DirectoryPart = "directoryPart";
 	public const string FileNameNoExtension = "fileNameNoExtension";
 	public const string FileExtension = "fileExtension";
+	/// <summary>The name of a .NET metadata heap ("#Strings", "#GUID") in a hex structure tooltip — dnSpy's
+	/// BoxedTextColor.HexTableName.</summary>
+	public const string HexTableName = "hexTableName";
 	// The colors only code has, which Roslyn's classifier and its tagged text use beside the ones above.
 	/// <summary>The gray of the words dnSpy writes between names ("parameter", "attribute").</summary>
 	public const string DarkGray = "darkGray";
@@ -3148,3 +3159,108 @@ public sealed record ResolveDocumentNodeRequest(string WorkspaceId, string NodeI
 /// anything but a member shown inside its type or a state machine's method.
 /// </summary>
 public sealed record ResolveDocumentNodeResponse(string DocumentNodeId, string DefinitionNodeId);
+
+/// <summary>A position of a hex document's file, the way the hex view's hover asks about it.</summary>
+public sealed record HexToolTipInfoRequest(string WorkspaceId, string ModuleId, long Position);
+
+/// <summary>
+/// One span dnSpy's DefaultHexStructureInfoProvider.GetFields yields for a position: <paramref name="Kind"/> is
+/// "currentField" (the simple field under the position), "subStructure" (one per sub-structure of the structure the
+/// field is in, or one per field when the structure has no sub-structure indexes of its own) or "structure" (the
+/// whole structure, when nothing breaks it into sub-structures).
+/// </summary>
+public sealed record HexStructureFieldSpanDto(long Offset, long Length, string Kind);
+
+/// <summary>
+/// A hex structure tooltip — dnSpy's HexToolTipContent. <paramref name="Image"/> is the name of the DsImages member
+/// drawn beside the first section ("FieldPublic", "MethodPublic", "String"...), and every section is the text one
+/// writer of the HexToolTipContentCreator wrote, as colored parts (<see cref="TextColors"/>). The first section is
+/// the signature line and is always there; an empty section after it is dropped, the way the WPF tooltip skips it.
+/// </summary>
+public sealed record HexToolTipDto(string? Image, IReadOnlyList<IReadOnlyList<TextPartDto>> Sections);
+
+/// <summary>
+/// The fields to highlight around a position, in the order dnSpy yields them, and the tooltip of the field under it.
+/// Both are empty when the position is in no structure.
+/// </summary>
+public sealed record HexToolTipInfoResponse(IReadOnlyList<HexStructureFieldSpanDto> Fields, HexToolTipDto? ToolTip);
+
+/// <summary>A position of a hex document's file, the way the hex view's context menu asks about it.</summary>
+public sealed record HexPositionInfoRequest(string WorkspaceId, string ModuleId, long Position);
+
+/// <summary>
+/// One entry of dnSpy's Edit Field submenu. Numbers are decimal strings: a field can be 64 bits wide. A flag entry
+/// (<paramref name="IsFlag"/>) toggles: when <c>value &amp; Mask</c> is non-zero the bits of
+/// <paramref name="Mask"/> are cleared, otherwise <c>(value &amp; ~Mask) | Value</c> is written. Any other entry
+/// writes <c>(value &amp; ~Mask) | Value</c>. An entry is checked when <c>(value &amp; Mask) == Value</c>.
+/// </summary>
+public sealed record HexEditFieldItemDto(string Name, string Mask, string Value, bool IsFlag);
+
+/// <summary>
+/// The field dnSpy's Edit Field command edits (EditFieldCommand): a flags or an enum field of <paramref name="Size"/>
+/// bytes (1, 2, 4 or 8, little-endian) at <paramref name="Offset"/>, its current value as a decimal string, and the
+/// entries of its submenu in dnSpy's order. <paramref name="Kind"/> is "flags" or "enum".
+/// </summary>
+public sealed record HexEditFieldDto(long Offset, int Size, string Value, string Kind, IReadOnlyList<HexEditFieldItemDto> Items);
+
+/// <summary>
+/// Where F12 (Go to Code or Structure) goes from a position. <paramref name="Kind"/> "method": a method body — the
+/// method is <paramref name="MetadataToken"/> in the module at <paramref name="ModulePath"/>, and
+/// <paramref name="IlOffset"/> the offset into its IL code, null when the position is in the body's header or its
+/// exception handler table (dnSpy's MethodStatementReference). <paramref name="Kind"/> "node": a PE header field, a
+/// section header, a metadata header or a metadata table row — <paramref name="NodeId"/> is the PE tree node that
+/// shows it, made on the way so tree/getNodePath can walk to it.
+/// </summary>
+public sealed record HexCodeReferenceDto(string Kind, string? NodeId, string? ModulePath, int? MetadataToken, int? IlOffset);
+
+/// <summary>
+/// What the hex view's commands need for a position. <paramref name="File"/> is the top-level file (Select File),
+/// <paramref name="NestedFile"/> the innermost file — an embedded resource, a resource of a .resources file — (Select
+/// Nested File), <paramref name="Structure"/> the structure under the position (Select Structure).
+/// <paramref name="Rva"/> is the position as an RVA of the file's PE image, null when the file is no PE image (Copy
+/// RVA); <paramref name="FileOffset"/> the position as an offset in the PE file, else in the file it is in (Copy File
+/// Offset). <paramref name="FieldReference"/> is what Follow Field Value Reference (Ctrl+F12) selects; a zero length
+/// only moves the caret. <paramref name="Reference"/> is where Go to Code or Structure (F12) goes, and
+/// <paramref name="EditField"/> the field Edit Field edits. Each is null when the position has no such thing.
+/// </summary>
+public sealed record HexPositionInfoResponse(
+	HexRangeDto? File,
+	HexRangeDto? NestedFile,
+	HexRangeDto? Structure,
+	HexEditFieldDto? EditField,
+	long? Rva,
+	long FileOffset,
+	HexRangeDto? FieldReference,
+	HexCodeReferenceDto? Reference);
+
+/// <summary>
+/// One search of dnSpy's hex search services (ByteHexSearchService, Utf8/Utf16StringHexSearchService) over
+/// <c>[RangeStart, RangeEnd)</c> of the file, from <paramref name="Start"/>, every match being as long as the pattern.
+/// Without <paramref name="Base64Alternate"/> the search is a byte search: a byte matches when
+/// <c>(data &amp; mask) == (pattern &amp; mask)</c>, the mask being all 0xFF when <paramref name="Base64Mask"/> is null.
+/// With it, the search is a case-insensitive string search: <paramref name="Base64Pattern"/> is the lower-case
+/// encoding and <paramref name="Base64Alternate"/> the upper-case one, <paramref name="CharLengths"/> the bytes each
+/// character takes, and each character must equal either its lower-case or its upper-case bytes.
+/// Forward, the matches start at <paramref name="Start"/> or after it; with <paramref name="Wrap"/> the ones lying
+/// entirely before <c>Start + length - 1</c> follow. Reverse, <paramref name="Start"/> is the last byte a match may end
+/// on and the matches come in descending order; with <paramref name="Wrap"/> the ones lying entirely inside
+/// <c>[Start - (length - 1), RangeEnd)</c> follow, from the end. <paramref name="NoOverlaps"/> skips a match that
+/// overlaps the one before it. At most <paramref name="MaxResults"/> offsets are returned.
+/// </summary>
+public sealed record HexSearchRequest(
+	string WorkspaceId,
+	string ModuleId,
+	string Base64Pattern,
+	string? Base64Mask,
+	string? Base64Alternate,
+	IReadOnlyList<int>? CharLengths,
+	long RangeStart,
+	long RangeEnd,
+	long Start,
+	bool Reverse,
+	bool Wrap,
+	bool NoOverlaps,
+	int MaxResults);
+
+/// <summary>Where each match starts, in the order dnSpy's FindAll yields them.</summary>
+public sealed record HexSearchResponse(IReadOnlyList<long> Offsets);

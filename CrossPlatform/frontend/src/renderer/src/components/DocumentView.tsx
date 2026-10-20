@@ -15,10 +15,11 @@ import { monacoThemeName } from '../monaco'
 import { useCategoryFont } from '../fonts'
 import { setDocumentEditorData } from '../document-editor'
 import {
-  blockLines, blockStructureColor, caretForSpan, definitionForNode, definitionOf, keywordAtCaret, keywordHighlights, nextDefinition,
+  blockLines, blockStructureColor, caretForSpan, definitionForNode, definitionOf, keywordAtCaret, keywordHighlights, lineCompressionKind, nextDefinition,
   nextReference, opCodeUrl, referenceHighlights, spanAtCaret, spanAtClick, type ReferenceHighlight, type TextRange,
 } from '../document-viewer'
 import { copyWithFormatting } from '../document-clipboard'
+import { installVirtualSpace, virtualSpacesOf, type VirtualSpaceController } from '../virtual-space'
 import { useDocumentAttachments } from '../document-attachments'
 import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
 import { DsIcon } from './DsIcon'
@@ -88,6 +89,37 @@ const highlightClass: Record<ReferenceHighlight['kind'], string> = {
 
 /** The pixel pattern of each BlockStructureLineKind: solid, or dashes and gaps of one to four pixels. */
 const dashLength: Record<BlockStructureLineKind, number> = { solid: 0, dashed1: 1, dashed2: 2, dashed3: 3, dashed4: 4 }
+
+/** dnSpy's SpacerMargin.SELECTION_MARGIN_WIDTH: the blank strip before the text that selects whole lines. */
+const SELECTION_MARGIN_WIDTH = 10
+/** The part of Monaco's line-decorations strip the bookmark markers are drawn in (the rest is the selection margin). */
+const BOOKMARK_STRIP_WIDTH = 14
+/** dnSpy's LineCompressor.SCALE: a compressed line is three quarters as tall as a normal one. */
+const LINE_COMPRESSION_SCALE = 0.75
+
+/** How many character widths a line takes on screen, counting a tab as the next tab stop. */
+const visualWidthOf = (text: string, tabSize: number): number => {
+  let width = 0
+  for (let index = 0; index < text.length; index++)
+    width = text[index] === '\t' ? width + tabSize - (width % tabSize) : width + 1
+  return width
+}
+
+/** Selects the whole of the lines from `anchorLine` to `line`, including the line break, as dnSpy's SelectLine does. */
+const selectWholeLines = (editor: MonacoEditor.IStandaloneCodeEditor, anchorLine: number, line: number): void => {
+  const model = editor.getModel()
+  if (!model)
+    return
+  const from = Math.min(anchorLine, line)
+  const to = Math.max(anchorLine, line)
+  const next = Math.min(to + 1, model.getLineCount())
+  editor.setSelection({
+    startLineNumber: from,
+    startColumn: 1,
+    endLineNumber: next,
+    endColumn: next === to + 1 ? 1 : model.getLineMaxColumn(next),
+  })
+}
 
 // The node a reference names. The tree lists a member only once its type has been expanded, so one it has not
 // loaded yet is asked of the backend; a node that cannot be had leaves the menu without the commands that need it.
@@ -246,6 +278,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const highlightsClearedAtRef = useRef<number | undefined>(undefined)
   const highlightDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const separatorDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
+  const compressionDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
+  // What the last compression pass was run for: Monaco lays the editor out again when line heights change, and
+  // that must not make the pass run again for the same text and width. The compressed lines themselves are kept
+  // too: the width changes with the scroll bars, and most of those passes leave every line as it was.
+  const compressionKeyRef = useRef<string | undefined>(undefined)
+  const compressionLinesRef = useRef<string | undefined>(undefined)
+  // A drag that started in the selection margin, whose lines the selection follows while the button is down.
+  const selectionMarginDragRef = useRef<{ anchorLine: number } | undefined>(undefined)
   const breakpointDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const bookmarkDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const stoppedDecorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
@@ -261,6 +301,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   const bookmarksRef = useRef(bookmarks)
   const toggleLineBreakpointRef = useRef(toggleLineBreakpoint)
   const advancedRef = useRef(advanced)
+  const generalRef = useRef(general)
+  const virtualSpaceRef = useRef<VirtualSpaceController | undefined>(undefined)
   const { locale, t } = useLanguage()
   const tRef = useRef(t)
   tRef.current = t
@@ -272,6 +314,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   bookmarksRef.current = bookmarks
   toggleLineBreakpointRef.current = toggleLineBreakpoint
   advancedRef.current = advanced
+  generalRef.current = general
 
   const clearGlyphTimers = (): void => {
     const timers = glyphTimersRef.current
@@ -482,6 +525,11 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     const position = editor?.getPosition()
     if (!editor || !model || !position || !highlightDecorationsRef.current)
       return
+    // dnSpy's GetCurrentSpanReference: there are no references in virtual space, so nothing is marked there.
+    if (virtualSpacesOf(editor) > 0) {
+      highlightDecorationsRef.current.clear()
+      return
+    }
     const offset = model.getOffsetAt(position)
     // Esc took the marks away; they come back once the caret moves somewhere else.
     if (highlightsClearedAtRef.current === offset)
@@ -563,6 +611,69 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   }
   const drawBlockStructureRef = useRef(drawBlockStructure)
   drawBlockStructureRef.current = drawBlockStructure
+
+  /**
+   * dnSpy's LineCompressor: with the option on, an empty line (or one made only of punctuation) is drawn at 75%
+   * height, unless it wraps — dnSpy leaves a line that takes more than one view line alone. Monaco has no line
+   * transform, but a decoration whose `lineHeight` is a multiple of the line height does the same, and the view's
+   * hit testing, scrolling and the block structure layer all read the heights it sets.
+   */
+  const applyLineCompression = (): void => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    const collection = compressionDecorationsRef.current
+    const monaco = monacoRef.current
+    if (!editor || !model || !collection || !monaco)
+      return
+    const options = advancedRef.current
+    const layout = editor.getLayoutInfo()
+    const fontInfo = editor.getOption(monaco.editor.EditorOption.fontInfo)
+    const charWidth = fontInfo.typicalHalfwidthCharacterWidth || 8
+    const tabSize = model.getOptions().tabSize
+    const wraps = editor.getOption(monaco.editor.EditorOption.wordWrap) !== 'off'
+    const key = [
+      model.getVersionId(), layout.contentWidth, charWidth, tabSize, wraps,
+      options.compressEmptyOrWhitespaceLines, options.compressNonLetterLines,
+    ].join(':')
+    if (key === compressionKeyRef.current)
+      return
+    compressionKeyRef.current = key
+    if (!options.compressEmptyOrWhitespaceLines && !options.compressNonLetterLines) {
+      if (compressionLinesRef.current !== '') {
+        compressionLinesRef.current = ''
+        collection.clear()
+      }
+      return
+    }
+    // A line is compressed only while it fits on one view line; the width is an estimate, as the view's own
+    // wrapping is, and only decides lines that would otherwise wrap.
+    const fitsOneViewLine = (text: string): boolean =>
+      !wraps || text.length === 0 || visualWidthOf(text, tabSize) * charWidth <= layout.contentWidth
+    // One decoration per line: a range's end at the start of the next line is read as the end of the line it
+    // starts in, which would leave the last line of a compressed group at its full height.
+    const decorations: MonacoEditor.IModelDeltaDecoration[] = []
+    for (let lineNumber = 1; lineNumber <= model.getLineCount(); lineNumber++) {
+      const text = model.getLineContent(lineNumber)
+      const kind = lineCompressionKind(text)
+      const compress = (kind === 'blank' && options.compressEmptyOrWhitespaceLines)
+        || (kind === 'noLetters' && options.compressNonLetterLines)
+      if (!compress || !fitsOneViewLine(text))
+        continue
+      decorations.push({
+        range: { startLineNumber: lineNumber, startColumn: 1, endLineNumber: lineNumber, endColumn: model.getLineMaxColumn(lineNumber) },
+        options: { lineHeight: LINE_COMPRESSION_SCALE },
+      })
+    }
+    const lines = decorations.map((decoration) => decoration.range.startLineNumber).join(',')
+    if (lines === compressionLinesRef.current)
+      return
+    compressionLinesRef.current = lines
+    collection.set(decorations)
+    // The compressed lines move every line below them, and the block structure layer is drawn from positions.
+    drawBlockStructureRef.current()
+  }
+  const applyLineCompressionRef = useRef(applyLineCompression)
+  applyLineCompressionRef.current = applyLineCompression
 
   /**
    * dnSpy's Incremental Search (SearchService with an incremental search kind): Ctrl+I looks forward and
@@ -832,6 +943,16 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     })))
   }, [document?.lineSeparators, document?.text, advanced.lineSeparators, editorReady])
 
+  // dnSpy's TextCaret on UseVirtualSpace changing: with the option off (or word wrap on) the caret leaves virtual space.
+  useEffect(() => {
+    virtualSpaceRef.current?.refresh()
+  }, [general.useVirtualSpace, general.wordWrap, editorReady])
+
+  // dnSpy's "Compress blank lines" and "Compress lines that do not have any alphanumeric characters".
+  useEffect(() => {
+    applyLineCompressionRef.current()
+  }, [advanced.compressEmptyOrWhitespaceLines, advanced.compressNonLetterLines, general.wordWrap, document?.text, editorReady])
+
   // The highlighter and the block structure follow the options as they change.
   useEffect(() => {
     updateHighlightsRef.current()
@@ -855,6 +976,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   useEffect(() => {
     if (document?.loading) {
       editorRef.current = undefined
+      compressionKeyRef.current = undefined
+      compressionLinesRef.current = undefined
+      compressionDecorationsRef.current = undefined
       setEditorReady(false)
     }
   }, [document?.loading])
@@ -885,7 +1009,11 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       }
     }
     const line = Math.min(Math.max(caretReveal.line, 1), model.getLineCount())
-    editor.setPosition({ lineNumber: line, column: Math.min(caretReveal.column, model.getLineMaxColumn(line)) })
+    // A column past the line's end is a caret that stood in virtual space, as dnSpy's CaretVirtualSpaces.
+    if (virtualSpaceRef.current)
+      virtualSpaceRef.current.placeCaret(line, caretReveal.column)
+    else
+      editor.setPosition({ lineNumber: line, column: Math.min(caretReveal.column, model.getLineMaxColumn(line)) })
     editor.focus()
     pendingCaretLineRef.current = { line, scrollTop: caretReveal.scrollTop }
     scrollToPendingCaret()
@@ -981,7 +1109,11 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     guides: { indentation: false, bracketPairs: false, highlightActiveIndentation: false },
     matchBrackets: advanced.highlightMatchingBrace ? 'always' : 'never',
     glyphMargin: advanced.glyphMargin,
-    lineDecorationsWidth: 14,
+    // The bookmark markers own the right-hand part of the strip, as they always have; with the selection
+    // margin on, dnSpy's blank strip for selecting whole lines sits before them. Monaco's own line numbers
+    // select their line whether or not that margin is shown, as dnSpy's line numbers do.
+    lineDecorationsWidth: BOOKMARK_STRIP_WIDTH + (advanced.selectionMargin ? SELECTION_MARGIN_WIDTH : 0),
+    selectOnLineNumbers: true,
     lineNumbers: general.showLineNumbers ? 'on' : 'off',
     wordWrap: general.wordWrap ? 'on' : 'off',
     renderLineHighlight: general.highlightCurrentLine ? 'all' : 'none',
@@ -996,6 +1128,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     lineHeight,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
+    // The sticky scroll contribution is not loaded, but its option, on by default, still has every caret move keep
+    // five lines below the caret on screen; dnSpy's caret scrolls the view only once it would leave it.
+    stickyScroll: { enabled: false },
     smoothScrolling: true,
     padding: { top: 8, bottom: 8 },
   }), [advanced, general, scrollBars, tabs.tabSize, editorFontFamily, editorFontSize, lineHeight])
@@ -1019,6 +1154,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
     <div
       className="document-view"
       data-reference-count={document.spans.filter(isNavigableSpan).length}
+      data-selection-margin={advanced.selectionMargin ? 'true' : undefined}
       onWheelCapture={(event) => {
         // Ctrl+wheel zooms the viewers when the option allows it — and only them, not the tab's other content.
         if (!event.ctrlKey || event.deltaY === 0)
@@ -1079,7 +1215,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                   useAppStore.getState().updateDocumentEditorState(
                     documentId,
                     position.lineNumber,
-                    position.column,
+                    position.column + virtualSpacesOf(editor),
                     editor.getScrollTop()
                   )
                 }
@@ -1097,7 +1233,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                   useAppStore.getState().updateDocumentEditorState(
                     documentId,
                     position.lineNumber,
-                    position.column,
+                    position.column + virtualSpacesOf(editor),
                     editor.getScrollTop()
                   )
                 }
@@ -1107,6 +1243,10 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               // A frame navigation opens its document while the tab is still being laid out, so the reveal
               // it asks for finds an editor without a height; this is where that request is tried again.
               editor.onDidLayoutChange(() => {
+                // The wrapping of a line decides whether it may be compressed, and a resize changes it. The
+                // compression goes before the reveal: it changes every line's height, so a reveal read before
+                // it would scroll to where the line used to be.
+                applyLineCompressionRef.current()
                 applyPendingRevealRef.current()
                 scrollToPendingCaretRef.current()
                 drawBlockStructureRef.current()
@@ -1122,6 +1262,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               decorationsRef.current = editor.createDecorationsCollection()
               highlightDecorationsRef.current = editor.createDecorationsCollection()
               separatorDecorationsRef.current = editor.createDecorationsCollection()
+              compressionDecorationsRef.current = editor.createDecorationsCollection()
+              compressionKeyRef.current = undefined
+              compressionLinesRef.current = undefined
               breakpointDecorationsRef.current = editor.createDecorationsCollection()
               breakpointDecorationsRef.current.set(breakpointDecorations(documentId, statementsRef.current, breakpointsRef.current))
               bookmarkDecorationsRef.current = editor.createDecorationsCollection()
@@ -1145,10 +1288,12 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 const position = editor.getPosition()
                 return position ? model.getOffsetAt(position) : undefined
               }
+              // dnSpy's GetCurrentSpanReference: a caret in virtual space is on no reference.
+              const referenceOffsetAtCaret = (): number | undefined => (virtualSpacesOf(editor) > 0 ? undefined : offsetAtCaret())
               // dnSpy's FollowReference (F12, Enter) and FollowReferenceNewTab (Ctrl+F12, Ctrl+Enter): the
               // reference at the caret, a local's declaration included.
               const followAtCaret = (newTab: boolean): void => {
-                const offset = offsetAtCaret()
+                const offset = referenceOffsetAtCaret()
                 const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
                 if (span)
                   goToRef.current(span, newTab, true)
@@ -1160,7 +1305,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               // dnSpy's MoveToNextReference and MoveToPreviousReference — Tab and Ctrl+Shift+Down, Shift+Tab and
               // Ctrl+Shift+Up — and MoveToNextDefinition and MoveToPreviousDefinition, Alt+Down and Alt+Up.
               const moveReference = (forward: boolean): void => {
-                const offset = offsetAtCaret()
+                const offset = referenceOffsetAtCaret()
                 const target = offset === undefined ? undefined : nextReference(spansRef.current, keywordsRef.current, offset, forward)
                 if (target)
                   moveCaretToRef.current(target)
@@ -1273,7 +1418,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               // dnSpy's Ctrl+Shift+R in the code viewer analyzes the reference under the caret — what the
               // context menu's Analyze would, a member of a module the workspace does not hold included.
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR, () => {
-                const offset = offsetAtCaret()
+                const offset = referenceOffsetAtCaret()
                 const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
                 if (!span || isLocalSpan(span) || span.opCode) return
                 void (async () => {
@@ -1386,6 +1531,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 // the right button never toggles the marks in the margins, which is the left button's job.
                 rightPress = undefined
                 leftPress = undefined
+                selectionMarginDragRef.current = undefined
                 if (event.event.rightButton) {
                   const position = event.target.position
                   if (position && (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY)) {
@@ -1402,9 +1548,25 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                   void toggleLineBreakpointRef.current(documentId, event.target.position?.lineNumber ?? 0)
                   return
                 }
-                // The bookmark strip is the one to its right, so the two marks never collide.
+                // The bookmark strip is the one to its right, so the two marks never collide. With the selection
+                // margin on, dnSpy's blank strip comes before it and selects whole lines instead.
                 if (event.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) {
-                  useAppStore.getState().toggleBookmark(documentId, event.target.position?.lineNumber ?? 0)
+                  const line = event.target.position?.lineNumber ?? 0
+                  const editorNode = editor.getDomNode()
+                  const x = editorNode ? event.event.browserEvent.clientX - editorNode.getBoundingClientRect().left : 0
+                  if (advancedRef.current.selectionMargin && x < editor.getLayoutInfo().contentLeft - BOOKMARK_STRIP_WIDTH) {
+                    if (line > 0) {
+                      // dnSpy's SelectLine: plain press starts at this line, Shift extends from the selection's
+                      // start; the drag that follows extends it line by line.
+                      const selection = editor.getSelection()
+                      const anchorLine = event.event.shiftKey && selection ? selection.selectionStartLineNumber : line
+                      selectionMarginDragRef.current = { anchorLine }
+                      selectWholeLines(editor, anchorLine, line)
+                      editor.focus()
+                    }
+                    return
+                  }
+                  useAppStore.getState().toggleBookmark(documentId, line)
                   return
                 }
                 const position = event.target.position
@@ -1421,13 +1583,54 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 leftPress = { lineNumber: position.lineNumber, column: position.column, span, ctrl: browserEvent.ctrlKey }
               })
               editor.onMouseMove((event) => {
+                const drag = selectionMarginDragRef.current
+                if (drag) {
+                  // The selection follows the pointer down the margin; past an edge the view scrolls a line at a
+                  // time until the pointer comes back, as dnSpy's captured margin does.
+                  const browserEvent = event.event.browserEvent
+                  const editorNode = editor.getDomNode()
+                  const rect = editorNode?.getBoundingClientRect()
+                  let line = editor.getTargetAtClientPoint(browserEvent.clientX, browserEvent.clientY)?.position?.lineNumber
+                  if (rect && (browserEvent.clientY < rect.top || browserEvent.clientY > rect.bottom)) {
+                    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight)
+                    editor.setScrollTop(editor.getScrollTop() + (browserEvent.clientY < rect.top ? -lineHeight : lineHeight))
+                    line = editor.getTargetAtClientPoint(browserEvent.clientX, browserEvent.clientY)?.position?.lineNumber
+                  }
+                  if (line !== undefined)
+                    selectWholeLines(editor, drag.anchorLine, line)
+                  return
+                }
                 if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position)
                   hoverGlyphRef.current(event.target.position.lineNumber)
                 else
                   leaveGlyphRef.current()
               })
               editor.onMouseLeave(() => leaveGlyphRef.current())
+              // dnSpy's virtual space, installed after the handlers above so that its mouse handler sees the caret
+              // where they and Monaco have put it.
+              const virtualSpace = installVirtualSpace(
+                editor,
+                monaco,
+                () => generalRef.current.useVirtualSpace && !generalRef.current.wordWrap,
+                () => {
+                  const position = editor.getPosition()
+                  if (position)
+                    useAppStore.getState().updateDocumentEditorState(documentId, position.lineNumber, position.column + virtualSpace.virtualSpaces(), editor.getScrollTop())
+                  // No brace is matched from virtual space (BracePairService), nor any reference marked.
+                  editor.updateOptions({ matchBrackets: advancedRef.current.highlightMatchingBrace && virtualSpace.virtualSpaces() === 0 ? 'always' : 'never' })
+                  updateHighlightsRef.current()
+                },
+              )
+              virtualSpaceRef.current = virtualSpace
+              editor.onDidDispose(() => {
+                virtualSpace.dispose()
+                if (virtualSpaceRef.current === virtualSpace)
+                  virtualSpaceRef.current = undefined
+              })
+              if (savedDoc?.cursorLine !== undefined && savedDoc.cursorColumn !== undefined && savedDoc.cursorColumn > model.getLineMaxColumn(Math.min(savedDoc.cursorLine, model.getLineCount())))
+                virtualSpace.placeCaret(savedDoc.cursorLine, savedDoc.cursorColumn)
               editor.onMouseUp((event) => {
+                selectionMarginDragRef.current = undefined
                 const press = leftPress
                 leftPress = undefined
                 const position = event.target.position

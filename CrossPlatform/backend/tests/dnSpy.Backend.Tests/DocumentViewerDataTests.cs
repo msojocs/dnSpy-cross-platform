@@ -111,6 +111,7 @@ public sealed class DocumentViewerDataTests : IDisposable {
 
 		var info = await manager.GetQuickInfoAsync(new DocumentQuickInfoRequest(workspaceId, OpCode: "ldarg.0"), TestContext.Current.CancellationToken);
 		Assert.StartsWith("ldarg.0 (0x02)", string.Concat(info.Parts.Select(part => part.Text)), StringComparison.Ordinal);
+		Assert.Null(info.Image);
 	}
 
 	[Fact]
@@ -148,6 +149,8 @@ public sealed class DocumentViewerDataTests : IDisposable {
 
 		var csharp = await manager.GetQuickInfoAsync(new DocumentQuickInfoRequest(workspaceId, null, DebugTargetPath, token), TestContext.Current.CancellationToken);
 		Assert.Equal("int DebugTarget.Program.Calculate(int left, int right)", string.Concat(csharp.Parts.Select(part => part.Text)));
+		// The image drawn before the signature is the member's own, as the tree shows it.
+		Assert.Matches("^Method(Public|Private|Internal|Protected|FamilyOrAssembly|FamilyAndAssembly|CompilerControlled)?$", csharp.Image);
 		var visualBasic = await manager.GetQuickInfoAsync(new DocumentQuickInfoRequest(workspaceId, null, DebugTargetPath, token, DecompilerLanguage.VisualBasic), TestContext.Current.CancellationToken);
 		Assert.Contains("Function", string.Concat(visualBasic.Parts.Select(part => part.Text)), StringComparison.Ordinal);
 		Assert.Contains("As Integer", string.Concat(visualBasic.Parts.Select(part => part.Text)), StringComparison.Ordinal);

@@ -231,6 +231,27 @@ export const blockLines = (
 export const blockStructureColor = (kind: string): string =>
   `blockStructure${kind.charAt(0).toUpperCase()}${kind.slice(1)}`
 
+/** What dnSpy's LineCompressor makes of a line: drawn at full height, blank, or made only of non-letters. */
+export type LineCompressionKind = 'normal' | 'blank' | 'noLetters'
+
+/**
+ * dnSpy's LineCompressor (WPF/Text/Editor/LineCompressor.cs): which lines the viewer draws shorter. A line with a
+ * letter or a digit anywhere — the middle character is checked first — keeps its height; a long line always does;
+ * an empty or whitespace-only line is `blank`; anything else shorter than that limit is `noLetters`, so a line of
+ * punctuation or an empty brace can be compressed too. The caller decides which of the two kinds to compress.
+ */
+export const lineCompressionKind = (text: string): LineCompressionKind => {
+  if (text.length === 0)
+    return 'blank'
+  if (/[\p{L}\p{N}]/u.test(text[Math.floor(text.length / 2)] ?? ''))
+    return 'normal'
+  if (text.length > 150)
+    return 'normal'
+  if (/[\p{L}\p{N}]/u.test(text))
+    return 'normal'
+  return /^\s*$/u.test(text) ? 'blank' : 'noLetters'
+}
+
 const groupDigits = (digits: string, group: number): string => {
   if (digits.length <= group)
     return digits

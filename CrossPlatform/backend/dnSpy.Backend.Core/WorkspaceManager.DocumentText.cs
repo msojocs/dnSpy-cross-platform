@@ -89,7 +89,8 @@ public sealed partial class WorkspaceManager {
 					break;
 			}
 			var documentation = modulePath is null ? null : XmlDocumentationOf(modulePath, member);
-			return new DocumentQuickInfoResponse(output.ToParts(), documentation);
+			// CodeToolTipProvider.SetImage: the member's own image, the one the tree shows it with.
+			return new DocumentQuickInfoResponse(output.ToParts(), documentation, DotNetImages.Of(member));
 		}
 
 		/// <summary>

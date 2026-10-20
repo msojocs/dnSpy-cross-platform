@@ -14,7 +14,11 @@ import { themeKey, themeMenuName, visibleThemes } from '../theme-service'
 export interface BaseControlSpec {
   /** English label, also the key used to look up a translation. */
   labelKey: string
-  /** Disable this control until the option at this dot-path is enabled. */
+  /**
+   * Disable this control until this expression holds. A dot-path is on when its option is truthy; `!` before a
+   * path negates it, and `|` joins alternatives — the shape upstream's `UseVirtualSpaceEnabled` needs, since
+   * either toggling word wrap off or checking the box itself keeps the box usable.
+   */
   enabledWhen?: string
   /** Turning this control off resets the listed option dot-paths. */
   resetWhenOff?: string[]
@@ -401,15 +405,27 @@ const debuggerCategory: PageSpec = {
 
 /**
  * `Virtual space` is only offered where upstream's `UseVirtualSpaceEnabled` content
- * option is set, and the REPL does not support it at all, so callers opt in.
+ * option is set, and the REPL does not support it at all, so callers opt in. Upstream's page also makes the two
+ * options take turns: word wrap is greyed out while virtual space is on and the other way round, each staying
+ * usable while it is checked so it can be switched off again.
  */
 const generalGroup = (base: string, virtualSpace: boolean): GroupSpec => ({
   id: 'general',
   controls: [
     ...(virtualSpace
-      ? [{ kind: 'checkbox', path: `${base}.general.useVirtualSpace`, labelKey: 'Virtual space' } as CheckboxSpec]
+      ? [{
+          kind: 'checkbox',
+          path: `${base}.general.useVirtualSpace`,
+          labelKey: 'Virtual space',
+          enabledWhen: `${base}.general.useVirtualSpace | !${base}.general.wordWrap`,
+        } as CheckboxSpec]
       : []),
-    { kind: 'checkbox', path: `${base}.general.wordWrap`, labelKey: 'Word wrap' },
+    {
+      kind: 'checkbox',
+      path: `${base}.general.wordWrap`,
+      labelKey: 'Word wrap',
+      enabledWhen: `${base}.general.wordWrap | !${base}.general.useVirtualSpace`,
+    },
     { kind: 'checkbox', path: `${base}.general.showLineNumbers`, labelKey: 'Line numbers' },
     { kind: 'checkbox', path: `${base}.general.highlightCurrentLine`, labelKey: 'Highlight current line' },
   ],

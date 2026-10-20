@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -49,7 +49,7 @@
 | C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
 | 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
 | 反编译与语言 | ~92% | 22 | 4 | 0 | 1 | C#、IL、IL with C# 对齐 WPF：IL 为分支反汇编器的移植，C# 页的分支独有选项（token 注释、成员顺序、修饰符等）写在包的输出上，程序集/模块/命名空间节点照 WPF 只写头部与特性；BAML 选项与 Disassemble BAML、GUI 导出项目齐备；VB 仍是 C# 的转换，三个 C# 选项包不支持 |
-| 代码编辑器与文档标签 | ~98% | 29 | 1 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；只差虚拟空格、独立选择边距与行压缩三项选项 |
+| 代码编辑器与文档标签 | 100% | 31 | 0 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info（含图标）、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；2026-10-20 补上选择边距、行压缩与虚拟空格，Text Viewer 页全部生效 |
 | Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
 | 字符串引用窗口 | 100% | 22 | 0 | 0 | 0 | 全部功能点对齐 WPF：三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新；来源列随工具栏语言经该反编译器的格式化器书写（VB 用自己的，IL 与 C# 同），C#/VB/IL 视图里跟随 ldstr 都定位到所在语句 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31，完成度约 **97%**（2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 460 / 🟡 18 / ❌ 7 / ⛔ 31，完成度约 **97%**（2026-10-20 代码编辑器与文档标签补上虚拟空格前为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -79,7 +79,7 @@
 这些问题不属于某一个模块，但拉低了多个模块的完成度，修一处能同时改善好几块。
 
 1. ~~**仍有一组选项页只保存、不生效。**~~ **已修复（2026-10-14）**：`DecompileRequest` 现在包含 `DecompilerSettingsDto` 字段，前端在调用反编译时会传递用户的 C#、IL 和 BAML 设置，后端通过 `DecompilerSettingsMapper` 应用这些设置。`DecompileFullType` 和 `UseMemoryMappedIO` 现在会被传递给后端。由于使用的是 NuGet 版 `ICSharpCode.Decompiler 11.1`，WPF dnSpy 分支特有的 C# 选项（`ShowTokenAndRvaComments`、`SortMembers` 等）在包里不存在；2026-10-20 起它们由 `BE/DnSpyCSharpOptions.cs` 写在包的输出上，只剩包不允许改写法的三项（见 4.4）。BAML 页（2026-10-20 起）与 IL 页全部生效。仍改了没效果的是：
-   - Hex 编辑器的部分选项（文本编辑器的 Text Viewer 页已在 2026-10-19 全部由文档视图读取，只余虚拟空格、选择边距与行压缩，见 4.5；Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
+   - Hex 编辑器的部分选项（文本编辑器的 Text Viewer 页已在 2026-10-19 全部由文档视图读取，2026-10-20 补上选择边距、行压缩与虚拟空格后全部生效，见 4.5；Hex 视图已应用当前行高亮、列分隔线、值/偏移大小写、分组、偏移格式、ASCII 编码与默认每行字节数；高亮当前值、结构高亮与滚动条页仍不生效，Memory 窗口仍只读其中的大小写与分组，见 4.7）、书签语法高亮、REPL；
    - General 的版本号与 PublicKeyToken 等程序集树页选项。
 
    Output 页的自动换行、行号、时间戳与时间格式（2026-10-17 起）、Environment › Font 页，以及调试器页与 Disassembler / Code Style 页（2026-10-17 起，经 `debug/setOptions` 交给引擎）已生效。
@@ -287,9 +287,9 @@
 
 ### 4.5 代码编辑器与文档标签
 
-完成度约 98%（✅ 29 / 🟡 1 / ❌ 0 / ⛔ 1）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
+完成度约 100%（✅ 31 / 🟡 0 / ❌ 0 / ⛔ 1）。WPF 范围：`WPF/Text/`、`WPF/Documents/Tabs/`（DocViewer、导航历史）。编辑器是 Monaco，右键菜单为自绘的 `FE/components/CodeEditorContextMenu.tsx`。
 
-2026-10-19 补齐后按实现与测试复核。此前这一节是 ✅ 4 / 🟡 13 / ❌ 13，补上的部分：
+2026-10-19 补齐后按实现与测试复核；2026-10-20 补上选择边距与行压缩后再次复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核。此前这一节是 ✅ 4 / 🟡 13 / ❌ 13，补上的部分：
 
 - **标签模型照 `DocumentTabService`**：树的选中（单击、键盘、右键）显示在前面的标签里，替换它的内容并记入这个标签的历史；双击/Enter 只把焦点交给标签（`NodeActivated`）。新标签只来自 Ctrl+T、标签菜单的 New Tab、树和代码视图的 Open in New Tab、Ctrl+单击、Ctrl+F12/Ctrl+Enter。文档一换进标签就显示为加载中，同一节点的第二次请求直接复用；启动页、Hex 标签也会被换成文档。
 - **每个标签自己的导航历史**（`TabHistory`）：记文档、语言、光标与滚动位置；同一文档内的跳转（局部变量、文档里已有定义的成员）也入历史；Alt+←/Backspace 后退，Alt+→/Shift+Backspace 前进，工具栏按钮跟随前面的标签。
@@ -299,7 +299,11 @@
 - **VB 文档有了引用**（`BE/WorkspaceManager.VisualBasic.cs`）：VB 是 C# 文本的转换，转换器不保留引用，于是把转换结果用 Roslyn 对模块及其引用的程序集编译一遍：外部成员按文档 ID 回到元数据（工作区外的模块给出文件与 token），文本自己声明的成员按所在类型链、名称与参数类型对回模块里的成员；局部变量/参数按符号身份相连，并有 VB 写法的 Quick Info（“(local variable) sum As Integer”）；块结构、过程分隔线与相关关键字（If/ElseIf/Else/End If、For/Next、Do/Loop、Select/Case、Try/Catch/Finally、Exit/Continue/Return）来自 VB 语法树；名字的颜色来自 dnSpy 的 Roslyn 分类器。
 - **Monaco contrib**：`FE/monaco.ts` 仍只导入 `editor.api`，按需加入查找、悬停、括号匹配三个 contrib；折叠、单词高亮、Monaco 自己的缩放与 Go to Line 面板不加载（dnSpy 没有或另有实现）。
 - **其余编辑器能力**：引用高亮（定义、写入、读取三种主题色）与相关关键字高亮、Quick Info 悬停、Go to Line（Ctrl+G，dnSpy 的“行 [, 列]”与提示文字）、增量搜索（Ctrl+I/Ctrl+Shift+I）、块结构线（按主题的 BlockStructure* 颜色与选项里的虚线样式）、过程分隔线、所有文档视图共用并持久化的缩放（缩放框、Ctrl+滚轮、Ctrl+Shift+./Ctrl+=/Ctrl+小键盘+ 等）、显示空白（Ctrl+Shift+8、Ctrl+R Ctrl+W、Ctrl+E S）、带 HTML 的复制（无选区时复制整行，超过 1 MiB 只写纯文本）。
-- **Text Viewer 选项页的设置都由 `DocumentView` 读取**：自动换行（默认开，与 WPF 相同，View 菜单与 Ctrl+E W 改的就是它）、行号、高亮当前行、滚动条、制表符宽度、引用高亮、相关关键字、括号高亮、过程分隔线、块结构线与样式、行距、指示器边距、鼠标滚轮缩放、缩放框。
+- **选择边距与行压缩（2026-10-20）**：dnSpy 的 `SpacerMargin` 是行号与文字之间 10 像素的空白条，`LeftSelectionMargin` 让按下（及随后的拖动、Shift）选择整行；Monaco 的行号本来就会选中整行，于是文档视图只在选择边距开启时把行装饰条加宽 10 像素，把那一段变成可点的选择边距，书签标记仍留在右侧 14 像素里。行压缩照 `LineCompressor` 分类（先看中间字符、超过 150 字符的行不动、全空白行与无字母数字行两类），命中的行用 Monaco 0.57 的逐行 `lineHeight` 装饰画成 75% 高；会折行的行不压缩，选项或布局变化时重算。Monaco 的命中测试、滚动与块结构线都读实际行高，所以压缩后光标与线都仍对得上。
+- **虚拟空格（2026-10-20，`FE/virtual-space.ts`）**：Monaco 没有越过行尾的位置（microsoft/monaco-editor#919），于是照 dnSpy 的 `VirtualSnapshotPoint` 在 Monaco 的光标旁另记「行尾之后的虚拟空格数」（光标与选区锚点各一份），Monaco 的光标留在行尾、按空格宽度右移画出。照 `EditorOperations`/`TextCaret` 的规则：在行尾之后按下（及拖动、Shift、右键）把光标放到按下处（`Math.Round(距离 / 空格宽)`）；→ 在行尾继续进入虚拟空间而不换行，← 在虚拟空间里逐格退回、在行首不再退到上一行，无 Shift 时有选区先收拢到选区的尾/头；↑↓/PageUp/PageDown 保持光标的屏幕列（`preferredXCoordinate`，制表符取较近的一侧），短行落在虚拟空间；Home/End 回到真实位置；Esc 只清选区、光标留在虚拟空间。选区伸进虚拟空间的部分照 `MarkerHelper` 画成选区色的一段；光标越过最长行时视图的横向滚动范围随之加宽（`ViewportLeft` 的最大值含 `Caret.Right`）。虚拟空间里没有引用（`GetCurrentSpanReference`）：不高亮引用与关键字、F12/Enter/Tab/Ctrl+Shift+R 不动作、不匹配括号（`BracePairService`）。标签历史与会话恢复按 `CaretVirtualSpaces` 记下虚拟空格（列号超出行尾的部分）。选项与 Word wrap 照 `GeneralAppSettingsPageBase` 互斥，Word wrap 开着时不启用虚拟空格。
+- **Quick Info 的图标（2026-10-20）**：照 `CodeToolTipProvider.SetImage`，成员的提示在签名前画它在树里的图标（后端 `DocumentQuickInfoResponse.Image`，即 `DotNetImages.Of`），局部变量、参数、数字分别画 LocalVariable、Parameter、ConstantPublic，按悬停框的背景着色；操作码没有图标，与 WPF 相同。
+- **文档视图不再带 Monaco 的 sticky scroll 留白（2026-10-20）**：sticky scroll 的贡献虽未加载，它默认开着的选项仍让每次光标移动在光标下方留出 5 行，↑↓ 在视图中部也会滚动；现已关闭，光标只在将要离开视图时才滚动，与 dnSpy 的 `EnsureVisible` 相同。
+- **Text Viewer 选项页的设置都由 `DocumentView` 读取**：自动换行（默认开，与 WPF 相同，View 菜单与 Ctrl+E W 改的就是它）、行号、高亮当前行、滚动条、制表符宽度、引用高亮、相关关键字、括号高亮、过程分隔线、块结构线与样式、行距、指示器边距、鼠标滚轮缩放、缩放框、选择边距、行压缩、虚拟空格。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
@@ -311,7 +315,7 @@
 | IL/VB 引用、局部变量与参数引用 | `DocViewer/DocumentViewerDotNetSpanMap.cs` | `SpanTextOutput`、`ILFormatter`、`WorkspaceManager.VisualBasic.cs` | ✅ | VB 中被转换器改名的成员（只差大小写而改名的字段等）对不回元数据，没有引用 |
 | 引用高亮、相关关键字高亮 | `DocViewer/DocumentViewerHighlightReferencesTagger.cs` | `FE/document-viewer.ts`、`DocumentView.tsx` | ✅ | |
 | 在引用间移动（Tab、Ctrl+Shift+↑↓、Alt+↑↓） | `DocViewer/DocumentViewerCommandTargetFilter.cs` | `document-viewer.ts` 的 `nextReference`、`nextDefinition` | ✅ | |
-| Quick Info 悬停 | `Documents/Tabs/DocViewer/ToolTips/*` | `FE/document-editor.ts`、RPC `document/quickInfo` | ✅ | 成员按文档语言（C#/VB/IL）写签名并附 XML 文档摘要（找模块旁、文化子目录与 .NET 参考包）；局部变量、操作码、数字（四种进制）。WPF 提示里的图标没有画 |
+| Quick Info 悬停 | `Documents/Tabs/DocViewer/ToolTips/*` | `FE/document-editor.ts`、RPC `document/quickInfo` | ✅ | 成员按文档语言（C#/VB/IL）写签名并附 XML 文档摘要（找模块旁、文化子目录与 .NET 参考包）；局部变量、操作码、数字（四种进制）；签名前照 `CodeToolTipProvider` 画成员、局部变量、参数或常量的图标（2026-10-20 起） |
 | 后退 / 前进 | `Documents/Tabs/NavigationCommands.cs`、`TabHistory.cs` | `App.tsx` 的 `stepHistory` | ✅ | 每个标签一份，记光标与滚动 |
 | 查找 / F3 | `Text/Editor/Search/SearchService.cs` | Monaco find contrib、`editor-registry.ts` | ✅ | 文档只读，与 WPF 一样没有替换 |
 | 增量搜索 | `Text/Editor/Search/SearchService.cs`（IncrementalSearch） | `DocumentView.tsx` 的 `startIncrementalSearch` | ✅ | 键入的文字显示在视图上方一行，WPF 显示在查找框里 |
@@ -327,7 +331,8 @@
 | 显示空白 | `Text/Editor/DefaultTextEditorCommandInfoProvider.cs` | `useVisibleWhitespace` | ✅ | |
 | 带格式复制 | `Text/Editor/CopyWpfTextViewCreationListener.cs` | `FE/document-clipboard.ts` | ✅ | 纯文本 + HTML，颜色取视图显示的颜色 |
 | 语法着色 | `DocViewer/DecompilerTabContentClassifierContext.cs` | 引用的 `tc-*` 装饰叠在 Shiki/Monarch 词法着色上 | ✅ | |
-| 文本编辑器选项与字体 | `Text/Settings/*`、`DocViewer/Settings/*` | `DocumentView.tsx` | 🟡 | 差三项：Monaco 没有虚拟空格（Use virtual space）与独立的选择边距（行号区可点选整行）；行压缩（Compress blank lines / non-alphanumeric lines，`LineCompressor`）试过用 Monaco 的逐行行高装饰实现，但它让鼠标命中测试错行，已撤下 |
+| 文本编辑器选项与字体 | `Text/Settings/*`、`DocViewer/Settings/*` | `DocumentView.tsx` | ✅ | Text Viewer 页的设置都生效；2026-10-20 起补上选择边距（10 像素空白条，点击/拖动选择整行）、行压缩（`LineCompressor` 的 75% 行高，Monaco 逐行 `lineHeight` 装饰）与虚拟空格（下一行） |
+| 虚拟空格（Use virtual space） | `Text/Editor/TextCaret.cs`、`Text/Operations/EditorOperations.cs`、`Text/Editor/MarkerHelper.cs` | `FE/virtual-space.ts`、`DocumentView.tsx` | ✅ | 2026-10-20 起：Monaco 无此能力（microsoft/monaco-editor#919），由视图在 Monaco 光标旁另记虚拟空格数并按 dnSpy 的规则处理鼠标、方向键、↑↓ 的首选列、选区与横向滚动；虚拟空间里没有引用；标签历史与会话恢复记下虚拟空格；与 Word wrap 按 WPF 互斥 |
 | 右键 Open in New Tab / Copy Token / Full Name / MSDN | `TabCommands.cs` 等 | `CodeEditorContextMenu.tsx` | ✅ | Open in New Tab 的手势文字照 WPF 写 Ctrl+Click |
 | 右键 Go to Token / Entry Point / Resource | `GoToTokenCommand.cs`、`EntryPointCommands.cs`、`ResourceCommands.cs` | `CodeEditorContextMenu.tsx` | ✅ | 入口点与 `<Module>` 构造只在模块有它们时出现；Go to 命令在前面的标签里跟随，树的选中随之而动 |
 | 标签右键与快捷键 | `Documents/Tabs/TabCommands.cs` | `DocumentTabContextMenu.tsx` | ✅ | 与 4.1 重复计入 |
@@ -335,7 +340,7 @@
 | 会话恢复标签 | `Documents/Tabs/DocumentTabSerializer.cs` | `buildSession`、`loadSession` | ✅ | 每个标签恢复成自己的标签，含语言、光标与滚动；与 4.1 重复计入 |
 | Show Code | `Documents/Tabs/Commands.cs` | `showCode` | ✅ | 只把焦点交给前面的标签（F7、Esc、Ctrl+Alt+0），不再切换语言 |
 
-测试：后端 `DocumentViewerDataTests.cs`（C# 的局部变量身份、写入、颜色、块、分隔线与关键字组，IL 的操作码与块，VB 的成员与局部变量引用、块与关键字，Quick Info 的三种语言写法与操作码）；前端 `document-viewer.test.ts`（命中测试、同一引用、高亮种类、Tab/Alt 移动、光标落点、Go to Line 解析、块结构线、数字提示、操作码地址、复制 HTML）、`CodeEditorContextMenu.test.tsx`（Open in New Tab 手势、令牌组的三个 Go to、增量搜索）；e2e `app.spec.ts`（引用高亮与 Tab、单击/Ctrl+单击跟随与 Alt+← 后退、Quick Info 与数字提示、Go to Line、缩放框、块结构线与分隔线、增量搜索、F12 与标签历史、Ctrl+T 后树的选中进入新标签）。
+测试：后端 `DocumentViewerDataTests.cs`（C# 的局部变量身份、写入、颜色、块、分隔线与关键字组，IL 的操作码与块，VB 的成员与局部变量引用、块与关键字，Quick Info 的三种语言写法、成员图标与操作码）；前端 `document-viewer.test.ts`（命中测试、同一引用、高亮种类、Tab/Alt 移动、光标落点、Go to Line 解析、块结构线、行压缩分类、数字提示、操作码地址、复制 HTML）、`virtual-space.test.ts`（屏幕列、首选列的落点与制表符、按下处的虚拟空格数、虚拟空间里的选区段）、`CodeEditorContextMenu.test.tsx`（Open in New Tab 手势、令牌组的三个 Go to、增量搜索）、`OptionsDialog.test.tsx`（虚拟空格与 Word wrap 的互斥）；e2e `app.spec.ts`（引用高亮与 Tab、单击/Ctrl+单击跟随与 Alt+← 后退、Quick Info 与数字提示、Go to Line、缩放框、块结构线与分隔线、增量搜索、F12 与标签历史、Ctrl+T 后树的选中进入新标签、空白行压缩与选项开关、选择边距整行选择、虚拟空格里的按下/→/←/↓/Shift 选区/Esc 与选项关闭、↓ 不滚动视图、Quick Info 的图标）。
 
 ### 4.6 书签
 
@@ -1040,7 +1045,9 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-2026-10-20 反编译与语言补齐后在本机重新跑过（后端与前端都是真实构建：`dotnet build dnSpy.Backend.Host`、`pnpm build`）：
+2026-10-20 代码编辑器与文档标签补上选择边距、行压缩、虚拟空格与 Quick Info 图标后在本机重新跑过（真实构建 `dotnet build dnSpy.Backend.Host`、`pnpm build`）：后端 617 通过，前端 `tsc` 0 错误、vitest 1460 通过，e2e 110 通过、3 跳过、0 失败。这一轮给 `Protocol.cs` 中间的 `DocumentQuickInfoResponse` 加了 `Image`，e2e 钉死的 `get_Code @06000AD6` 变为 `@06000AD8`（Go to Token 的 `0x06000AD8` 同改），`RpcException @0200008D` 未动。并行跑时偶发的几条 e2e 一并修了测试一侧：Ctrl+End 之后点 Monaco 里的标记改为等标记的位置稳定后用鼠标坐标点击（`clickEditorToken`）——定位器的 `click()` 会先让 Chromium 把元素滚进视图，它滚的是 Monaco 那个 overflow:hidden 的可滚动元素，Monaco 下一次滚动事件才复位，按下却已落在偏移后的位置、而 Monaco 的命中测试仍按自己的滚动位置算，于是落到上方几行；主题子菜单的选择在窗口刚启动、菜单被关掉时整体重试。
+
+此前，2026-10-20 反编译与语言补齐后在本机重新跑过（后端与前端都是真实构建：`dotnet build dnSpy.Backend.Host`、`pnpm build`）：
 
 | 套件 | 结果 |
 |---|---|

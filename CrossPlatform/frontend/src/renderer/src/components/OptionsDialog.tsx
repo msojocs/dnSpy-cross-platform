@@ -120,9 +120,19 @@ interface ControlRowProps {
   t: Translate
 }
 
+/**
+ * `enabledWhen` as upstream's general settings pages read it: a dot-path, an alternative for each `|`, and a
+ * `!` in front of a path that must be off (GeneralAppSettingsPageBase's `UseVirtualSpace || !WordWrap`).
+ */
+const enabledBy = (options: AppOptions, expression: string): boolean =>
+  expression.split('|').some((term) => {
+    const path = term.trim()
+    return path.startsWith('!') ? !readValue(options, path.slice(1)) : Boolean(readValue(options, path))
+  })
+
 const ControlRow = ({ spec, options, onChange, t }: ControlRowProps): React.JSX.Element => {
   const value = readValue(options, spec.path)
-  const isDisabled = spec.enabledWhen !== undefined && !readValue(options, spec.enabledWhen)
+  const isDisabled = spec.enabledWhen !== undefined && !enabledBy(options, spec.enabledWhen)
 
   if (spec.kind === 'checkbox') {
     return (

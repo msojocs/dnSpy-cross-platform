@@ -1,6 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api'
 import type { DecompilerLanguage, TextPart, TextSpan } from '../../shared/protocol'
 import { escapeHtml, integerLiteralValue, localToolTip, numberToolTip, spanAtClick } from './document-viewer'
+import { dsImageUrl, parseCssColor } from './ds-image'
 
 /**
  * What the hover needs to know about one decompiled document. The text itself lives in the Monaco model; this
@@ -61,6 +62,25 @@ const partsMarkdown = (parts: readonly TextPart[]): string =>
 
 const markdown = (value: string): Monaco.IMarkdownString => ({ value, supportHtml: true, isTrusted: false })
 
+/**
+ * The image CodeToolTipProvider draws before the signature, as hover markup: themed for the hover's background
+ * the way dnSpy's images are for whatever they are drawn on. The sanitizer keeps no style, so its spacing is the
+ * stylesheet's.
+ */
+const imageMarkup = (name: string | null | undefined): string => {
+  if (!name || typeof document === 'undefined')
+    return ''
+  const editor = document.querySelector('.monaco-editor')
+  const background = (editor && parseCssColor(getComputedStyle(editor).getPropertyValue('--vscode-editorHoverWidget-background'))) || [255, 255, 255]
+  const url = dsImageUrl(name, background, document.documentElement.dataset.themeKind === 'hc')
+  return url ? `<img src="${url}" width="16" height="16" alt="">` : ''
+}
+
+/** The images dnSpy's tooltips give what is not a member: a local, a parameter, a number. */
+const LOCAL_IMAGE = 'LocalVariable'
+const PARAMETER_IMAGE = 'Parameter'
+const NUMBER_IMAGE = 'ConstantPublic'
+
 export interface DocumentEditorProviders {
   /** The languages the decompiled documents are shown in. */
   readonly languages: readonly string[]
@@ -86,7 +106,7 @@ export const registerDocumentEditorProviders = (monaco: typeof Monaco, provider:
           return undefined
         return {
           range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
-          contents: [markdown(numberToolTip(value).map(escapeHtml).join('<br/>'))],
+          contents: [markdown(imageMarkup(NUMBER_IMAGE) + numberToolTip(value).map(escapeHtml).join('<br/>'))],
         }
       }
       const start = model.getPositionAt(span.start)
@@ -94,7 +114,8 @@ export const registerDocumentEditorProviders = (monaco: typeof Monaco, provider:
       const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column)
       if (span.localId) {
         const parts = localToolTip(data.spans, span.localId)
-        return parts ? { range, contents: [markdown(partsMarkdown(parts))] } : undefined
+        const image = span.color?.toLowerCase() === 'parameter' ? PARAMETER_IMAGE : LOCAL_IMAGE
+        return parts ? { range, contents: [markdown(imageMarkup(image) + partsMarkdown(parts))] } : undefined
       }
       if (!data.workspaceId)
         return undefined
@@ -108,7 +129,7 @@ export const registerDocumentEditorProviders = (monaco: typeof Monaco, provider:
         })
         if (token.isCancellationRequested || info.parts.length === 0)
           return undefined
-        const contents = [markdown(partsMarkdown(info.parts))]
+        const contents = [markdown(imageMarkup(info.image) + partsMarkdown(info.parts))]
         if (info.documentation)
           contents.push(markdown(info.documentation.split('\n').map(escapeHtml).join('<br/>')))
         return { range, contents }

@@ -1,5 +1,6 @@
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { CaretPosition } from './app-store'
+import { virtualSpacesOf } from './virtual-space'
 
 interface DocumentEditor {
   editor: MonacoEditor.IStandaloneCodeEditor
@@ -71,10 +72,15 @@ export const activeDocumentPosition = (): CaretPosition | undefined => {
  */
 export const isActiveDocumentEditor = (viewId: string): boolean => activeViewId === viewId
 
-/** Where the caret sits in the editor of `viewId`, or undefined when that view is not open. */
+/**
+ * Where the caret sits in the editor of `viewId`, or undefined when that view is not open. A caret in virtual
+ * space is a column past its line's end, one for each virtual space — what dnSpy's tab history and saved tabs
+ * keep as CaretVirtualSpaces.
+ */
 export const caretPosition = (viewId: string): { line: number; column: number } | undefined => {
-  const position = editors.get(viewId)?.editor.getPosition()
-  return position ? { line: position.lineNumber, column: position.column } : undefined
+  const editor = editors.get(viewId)?.editor
+  const position = editor?.getPosition()
+  return editor && position ? { line: position.lineNumber, column: position.column + virtualSpacesOf(editor) } : undefined
 }
 
 /** How far the editor of `viewId` is scrolled, or undefined when that view is not open. */

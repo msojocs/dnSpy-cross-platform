@@ -670,6 +670,35 @@ select:focus-visible,
 }
 
 /* dnSpy's block structure lines, drawn by DocumentView into a layer over the text. */
+/* The image CodeToolTipProvider puts before a tooltip's signature, 4 pixels from it. */
+.monaco-hover .hover-contents img {
+  vertical-align: text-bottom;
+  margin-right: 4px;
+}
+
+/* dnSpy's virtual space: Monaco's caret stays at the end of the line and is drawn the virtual spaces further on;
+   the part of a selection past the end is a band of the selection color of its own. */
+.monaco-editor .cursors-layer > .cursor {
+  margin-left: var(--virtual-caret-offset, 0px);
+}
+
+.virtual-space-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.virtual-space-selection {
+  position: absolute;
+  display: none;
+  background: var(--vscode-editor-inactiveSelectionBackground);
+}
+
+.monaco-editor.focused .virtual-space-selection {
+  background: var(--vscode-editor-selectionBackground);
+}
+
 .block-structure-layer {
   position: absolute;
   top: 0;
@@ -792,6 +821,13 @@ select:focus-visible,
 
 .bookmark-glyph-disabled::before {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* With the selection margin on, its blank strip sits before the bookmark strip, so the mark keeps to the
+   right-hand 14 pixels of Monaco's line-decorations strip instead of centering over both. */
+.document-view[data-selection-margin='true'] .bookmark-glyph::before,
+.document-view[data-selection-margin='true'] .bookmark-glyph-disabled::before {
+  transform: translateX(5px);
 }
 
 .loading-state,

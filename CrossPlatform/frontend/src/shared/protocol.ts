@@ -432,6 +432,8 @@ export interface KeywordReference {
 export interface DocumentQuickInfoResponse {
   parts: TextPart[]
   documentation?: string | null
+  /** The dnSpy image drawn before the signature, the member's own (CodeToolTipProvider's SetImage). */
+  image?: string | null
 }
 
 /** What a hover asks Quick Info for: the reference's target, or an IL opcode, in the document's language. */

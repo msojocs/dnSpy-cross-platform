@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { isNavigableSpan, type KeywordReference, type TextSpan } from '../../shared/protocol'
 import {
   blockLines, blockStructureColor, buildClipboardHtml, caretForSpan, definitionForNode, definitionOf, integerLiteralValue, keywordAtCaret,
-  keywordHighlights, localToolTip, nextDefinition, nextReference, numberToolTip, opCodeUrl, parseGoToLine, positionAt, referenceHighlights,
-  sameReference, spanAtCaret, spanAtClick,
+  keywordHighlights, lineCompressionKind, localToolTip, nextDefinition, nextReference, numberToolTip, opCodeUrl, parseGoToLine, positionAt,
+  referenceHighlights, sameReference, spanAtCaret, spanAtClick,
 } from './document-viewer'
 
 // `int num = 0; num += left; return num;` — a local declared, written and read, a parameter, and a call.
@@ -167,5 +167,23 @@ describe('tooltips, links and the clipboard', () => {
     expect(positionAt('ab\r\ncd\nef', 0)).toEqual({ line: 1, column: 1 })
     expect(positionAt('ab\r\ncd\nef', 5)).toEqual({ line: 2, column: 2 })
     expect(positionAt('ab\r\ncd\nef', 7)).toEqual({ line: 3, column: 1 })
+  })
+})
+
+describe('the lines dnSpy compresses', () => {
+  it('classifies lines the way LineCompressor does', () => {
+    expect(lineCompressionKind('')).toBe('blank')
+    expect(lineCompressionKind('    ')).toBe('blank')
+    expect(lineCompressionKind('}')).toBe('noLetters')
+    expect(lineCompressionKind('};')).toBe('noLetters')
+    expect(lineCompressionKind('// comment')).toBe('normal')
+    // A letter or digit anywhere keeps a line at full height, even a short one that starts with punctuation.
+    expect(lineCompressionKind('} // end')).toBe('normal')
+    expect(lineCompressionKind('int x;')).toBe('normal')
+    // The middle character is checked first, as an early-out; a very long line stays normal either way.
+    expect(lineCompressionKind('-'.repeat(151))).toBe('normal')
+    expect(lineCompressionKind('-'.repeat(150))).toBe('noLetters')
+    expect(lineCompressionKind('é')).toBe('normal')
+    expect(lineCompressionKind('ς')).toBe('normal')
   })
 })

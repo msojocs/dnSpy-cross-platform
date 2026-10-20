@@ -597,9 +597,10 @@ public sealed record DocumentQuickInfoRequest(
 /// <summary>
 /// dnSpy's tooltip for a reference: the member written the way the document's language writes it, then the
 /// summary of its XML documentation when the module has one. An empty <paramref name="Parts"/> means
-/// there is nothing to show.
+/// there is nothing to show. <paramref name="Image"/> is the dnSpy image drawn before the signature
+/// (CodeToolTipProvider's <c>SetImage</c>), when the tooltip has one.
 /// </summary>
-public sealed record DocumentQuickInfoResponse(IReadOnlyList<TextPartDto> Parts, string? Documentation);
+public sealed record DocumentQuickInfoResponse(IReadOnlyList<TextPartDto> Parts, string? Documentation, string? Image = null);
 
 /// <summary>
 /// Something a document shows between its lines — dnSpy's <c>AddUIElement</c> and <c>AddButton</c>.

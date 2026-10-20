@@ -196,6 +196,28 @@ const editorLayout = async (line: Locator, margin: Locator): Promise<{ lineBox: 
   return boxes!
 }
 
+/** Clicks a token in the code view where it is drawn. A locator's click first asks Chromium to scroll it into
+ * view, and Chromium does that by scrolling Monaco's overflow-hidden scrollable element, which Monaco puts
+ * back on its next scroll event — after the press has landed at the shifted spot, but with Monaco's hit test
+ * still reading its own scroll position, so the press falls on a line above the token. The mouse is aimed at
+ * the token's box instead, once two reads of it agree (Ctrl+End scrolls smoothly). */
+const clickEditorToken = async (token: Locator, options: { button?: 'left' | 'right'; clickCount?: number } = {}): Promise<void> => {
+  await expect(token).toBeVisible()
+  let seen = ''
+  let box: Box | undefined
+  await expect(async () => {
+    const next = await token.boundingBox()
+    if (!next?.width || !next.height)
+      throw new Error('The token is not laid out yet.')
+    if (JSON.stringify(next) !== seen) {
+      seen = JSON.stringify(next)
+      throw new Error('The view is still scrolling.')
+    }
+    box = next
+  }).toPass({ timeout: 15_000 })
+  await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2, options)
+}
+
 /** The search window's row whose name reads exactly `name`. */
 const searchResult = (name: string): Locator =>
   page.getByRole('listbox', { name: 'Search results' }).getByRole('option')
@@ -303,21 +325,28 @@ test.describe('the workspace shell', () => {
   })
 
   test('persists themes across renderer reloads', async () => {
-    await page.getByRole('menuitem', { name: 'View' }).click()
-    // The themes sit in a submenu, which opens while the pointer rests on its parent row.
-    await page.getByRole('menuitem', { name: /^Theme$/ }).hover()
-    await page.getByRole('menuitem', { name: 'Light', exact: true }).click()
+    // The themes sit in a submenu, which opens while the pointer rests on its parent row. A window that is still
+    // settling right after launch can close the menu under the pointer, so the whole pick is tried again then.
+    const pickTheme = async (name: string, check?: () => Promise<void>): Promise<void> => {
+      const theme = page.getByRole('menuitem', { name: /^Theme$/ })
+      await expect(async () => {
+        if (!(await theme.isVisible()))
+          await page.getByRole('menuitem', { name: 'View' }).click()
+        await theme.hover()
+        await expect(theme).toHaveAttribute('aria-expanded', 'true', { timeout: 2_000 })
+        await check?.()
+        await page.getByRole('menuitem', { name, exact: true }).click({ timeout: 2_000 })
+      }).toPass({ timeout: 20_000 })
+    }
+    await pickTheme('Light')
     await page.getByRole('tab', { name: 'Search' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await page.reload()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await expect(page.getByText('Ready', { exact: true })).toBeVisible()
     await expect(page.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true')
-    await page.getByRole('menuitem', { name: 'View' }).click()
-    await page.getByRole('menuitem', { name: /^Theme$/ }).hover()
     // ThemesMenu lists the high-contrast theme only while the system is in high contrast, which it is not here.
-    await expect(page.getByRole('menuitem', { name: 'High Contrast' })).toHaveCount(0)
-    await page.getByRole('menuitem', { name: 'Blue', exact: true }).click()
+    await pickTheme('Blue', async () => await expect(page.getByRole('menuitem', { name: 'High Contrast' })).toHaveCount(0))
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'blue')
     // The theme's resources are what the stylesheet draws with: the blue theme's tool windows are white.
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--wpf-EnvironmentToolWindow').trim())).toBe('#ffffff')
@@ -468,7 +497,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -707,7 +736,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -819,7 +848,7 @@ test.describe('the workspace shell', () => {
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -883,7 +912,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ }).click({ button: 'right' })
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expect(getter).toHaveCount(1)
   })
@@ -934,7 +963,7 @@ test.describe('the workspace shell', () => {
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // Go to Token is dnSpy's FollowReference: with DecompileFullType on, the method's token opens the type it is
     // declared in — which the tree then selects, opening the chain above it — with the caret on the method.
-    await tokenDialog.getByLabel('Token').fill('0x06000AD6')
+    await tokenDialog.getByLabel('Token').fill('0x06000AD8')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
     await expect(page.getByRole('tab', { name: 'RpcException', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -973,7 +1002,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -1118,7 +1147,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -1239,7 +1268,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD6$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -1335,6 +1364,150 @@ test.describe('the workspace shell', () => {
 
     await expect(rows).toHaveCount(0)
     await expect(glyphs).toHaveCount(0)
+  })
+
+  test('compresses blank lines, and stops when the Text Viewer option is turned off', async () => {
+    await openAssemblyAndNamespace()
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
+    await rpcException.dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+
+    const lines = page.locator('.monaco-editor .view-lines .view-line')
+    await expect(lines.first()).toBeVisible()
+
+    // The rendered heights of the lines: the tallest line's, and those of the empty ones, which dnSpy draws
+    // at three quarters' height.
+    const heights = async (): Promise<{ normal: number; blank: number[] }> => page.evaluate(() => {
+      const all: number[] = []
+      const blank: number[] = []
+      for (const node of Array.from(document.querySelectorAll('.monaco-editor .view-lines .view-line'))) {
+        const height = Number.parseFloat((node as HTMLElement).style.height)
+        all.push(height)
+        if (!(node.textContent ?? '').trim())
+          blank.push(height)
+      }
+      return { normal: Math.max(...all), blank }
+    })
+
+    await expect.poll(async () => {
+      const { normal, blank } = await heights()
+      return blank.length > 0 && blank.every((height) => height < normal * 0.9)
+    }).toBe(true)
+
+    await page.evaluate(() => {
+      // The saved options are a partial tree: what is left out falls back to the defaults when they are read.
+      const raw = JSON.parse(localStorage.getItem('dnspy.appOptions.v1') ?? '{}')
+      const viewer = raw.documentViewer ?? {}
+      localStorage.setItem('dnspy.appOptions.v1', JSON.stringify({
+        ...raw,
+        documentViewer: { ...viewer, advanced: { ...(viewer.advanced ?? {}), compressEmptyOrWhitespaceLines: false } },
+      }))
+      window.dispatchEvent(new Event('app-options-changed'))
+    })
+    // With the option off every rendered line, the empty ones included, is full height again.
+    await expect.poll(async () => {
+      const { normal, blank } = await heights()
+      return blank.every((height) => height >= normal * 0.9)
+    }).toBe(true)
+  })
+
+  test('selects a whole line from the selection margin, and leaves the bookmark strip alone', async () => {
+    await openAssemblyAndNamespace()
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
+    await rpcException.dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+
+    const bodyLine = page.locator('.monaco-editor .view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    const { lineBox, marginBox } = await editorLayout(bodyLine, page.locator('.monaco-editor .margin').first())
+
+    // The selection margin is the 10 pixels of the margin just before the text; the bookmark strip follows it.
+    await page.mouse.click(marginBox.x + marginBox.width - 19, lineBox.y + lineBox.height / 2)
+    // The press draws a selection over the line, which a click in the text \u2014 one that only moves the caret \u2014
+    // would not; dnSpy's SelectLine takes the line break too, so the copy is the whole line and its newline.
+    await expect(page.locator('.monaco-editor .selected-text').first()).toBeVisible()
+    await page.keyboard.press('Control+C')
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^[ \t]+Code = code;\r?\n$/)
+    await expect(page.locator('.bookmark-glyph')).toHaveCount(0)
+  })
+
+  test('puts the caret in virtual space past the end of a line when the Text Viewer option is on', async () => {
+    await page.evaluate(() => {
+      // Virtual space and word wrap take turns, as the Options dialog has them.
+      localStorage.setItem('dnspy.appOptions.v1', JSON.stringify({ documentViewer: { general: { useVirtualSpace: true, wordWrap: false } } }))
+      window.dispatchEvent(new Event('app-options-changed'))
+    })
+    await openAssemblyAndNamespace()
+    const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
+    await rpcException.dblclick()
+    const browserWindow = await application.browserWindow(page)
+    await browserWindow.evaluate((window) => window.setSize(1500, 700))
+
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    const bodyLine = editor.locator('.view-lines .view-line').filter({ hasText: /Code\s*=\s*code/ }).first()
+    const { lineBox } = await editorLayout(bodyLine, editor.locator('.margin').first())
+    const caret = editor.locator('.cursors-layer > .cursor')
+    const caretBox = async (): Promise<Box> => {
+      // The caret is redrawn on the next frame.
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      return (await caret.boundingBox())!
+    }
+
+    // A press well past the end of the line leaves the caret where it was pressed, not at the line's end.
+    const pressX = lineBox.x + 600
+    await page.mouse.click(pressX, lineBox.y + lineBox.height / 2)
+    const pressed = await caretBox()
+    expect(Math.abs(pressed.x - pressX)).toBeLessThan(10)
+    // End goes back to the line's end; Right from there goes on into virtual space rather than to the next line.
+    await page.keyboard.press('End')
+    const lineEnd = await caretBox()
+    expect(lineEnd.x).toBeLessThan(pressed.x - 100)
+    await page.keyboard.press('ArrowRight')
+    const oneSpace = await caretBox()
+    const spaceWidth = oneSpace.x - lineEnd.x
+    expect(spaceWidth).toBeGreaterThan(4)
+    expect(spaceWidth).toBeLessThan(16)
+    await page.keyboard.press('ArrowLeft')
+    expect((await caretBox()).x).toBeCloseTo(lineEnd.x, 0)
+
+    // Down keeps the caret's screen column: in the text of the longer line below, and on the type's closing brace
+    // after it, in virtual space past that line's end.
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+    const inText = await caretBox()
+    expect(inText.x).toBeCloseTo(oneSpace.x, 0)
+    // The caret's own box keeps the height of a full line, so the line it is on is read off the current-line mark.
+    const currentLine = editor.locator('.view-overlays .current-line').first()
+    const inTextLine = (await currentLine.boundingBox())!
+    await page.keyboard.press('ArrowDown')
+    const below = await caretBox()
+    expect((await currentLine.boundingBox())!.y).toBeGreaterThan(inTextLine.y)
+    expect(below.x).toBeCloseTo(oneSpace.x, 0)
+    // The caret moved within the view, so the view did not scroll (no five lines kept below it, as Monaco's sticky
+    // scroll option would have).
+    expect((await bodyLine.boundingBox())!.y).toBe(lineBox.y)
+
+    // Shift+Right selects on into virtual space, which is drawn as a band past the end.
+    for (let step = 0; step < 3; step++)
+      await page.keyboard.press('Shift+ArrowRight')
+    const band = editor.locator('.virtual-space-selection')
+    await expect(band).toBeVisible()
+    const bandBox = (await band.boundingBox())!
+    expect(bandBox.width).toBeCloseTo(3 * spaceWidth, 0)
+    // Esc drops the selection and leaves the caret where the selection ended, in virtual space still.
+    await page.keyboard.press('Escape')
+    await expect(band).toBeHidden()
+    expect((await caretBox()).x).toBeCloseTo(below.x + 3 * spaceWidth, 0)
+
+    // Turning the option off takes the caret back to the end of its line.
+    await page.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem('dnspy.appOptions.v1') ?? '{}')
+      raw.documentViewer.general.useVirtualSpace = false
+      localStorage.setItem('dnspy.appOptions.v1', JSON.stringify(raw))
+      window.dispatchEvent(new Event('app-options-changed'))
+    })
+    await expect.poll(async () => (await caretBox()).x).toBeLessThan(below.x - 3 * spaceWidth)
   })
 
   test('keeps a bookmark across a reload', async () => {
@@ -2431,7 +2604,7 @@ test.describe('the code viewer context menu', () => {
     await page.keyboard.press('Control+End')
     const call = editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first()
     await expect(call).toBeVisible()
-    await call.click({ button: 'right' })
+    await clickEditorToken(call, { button: 'right' })
     const menu = page.getByRole('menu', { name: 'Code editor' })
     await expect(menu).toBeVisible()
     return menu
@@ -2557,7 +2730,7 @@ test.describe('the code viewer context menu', () => {
     await expect(page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^Worker @/ })).toHaveAttribute('aria-expanded', 'false')
     const worker = editor.locator('.view-lines').getByText('Worker', { exact: true }).first()
     await expect(worker).toBeVisible()
-    await worker.click({ button: 'right' })
+    await clickEditorToken(worker, { button: 'right' })
     const menu = page.getByRole('menu', { name: 'Code editor' })
     await expect(menu).toBeVisible()
 
@@ -2590,7 +2763,7 @@ test.describe('the code viewer context menu', () => {
     const line = editor.locator('.view-line').filter({ hasText: /ViaInterface\(new\sWorker\(\)\)/ })
     const worker = line.getByText('Worker', { exact: true })
     await expect(worker).toBeVisible()
-    await worker.click({ button: 'right' })
+    await clickEditorToken(worker, { button: 'right' })
     await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Analyze' }).click()
 
     const analyzer = page.getByRole('tree', { name: 'Analyzer' })
@@ -2695,7 +2868,7 @@ test.describe('the code viewer context menu', () => {
     await expect(call).toBeVisible()
     // A right click puts the caret on the call — a left one would follow it, as dnSpy's does — and the
     // editor's own binding analyzes what the caret is on.
-    await call.click({ button: 'right' })
+    await clickEditorToken(call, { button: 'right' })
     // The menu is put up once what it acts on has been read, and takes the keyboard after that; the Escape has to
     // reach it, not come before it.
     await expect(page.getByRole('menu', { name: 'Code editor' })).toBeVisible()
@@ -2786,8 +2959,8 @@ test.describe('the code viewer context menu', () => {
     await focusEditor(editor)
     await page.keyboard.press('Control+End')
     const call = editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first()
-    await call.dblclick()
-    await call.click({ button: 'right' })
+    await clickEditorToken(call, { clickCount: 2 })
+    await clickEditorToken(call, { button: 'right' })
     const menu = page.getByRole('menu', { name: 'Code editor' })
     // The entry's name carries its shortcut, which is what keeps it apart from "Copy MD Token" and the rest.
     await menu.getByRole('menuitem', { name: /^Copy Ctrl\+C$/ }).click()
@@ -2873,7 +3046,7 @@ test.describe('the code viewer context menu', () => {
     await page.keyboard.press('Control+End')
     const call = editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first()
     await expect(call).toBeVisible()
-    await call.click()
+    await clickEditorToken(call)
     await expect(page.getByRole('tab', { name: 'Program', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('tab', { name: 'Main(string[]) : void' })).toHaveCount(0)
     const selected = editor.locator('.selected-text')
@@ -2884,7 +3057,7 @@ test.describe('the code viewer context menu', () => {
     // Ctrl+click goes to a tab of its own instead.
     await page.keyboard.press('Control+End')
     await page.keyboard.down('Control')
-    await editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first().click()
+    await clickEditorToken(editor.locator('.view-lines').getByText('ThrowAndCatch', { exact: true }).first())
     await page.keyboard.up('Control')
     await expect(page.getByRole('tab', { name: 'Program', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('tab', { name: 'Main(string[]) : void' })).toHaveCount(1)
@@ -2898,9 +3071,13 @@ test.describe('the code viewer context menu', () => {
     const main = editor.locator('.view-lines .code-definition').filter({ hasText: /^Main$/ }).first()
     await expect(main).toBeVisible()
     await main.hover()
-    await expect(page.locator('.monaco-hover').filter({ visible: true })).toContainText('void DebugTarget.Program.Main(string[] args)')
+    const hover = page.locator('.monaco-hover').filter({ visible: true })
+    await expect(hover).toContainText('void DebugTarget.Program.Main(string[] args)')
+    // CodeToolTipProvider draws the member's image before the signature, and a constant's before a number.
+    await expect(hover.locator('img[src^="data:image/svg+xml"]')).toHaveCount(1)
     await editor.locator('.view-lines').getByText('100', { exact: true }).first().hover()
-    await expect(page.locator('.monaco-hover').filter({ visible: true })).toContainText('Base 16: 64')
+    await expect(hover).toContainText('Base 16: 64')
+    await expect(hover.locator('img[src^="data:image/svg+xml"]')).toHaveCount(1)
   })
 
   // dnSpy's Go to Line (Ctrl+G), its zoom box, its block structure lines and its procedure line separators.

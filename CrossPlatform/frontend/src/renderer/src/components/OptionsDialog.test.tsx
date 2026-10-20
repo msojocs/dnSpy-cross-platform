@@ -308,6 +308,25 @@ describe('OptionsDialog', () => {
     expect((screen.getByLabelText('Timestamp format') as HTMLInputElement).value).toBe('HH:mm:ss.fff')
   })
 
+  it('makes virtual space and word wrap take turns, as GeneralAppSettingsPage does', () => {
+    openDialog({ initialCategory: 'documentViewer' })
+    const virtualSpace = screen.getByLabelText('Virtual space')
+    const wordWrap = screen.getByLabelText('Word wrap')
+    // Word wrap is on by default, so virtual space is greyed out; word wrap itself stays usable.
+    expect(wordWrap).toBeChecked()
+    expect(wordWrap).toBeEnabled()
+    expect(virtualSpace).not.toBeChecked()
+    expect(virtualSpace).toBeDisabled()
+
+    fireEvent.click(wordWrap)
+    expect(virtualSpace).toBeEnabled()
+    fireEvent.click(virtualSpace)
+    expect(virtualSpace).toBeChecked()
+    expect(wordWrap).toBeDisabled()
+    // The checked box itself stays usable, so it can be switched back off.
+    expect(virtualSpace).toBeEnabled()
+  })
+
   it('renders the compiler pages per language', () => {
     openDialog({ initialCategory: 'compiler' })
     expect((screen.getByLabelText('Conditional compilation symbols') as HTMLInputElement).value).toBe('TRACE')

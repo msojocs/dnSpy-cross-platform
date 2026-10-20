@@ -86,7 +86,7 @@ public sealed partial class WorkspaceManager {
 					Add(entry);
 			}
 			var scan = new StringReferenceScan(analyzerEpoch, modules.Select(entry => entry.Path).ToArray());
-			scan.Start(ScanStringReferences(modules, scan.Found, request.ShowAllMembers));
+			scan.Start(ScanStringReferences(modules, scan.Found, request.ShowAllMembers, request.Language));
 			return scan;
 		}
 
@@ -94,15 +94,16 @@ public sealed partial class WorkspaceManager {
 			GetAssemblyChildren(root).Select(node => node.AsModuleEntry).OfType<ModuleEntry>();
 
 		/// <summary>dnSpy's AnalyzeMetadataRoots then AnalyzeModules, one type a step.</summary>
-		IEnumerable<bool> ScanStringReferences(IReadOnlyList<ModuleEntry> modules, List<StringReferenceDto> found, bool showAllMembers) {
+		IEnumerable<bool> ScanStringReferences(IReadOnlyList<ModuleEntry> modules, List<StringReferenceDto> found, bool showAllMembers, DecompilerLanguage language) {
 			// dnSpy asks the decompiler which members it shows: C# and VB hide what the compiler made, IL hides nothing.
 			bool Show(IMemberDef member) => showAllMembers || !CompilerGeneratedMembers.IsHidden(member);
+			var writer = new ReferrerWriter(language, TypeColor);
 
 			foreach (var entry in modules) {
 				var module = entry.Module;
-				ScanCustomAttributes(found, entry, module, module, module);
+				ScanCustomAttributes(found, writer, entry, module, module, module);
 				if (module.IsManifestModule && module.Assembly is { } assembly)
-					ScanCustomAttributes(found, entry, assembly, assembly, assembly);
+					ScanCustomAttributes(found, writer, entry, assembly, assembly, assembly);
 			}
 			yield return true;
 
@@ -110,29 +111,29 @@ public sealed partial class WorkspaceManager {
 				foreach (var type in entry.Module.GetTypes()) {
 					if (!Show(type))
 						continue;
-					ScanCustomAttributes(found, entry, type, type, type);
+					ScanCustomAttributes(found, writer, entry, type, type, type);
 					// A type's generic parameters, fields, properties and events are filed under the type: dnSpy's
 					// AnalyzeConstantProviders keeps the type's context and only changes the object.
 					foreach (var genericParam in type.GenericParameters)
-						ScanConstantProvider(found, entry, type, genericParam, Show);
+						ScanConstantProvider(found, writer, entry, type, genericParam, Show);
 					foreach (var field in type.Fields)
-						ScanConstantProvider(found, entry, type, field, Show);
+						ScanConstantProvider(found, writer, entry, type, field, Show);
 					foreach (var property in type.Properties)
-						ScanConstantProvider(found, entry, type, property, Show);
+						ScanConstantProvider(found, writer, entry, type, property, Show);
 					foreach (var @event in type.Events)
-						ScanConstantProvider(found, entry, type, @event, Show);
+						ScanConstantProvider(found, writer, entry, type, @event, Show);
 					foreach (var method in type.Methods) {
 						if (!Show(method))
 							continue;
-						ScanCustomAttributes(found, entry, method, method, method);
+						ScanCustomAttributes(found, writer, entry, method, method, method);
 						foreach (var genericParam in method.GenericParameters)
-							ScanConstantProvider(found, entry, method, genericParam, Show);
+							ScanConstantProvider(found, writer, entry, method, genericParam, Show);
 						foreach (var paramDef in method.ParamDefs)
-							ScanConstantProvider(found, entry, method, paramDef, Show);
+							ScanConstantProvider(found, writer, entry, method, paramDef, Show);
 						if (method.HasBody && method.Body is { HasInstructions: true } body) {
 							foreach (var instruction in body.Instructions) {
 								if (instruction is { OpCode.Code: Code.Ldstr, Operand: string { Length: > 0 } literal })
-									found.Add(ILReference(entry, method, literal, instruction.Offset));
+									found.Add(ILReference(writer, entry, method, literal, instruction.Offset));
 							}
 						}
 					}
@@ -141,59 +142,52 @@ public sealed partial class WorkspaceManager {
 			}
 		}
 
-		void ScanConstantProvider(List<StringReferenceDto> found, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider item, Func<IMemberDef, bool> show) {
+		void ScanConstantProvider(List<StringReferenceDto> found, ReferrerWriter writer, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider item, Func<IMemberDef, bool> show) {
 			if (item is IMemberDef member && !show(member))
 				return;
 			if (item is IHasConstant { Constant: { Type: ElementType.String, Value: string { Length: > 0 } literal } } hasConstant)
-				found.Add(ConstantReference(entry, hasConstant, literal));
+				found.Add(ConstantReference(writer, entry, hasConstant, literal));
 			if (item is IHasCustomAttribute hasCustomAttribute)
-				ScanCustomAttributes(found, entry, container, item, hasCustomAttribute);
+				ScanCustomAttributes(found, writer, entry, container, item, hasCustomAttribute);
 		}
 
-		void ScanCustomAttributes(List<StringReferenceDto> found, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, IHasCustomAttribute provider) {
+		void ScanCustomAttributes(List<StringReferenceDto> found, ReferrerWriter writer, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, IHasCustomAttribute provider) {
 			foreach (var attribute in provider.CustomAttributes) {
 				for (var i = 0; i < attribute.ConstructorArguments.Count; i++)
-					ScanAttributeArgument(found, entry, container, referrer, attribute, $"Argument #{i}", attribute.ConstructorArguments[i].Value);
+					ScanAttributeArgument(found, writer, entry, container, referrer, attribute, $"Argument #{i}", attribute.ConstructorArguments[i].Value);
 				foreach (var argument in attribute.NamedArguments)
-					ScanAttributeArgument(found, entry, container, referrer, attribute, argument.Name.String, argument.Value);
+					ScanAttributeArgument(found, writer, entry, container, referrer, attribute, argument.Name.String, argument.Value);
 			}
 		}
 
-		void ScanAttributeArgument(List<StringReferenceDto> found, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, CustomAttribute attribute, string argumentName, object? value) {
+		void ScanAttributeArgument(List<StringReferenceDto> found, ReferrerWriter writer, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, CustomAttribute attribute, string argumentName, object? value) {
 			switch (value) {
 			case IEnumerable<CAArgument> list:
 				foreach (var item in list)
-					ScanAttributeArgument(found, entry, container, referrer, attribute, argumentName, item.Value);
+					ScanAttributeArgument(found, writer, entry, container, referrer, attribute, argumentName, item.Value);
 				break;
 			case CAArgument argument:
-				ScanAttributeArgument(found, entry, container, referrer, attribute, argumentName, argument.Value);
+				ScanAttributeArgument(found, writer, entry, container, referrer, attribute, argumentName, argument.Value);
 				break;
 			case UTF8String { Length: > 0 } literal:
-				found.Add(AttributeReference(entry, container, referrer, attribute, argumentName, literal.String));
+				found.Add(AttributeReference(writer, entry, container, referrer, attribute, argumentName, literal.String));
 				break;
 			}
 		}
 
-		/// <summary>dnSpy's StringReference.DefaultFormatterOptions: FormatterOptions.Default less parameter names,
-		/// field values, return types and field types.</summary>
-		const CSharpMemberFormatter.Options ReferrerOptions =
-			CSharpMemberFormatter.Options.ParameterTypes | CSharpMemberFormatter.Options.DeclaringTypes | CSharpMemberFormatter.Options.IntrinsicTypeKeywords;
-
-		void WriteMember(TextPartsBuilder output, IMemberDef member) => CSharpMemberFormatter.Write(output, member, ReferrerOptions, TypeColor);
-
 		/// <summary>ILStringReference: the method, then "+IL_xxxx".</summary>
-		StringReferenceDto ILReference(ModuleEntry entry, MethodDef method, string literal, uint offset) {
+		StringReferenceDto ILReference(ReferrerWriter writer, ModuleEntry entry, MethodDef method, string literal, uint offset) {
 			var referrer = new TextPartsBuilder();
-			WriteMember(referrer, method);
+			writer.WriteMember(referrer, method);
 			referrer.Write(TextColors.Punctuation, "+").Write(TextColors.Label, $"IL_{offset:X4}");
 			return Reference(StringReferenceKinds.IL, literal, referrer, ReferrerIcon(method), entry, method.MDToken.Raw, GetMemberNode(method, entry).Id, (int)offset);
 		}
 
 		/// <summary>ConstantStringReference: the field or property, or the parameter's method and the parameter.</summary>
-		StringReferenceDto ConstantReference(ModuleEntry entry, IHasConstant referrer, string literal) {
+		StringReferenceDto ConstantReference(ReferrerWriter writer, ModuleEntry entry, IHasConstant referrer, string literal) {
 			IMemberDef container = referrer is ParamDef { DeclaringMethod: { } method } ? method : (IMemberDef)referrer;
 			var output = new TextPartsBuilder();
-			WriteMember(output, container);
+			writer.WriteMember(output, container);
 			if (referrer is ParamDef paramDef)
 				WriteParameterReference(output, paramDef);
 			return Reference(StringReferenceKinds.Constant, literal, output, ReferrerIcon(container), entry, referrer.MDToken.Raw, GetMemberNode(container, entry).Id, null);
@@ -201,7 +195,7 @@ public sealed partial class WorkspaceManager {
 
 		/// <summary>CustomAttributeStringReference: the container, the parameter the attribute is on, then the
 		/// attribute's type and the argument the string is.</summary>
-		StringReferenceDto AttributeReference(ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, CustomAttribute attribute, string argumentName, string literal) {
+		StringReferenceDto AttributeReference(ReferrerWriter writer, ModuleEntry entry, IMDTokenProvider container, IMDTokenProvider referrer, CustomAttribute attribute, string argumentName, string literal) {
 			var output = new TextPartsBuilder();
 			switch (container) {
 			case ModuleDef module:
@@ -211,7 +205,7 @@ public sealed partial class WorkspaceManager {
 				WriteAssemblyNode(output, assembly);
 				break;
 			case IMemberDef member:
-				WriteMember(output, member);
+				writer.WriteMember(output, member);
 				break;
 			default:
 				output.Write(TextColors.Text, container.ToString());
@@ -223,11 +217,13 @@ public sealed partial class WorkspaceManager {
 				break;
 			case GenericParam genericParam:
 				output.WriteSpace().Write(TextColors.DarkGray, "generic").WriteSpace();
-				output.Write(genericParam.DeclaringMethod is not null ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter, genericParam.Name.String);
+				writer.WriteMember(output, genericParam);
 				break;
 			}
 			output.WriteSpace().Write(TextColors.DarkGray, "attribute").WriteSpace();
-			if (!CSharpTypeName.Write(output, null, attribute.AttributeType, CSharpTypeName.Options.None, TypeColor))
+			if (attribute.AttributeType is { } attributeType)
+				writer.WriteType(output, attributeType);
+			else
 				output.Write(TextColors.Type, attribute.TypeFullName);
 			output.Write(TextColors.Punctuation, " (").Write(TextColors.InstanceProperty, argumentName).Write(TextColors.Punctuation, ")");
 			return Reference(StringReferenceKinds.Attribute, literal, output, ReferrerIcon(container), entry, container.MDToken.Raw, FollowNodeId(entry, referrer), null);
@@ -282,6 +278,31 @@ public sealed partial class WorkspaceManager {
 		static StringReferenceDto Reference(string kind, string literal, TextPartsBuilder referrer, string icon, ModuleEntry entry, uint token, string? nodeId, int? ilOffset) {
 			var formatted = StringLiteralFormatter.Format(literal, out var isVerbatim);
 			return new StringReferenceDto(kind, literal, formatted, isVerbatim, referrer.ToParts(), icon, entry.Module.Name.String, (int)token, nodeId, ilOffset);
+		}
+	}
+
+	/// <summary>
+	/// The decompiler's Write a row's referrer goes through, with dnSpy's StringReference.DefaultFormatterOptions:
+	/// the Visual Basic formatter for VB ("Sub Program.Main(String())"), and the C# one for C# and both IL views,
+	/// which do not override it ("Program.Main(string[])").
+	/// </summary>
+	sealed class ReferrerWriter(DecompilerLanguage language, Func<ITypeDefOrRef, string> typeColor) {
+		/// <summary>FormatterOptions.Default less parameter names, field values, return types and field types.</summary>
+		const CSharpMemberFormatter.Options Options =
+			CSharpMemberFormatter.Options.ParameterTypes | CSharpMemberFormatter.Options.DeclaringTypes | CSharpMemberFormatter.Options.IntrinsicTypeKeywords;
+
+		public void WriteMember(TextPartsBuilder output, IMemberDef member) {
+			if (language == DecompilerLanguage.VisualBasic)
+				VisualBasicMemberFormatter.Write(output, member, Options, typeColor);
+			else
+				CSharpMemberFormatter.Write(output, member, Options, typeColor);
+		}
+
+		public void WriteType(TextPartsBuilder output, ITypeDefOrRef type) {
+			if (language == DecompilerLanguage.VisualBasic)
+				VisualBasicMemberFormatter.WriteType(output, type, Options, typeColor);
+			else
+				CSharpMemberFormatter.WriteType(output, type, Options, typeColor);
 		}
 	}
 

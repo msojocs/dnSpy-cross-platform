@@ -1,6 +1,7 @@
 import { create } from 'zustand'
-import type { StringReference, StringReferencesProgress } from '../../shared/protocol'
+import type { DecompilerLanguage, StringReference, StringReferencesProgress } from '../../shared/protocol'
 import { useAppStore } from './app-store'
+import { loadAppOptions } from './components/app-options'
 import { translate as t } from './localization'
 
 // dnSpy's String References window (StringReferencesService). A scan reads every module of the assemblies it was
@@ -38,11 +39,10 @@ const message = (reason: unknown): string => reason instanceof Error ? reason.me
 /** The part of a batch the list does not hold yet: the batch starts at `start` among everything found. */
 const unseen = (batch: StringReference[], start: number, held: number): StringReference[] => batch.slice(Math.max(held - start, 0))
 
-/** dnSpy asks the decompiler which members it shows: IL shows the ones the compiler made, C# and VB do not. */
-const showsAllMembers = (): boolean => {
-  const language = useAppStore.getState().defaultLanguage
-  return language === 'il' || language === 'ilWithCSharp'
-}
+/** dnSpy asks the decompiler which members it shows: IL shows the ones the compiler made, C# and VB only when
+ * "Show hidden compiler generated types and methods" is on. */
+const showsAllMembers = (language: DecompilerLanguage): boolean =>
+  language === 'il' || language === 'ilWithCSharp' || loadAppOptions().decompiler.cSharp.forceShowAllMembers
 
 const scan = (request: { nodeIds?: string[]; modulePaths?: string[] }): void => {
   const store = useStringReferencesStore
@@ -56,7 +56,9 @@ const scan = (request: { nodeIds?: string[]; modulePaths?: string[] }): void => 
   }
   const requestKey = `strings-${++nextRequestKey}`
   store.setState({ references: [], scanning: true, requestKey })
-  window.dnSpy.searchStringReferences(workspaceId, { ...request, showAllMembers: showsAllMembers() }, requestKey).then((response) => {
+  // The rows are written by the decompiler that is selected, the way dnSpy's StringReferenceContext holds it.
+  const language = useAppStore.getState().defaultLanguage
+  window.dnSpy.searchStringReferences(workspaceId, { ...request, showAllMembers: showsAllMembers(language), language }, requestKey).then((response) => {
     if (store.getState().requestKey !== requestKey)
       return
     store.setState((state) => ({

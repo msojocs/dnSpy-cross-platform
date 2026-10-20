@@ -1812,6 +1812,56 @@ test.describe('the String References window', () => {
     await rows.first().dblclick()
     await expect(page.getByRole('tab', { name: /^Holder/ })).toBeVisible()
   })
+
+  test('writes its rows in the language the toolbar picks and follows an ldstr to its statement in each view', async () => {
+    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
+    const assemblyRow = page.locator('.tree-row[data-kind="assembly"]').first()
+    await expect(assemblyRow).toContainText('StringTarget')
+    await assemblyRow.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: /^Find String References in Module/ }).click()
+    const grid = page.getByRole('grid', { name: 'String References' })
+    const rows = grid.locator('.strings-row')
+    await page.getByRole('textbox', { name: 'Search' }).fill('Hello, ')
+    await expect(rows).toHaveCount(1)
+    const referrer = rows.first().locator('.strings-referrer')
+    const editor = page.locator('.monaco-editor').filter({ visible: true })
+    const caret = editor.locator('.cursors-layer > .cursor')
+
+    /** Follows the row from the top of the document, and waits for the caret on the line of the ldstr's statement. */
+    const followsTo = async (line: Locator): Promise<void> => {
+      if (await editor.count() > 0) {
+        await focusEditor(editor)
+        await page.keyboard.press('Control+Home')
+      }
+      await rows.first().dblclick()
+      await expect(line).toBeVisible()
+      await expect.poll(async () => {
+        const caretBox = await caret.boundingBox()
+        const lineBox = await line.boundingBox()
+        if (!caretBox || !lineBox)
+          return false
+        const caretMiddle = caretBox.y + caretBox.height / 2
+        return caretMiddle >= lineBox.y && caretMiddle <= lineBox.y + lineBox.height
+      }).toBe(true)
+    }
+
+    await expect(referrer).toHaveText(/^Holder\.Greet\(\[string\]\)\+IL_[0-9A-F]{4}$/)
+    await followsTo(editor.locator('.view-line').filter({ hasText: /return\s"Hello,\s"/ }))
+
+    // dnSpy writes a referrer through the selected decompiler: Visual Basic's formatter has its own words, and
+    // the statement is found in the VB view's own statement table.
+    await page.getByLabel('Decompiler language').selectOption('visualBasic')
+    await expect(editor).toHaveAttribute('data-language-id', 'vb')
+    await expect(referrer).toHaveText(/^Function Holder\.Greet\(\[String\]\)\+IL_[0-9A-F]{4}$/)
+    await followsTo(editor.locator('.view-line').filter({ hasText: /Return\s"Hello,\s"/ }))
+
+    // The IL views do not override the decompiler's Write, so the row reads as in C#; following goes to the
+    // instruction.
+    await page.getByLabel('Decompiler language').selectOption('il')
+    await expect(editor).toHaveAttribute('data-language-id', 'il')
+    await expect(referrer).toHaveText(/^Holder\.Greet\(\[string\]\)\+IL_[0-9A-F]{4}$/)
+    await followsTo(editor.locator('.view-line').filter({ hasText: /ldstr\s+"Hello,\s"/ }))
+  })
 })
 
 /** Opens the debuggee and unfolds it down to its namespace, which is where its own documents hang off. */

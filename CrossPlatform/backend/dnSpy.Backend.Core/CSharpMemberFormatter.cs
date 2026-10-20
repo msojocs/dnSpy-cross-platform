@@ -122,6 +122,13 @@ sealed class CSharpMemberFormatter {
 	public static void WriteToolTip(TextPartsBuilder output, IMemberDef member, Options options, Func<ITypeDefOrRef, string>? typeColor = null) =>
 		new CSharpMemberFormatter(output, options, typeColor).WriteMemberToolTip(member);
 
+	/// <summary>
+	/// Writes a type reference the way <c>CSharpFormatter.Write(IMemberRef)</c> does: by name, after its enclosing
+	/// types, and an instantiated generic with its arguments.
+	/// </summary>
+	public static void WriteType(TextPartsBuilder output, ITypeDefOrRef type, Options options, Func<ITypeDefOrRef, string>? typeColor = null) =>
+		new CSharpMemberFormatter(output, options, typeColor).Write(type, (options & Options.ModuleNames) != 0);
+
 	static string DefaultTypeColor(ITypeDefOrRef type) =>
 		MetadataTextColors.Of(type, reference => reference as TypeDef ?? (reference is TypeRef typeRef ? typeRef.Module?.Find(typeRef) : null));
 
@@ -143,6 +150,9 @@ sealed class CSharpMemberFormatter {
 				break;
 			case TypeDef type:
 				Write(type, Has(Options.ModuleNames));
+				break;
+			case GenericParam genericParam:
+				WriteIdentifier(genericParam.Name, genericParam.DeclaringMethod is not null ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter);
 				break;
 			default:
 				WriteError();

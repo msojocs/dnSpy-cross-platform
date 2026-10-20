@@ -1982,15 +1982,17 @@ public sealed record SelectMemberResponse(string? NodeId);
 /// <summary>
 /// Scans for the strings dnSpy's String References window lists. <paramref name="NodeIds"/> are tree nodes whose
 /// assemblies are scanned, every module of each; <paramref name="ModulePaths"/> are modules a scan read before,
-/// which a refresh reads again. <paramref name="ShowAllMembers"/> is set when the current language shows the members
-/// the compiler made (IL); C# and VB leave them out, as dnSpy's decompilers do.
+/// which a refresh reads again. <paramref name="ShowAllMembers"/> is set when the current decompiler shows the members
+/// the compiler made (IL, or C# and VB with "Show hidden compiler generated types and methods"); otherwise they are
+/// left out, as dnSpy's decompilers do. <paramref name="Language"/> is the decompiler the referrers are written in.
 /// </summary>
 public sealed record StringReferencesSearchRequest(
 	string WorkspaceId,
 	IReadOnlyList<string>? NodeIds = null,
 	IReadOnlyList<string>? ModulePaths = null,
 	bool ShowAllMembers = false,
-	string? ProgressToken = null);
+	string? ProgressToken = null,
+	DecompilerLanguage Language = DecompilerLanguage.CSharp);
 
 /// <summary>
 /// What a scan found, in the order it found it. <paramref name="Start"/> is where the first of them stands among

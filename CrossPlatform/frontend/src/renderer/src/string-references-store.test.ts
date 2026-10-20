@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StringReference, StringReferencesSearchResponse } from '../../shared/protocol'
 import { useAppStore } from './app-store'
+import { loadAppOptions, saveAppOptions } from './components/app-options'
 import { useStringReferencesStore } from './string-references-store'
 
 const reference = (literal: string): StringReference => ({
@@ -41,7 +42,7 @@ describe('the String References store', () => {
   it('scans the nodes\' assemblies, takes the batches that arrive, then the rest', async () => {
     useStringReferencesStore.getState().analyze(['node-1'])
 
-    expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: false }, expect.stringMatching(/^strings-/))
+    expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: false, language: 'cSharp' }, expect.stringMatching(/^strings-/))
     const requestKey = useStringReferencesStore.getState().requestKey!
     expect(useStringReferencesStore.getState().scanning).toBe(true)
 
@@ -62,7 +63,27 @@ describe('the String References store', () => {
 
     useStringReferencesStore.getState().analyze(['node-1'])
 
-    expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: true }, expect.any(String))
+    expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: true, language: 'il' }, expect.any(String))
+  })
+
+  it('writes the rows in the language the toolbar picks', () => {
+    useAppStore.setState({ defaultLanguage: 'visualBasic' })
+
+    useStringReferencesStore.getState().analyze(['node-1'])
+
+    expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: false, language: 'visualBasic' }, expect.any(String))
+  })
+
+  it('lists the members the compiler made in C# and VB when the decompiler is told to show them', () => {
+    const options = loadAppOptions()
+    saveAppOptions({ ...options, decompiler: { ...options.decompiler, cSharp: { ...options.decompiler.cSharp, forceShowAllMembers: true } } })
+    try {
+      useStringReferencesStore.getState().analyze(['node-1'])
+
+      expect(searchStringReferences).toHaveBeenCalledWith('ws', { nodeIds: ['node-1'], showAllMembers: true, language: 'cSharp' }, expect.any(String))
+    } finally {
+      saveAppOptions(options)
+    }
   })
 
   it('calls off the scan a new one replaces', () => {
@@ -78,13 +99,13 @@ describe('the String References store', () => {
   it('refreshes the modules it read, or scans the tree\'s selection when it has none', async () => {
     useAppStore.setState({ selectedNodes: [{ id: 'selected', kind: 'type', label: 'T', hasChildren: false } as never] })
     useStringReferencesStore.getState().refresh()
-    expect(searchStringReferences).toHaveBeenLastCalledWith('ws', { nodeIds: ['selected'], showAllMembers: false }, expect.any(String))
+    expect(searchStringReferences).toHaveBeenLastCalledWith('ws', { nodeIds: ['selected'], showAllMembers: false, language: 'cSharp' }, expect.any(String))
     resolvers[0]({ references: [], start: 0, modulePaths: ['/A.dll'] })
     await flush()
 
     useStringReferencesStore.getState().refresh()
 
-    expect(searchStringReferences).toHaveBeenLastCalledWith('ws', { modulePaths: ['/A.dll'], showAllMembers: false }, expect.any(String))
+    expect(searchStringReferences).toHaveBeenLastCalledWith('ws', { modulePaths: ['/A.dll'], showAllMembers: false, language: 'cSharp' }, expect.any(String))
   })
 
   it('starts a scan of the selection from the search box only when it has no modules yet', () => {

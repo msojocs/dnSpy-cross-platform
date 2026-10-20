@@ -593,8 +593,11 @@ export interface StringReferencesSearchRequest {
   nodeIds?: string[]
   /** Modules an earlier scan read, which a refresh reads again. */
   modulePaths?: string[]
-  /** The current language shows the members the compiler made (IL); C# and VB leave them out. */
+  /** The current decompiler shows the members the compiler made: IL, or C# and VB with "Show hidden compiler
+   * generated types and methods". Otherwise they are left out. */
   showAllMembers?: boolean
+  /** The decompiler the referrers are written in — VB's formatter for VB, C#'s for the rest. */
+  language?: DecompilerLanguage
 }
 
 export interface StringReferencesSearchResponse {

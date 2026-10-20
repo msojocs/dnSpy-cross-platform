@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -52,13 +52,13 @@
 | 代码编辑器与文档标签 | ~98% | 29 | 1 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；只差虚拟空格、独立选择边距与行压缩三项选项 |
 | Hex 编辑器（浏览） | ~84% | 24 | 4 | 3 | 0 | 整文件滚动转储、光标与选区、键入改写、右键菜单、四个对话框与查找；缺结构信息与 F12 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
-| 字符串引用窗口 | ~95% | 20 | 2 | 0 | 0 | 三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新齐备；来源列只按 C# 书写，IL/VB 视图跟随不定位语句 |
+| 字符串引用窗口 | 100% | 22 | 0 | 0 | 0 | 全部功能点对齐 WPF：三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新；来源列随工具栏语言经该反编译器的格式化器书写（VB 用自己的，IL 与 C# 同），C#/VB/IL 视图里跟随 ldstr 都定位到所在语句 |
 | dnSpy.Console 命令行 | ~92% | 11 | 2 | 0 | 0 | 跨平台 CLI 已就位：项目导出（SDK/传统工程、.sln/.slnx、GAC 与程序集解析、资源与 BAML 开关）、单个类型/成员输出（C#/VB/IL/IL with C#）、彩色与 `--spaces` 都对齐 WPF；语言选项是子集，VB 工程由 C# 转换而来 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，完成度约 **96%**（2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31，完成度约 **97%**（2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -523,9 +523,9 @@
 
 ### 4.11 字符串引用窗口
 
-完成度约 95%（✅ 20 / 🟡 2）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。2026-10-16 按实现与测试复核：此前标的 100% 那一版后端编译不过（`WorkspaceManager.StringReferences.cs` 十几处错误）、前端引用了未安装的 `react-i18next`、树右键入口恒不可见，已整体重写。
+完成度 100%（✅ 22）。WPF 范围：`Extensions/dnSpy.StringSearcher/`。2026-10-16 按实现与测试复核：此前标的 100% 那一版后端编译不过（`WorkspaceManager.StringReferences.cs` 十几处错误）、前端引用了未安装的 `react-i18next`、树右键入口恒不可见，已整体重写。2026-10-20 补齐剩余两项：来源列按工具栏语言书写；IL/VB 视图有了语句表（见第 2 节第 3 条）后，跟随 ldstr 在三种视图里都定位到语句，并有 e2e 实测。
 
-跨平台实现：`BE/WorkspaceManager.StringReferences.cs`（扫描、来源格式化、跟随目标、`StringLiteralFormatter` 即 WPF 的 `StringFormatter`），RPC `stringReferences/search` 与进度通知 `stringReferences/progress`；`FE/string-references-store.ts`（扫描、刷新、跟随工作区）、`FE/string-references-model.ts`（过滤与 WPF 各比较器）、`FE/components/StringReferencesPane.tsx`、`StringReferencesContextMenu.tsx`。
+跨平台实现：`BE/WorkspaceManager.StringReferences.cs`（扫描、来源格式化、跟随目标、`StringLiteralFormatter` 即 WPF 的 `StringFormatter`；`ReferrerWriter` 即 WPF 的 `Context.Decompiler.Write`，按语言选 `CSharpMemberFormatter` 或 `VisualBasicMemberFormatter`），RPC `stringReferences/search` 与进度通知 `stringReferences/progress`；`FE/string-references-store.ts`（扫描、刷新、跟随工作区）、`FE/string-references-model.ts`（过滤与 WPF 各比较器）、`FE/components/StringReferencesPane.tsx`、`StringReferencesContextMenu.tsx`。
 
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
@@ -536,16 +536,16 @@
 | IL ldstr（每条一行，带 IL 偏移） | `ILStringReference.cs` | ✅ | 空字符串不列 |
 | 常量（字段、属性、参数默认值） | `ConstantStringReference.cs` | ✅ | |
 | 自定义特性参数 | `CustomAttributeStringReference.cs` | ✅ | 构造参数（Argument #n）、命名参数、数组逐项；模块、程序集、类型、方法、字段、属性、事件、参数（含返回值）、泛型参数上的特性。字段等成员的特性按 WPF 归在类型名下，跟随仍到成员本身 |
-| 按当前反编译器隐藏编译器生成成员 | `Decompiler.ShowMember` | ✅ | C#/VB 隐藏 lambda、状态机等，IL 全部列出；切换语言自动重扫 |
+| 按当前反编译器隐藏编译器生成成员 | `Decompiler.ShowMember` | ✅ | C#/VB 隐藏 lambda、状态机等，IL 全部列出；C#/VB 打开「显示隐藏的编译器生成类型和方法」（`ForceShowAllMembers`）时也全部列出，与 WPF 一样在下次扫描时生效；切换语言自动重扫 |
 | 子串过滤 | `ApplyFilter` | ✅ | 绑定延迟 100 ms，与 WPF 相同 |
 | 区分大小写 | `SearchCaseSensitive` | ✅ | |
 | 正则表达式 | `SearchIsRegex` | ✅ | 非法模式时保留原过滤、搜索框标红并在提示里写原因。用的是 JavaScript 正则，个别 .NET 专有语法不同 |
 | 按格式化后的字符串匹配 | `SearchMatchFormattedString` | ✅ | |
 | 四列（种类、文本、来源、模块） | `StringsControl.xaml` | ✅ | WPF 的列序与列宽；字面量按普通/逐字字符串着色，来源带容器图标与语法着色，「parameter」「attribute」「generic」等用 dnSpy 的灰色并随界面语言翻译 |
-| 来源列随当前语言格式化 | `Decompiler.Write(...)` | 🟡 | 一律按 C# 格式化器（WPF `StringReference.DefaultFormatterOptions` 的选项）书写；WPF 选 VB 或 IL 时按该语言书写 |
+| 来源列随当前语言格式化 | `Decompiler.Write(...)` | ✅ | 用 WPF `StringReference.DefaultFormatterOptions` 的选项，经所选反编译器的 `Write`：VB 用 VB 格式化器（`Function Holder.Greet([String])+IL_0000`、`Holder.Constant As String`），C#、IL 与 IL with C#（两者不重写 `Write`）用 C# 格式化器；特性类型与泛型参数也经同一格式化器（WPF 的 `Write(IMemberRef)`）。请求带上语言，切换语言即重扫重写 |
 | 列头排序 | `StringsControlVM.UpdateSortDescriptions` | ✅ | 升序 → 降序 → 还原；无排序时按种类、令牌、IL 偏移；文本与来源列忽略大小写，模块列只在 IL 行之间比模块（照 WPF 的 `ModuleComparer` 写法） |
 | 列拖动重排与调整列宽 | `GridView AllowsColumnReorder` | ✅ | |
-| 跟随（双击、Enter，Ctrl/Shift 新标签） | `FollowReference` | 🟡 | ldstr 在 C# 视图里定位到所在语句；IL/VB 视图没有语句表（见第 2 节第 3 条），只打开方法 |
+| 跟随（双击、Enter，Ctrl/Shift 新标签） | `FollowReference` | ✅ | ldstr 按当前视图的语句表定位到包含该 IL 偏移的语句起点（WPF `FindByCodeOffset` 后 `MoveCaretToPosition`）：C# 的 `return "Hello, " + name;`、VB 的 `Return "Hello, " & name`、IL 的 `ldstr` 指令行 |
 | 右键菜单 | `Commands.cs` | ✅ | 复制字符串文本（格式化，Ctrl+C）/（原始）；转到代码中的引用 / 在新标签页中转到 |
 | Ctrl+C 复制格式化文本 | `StringSearcherCommandLoader` | ✅ | |
 | 刷新按钮 | `RefreshCommand` | ✅ | 有已扫描模块时重扫，否则扫描树的选中项 |
@@ -554,7 +554,7 @@
 
 扫描在工作区锁内按类型分片进行，结果分批推送到列表（对应 WPF 边扫边加），新扫描会取消正在进行的那次。
 
-测试：后端 `WorkspaceStringReferencesTests.cs` 13 条（夹具 `backend/tests/StringTarget`：三类来源与来源文字、字面量格式化规则、编译器生成成员、跟随目标、整程序集扫描、按模块刷新、分批结果与一次扫描一致）；前端 `string-references-model.test.ts`（排序与过滤）、`string-references-store.test.ts`（扫描、批次、取消、刷新、跟随工作区）、`StringReferencesPane.test.tsx`（列、过滤延迟、非法正则、排序、列重排、跟随与复制、右键菜单、焦点）、`AssemblyExplorerContextMenu.test.tsx` 与 `MenuBar.test.tsx` 的入口；e2e「the String References window」。
+测试：后端 `WorkspaceStringReferencesTests.cs` 14 条（夹具 `backend/tests/StringTarget`：三类来源与来源文字、按语言书写来源（VB 与两种 IL）、字面量格式化规则、编译器生成成员、跟随目标、整程序集扫描、按模块刷新、分批结果与一次扫描一致）；前端 `string-references-model.test.ts`（排序与过滤）、`string-references-store.test.ts`（扫描、批次、取消、刷新、跟随工作区、请求带语言、`ForceShowAllMembers`）、`StringReferencesPane.test.tsx`（列、过滤延迟、非法正则、排序、列重排、跟随与复制、右键菜单、焦点）、`AssemblyExplorerContextMenu.test.tsx` 与 `MenuBar.test.tsx` 的入口；e2e「the String References window」2 条，新增「writes its rows in the language the toolbar picks and follows an ldstr to its statement in each view」覆盖 C#→VB→IL 的来源列重写与三种视图里光标落到语句行（去掉定位调用时该条失败）。2026-10-20 本机真实构建后：后端 617、前端单测 1454、e2e 107 通过 3 跳过，全绿。
 
 ### 4.12 程序集编辑（AsmEditor）与保存
 

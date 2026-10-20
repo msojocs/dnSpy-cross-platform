@@ -103,6 +103,34 @@ public sealed class WorkspaceStringReferencesTests : IDisposable {
 	}
 
 	[Fact]
+	public async Task TheReferrerIsWrittenByTheDecompilerThatIsSelected() {
+		var (workspaceId, nodeId) = await OpenAsync();
+		async Task<IReadOnlyList<StringReferenceDto>> ScanIn(DecompilerLanguage language) =>
+			(await manager.SearchStringReferencesAsync(new StringReferencesSearchRequest(workspaceId, [nodeId], Language: language), Token)).References;
+
+		// Visual Basic has a formatter of its own: a method after its Sub or Function, a field with its type
+		// whatever the options say, the attribute's type and a generic parameter written by it as well.
+		var vb = await ScanIn(DecompilerLanguage.VisualBasic);
+		var greeting = Find(vb, "Hello, ");
+		Assert.Equal($"Function Holder.Greet([String])+IL_{greeting.IlOffset:X4}", Referrer(greeting));
+		Assert.Contains(greeting.ReferrerParts, part => part.Text == "Function" && part.Color == TextColors.Keyword);
+		Assert.Contains(greeting.ReferrerParts, part => part.Text == "String" && part.Color == TextColors.Keyword);
+		Assert.Equal("Holder.Constant As String", Referrer(Find(vb, "field constant")));
+		Assert.Equal("Function Holder.Greet([String]) parameter name", Referrer(Find(vb, "default name")));
+		Assert.Equal("Function Holder.Later() parameter return attribute NoteAttribute (Argument #0)", Referrer(Find(vb, "return note")));
+		Assert.Equal("Holder generic T attribute NoteAttribute (Argument #0)", Referrer(Find(vb, "generic note")));
+		Assert.Contains(Find(vb, "generic note").ReferrerParts, part => part.Text == "T" && part.Color == TextColors.TypeGenericParameter);
+		Assert.Equal("StringTarget (1.0.0.0) attribute AssemblyMetadataAttribute (Argument #1)", Referrer(Find(vb, "assembly value")));
+
+		// Neither IL view overrides the decompiler's Write, so both go through the C# formatter.
+		foreach (var language in new[] { DecompilerLanguage.IL, DecompilerLanguage.ILWithCSharp }) {
+			var il = await ScanIn(language);
+			Assert.Equal($"Holder.Greet([string])+IL_{greeting.IlOffset:X4}", Referrer(Find(il, "Hello, ")));
+			Assert.Equal("Holder.Constant", Referrer(Find(il, "field constant")));
+		}
+	}
+
+	[Fact]
 	public async Task TheCSharpViewLeavesOutWhatTheCompilerMadeAndILShowsIt() {
 		var (workspaceId, nodeId) = await OpenAsync();
 

@@ -123,6 +123,13 @@ sealed class VisualBasicMemberFormatter {
 	public static void WriteToolTip(TextPartsBuilder output, IMemberDef member, CSharpMemberFormatter.Options options, Func<ITypeDefOrRef, string>? typeColor = null) =>
 		new VisualBasicMemberFormatter(output, options, typeColor).WriteMemberToolTip(member);
 
+	/// <summary>
+	/// Writes a type reference the way <c>VisualBasicFormatter.Write(IMemberRef)</c> does: by name, after its
+	/// enclosing types, and an instantiated generic with its arguments.
+	/// </summary>
+	public static void WriteType(TextPartsBuilder output, ITypeDefOrRef type, CSharpMemberFormatter.Options options, Func<ITypeDefOrRef, string>? typeColor = null) =>
+		new VisualBasicMemberFormatter(output, options, typeColor).Write(type, (options & CSharpMemberFormatter.Options.ModuleNames) != 0);
+
 	static string DefaultTypeColor(ITypeDefOrRef type) =>
 		MetadataTextColors.Of(type, reference => reference as TypeDef ?? (reference is TypeRef typeRef ? typeRef.Module?.Find(typeRef) : null));
 
@@ -144,6 +151,9 @@ sealed class VisualBasicMemberFormatter {
 				break;
 			case TypeDef type:
 				Write(type, Has(CSharpMemberFormatter.Options.ModuleNames));
+				break;
+			case GenericParam genericParam:
+				WriteIdentifier(genericParam.Name, genericParam.DeclaringMethod is not null ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter);
 				break;
 			// dnSpy writes nothing for anything else.
 		}

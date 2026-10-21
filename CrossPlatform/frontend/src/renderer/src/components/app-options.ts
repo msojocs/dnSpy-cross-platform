@@ -8,6 +8,7 @@
  * dnSpy/dnSpy.Contracts.DnSpy/Settings/Dialog/AppSettingsConstants.cs.
  */
 
+import { hexCodePageOf } from '../hex-encodings'
 import { useSyncExternalStore } from 'react'
 import { resolveTheme } from '../theme-service'
 import type { StringReferencesSettings } from '../string-references-model'
@@ -342,7 +343,7 @@ export interface HexEditorGeneralSettings {
   enableColorization: boolean
   groupSizeInBytes: number
   hexOffsetFormat: HexOffsetFormat
-  /** Name of the text encoding, as listed by .NET's `Encoding.GetEncodings()`. */
+  /** The code page of the text encoding, one of .NET's `Encoding.GetEncodings()` (`EncodingCodePage`). */
   encoding: string
 }
 
@@ -564,7 +565,7 @@ const defaultHexEditor = (): HexEditorPaneOptions => ({
     enableColorization: true,
     groupSizeInBytes: 0,
     hexOffsetFormat: 'hex',
-    encoding: 'utf8',
+    encoding: '65001',
   },
   scrollBars: defaultScrollBars(),
   advanced: {
@@ -873,6 +874,15 @@ const migrateLegacyFont = (options: AppOptions): AppOptions => {
   return { ...options, environmentFont: { byTheme } }
 }
 
+/** The hex encoding used to be one of five names; it is a code page now, as dnSpy stores it. */
+const migrateHexEncodings = (options: AppOptions): AppOptions => {
+  for (const view of Object.keys(options.hexEditor) as HexEditorView[]) {
+    const general = options.hexEditor[view].general
+    general.encoding = String(hexCodePageOf(general.encoding))
+  }
+  return options
+}
+
 export const loadAppOptions = (): AppOptions => {
   if (typeof localStorage === 'undefined')
     return cloneDefault()
@@ -881,7 +891,7 @@ export const loadAppOptions = (): AppOptions => {
     return cloneDefault()
   try {
     const parsed = JSON.parse(raw) as Partial<AppOptions>
-    return migrateLegacyFont(deepMerge(cloneDefault(), parsed))
+    return migrateHexEncodings(migrateLegacyFont(deepMerge(cloneDefault(), parsed)))
   }
   catch {
     return cloneDefault()

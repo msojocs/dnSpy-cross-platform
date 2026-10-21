@@ -10,11 +10,13 @@ namespace dnSpy.Backend.Core.HexFiles {
 	/// <list type="bullet">
 	/// <item>A <see cref="HexBuffer"/> over the patched file, and the <see cref="HexBufferFileService"/> of it with the one
 	/// top-level file AsmEditor's HexBufferFileBufferServiceListener creates for every buffer —
-	/// <c>CreateFile(buffer.Span, buffer.Name, buffer.Name, [])</c>. The structure providers create the nested files
-	/// (embedded resources, the elements of a multi-file .resources) as they initialize.</item>
+	/// <c>CreateFile(buffer.Span, buffer.Name, buffer.Name, [])</c>; or a <see cref="HexBuffer"/> over a debugged
+	/// process's memory with a top-level file for each loaded module, the way the debugger's BufferFileCreator creates
+	/// them for the Memory window. The structure providers create the nested files (embedded resources, the elements
+	/// of a multi-file .resources) as they initialize.</item>
 	/// <item>The structure providers: PE, then .NET (<c>Order(After = PE)</c>), then the multi-file resource one.
-	/// No BufferFileHeadersProviderFactory or PeFileLayoutProvider is exported for a document's hex view in dnSpy, so
-	/// there are none here either.</item>
+	/// No BufferFileHeadersProviderFactory or PeFileLayoutProvider is exported in dnSpy, so there are none here
+	/// either; a module of a process says its layout with a <see cref="PredefinedBufferFileTags"/> tag.</item>
 	/// <item>The HexFileStructureInfoService's providers. All of them are ordered <c>Before = Default</c> and claim
 	/// different structures, so their order among themselves only shows where two answer the same question, which
 	/// none does: dnSpy-DotNet (tooltips and references of the .NET structures), PE and DotNet (field references and
@@ -33,15 +35,26 @@ namespace dnSpy.Backend.Core.HexFiles {
 		/// <param name="entry">The document whose file the buffer is.</param>
 		/// <param name="peField">What AsmEditor's provider answers for a position of the top-level PE file
 		/// (<see cref="AsmEditorHexFileStructureInfoProvider"/>), or null for a document that has no PE tree.</param>
-		public HexStructureModel(WorkspaceManager.IModuleEntry entry, Func<HexPosition, object?>? peField) {
-			Buffer = new HexBuffer(entry);
+		public HexStructureModel(WorkspaceManager.IModuleEntry entry, Func<HexPosition, object?>? peField)
+			: this(new HexBuffer(entry), peField is null ? null : (_, position) => peField(position), buffer => [new BufferFileOptions(buffer.Span, buffer.Name, buffer.Name, [])]) {
+		}
+
+		/// <param name="buffer">The bytes.</param>
+		/// <param name="peField">What AsmEditor's provider answers for a position of a PE file, or null when there is no
+		/// PE tree to find a node in.</param>
+		/// <param name="files">The top-level files: a document's one file, or the modules a process has loaded
+		/// (the debugger's BufferFileCreator).</param>
+		public HexStructureModel(HexBuffer buffer, Func<HexBufferFile, HexPosition, object?>? peField, Func<HexBuffer, BufferFileOptions[]> files) {
+			Buffer = buffer;
 			StructureProviderFactory[] structureProviderFactories = [
 				new PeStructureProviderFactory(),
 				new DotNetStructureProviderFactory(),
 				new MultiResourceStructureProviderFactory(),
 			];
 			FileService = new HexBufferFileServiceImpl(Buffer, structureProviderFactories, []);
-			FileService.CreateFile(Buffer.Span, Buffer.Name, Buffer.Name, []);
+			var options = files(Buffer);
+			if (options.Length > 0)
+				FileService.CreateFiles(options);
 			var toolTipCreatorFactory = new ToolTipCreatorFactoryImpl();
 			HexFileStructureInfoProvider[] providers = [
 				new DnSpy.DotNetHexFileStructureInfoProvider(toolTipCreatorFactory),
@@ -63,12 +76,12 @@ namespace dnSpy.Backend.Core.HexFiles {
 	/// AsmEditor's view models, so the workspace answers the question (<paramref name="peField"/>) and turns the
 	/// answer into a node when the reference is followed.
 	/// </summary>
-	sealed class AsmEditorHexFileStructureInfoProvider(Func<HexPosition, object?>? peField) : HexFileStructureInfoProvider {
+	sealed class AsmEditorHexFileStructureInfoProvider(Func<HexBufferFile, HexPosition, object?>? peField) : HexFileStructureInfoProvider {
 		public override object? GetReference(HexBufferFile file, ComplexData structure, HexPosition position) {
 			// PEStructure.TryCreate: only a file the PE structure provider read headers out of has the structures.
 			if (peField is null || file.GetHeaders<PeHeaders>() is null)
 				return null;
-			return peField(position);
+			return peField(file, position);
 		}
 
 		public override HexIndexes[]? GetSubStructureIndexes(HexBufferFile file, ComplexData structure, HexPosition position) {

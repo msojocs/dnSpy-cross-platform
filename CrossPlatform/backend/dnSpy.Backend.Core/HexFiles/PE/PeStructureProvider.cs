@@ -27,8 +27,9 @@ namespace dnSpy.Backend.Core.HexFiles.PE {
 	sealed class PeStructureProviderFactory : StructureProviderFactory {
 		readonly PeFileLayoutProvider[] peFileLayoutProviders;
 
-		// dnSpy imports every PeFileLayoutProvider; only its debugger's memory window exports one, and a document's
-		// hex view is always a file, so there is none here and the reader falls back on the file layout.
+		// dnSpy imports every PeFileLayoutProvider but exports none, not even for the debugger's Memory window: a file
+		// whose layout no tag names falls back on the reader's own guess (the .NET header, then unreadable pages of a
+		// process's memory, then the buffer's kind).
 		public PeStructureProviderFactory() => peFileLayoutProviders = [];
 
 		public override StructureProvider? Create(HexBufferFile file) => new PeStructureProvider(file, peFileLayoutProviders);

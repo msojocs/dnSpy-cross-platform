@@ -282,6 +282,23 @@ public static class RpcMethods {
 	public const string ProjectExport = "project/export";
 	/// <summary>A notification: how far project/export has got, and the errors it logged since the last one.</summary>
 	public const string ProjectExportProgress = "project/exportProgress";
+	/// <summary>The Memory window's hover: the fields to highlight around an address of a debugged process and the
+	/// tooltip of the field under it, over the structures of the modules the process has loaded.</summary>
+	public const string DebugMemoryToolTipInfo = "debug/memoryToolTipInfo";
+	/// <summary>What the Memory window's context menu needs for an address — hex/getPositionInfo over a process.</summary>
+	public const string DebugMemoryPositionInfo = "debug/memoryPositionInfo";
+	/// <summary>The Memory window's Go to Position with a file offset or an RVA of the module at the caret.</summary>
+	public const string DebugMemoryResolvePosition = "debug/memoryResolvePosition";
+	/// <summary>The Memory window's Go to Metadata over the metadata of the module at the caret.</summary>
+	public const string DebugMemoryGoToMetadata = "debug/memoryGoToMetadata";
+	/// <summary>Whether the module at an address of the Memory window has PE headers and .NET metadata.</summary>
+	public const string DebugMemoryFileInfo = "debug/memoryFileInfo";
+	/// <summary>Drops the Memory window's cached structure bytes, including writes made outside the debugger.</summary>
+	public const string DebugMemoryRefresh = "debug/memoryRefresh";
+	/// <summary>The encodings the hex editor's ASCII column can type in — dnSpy's hex options page list.</summary>
+	public const string TextGetEncodings = "text/getEncodings";
+	/// <summary>Text as the bytes one encoding makes of it, for typing or pasting into the hex editor's ASCII column.</summary>
+	public const string TextEncode = "text/encode";
 }
 
 public static class ErrorCodes {
@@ -3264,3 +3281,99 @@ public sealed record HexSearchRequest(
 
 /// <summary>Where each match starts, in the order dnSpy's FindAll yields them.</summary>
 public sealed record HexSearchResponse(IReadOnlyList<long> Offsets);
+
+/// <summary>An address of a debugged process, the way the Memory window's hover and context menu ask about it.</summary>
+public sealed record DebugMemoryPositionRequest(string SessionId, long Address);
+
+/// <summary>
+/// The Memory window's Go to Position with a "file" offset or an "rva" (<paramref name="Kind"/>): read through the PE
+/// headers of the module at <paramref name="CaretAddress"/>.
+/// </summary>
+public sealed record DebugMemoryResolvePositionRequest(string SessionId, long CaretAddress, string Kind, long Value);
+
+/// <summary>
+/// The Memory window's Go to Metadata: <paramref name="Value"/> is an offset, a token or an index as
+/// <paramref name="Kind"/> says — "table", "memberRva", "blob", "strings", "us" or "guid", as hex/goToMetadata — in
+/// the metadata of the module at <paramref name="CaretAddress"/>. Answered with a <see cref="HexGoToMetadataResponse"/>
+/// whose range is in addresses, null when the value names nothing there.
+/// </summary>
+public sealed record DebugMemoryGoToMetadataRequest(string SessionId, long CaretAddress, string Kind, long Value);
+
+/// <summary>An address of a debugged process whose module is asked about.</summary>
+public sealed record DebugMemoryFileInfoRequest(string SessionId, long Address);
+
+/// <summary>
+/// Whether the module at the address has .NET metadata (Go to Metadata) and PE headers (Go to Method Body, Go to
+/// Position with a file offset or an RVA). Both are false where no module is.
+/// </summary>
+public sealed record DebugMemoryFileInfoResponse(bool HasMetadata, bool HasPeHeaders);
+
+/// <summary>One encoding of the hex options page: its code page, its web name and the name it is listed by.</summary>
+public sealed record EncodingInfoDto(int CodePage, string Name, string DisplayName);
+
+/// <summary>Every encoding the runtime has, sorted by display name the way dnSpy's options page sorts them.</summary>
+public sealed record EncodingListResponse(IReadOnlyList<EncodingInfoDto> Encodings);
+
+/// <summary>Text to encode with the encoding of <paramref name="CodePage"/>.</summary>
+public sealed record EncodeTextRequest(int CodePage, string Text);
+
+/// <summary>The bytes the encoding makes of the text.</summary>
+public sealed record EncodeTextResponse(string Base64Data);
+
+/// <summary>How a module's PE image lies in a process's memory — dnSpy's <c>DbgImageLayout</c>.</summary>
+public enum DebugImageLayout {
+	/// <summary>Not known; the structure readers guess.</summary>
+	Unknown,
+	/// <summary>As the file stores it: a module loaded from bytes.</summary>
+	File,
+	/// <summary>As the loader maps it, each section at its RVA.</summary>
+	Memory,
+}
+
+/// <summary>A module a debugged process has loaded, as the Memory window's structures see it.</summary>
+/// <param name="Address">Where its image starts.</param>
+/// <param name="Size">How long its image is.</param>
+/// <param name="Name">Its file's name.</param>
+/// <param name="Filename">The path it was loaded from, or its name when it has none.</param>
+/// <param name="ImageLayout">How its image is laid out.</param>
+public sealed record DebugProcessModule(ulong Address, ulong Size, string Name, string Filename, DebugImageLayout ImageLayout);
+
+/// <summary>
+/// A debug session's process as the Memory window's structures read it. Implemented by the debug engine; the
+/// workspace builds its structure model over it.
+/// </summary>
+public interface IDebugProcessMemory {
+	string SessionId { get; }
+
+	/// <summary>The workspace the session was started from, whose documents F12 can open; null without one.</summary>
+	string? WorkspaceId { get; }
+
+	int ProcessId { get; }
+
+	/// <summary>Whether the process is stopped. While it runs, its memory can change at any time.</summary>
+	bool IsStopped { get; }
+
+	/// <summary>Changes whenever the process may have changed its memory: every continue, and every write.</summary>
+	int Generation { get; }
+
+	/// <summary>Changes whenever a module is loaded or unloaded.</summary>
+	int ModuleListVersion { get; }
+
+	/// <summary>The loaded modules, in load order.</summary>
+	IReadOnlyList<DebugProcessModule> GetModules();
+
+	/// <summary>Reads memory into <paramref name="buffer"/> and answers how many bytes from its start could be read.</summary>
+	int ReadMemory(ulong address, byte[] buffer);
+}
+
+/// <summary>Finds the process of a debug session, for the Memory window's structures.</summary>
+public interface IDebugMemoryProvider {
+	/// <summary>The session's process, or null when there is no such session.</summary>
+	IDebugProcessMemory? FindProcessMemory(string sessionId);
+
+	/// <summary>Raised with the session's id when a session ends.</summary>
+	event EventHandler<string>? SessionEnded;
+}
+
+/// <summary>Refreshes the cached structures of one debugged process without resuming it.</summary>
+public sealed record DebugMemoryRefreshRequest(string SessionId);

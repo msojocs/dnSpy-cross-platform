@@ -1,3 +1,4 @@
+import { hexEncodings } from '../hex-encodings'
 import { themeKey, themeMenuName, visibleThemes } from '../theme-service'
 
 /**
@@ -825,13 +826,8 @@ const hexEditorGroups = (base: string): PageSpec[] => [
             kind: 'select',
             path: `${base}.general.encoding`,
             labelKey: 'Encoding',
-            options: [
-              { value: 'utf8', labelKey: 'UTF-8' },
-              { value: 'utf16', labelKey: 'UTF-16' },
-              { value: 'utf16BE', labelKey: 'UTF-16 (Big Endian)' },
-              { value: 'ascii', labelKey: 'ASCII' },
-              { value: 'latin1', labelKey: 'Western European (ISO)' },
-            ],
+            // GeneralAppSettingsPageBase: every encoding .NET lists, by display name, stored as its code page.
+            options: () => hexEncodings().map((encoding) => ({ value: String(encoding.codePage), labelKey: encoding.displayName })),
           },
         ],
       },

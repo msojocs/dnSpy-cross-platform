@@ -3,6 +3,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OptionsDialog } from './OptionsDialog'
 import { defaultAppOptions, loadAppOptions, resetAppOptions, saveAppOptions } from './app-options'
 
+const originalApi = window.dnSpy
+const ENCODINGS = [
+  { codePage: 936, name: 'gb2312', displayName: 'Chinese Simplified (GB2312)' },
+  { codePage: 932, name: 'shift_jis', displayName: 'Japanese (Shift-JIS)' },
+  { codePage: 20127, name: 'us-ascii', displayName: 'US-ASCII' },
+  { codePage: 1200, name: 'utf-16', displayName: 'Unicode' },
+  { codePage: 1201, name: 'utf-16BE', displayName: 'Unicode (Big-Endian)' },
+  { codePage: 65001, name: 'utf-8', displayName: 'Unicode (UTF-8)' },
+  { codePage: 28591, name: 'iso-8859-1', displayName: 'Western European (ISO)' },
+  { codePage: 1252, name: 'windows-1252', displayName: 'Western European (Windows)' },
+]
+Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...originalApi, getEncodings: vi.fn(async () => ({ encodings: ENCODINGS })) } })
+
 afterEach(() => {
   cleanup()
   localStorage.clear()
@@ -342,13 +355,65 @@ describe('OptionsDialog', () => {
     expect(within(tree()).getByRole('treeitem', { name: /^Default/ })).toBeInTheDocument()
     expect(within(tree()).getByRole('treeitem', { name: /^Memory Window/ })).toBeInTheDocument()
     expect((screen.getByLabelText('Group size') as HTMLInputElement).value).toBe('0')
-    expect((screen.getByLabelText('Encoding') as HTMLSelectElement).value).toBe('utf8')
+    expect((screen.getByLabelText('Encoding') as HTMLSelectElement).value).toBe('65001')
 
     for (const [root, label] of [['backgroundImage', 'Background Image'], ['bookmarks', 'Bookmarks']] as const) {
       cleanup()
       openDialog({ initialCategory: root })
       expect(screen.getByRole('heading', { name: label, level: 2 })).toBeInTheDocument()
     }
+  })
+
+  it('lists the backend’s encodings and saves file and Memory code pages separately', async () => {
+    openDialog({ initialCategory: 'hexEditor' })
+    const encoding = screen.getByLabelText('Encoding') as HTMLSelectElement
+    await waitFor(() => expect([...encoding.options].map((option) => option.text)).toEqual(ENCODINGS.map((entry) => entry.displayName)))
+    fireEvent.change(encoding, { target: { value: '936' } })
+    fireEvent.click(within(tree()).getByRole('treeitem', { name: /^Memory Window/ }))
+    expect((screen.getByLabelText('Encoding') as HTMLSelectElement).value).toBe('65001')
+    fireEvent.change(screen.getByLabelText('Encoding'), { target: { value: '932' } })
+    fireEvent.click(within(tree()).getByRole('treeitem', { name: /^Default/ }))
+    expect((screen.getByLabelText('Encoding') as HTMLSelectElement).value).toBe('936')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(loadAppOptions().hexEditor.hexViewer.general.encoding).toBe('936')
+    expect(loadAppOptions().hexEditor.memoryWindow.general.encoding).toBe('932')
+  })
+
+  it('selects UTF-8 when a saved code page is unavailable, as the WPF General page does', async () => {
+    const options = loadAppOptions()
+    options.hexEditor.hexViewer.general.encoding = '12345'
+    options.hexEditor.memoryWindow.general.encoding = '1252'
+    saveAppOptions(options)
+    openDialog({ initialCategory: 'hexEditor' })
+    await waitFor(() => expect((screen.getByLabelText('Encoding') as HTMLSelectElement).value).toBe('65001'))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(loadAppOptions().hexEditor.hexViewer.general.encoding).toBe('65001')
+    expect(loadAppOptions().hexEditor.memoryWindow.general.encoding).toBe('1252')
+  })
+
+  it('migrates all five old encoding names independently without changing defaults', () => {
+    for (const [name, codePage] of [['utf8', '65001'], ['utf16', '1200'], ['utf16BE', '1201'], ['ascii', '20127'], ['latin1', '28591']]) {
+      localStorage.setItem('dnspy.appOptions.v1', JSON.stringify({ hexEditor: {
+        hexViewer: { general: { encoding: name } },
+        memoryWindow: { general: { encoding: '932' } },
+      } }))
+      const options = loadAppOptions()
+      expect(options.hexEditor.hexViewer.general.encoding).toBe(codePage)
+      expect(options.hexEditor.memoryWindow.general.encoding).toBe('932')
+    }
+    expect(defaultAppOptions.hexEditor.hexViewer.general.encoding).toBe('65001')
+    expect(defaultAppOptions.hexEditor.memoryWindow.general.encoding).toBe('65001')
+  })
+
+  it('persists the Memory window’s mouse-wheel zoom option without changing file views', () => {
+    openDialog({ initialCategory: 'hexEditor' })
+    fireEvent.click(within(tree()).getByRole('treeitem', { name: /^Memory Window/ }))
+    const memoryGroup = within(tree()).getByRole('treeitem', { name: /^Memory Window/ }).parentElement!
+    fireEvent.click(within(memoryGroup).getByRole('treeitem', { name: /^Advanced/ }))
+    fireEvent.click(screen.getByLabelText('Mouse wheel zoom'))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(loadAppOptions().hexEditor.memoryWindow.advanced.enableMouseWheelZoom).toBe(false)
+    expect(loadAppOptions().hexEditor.hexViewer.advanced.enableMouseWheelZoom).toBe(true)
   })
 
   it('restores defaults when Restore Defaults is clicked', async () => {

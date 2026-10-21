@@ -2409,6 +2409,19 @@ export interface DnSpyApi {
   goToHexMetadata(workspaceId: string, moduleId: string, kind: HexMetadataKind, value: number): Promise<HexGoToMetadataResponse>
   /** One Find step: the offset the pattern was found at, or -1. */
   findHex(workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean): Promise<HexFindResponse>
+  /** Invalidates the process's cached hex structures before an explicit Memory window refresh. */
+  refreshDebugMemory(sessionId: string): Promise<void>
+  /** The structures of the modules a debugged process has loaded, at an address of its memory (the Memory windows). */
+  getDebugMemoryToolTipInfo(sessionId: string, address: number): Promise<HexToolTipInfoResponse>
+  getDebugMemoryPositionInfo(sessionId: string, address: number): Promise<HexPositionInfoResponse>
+  /** A file offset or an RVA of the module at the caret as an address, or -1 when it has no PE headers. */
+  resolveDebugMemoryPosition(sessionId: string, caretAddress: number, kind: 'file' | 'rva', value: number): Promise<HexResolvePositionResponse>
+  goToDebugMemoryMetadata(sessionId: string, caretAddress: number, kind: HexMetadataKind, value: number): Promise<HexGoToMetadataResponse>
+  getDebugMemoryFileInfo(sessionId: string, address: number): Promise<{ hasMetadata: boolean; hasPeHeaders: boolean }>
+  /** The encodings .NET lists (`Encoding.GetEncodings()`), sorted by display name. */
+  getEncodings(): Promise<{ encodings: { codePage: number; name: string; displayName: string }[] }>
+  /** Text as bytes in a code page. */
+  encodeText(codePage: number, text: string): Promise<{ base64Data: string }>
   /** dnSpy's hex search over a module's file: the matches of a pattern, in FindAll's order. */
   searchHex(workspaceId: string, moduleId: string, request: HexSearchRequest): Promise<HexSearchResponse>
   /** The structure field a byte belongs to: its tooltip and the spans the hex view highlights. */
@@ -2417,7 +2430,9 @@ export interface DnSpyApi {
   getHexPositionInfo(workspaceId: string, moduleId: string, position: number): Promise<HexPositionInfoResponse>
   /** Saves a byte range of the file to a file the user picks — dnSpy's Save Selection. Answers the path
    * written, or undefined when the dialog was cancelled. */
-  saveHexSelection(workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string): Promise<string | undefined>
+  saveHexSelection(workspaceId: string, moduleId: string, offset: number, count: number): Promise<string | undefined>
+  /** Saves bytes the view has read — a process's memory — to a file the user picks. */
+  saveHexBytes(base64Data: string): Promise<string | undefined>
   getModuleInfo(workspaceId: string, moduleId: string): Promise<ModuleInfoResponse>
   beginEdit(workspaceId: string): Promise<BeginEditResponse>
   getMethodBody(workspaceId: string, methodNodeId: string): Promise<MethodBodyResponse>

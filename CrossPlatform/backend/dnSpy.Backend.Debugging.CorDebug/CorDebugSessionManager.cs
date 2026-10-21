@@ -9,7 +9,7 @@ namespace dnSpy.Backend.Debugging.CorDebug;
 /// Hosts the debug sessions of the in-process ICorDebug engine. Shaped like the DAP manager it
 /// replaces so the host only has to change its <c>using</c>.
 /// </summary>
-public sealed class CorDebugSessionManager : IAsyncDisposable {
+public sealed class CorDebugSessionManager : IAsyncDisposable, IDebugMemoryProvider {
 	/// <summary>
 	/// Commands the client may send. <c>source</c> is absent on purpose: breakpoints and stack
 	/// frames are resolved against the decompiled text the client already has.
@@ -279,9 +279,21 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 	public async Task DisconnectAsync(DebugDisconnectRequest request, CancellationToken cancellationToken) {
 		if (sessions.TryRemove(request.SessionId, out var session)) {
 			session.EventReceived -= Session_EventReceived;
-			await session.DisconnectAsync(request.TerminateDebuggee, cancellationToken).ConfigureAwait(false);
+			try {
+				await session.DisconnectAsync(request.TerminateDebuggee, cancellationToken).ConfigureAwait(false);
+			}
+			finally {
+				SessionEnded?.Invoke(this, session.Id);
+			}
 		}
 	}
+
+	/// <summary>The process of a session, for the Memory window's structures; null when the session has ended.</summary>
+	public IDebugProcessMemory? FindProcessMemory(string sessionId) =>
+		sessions.TryGetValue(sessionId, out var session) && !session.HasExited ? session : null;
+
+	/// <summary>Raised with a session's id when its process exits, or it is disconnected or disposed.</summary>
+	public event EventHandler<string>? SessionEnded;
 
 	void Register(CorDebugSession session) {
 		session.Options = options;
@@ -298,6 +310,8 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 		if (sender is not CorDebugSession session)
 			return;
 		EventReceived?.Invoke(this, new DebugEventNotification(session.Id, e.Event, ToJson(e.Body)));
+		if (e.Event == DebugEventNames.Terminated)
+			SessionEnded?.Invoke(this, session.Id);
 		// DbgManager.BreakAllProcessesIfNeeded: with Break all processes on, a process that breaks pauses the others.
 		if (e.Event == DebugEventNames.Stopped && options.BreakAllProcesses)
 			BreakOtherProcesses(session);
@@ -331,6 +345,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable {
 			if (sessions.TryRemove(id, out var session)) {
 				session.EventReceived -= Session_EventReceived;
 				await session.DisposeAsync().ConfigureAwait(false);
+				SessionEnded?.Invoke(this, id);
 			}
 		}
 	}

@@ -47,7 +47,7 @@ export function buildHexViewMenu(ctx: HexViewMenuContext): MenuItem[] {
     { label: t('Go to Metadata...'), shortcut: 'Ctrl+M', disabled: !ctx.hasFile, action: () => ctx.dialog('goToMetadata') },
     { label: t('Go to Code or Structure'), shortcut: 'F12', action: () => ctx.run('goToCodeOrStructure') },
     { label: t('Follow Reference'), shortcut: 'Ctrl+F12', action: () => ctx.run('followFieldValueReference') },
-    { label: t('Save Selection...'), icon: 'Save', shortcut: 'Ctrl+Alt+S', disabled: !ctx.hasSelection || !ctx.hasFile, action: () => ctx.run('saveSelection') },
+    { label: t('Save Selection...'), icon: 'Save', shortcut: 'Ctrl+Alt+S', disabled: !ctx.hasSelection, action: () => ctx.run('saveSelection') },
     ...(ctx.hasSelection ? [{ label: t('Show Only Selected Bytes'), shortcut: 'Ctrl+D', action: () => ctx.run('showOnlySelectedBytes') }] : []),
     ...(ctx.narrowed ? [{ label: t('Show All Bytes'), shortcut: 'Ctrl+Shift+D', action: () => ctx.run('showAllBytes') }] : []),
   ])

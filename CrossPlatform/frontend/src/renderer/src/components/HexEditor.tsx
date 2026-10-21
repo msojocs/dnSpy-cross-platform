@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import type { HexCodeReference, HexEditField, HexPositionInfoResponse, HexToolTip } from '../../../shared/protocol'
+import type { HexCodeReference, HexEditField, HexMetadataKind, HexPositionInfoResponse, HexRange, HexToolTip, HexToolTipInfoResponse } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { useCategoryFont } from '../fonts'
 import { hexChordCommand, hexChordPrefix, hexKeyCommand, type HexChordPrefix, type HexCommand } from '../hex-commands'
-import { HexLineFormatter, cellAt, columnSpansOf, lineTextWithin, linePositionInfo, type HexBufferLine } from '../hex-line'
+import { HexLineFormatter, cellAt, columnSpansOf, linePositionInfo, type HexBufferLine } from '../hex-line'
+import { buildHexClipboardText } from '../hex-clipboard'
 import {
   canEditValues,
   compressedUIntPrefix,
@@ -16,6 +17,7 @@ import {
   visualBasicArrayText,
   type HexValuesFormat,
 } from '../hex-model'
+import { encodeHexText, hexCodePageOf } from '../hex-encodings'
 import { findAllInBytes, type HexSearchPattern } from '../hex-search'
 import { NOT_LOADED, useHexChunks, type HexChunkReader } from '../hex-view-data'
 import { HexViewModel } from '../hex-view-model'
@@ -49,6 +51,17 @@ const WHEEL_LINES = 3
 /** The tallest scroll range the vertical bar is given; a longer file maps onto it. */
 const MAX_SCROLL_HEIGHT = 1_000_000
 const CARET_BLINK_MS = 530
+/** `HexEditorOperationsImpl`'s copy limits and the text it copies instead past them. */
+const BYTES_MAX_TO_COPY = 10 * 1024 * 1024
+const TOO_MUCH_DATA = 'Too much data selected'
+
+/** A theme colour the stylesheet holds as a custom property, for the HTML a copy carries. */
+const themeColor = (name: string): string | undefined => {
+  if (typeof document === 'undefined')
+    return undefined
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value === '' ? undefined : value
+}
 
 /**
  * Bytes the hex view shows that are not a module's file — the Memory windows' window onto a process's memory.
@@ -65,13 +78,32 @@ export interface HexByteSource {
   read(offset: number, count: number): Promise<{ bytes: Uint8Array; readable?: boolean[] }>
   write(offset: number, data: Uint8Array): Promise<boolean>
   /** Moves the window so it holds `address`; answers the address's offset in the new window. */
-  reveal(address: number): number
+  reveal(address: number, endAddress?: number): number
+  /** Refreshes volatile structure data before the view reads its bytes again. */
+  refresh?(): Promise<void>
   /** One past the last address the window may move to, when the source is a window onto a larger space. */
   end?: number
   /** Entries the source's owner adds to the context menu, such as the Memory window's Process submenu. */
   menu?: MenuItem[]
   /** The options page the view follows: the Memory windows have one of their own. */
   optionsView?: HexEditorView
+  /** The files in the bytes and their structures — the modules a process has loaded — in window offsets. */
+  structures?: HexStructureSource
+}
+
+/**
+ * What the view asks the structures of its bytes (dnSpy's `HexBufferFileService` and `HexFileStructureInfoService`),
+ * every position an offset of the view's own bytes.
+ */
+export interface HexStructureSource {
+  toolTipInfo(position: number): Promise<HexToolTipInfoResponse>
+  positionInfo(position: number): Promise<HexPositionInfoResponse>
+  /** A file offset or an RVA as a window offset (possibly negative); NaN when that file has no PE headers. */
+  resolvePosition(caret: number, kind: 'file' | 'rva', value: number): Promise<number>
+  /** `GetGoToMetadataSpan` over the metadata of the file at the caret. */
+  goToMetadata(caret: number, kind: HexMetadataKind, value: number): Promise<HexRange | null>
+  /** Whether the file at the caret has metadata and PE headers: Go to Metadata and its Method Body kind need them. */
+  fileInfo(caret: number): Promise<{ hasMetadata: boolean; hasPeHeaders: boolean }>
 }
 
 /** dnSpy's `HexViewUIState`: what a hex tab keeps across a restart and a trip through the tab history. */
@@ -140,27 +172,14 @@ const toBase64 = (bytes: Uint8Array): string => {
 
 const fromBase64 = (data: string): Uint8Array => Uint8Array.from(atob(data), (character) => character.charCodeAt(0))
 
-const encodings: Record<string, string> = { utf8: 'utf-8', utf16: 'utf-16le', utf16BE: 'utf-16be', ascii: 'ascii', latin1: 'iso-8859-1' }
-
-/** The bytes the ASCII column types and pastes, in the encoding the options page names. */
-const encodeText = (text: string, encoding: string): Uint8Array => {
-  const name = encodings[encoding] ?? 'utf-8'
-  if (name === 'utf-16le' || name === 'utf-16be') {
-    const bytes = new Uint8Array(text.length * 2)
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i)
-      const big = name === 'utf-16be'
-      bytes[i * 2 + (big ? 0 : 1)] = code >> 8
-      bytes[i * 2 + (big ? 1 : 0)] = code & 0xFF
-    }
-    return bytes
+const utf16Of = (text: string): Uint8Array => {
+  const bytes = new Uint8Array(text.length * 2)
+  for (let i = 0; i < text.length; i++) {
+    bytes[i * 2] = text.charCodeAt(i) & 0xFF
+    bytes[i * 2 + 1] = text.charCodeAt(i) >> 8
   }
-  if (name === 'ascii' || name === 'iso-8859-1')
-    return Uint8Array.from(text, (character) => character.charCodeAt(0) & 0xFF)
-  return new TextEncoder().encode(text)
+  return bytes
 }
-
-const utf16Of = (text: string): Uint8Array => encodeText(text, 'utf16')
 
 let measureContext: CanvasRenderingContext2D | null | undefined
 
@@ -231,15 +250,13 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   const readBytes = useCallback(async (offset: number, count: number): Promise<Uint8Array> => {
     if (count <= 0)
       return new Uint8Array(0)
-    if (source)
-      return (await source.read(offset, count)).bytes
-    if (!workspaceId)
+    if (!reader)
       return new Uint8Array(0)
     const parts: Uint8Array[] = []
     for (let position = 0; position < count; position += 1024 * 1024)
-      parts.push(fromBase64((await window.dnSpy.readHex(workspaceId, moduleId, offset + position, Math.min(1024 * 1024, count - position))).base64Data))
+      parts.push((await reader(offset + position, Math.min(1024 * 1024, count - position))).bytes)
     return concatBytes(parts)
-  }, [source, workspaceId, moduleId])
+  }, [reader])
 
   const writeBytes = useCallback(async (offset: number, bytes: Uint8Array): Promise<boolean> => {
     if (bytes.length === 0)
@@ -432,12 +449,37 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
 
   // A source's window moves when the view reaches its edge, so the view scrolls on through the address space.
   const previousBase = useRef(source?.base ?? 0)
-  const pendingReveal = useRef<{ address: number; caret: boolean } | undefined>(undefined)
-  const revealAddress = (address: number, caret: boolean): void => {
+  const pendingReveal = useRef<{ address: number; caret: boolean; selection?: { anchor: number; active: number; moveCaret: boolean } } | undefined>(undefined)
+  const revealAddress = (address: number, caret: boolean, selection?: { anchor: number; active: number; moveCaret: boolean }): void => {
     if (!source)
       return
-    pendingReveal.current = { address, caret }
-    source.reveal(address)
+    pendingReveal.current = { address, caret, selection }
+    source.reveal(selection ? Math.min(address, selection.anchor, selection.active) : address,
+      selection ? Math.max(address + 1, selection.anchor, selection.active) : undefined)
+  }
+  /** Structure spans are window offsets, not necessarily inside the currently visible memory window. */
+  const revealPosition = (position: number, selection?: { anchor: number; active: number; moveCaret: boolean }): void => {
+    if (!Number.isFinite(position))
+      return
+    if (source && (position < 0 || position >= source.length
+      || (selection && (Math.min(selection.anchor, selection.active) < 0 || Math.max(selection.anchor, selection.active) > source.length)))) {
+      revealAddress(source.base + position, true, selection && {
+        anchor: source.base + selection.anchor, active: source.base + selection.active, moveCaret: selection.moveCaret,
+      })
+      return
+    }
+    if (selection) {
+      if (selection.moveCaret)
+        model.selectAndMoveCaret(selection.anchor, selection.active)
+      else
+        model.selectSpan(selection.anchor, selection.active)
+    }
+    else {
+      model.clearSelection()
+      model.moveCaretTo(position)
+      model.ensureSpanVisible(position, position, true)
+      model.ensureCaretVisible()
+    }
   }
   useLayoutEffect(() => {
     if (!source)
@@ -457,10 +499,17 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       model.moveCaretToCell({ ...model.activePosition, position: clamp(model.caretPosition + delta) }, false)
       model.select(clamp(model.anchorPoint + delta), clamp(model.activePoint + delta), false)
     }
+    if (pending?.selection) {
+      const { anchor, active, moveCaret } = pending.selection
+      if (moveCaret)
+        model.selectAndMoveCaret(anchor - source.base, active - source.base)
+      else
+        model.selectSpan(anchor - source.base, active - source.base)
+    }
     if (pending)
       model.displayLineContaining(clamp(pending.address - source.base), 'top', pending.caret ? 2 : 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source?.base])
+  }, [source?.base, source?.length])
   const moveSourceWindowIfAtEdge = (): void => {
     if (!source || source.end === undefined || pendingReveal.current)
       return
@@ -474,16 +523,34 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
 
   // ---- Structures: Quick Info, references and the caret's field ----------------------------------------
   const hasFile = !source && workspaceId !== undefined
+  // A module's file asks the workspace; a process's memory asks its source, which knows the loaded modules.
+  const structures = useMemo<HexStructureSource | undefined>(() => {
+    if (source)
+      return source.structures
+    if (!workspaceId)
+      return undefined
+    return {
+      toolTipInfo: (position) => window.dnSpy.getHexToolTipInfo(workspaceId, moduleId, position),
+      positionInfo: (position) => window.dnSpy.getHexPositionInfo(workspaceId, moduleId, position),
+      resolvePosition: async (_caret, kind, value) => {
+        const offset = (await window.dnSpy.resolveHexPosition(workspaceId, moduleId, kind, value)).offset
+        return offset < 0 ? Number.NaN : offset
+      },
+      goToMetadata: async (_caret, kind, value) => (await window.dnSpy.goToHexMetadata(workspaceId, moduleId, kind, value)).range,
+      fileInfo: async () => ({ hasMetadata: true, hasPeHeaders: true }),
+    }
+  }, [source, workspaceId, moduleId])
+  const hasStructures = structures !== undefined
   const positionInfo = useCallback(async (position: number): Promise<HexPositionInfoResponse | undefined> => {
-    if (!hasFile || !workspaceId)
+    if (!structures)
       return undefined
     try {
-      return await window.dnSpy.getHexPositionInfo(workspaceId, moduleId, position)
+      return await structures.positionInfo(position)
     }
     catch {
       return undefined
     }
-  }, [hasFile, workspaceId, moduleId])
+  }, [structures])
   const [toolTip, setToolTip] = useState<{ position: number; row: number; x: number; toolTip: HexToolTip; fields: { offset: number; length: number; kind: string }[]; span: { start: number; end: number } } | undefined>()
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const hoverPosition = useRef<number | undefined>(undefined)
@@ -493,10 +560,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     setToolTip(undefined)
   }, [])
   const showQuickInfo = useCallback(async (position: number, row: number, x: number): Promise<void> => {
-    if (!hasFile || !workspaceId)
+    if (!structures)
       return
     try {
-      const info = await window.dnSpy.getHexToolTipInfo(workspaceId, moduleId, position)
+      const info = await structures.toolTipInfo(position)
       if (!info.toolTip || hoverPosition.current !== position)
         return
       const current = info.fields.find((field) => field.kind === 'currentField')
@@ -505,9 +572,9 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     catch {
       // A file the structures cannot be read from has no Quick Info.
     }
-  }, [hasFile, workspaceId, moduleId])
+  }, [structures])
   useEffect(() => () => clearTimeout(hoverTimer.current), [])
-  useEffect(() => { dismissToolTip() }, [workspaceStateId, topLine, formatter, dismissToolTip])
+  useEffect(() => { dismissToolTip() }, [workspaceStateId, source?.revision, topLine, formatter, dismissToolTip])
 
   const navigate = useCallback(async (reference: HexCodeReference): Promise<void> => {
     const store = useAppStore.getState()
@@ -536,10 +603,29 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
 
   // ---- Edits -------------------------------------------------------------------------------------------
   const readOnly = !source && !hasFile
-  const encoding = pane.general.encoding
+  const codePage = hexCodePageOf(pane.general.encoding)
 
-  /** `InsertText`: a hex digit edits the character of the value cell under the caret, text the ASCII bytes. */
-  const insertText = async (text: string): Promise<void> => {
+  const editQueue = useRef(Promise.resolve())
+  const editContext = `${workspaceId}:${moduleId}:${source?.base ?? ''}:${source?.revision ?? ''}`
+  const currentEditContext = useRef<string | undefined>(editContext)
+  currentEditContext.current = editContext
+  useEffect(() => () => { currentEditContext.current = undefined }, [])
+  const enqueueEdit = (action: (isCurrent: () => boolean) => Promise<void>): Promise<void> => {
+    const context = editContext
+    const isCurrent = (): boolean => currentEditContext.current === context
+    const pending = editQueue.current.then(async () => {
+      if (isCurrent())
+        await action(isCurrent)
+    }).catch((error: unknown) => {
+      if (isCurrent())
+        appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))
+    })
+    editQueue.current = pending
+    return pending
+  }
+
+  /** `InsertText`: each key is a transaction, including encoding and advancing the caret, before the next key. */
+  const insertText = (text: string): Promise<void> => enqueueEdit(async (isCurrent) => {
     if (readOnly || text.length === 0)
       return
     const position = model.activePosition
@@ -551,20 +637,20 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         return
       const bytes = await readBytes(cell.bufferStart, formatter.bytesPerValue)
       const edit = editValueCell(formatter.valuesFormat, bytes, position.cellPosition, text)
-      if (!edit || !await writeBytes(cell.bufferStart + edit.offset, edit.data))
+      if (!isCurrent() || !edit || !await writeBytes(cell.bufferStart + edit.offset, edit.data) || !isCurrent())
         return
       model.clearSelection()
       model.moveToNextCharacter(false)
       return
     }
-    const bytes = encodeText(text, encoding)
-    if (!await writeBytes(position.position, bytes))
+    const bytes = await encodeHexText(text, codePage)
+    if (!isCurrent() || !await writeBytes(position.position, bytes) || !isCurrent())
       return
     model.moveCaretAfterWrite(position.position, bytes.length)
-  }
+  })
 
   /** `PasteData`: bytes written from the caret's cell on, the caret after them. */
-  const pasteData = async (bytes: Uint8Array | undefined): Promise<void> => {
+  const pasteData = (bytes: Uint8Array | undefined): Promise<void> => enqueueEdit(async (isCurrent) => {
     if (!bytes || readOnly)
       return
     if (bytes.length === 0)
@@ -575,10 +661,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       return
     const available = Math.max(0, model.bufferEnd - cell.bufferStart)
     const data = bytes.length > available ? bytes.subarray(0, available) : bytes
-    if (!await writeBytes(cell.bufferStart, data))
+    if (!await writeBytes(cell.bufferStart, data) || !isCurrent())
       return
     model.moveCaretAfterWrite(cell.bufferStart, data.length)
-  }
+  })
 
   const clipboardText = async (): Promise<string | undefined> => {
     try {
@@ -609,34 +695,55 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     return value
   }
   const selectedBytes = (): Promise<Uint8Array> => readBytes(model.selectionStart, model.selectionEnd - model.selectionStart)
+  /** `bytesMaxTotalBytesToCopy`: past 10 MiB dnSpy copies a note instead of the bytes. */
+  const copySelected = (format: (bytes: Uint8Array) => string): void => {
+    if (model.selectionEnd - model.selectionStart > BYTES_MAX_TO_COPY) {
+      void copy(TOO_MUCH_DATA)
+      return
+    }
+    void selectedBytes().then((bytes) => copy(format(bytes)))
+  }
   const copyData = (kind: 'uint16' | 'uint16Be' | 'uint32Be' | 'uint64' | 'uint64Be'): void => {
     const sizes = { uint16: [2, false], uint16Be: [2, true], uint32Be: [4, true], uint64: [8, false], uint64Be: [8, true] } as const
     const [size, bigEndian] = sizes[kind]
     void readInteger(size, bigEndian).then((value) => copy(hexNumber(value)))
   }
 
-  /** `CopySelectionText`: the selected lines' text, or the caret's line when nothing is selected. */
-  const copyText = async (): Promise<string> => {
-    const readLine = async (position: number): Promise<HexBufferLine> => {
-      const start = formatter.getLineStart(formatter.getLineNumber(position))
-      const bytes = await readBytes(start, Math.min(formatter.bytesPerLine, model.bufferEnd - start))
-      return formatter.getLine(start, (at) => bytes[at - start] ?? -1)
+  /** `CopySelectionText`: the selected lines' text, or the caret's line when nothing is selected — as text and,
+   * up to a MiB of bytes, as HTML in the colours the view draws them in (`HexHtmlBuilder`). */
+  const copyText = async (): Promise<void> => {
+    if (!reader)
+      return
+    const { text, html } = await buildHexClipboardText({
+      formatter,
+      reader,
+      caretPosition: model.caretPosition,
+      selection: model.isSelectionEmpty ? undefined : { start: model.selectionStart, end: model.selectionEnd },
+      fontFamily: hexFont.fontFamily,
+      fontSize,
+      colorize: pane.general.enableColorization,
+      colors: {
+        defaultText: themeColor('--tc-hextext') ?? themeColor('--tc-defaulttext'),
+        offset: themeColor('--tc-hexoffset'),
+        byte0: themeColor('--tc-hexbyte0'),
+        byte1: themeColor('--tc-hexbyte1'),
+        error: themeColor('--tc-hexbyteerror'),
+        ascii: themeColor('--tc-hexascii'),
+      },
+    })
+    try {
+      const items: Record<string, Blob> = { 'text/plain': new Blob([text], { type: 'text/plain' }) }
+      if (html !== undefined)
+        items['text/html'] = new Blob([html], { type: 'text/html' })
+      await navigator.clipboard.write([new ClipboardItem(items)])
     }
-    if (model.isSelectionEmpty)
-      return (await readLine(model.caretPosition)).text
-    const parts: string[] = []
-    for (let position = model.selectionStart; ;) {
-      const line = await readLine(position)
-      parts.push(lineTextWithin(line, model.selectionStart, model.selectionEnd) + '\n')
-      position = line.bufferEnd
-      if (position >= model.selectionEnd || line.bufferEnd <= line.bufferStart)
-        break
+    catch {
+      await copy(text)
     }
-    return parts.join('')
   }
 
   // ---- Commands ----------------------------------------------------------------------------------------
-  const [dialog, setDialog] = useState<{ kind: 'goToPosition' | 'goToMetadata' | 'select' | 'settings' | 'fill'; initial?: number } | undefined>()
+  const [dialog, setDialog] = useState<{ kind: 'goToPosition' | 'goToMetadata' | 'select' | 'settings' | 'fill'; initial?: number; hasPeHeaders?: boolean } | undefined>()
   const [menu, setMenu] = useState<{ x: number; y: number; editField?: HexEditField } | undefined>()
   const focusView = useCallback(() => textAreaRef.current?.focus({ preventScroll: true }), [])
   const localSearch = useCallback(async (pattern: HexSearchPattern, run: HexSearchRun): Promise<number[]> => {
@@ -752,12 +859,12 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         void showQuickInfo(m.caretPosition, m.caretLine - m.topLine, cell ? spanLeft(geometry, cell.cellSpan.start) - scrollLeft : 0)
         break
       }
-      case 'copy': if (!m.isSelectionEmpty) void selectedBytes().then((bytes) => copy(hexText(bytes, !formatter.valuesLowerCaseHex))); break
-      case 'copyText': void copyText().then(copy); break
-      case 'copyUtf8String': void selectedBytes().then((bytes) => copy(new TextDecoder('utf-8').decode(bytes))); break
-      case 'copyUnicodeString': void selectedBytes().then((bytes) => copy(new TextDecoder('utf-16le').decode(bytes))); break
-      case 'copyCSharpArray': void selectedBytes().then((bytes) => copy(csharpArrayText(bytes, !formatter.valuesLowerCaseHex))); break
-      case 'copyVisualBasicArray': void selectedBytes().then((bytes) => copy(visualBasicArrayText(bytes, !formatter.valuesLowerCaseHex))); break
+      case 'copy': if (!m.isSelectionEmpty) copySelected((bytes) => hexText(bytes, !formatter.valuesLowerCaseHex)); break
+      case 'copyText': void copyText().catch((error: unknown) => appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))); break
+      case 'copyUtf8String': copySelected((bytes) => new TextDecoder('utf-8').decode(bytes)); break
+      case 'copyUnicodeString': copySelected((bytes) => new TextDecoder('utf-16le').decode(bytes)); break
+      case 'copyCSharpArray': copySelected((bytes) => csharpArrayText(bytes, !formatter.valuesLowerCaseHex)); break
+      case 'copyVisualBasicArray': copySelected((bytes) => visualBasicArrayText(bytes, !formatter.valuesLowerCaseHex)); break
       case 'copyOffset': void copy(formatter.formatOffset(formatter.toLogicalPosition(m.caretPosition))); break
       case 'copyValue': {
         if (!formatter.showValues)
@@ -774,8 +881,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         break
       }
       case 'copyUInt32': void readInteger(4, false).then((value) => copy(hexNumber(value))); break
-      case 'copyAbsoluteFileOffset': void copy(hexNumber(m.caretPosition)); break
-      case 'copyFileOffset': void positionInfo(m.caretPosition).then((info) => copy(hexNumber(info?.fileOffset ?? m.caretPosition))); break
+      case 'copyAbsoluteFileOffset': void copy(hexNumber((source?.base ?? 0) + m.caretPosition)); break
+      case 'copyFileOffset': void positionInfo(m.caretPosition).then((info) => copy(hexNumber(info?.fileOffset ?? (source?.base ?? 0) + m.caretPosition))); break
       case 'copyRva': void positionInfo(m.caretPosition).then((info) => { if (info?.rva !== null && info?.rva !== undefined) void copy(hexNumber(info.rva)) }); break
       case 'paste':
         void clipboardText().then((text) => {
@@ -791,17 +898,18 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       case 'pasteBlob': void clipboardText().then((text) => { const bytes = text === undefined ? undefined : parseHexBytes(text); if (bytes) void pasteData(concatBytes([compressedUIntPrefix(bytes.length), bytes])) }); break
       case 'showOnlySelectedBytes': if (!m.isSelectionEmpty) setLocalSettings({ startPosition: m.selectionStart, endPosition: m.selectionEnd }); break
       case 'showAllBytes': setLocalSettings({ startPosition: 0, endPosition: -1 }); break
-      case 'refresh': data.invalidate(); break
+      case 'refresh':
+        dismissToolTip()
+        void Promise.resolve().then(() => source?.refresh?.()).then(() => data.invalidate()).catch((error: unknown) => {
+          appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))
+        })
+        break
       case 'goToCodeOrStructure': void positionInfo(m.caretPosition).then((info) => { if (info?.reference) void navigate(info.reference) }); break
       case 'followFieldValueReference':
         void positionInfo(m.caretPosition).then((info) => {
           const span = info?.fieldReference
-          if (!span || !formatter.isValidPosition(span.offset))
-            return
-          m.ensureSpanVisible(span.offset, span.offset, true)
-          m.moveCaretTo(span.offset)
-          m.ensureCaretVisible()
-          m.clearSelection()
+          if (span)
+            revealPosition(span.offset)
         })
         break
       case 'selectFile':
@@ -810,11 +918,28 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         void positionInfo(m.caretPosition).then((info) => {
           const span = command === 'selectFile' ? info?.file : command === 'selectNestedFile' ? info?.nestedFile : info?.structure
           if (span)
-            m.selectSpan(span.offset, span.offset + span.length)
+            revealPosition(span.offset, { anchor: span.offset, active: span.offset + span.length, moveCaret: false })
         })
         break
-      case 'goToPosition': void readInteger(4, false).then((value) => setDialog({ kind: 'goToPosition', initial: Number(value) })); break
-      case 'goToMetadata': if (hasFile) void readInteger(4, false).then((value) => setDialog({ kind: 'goToMetadata', initial: Number(value) })); break
+      case 'goToPosition':
+        void readInteger(4, false).catch(() => BigInt(0)).then((value) => {
+          if (currentEditContext.current === editContext)
+            setDialog({ kind: 'goToPosition', initial: Number(value) })
+        })
+        break
+      case 'goToMetadata':
+        // GoToMetadata: nothing happens without metadata in the file at the caret.
+        if (structures) {
+          const caret = m.caretPosition
+          void structures.fileInfo(caret).then(async (info) => {
+            if (info.hasMetadata) {
+              const initial = Number(await readInteger(4, false))
+              if (currentEditContext.current === editContext)
+                setDialog({ kind: 'goToMetadata', initial, hasPeHeaders: info.hasPeHeaders })
+            }
+          }).catch(() => undefined)
+        }
+        break
       case 'select': setDialog({ kind: 'select' }); break
       case 'saveSelection': saveSelection(); break
       case 'toggleUseRelativePositions': setLocalSettings({ useRelativePositions: !local.useRelativePositions }); break
@@ -830,13 +955,18 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     }
   }
 
+  /** dnSpy's Save Selection: the selected bytes to a file the user picks; a process's memory is read here first. */
   const saveSelection = (): void => {
-    if (!workspaceId || model.isSelectionEmpty || source)
+    if (model.isSelectionEmpty)
       return
+    const start = model.selectionStart
+    const count = model.selectionEnd - start
     void (async () => {
       try {
-        const name = `${moduleId.split(/[\\/]/).pop() ?? 'bytes'}.bin`
-        await window.dnSpy.saveHexSelection(workspaceId, moduleId, model.selectionStart, model.selectionEnd - model.selectionStart, name)
+        if (source)
+          await window.dnSpy.saveHexBytes(toBase64(await readBytes(start, count)))
+        else if (workspaceId)
+          await window.dnSpy.saveHexSelection(workspaceId, moduleId, start, count)
       }
       catch (error) {
         appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))
@@ -870,6 +1000,36 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     ensureCaretVisibleHorizontally()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caretKey])
+
+  // `PositionWithoutCoveringSpan`: a match the search control would cover sends the control to the bottom right.
+  const searchControlRef = useRef<HTMLDivElement>(null)
+  const [searchAtBottom, setSearchAtBottom] = useState(false)
+  useEffect(() => { if (!search.visible) setSearchAtBottom(false) }, [search.visible])
+  useLayoutEffect(() => {
+    const control = searchControlRef.current
+    const area = textAreaRef.current
+    if (!search.visible || !control || !area || model.isSelectionEmpty)
+      return
+    const controlWidth = control.offsetWidth
+    const controlHeight = control.offsetHeight
+    const covers = (bottom: boolean): boolean => {
+      const top = bottom ? viewport.height - controlHeight : 0
+      const left = viewport.width - controlWidth
+      for (const { line } of lines) {
+        const row = line.lineNumber - topLine
+        const y = row * lineHeight
+        if (y + lineHeight <= top || y >= top + controlHeight)
+          continue
+        for (const { span } of columnSpansOf(line, model.selectionStart, model.selectionEnd, { values: true, ascii: true })) {
+          if (spanLeft(geometry, span.end) - scrollLeft > left && spanLeft(geometry, span.start) - scrollLeft < viewport.width)
+            return true
+        }
+      }
+      return false
+    }
+    setSearchAtBottom(covers(false) && !covers(true))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.visible, model.selectionStart, model.selectionEnd, topLine])
 
   // ---- Current value highlight ---------------------------------------------------------------------------
   const [currentValue, setCurrentValue] = useState<{ column: 'values' | 'ascii'; bytes: number[] } | undefined>()
@@ -1150,7 +1310,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   })
 
   const onHover = (event: React.MouseEvent<HTMLDivElement>): void => {
-    if (drag.current || event.buttons !== 0 || !hasFile)
+    if (drag.current || event.buttons !== 0 || !hasStructures)
       return
     if ((event.target as HTMLElement).closest('.hex-search-control, .hex-tooltip'))
       return
@@ -1231,7 +1391,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     event.preventDefault()
     event.stopPropagation()
     const at = { x: event.clientX, y: event.clientY }
-    void positionInfo(model.caretPosition).then((info) => setMenu({ ...at, editField: info?.editField ?? undefined }))
+    void positionInfo(model.caretPosition).then((info) => {
+      if (currentEditContext.current === editContext)
+        setMenu({ ...at, editField: info?.editField ?? undefined })
+    })
   }
   const editFieldItem = (field: HexEditField, index: number): void => {
     const item = field.items[index]
@@ -1251,7 +1414,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     narrowed: model.bufferStart !== 0 || model.bufferEnd !== length,
     readOnly,
     volatile: source !== undefined,
-    hasFile,
+    hasFile: hasStructures,
     bytesPerLine: local.bytesPerLine,
     valuesFormat: local.valuesFormat,
     editField,
@@ -1277,29 +1440,35 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       const origin = model.caretPosition
       let position: number
       if (result.kind === 'absolute')
-        position = source ? (result.value >= source.base && result.value < source.base + source.length ? result.value - source.base : source.reveal(result.value)) : formatter.toPhysicalPosition(result.value)
+        position = source ? result.value - source.base : formatter.toPhysicalPosition(result.value)
       else if (result.kind === 'current')
         position = origin + result.value
-      else if (workspaceId && !source)
-        position = (await window.dnSpy.resolveHexPosition(workspaceId, moduleId, result.kind === 'rva' ? 'rva' : 'file', result.value)).offset
-      else
-        position = result.value
-      if (position < 0)
+      else {
+        // ToBufferPosition: through the PE headers of the file at the caret, the number itself without any.
+        let resolved = Number.NaN
+        try {
+          if (structures)
+            resolved = await structures.resolvePosition(origin, result.kind === 'rva' ? 'rva' : 'file', result.value)
+        }
+        catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError')
+            return
+        }
+        position = Number.isFinite(resolved) ? resolved : source ? result.value - source.base : result.value
+      }
+      if (currentEditContext.current !== editContext || !Number.isFinite(position) || (source ? source.base + position < 0 || source.base + position >= (source.end ?? Number.MAX_SAFE_INTEGER) : position < 0))
         return
-      position = Math.max(model.bufferStart, Math.min(model.bufferEnd, position))
+      if (!source)
+        position = Math.max(model.bufferStart, Math.min(model.bufferEnd, position))
       if (!result.selectToNewPosition) {
-        model.clearSelection()
-        model.moveCaretTo(position)
-        model.ensureSpanVisible(position, position, true)
-        model.ensureCaretVisible()
+        revealPosition(position)
         return
       }
       // UserValueToSelection from the selection's start (or the caret) to the new position.
       const from = model.isSelectionEmpty ? origin : (model.anchorPoint < model.activePoint ? model.anchorPoint : model.anchorPoint - 1)
-      if (from <= position)
-        model.selectAndMoveCaret(from, Math.min(model.bufferEnd, position + 1))
-      else
-        model.selectAndMoveCaret(Math.min(model.bufferEnd, from + 1), position)
+      revealPosition(position, from <= position
+        ? { anchor: from, active: position + 1, moveCaret: true }
+        : { anchor: from + 1, active: position, moveCaret: true })
     })()
   }
 
@@ -1307,51 +1476,55 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     void (async () => {
       setDialog(undefined)
       focusView()
-      if (!workspaceId)
+      if (!structures)
         return
-      const response = await window.dnSpy.goToHexMetadata(workspaceId, moduleId, result.kind as never, result.value)
-      if (!response.range || response.range.offset < 0)
+      const range = await structures.goToMetadata(model.caretPosition, result.kind as HexMetadataKind, result.value).catch(() => null)
+      if (!range)
         return
       // GoToMetadata: the caret at the item's start, nothing selected.
-      model.clearSelection()
-      model.moveCaretTo(Math.min(response.range.offset, model.bufferEnd))
-      model.ensureSpanVisible(response.range.offset, response.range.offset + Math.max(1, response.range.length), true)
+      revealPosition(range.offset)
     })()
   }
   const validateMetadata = useCallback(async (kind: string, value: number): Promise<boolean> => {
-    if (!workspaceId)
+    if (!structures)
       return false
     try {
-      const response = await window.dnSpy.goToHexMetadata(workspaceId, moduleId, kind as never, value)
-      return response.range !== null && response.range.offset >= 0
+      const range = await structures.goToMetadata(model.caretPosition, kind as HexMetadataKind, value)
+      return range !== null
     }
     catch {
       return false
     }
-  }, [workspaceId, moduleId])
+  }, [structures, model])
 
   const select = (result: { kind: string; start: number; end: number; mode: 'position' | 'length' }): void => {
     void (async () => {
       setDialog(undefined)
       focusView()
-      const origin = formatter.toLogicalPosition(model.isSelectionEmpty ? model.caretPosition : model.selectionStart)
+      const origin = model.isSelectionEmpty ? model.caretPosition : model.selectionStart
       const toBuffer = async (value: number): Promise<number> => {
         if (result.kind === 'absolute')
-          return formatter.toPhysicalPosition(value)
+          return source ? value - source.base : formatter.toPhysicalPosition(value)
         if (result.kind === 'current')
           return origin + value
-        if (workspaceId && !source)
-          return (await window.dnSpy.resolveHexPosition(workspaceId, moduleId, result.kind === 'rva' ? 'rva' : 'file', value)).offset
-        return value
+        let resolved = Number.NaN
+        try {
+          if (structures)
+            resolved = await structures.resolvePosition(model.caretPosition, result.kind === 'rva' ? 'rva' : 'file', value)
+        }
+        catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError')
+            return Number.NaN
+        }
+        return Number.isFinite(resolved) ? resolved : source ? value - source.base : value
       }
       const start = await toBuffer(result.start)
       const end = result.mode === 'length' ? (result.end === 0 ? start : start + result.end - 1) : await toBuffer(result.end)
-      if (start < 0 || end < 0)
+      if (currentEditContext.current !== editContext || !Number.isFinite(start) || !Number.isFinite(end) || (source ? Math.min(start, end) + source.base < 0 : Math.min(start, end) < 0))
         return
-      if (start <= end)
-        model.selectAndMoveCaret(start, Math.min(model.bufferEnd, end + 1))
-      else
-        model.selectAndMoveCaret(Math.min(model.bufferEnd, start + 1), end)
+      revealPosition(end, start <= end
+        ? { anchor: start, active: end + 1, moveCaret: true }
+        : { anchor: start + 1, active: end, moveCaret: true })
     })()
   }
 
@@ -1399,6 +1572,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
               state={search.state}
               canReplace={search.canReplace}
               focusRequest={search.focusRequest}
+              atBottom={searchAtBottom}
+              controlRef={searchControlRef}
               onChange={search.change}
               onFindNext={search.findNext}
               onReplaceNext={search.replaceNext}
@@ -1433,7 +1608,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         </div>
       )}
       {dialog?.kind === 'goToPosition' && <HexGoToPositionDialog initial={dialog.initial ?? 0} onAccept={goToPosition} onClose={() => { setDialog(undefined); focusView() }} />}
-      {dialog?.kind === 'goToMetadata' && <HexGoToMetadataDialog initial={dialog.initial ?? 0} hasPeHeaders validate={validateMetadata} onAccept={goToMetadata} onClose={() => { setDialog(undefined); focusView() }} />}
+      {dialog?.kind === 'goToMetadata' && <HexGoToMetadataDialog initial={dialog.initial ?? 0} hasPeHeaders={dialog.hasPeHeaders !== false} validate={validateMetadata} onAccept={goToMetadata} onClose={() => { setDialog(undefined); focusView() }} />}
       {dialog?.kind === 'select' && (
         <HexSelectDialog
           start={formatter.toLogicalPosition(selectionEmpty ? model.caretPosition : model.anchorPoint < model.activePoint ? model.anchorPoint : model.anchorPoint - 1)}

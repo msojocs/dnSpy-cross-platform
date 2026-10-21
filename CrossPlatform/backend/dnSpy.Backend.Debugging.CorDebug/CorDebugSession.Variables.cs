@@ -43,6 +43,11 @@ internal sealed partial class CorDebugSession {
 			var count = (int)read;
 			return count == bytes.Length ? bytes : bytes.AsSpan(0, Math.Max(0, Math.Min(count, bytes.Length))).ToArray();
 		}
+		catch (ArgumentException ex) when (ex.HResult == unchecked((int)0x80070057)) {
+			// CoreCLR returns E_INVALIDARG for an unmapped address (including zero); Marshal translates that
+			// HRESULT to ArgumentException rather than COMException. Such a page is unreadable, not an RPC error.
+			return null;
+		}
 		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
 			return null;
 		}

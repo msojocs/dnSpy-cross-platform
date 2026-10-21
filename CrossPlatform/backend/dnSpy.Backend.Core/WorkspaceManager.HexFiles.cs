@@ -72,7 +72,7 @@ public sealed partial class WorkspaceManager {
 		/// file broken in a way they did not foresee can still make one throw; the hex view then shows no structure
 		/// there rather than failing the request, which is what a position outside every structure gets anyway.
 		/// </summary>
-		static T AskModel<T>(Func<T> ask, T fallback) {
+		internal static T AskModel<T>(Func<T> ask, T fallback) {
 			try {
 				return ask();
 			}
@@ -103,7 +103,7 @@ public sealed partial class WorkspaceManager {
 			}, empty);
 		}
 
-		static string FieldKind(HexStructureFieldKind kind) => kind switch {
+		internal static string FieldKind(HexStructureFieldKind kind) => kind switch {
 			HexStructureFieldKind.CurrentField => "currentField",
 			HexStructureFieldKind.SubStructure => "subStructure",
 			HexStructureFieldKind.Structure => "structure",
@@ -116,7 +116,7 @@ public sealed partial class WorkspaceManager {
 		/// GetColor gives the classified text tags. An empty section after the first is left out, as the WPF tooltip
 		/// leaves it out; parts of one color next to each other are joined.
 		/// </summary>
-		static HexToolTipDto ToToolTipDto(HexToolTipContent content) {
+		internal static HexToolTipDto ToToolTipDto(HexToolTipContent content) {
 			var sections = new List<IReadOnlyList<TextPartDto>>(content.Text.Length);
 			for (var i = 0; i < content.Text.Length; i++) {
 				var text = content.Text[i];
@@ -193,14 +193,14 @@ public sealed partial class WorkspaceManager {
 			}, empty);
 		}
 
-		static HexRangeDto? Range(HexSpan? span) =>
+		internal static HexRangeDto? Range(HexSpan? span) =>
 			span is { } value ? new HexRangeDto((long)value.Start.ToUInt64(), (long)value.Length.ToUInt64()) : null;
 
 		/// <summary>
 		/// EditFieldCommand: only a flags or an enum field has the submenu. A flags field lists every flag but the names
 		/// of its enum-like parts, each a toggle unless its mask is one of those parts; an enum field lists its values.
 		/// </summary>
-		static HexEditFieldDto? GetEditField(ComplexData structure, HexPosition position) {
+		internal static HexEditFieldDto? GetEditField(ComplexData structure, HexPosition position) {
 			if (structure.GetSimpleField(position)?.Data is not SimpleData field || field is not (FlagsData or EnumData))
 				return null;
 			var span = field.Span;

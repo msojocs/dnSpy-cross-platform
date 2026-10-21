@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { hexEncodingSelection, loadHexEncodings } from '../hex-encodings'
 import { useLanguage } from '../localization'
 import { trapTabKey } from './modal-stack'
 import { loadAppOptions, resetAppOptions, saveAppOptions, type AppOptions } from './app-options'
@@ -362,6 +363,26 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
   const [options, setOptions] = useState<AppOptions>(() => loadAppOptions())
   const [selectedPageId, setSelectedPageId] = useState<string>(() => initialSelection(initialCategory))
   const [search, setSearch] = useState('')
+  // The Hex Editor pages list every encoding .NET has, which the backend is asked for once.
+  const [encodingsLoaded, setEncodingsLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void loadHexEncodings().then(() => {
+      if (cancelled)
+        return
+      setOptions((current) => {
+        let next = current
+        for (const view of ['hexViewer', 'memoryWindow'] as const) {
+          const encoding = String(hexEncodingSelection(current.hexEditor[view].general.encoding))
+          if (encoding !== current.hexEditor[view].general.encoding)
+            next = setNested(['hexEditor', view, 'general', 'encoding'], encoding)(next)
+        }
+        return next
+      })
+      setEncodingsLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [])
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(expandedFor(initialSelection(initialCategory))))
 
   useEffect(() => searchInput.current?.focus(), [])
@@ -417,7 +438,7 @@ export const OptionsDialog = ({ onClose, initialCategory }: OptionsDialogProps):
   }
 
   const normalizedSearch = normalizeForSearch(search)
-  const visiblePages = useMemo(() => filterPages(OPTION_PAGES, normalizedSearch, t), [normalizedSearch, t])
+  const visiblePages = useMemo(() => filterPages(OPTION_PAGES, normalizedSearch, t), [normalizedSearch, t, encodingsLoaded])
   const selectionPath = useMemo(() => findPagePath(OPTION_PAGES, selectedPageId) ?? [], [selectedPageId])
   const selectedPage = selectionPath.at(-1)
 

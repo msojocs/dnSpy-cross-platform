@@ -307,6 +307,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		if (disposed)
 			return;
 		disposed = true;
+		DebugMemory = null;
 		foreach (var workspace in workspaces.Values)
 			workspace.Dispose();
 		workspaces.Clear();

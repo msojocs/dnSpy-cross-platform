@@ -74,7 +74,10 @@ namespace dnSpy.Backend.Core.HexFiles.PE {
 			if (sects > 0 && file.Span.Contains(pos + 0x28 - 1)) {
 				// Mono doesn't verify the section count
 				uint firstSectionOffset = file.Buffer.ReadUInt32(pos + 0x14);
-				sects = Math.Min(sects, (int)((firstSectionOffset - pos).ToUInt64() / 0x28));
+				// dnSpy subtracts the buffer position from the section's file offset, which only means something for a
+				// file that starts at 0; the offset of the section table in the file is what it is compared with, so a
+				// module at any address of a process's memory reads the same sections as its file does.
+				sects = Math.Min(sects, (int)((firstSectionOffset - (pos - file.Span.Start)).ToUInt64() / 0x28));
 			}
 			Sections = CreateSections(pos, sects);
 			if (Sections is null)

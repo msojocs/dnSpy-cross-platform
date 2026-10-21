@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from '../app-store'
 import { HexView } from './SpecialDocuments'
+import { loadAppOptions, saveAppOptions } from './app-options'
 
 const moduleId = 'mod1'
 const fileLength = 0x2000
@@ -38,6 +39,7 @@ beforeEach(() => {
       beginEdit,
       patchHex,
       commitEdit,
+      getRoots: vi.fn(async () => ({ nodes: [] })),
       findHex: vi.fn(async () => ({ offset: -1 })),
       resolveHexPosition: vi.fn(async () => ({ offset: -1 })),
       goToHexMetadata: vi.fn(async () => ({ range: null })),
@@ -199,6 +201,66 @@ describe('HexView', () => {
     // The first byte of the file is 0x00, so its high nibble becomes 0xA and the byte is 0xA0.
     expect(patchHex).toHaveBeenCalledWith('w1', 'tx1', moduleId, 0, base64Of([0xA0]))
     expect(commitEdit).toHaveBeenCalledWith('w1', 'tx1')
+  })
+
+  it('serializes code-page encoding, writing and caret movement for rapid ASCII input', async () => {
+    let finishFirst: ((value: { base64Data: string }) => void) | undefined
+    const encodeText = vi.fn((_codePage: number, text: string): Promise<{ base64Data: string }> => {
+      if (text === '你')
+        return new Promise((resolve) => { finishFirst = resolve })
+      return Promise.resolve({ base64Data: base64Of([0xBA, 0xC3]) })
+    })
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, encodeText } })
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    act(() => {
+      const options = loadAppOptions()
+      options.hexEditor.hexViewer.general.encoding = '936'
+      saveAppOptions(options)
+    })
+    const content = container.querySelector('.hex-content')!
+    fireEvent.keyDown(content, { key: 'Tab', code: 'Tab' })
+    fireEvent.keyDown(content, { key: '你' })
+    fireEvent.keyDown(content, { key: '好' })
+    await waitFor(() => expect(encodeText).toHaveBeenCalledTimes(1))
+    expect(patchHex).not.toHaveBeenCalled()
+    await act(async () => { finishFirst!({ base64Data: base64Of([0xC4, 0xE3]) }) })
+    await waitFor(() => expect(patchHex).toHaveBeenCalledTimes(2))
+    expect(patchHex.mock.calls).toEqual([
+      ['w1', 'tx1', moduleId, 0, base64Of([0xC4, 0xE3])],
+      ['w1', 'tx1', moduleId, 2, base64Of([0xBA, 0xC3])],
+    ])
+    expect(view(container).dataset.caret).toBe('4')
+  })
+
+  it('recovers after an encoding error without advancing the caret', async () => {
+    const encodeText = vi.fn().mockRejectedValueOnce(new Error('encoding failed')).mockResolvedValue({ base64Data: base64Of([0xBA, 0xC3]) })
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, encodeText } })
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    act(() => {
+      const options = loadAppOptions()
+      options.hexEditor.hexViewer.general.encoding = '936'
+      saveAppOptions(options)
+    })
+    const content = container.querySelector('.hex-content')!
+    fireEvent.keyDown(content, { key: 'Tab', code: 'Tab' })
+    fireEvent.keyDown(content, { key: '你' })
+    fireEvent.keyDown(content, { key: '好' })
+    await waitFor(() => expect(patchHex).toHaveBeenCalledTimes(1))
+    expect(patchHex).toHaveBeenCalledWith('w1', 'tx1', moduleId, 0, base64Of([0xBA, 0xC3]))
+    expect(view(container).dataset.caret).toBe('2')
+  })
+
+  it('opens Go to Offset even when the current memory cannot be read', async () => {
+    const { container } = render(<HexView source={{
+      length: 0x10000, base: 0, revision: 'unmapped',
+      read: async () => { throw new Error('unreadable memory') },
+      write: async () => false,
+      reveal: (address) => address,
+    }} />)
+    fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'g', code: 'KeyG', ctrlKey: true })
+    expect(await screen.findByRole('dialog', { name: 'Go to Offset' })).toBeInTheDocument()
   })
 
   it('has no pagination: the whole file is one scrollable dump', async () => {

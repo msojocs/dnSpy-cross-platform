@@ -310,7 +310,7 @@ export interface ColoredRun {
 export const buildClipboardHtml = (lines: readonly (readonly ColoredRun[])[], fontFamily: string, fontSize: number, tabSize: number): string => {
   const body = lines.map((runs) => runs.map((run) => {
     const text = escapeHtml(run.text.replaceAll('\t', ' '.repeat(tabSize))).replaceAll('  ', '&nbsp; ')
-    return run.color ? `<span style="color:${run.color};">${text}</span>` : text
+    return run.color ? `<span style="color:${escapeHtml(run.color)};">${text}</span>` : text
   }).join('')).join('<br/>')
   return `<div style="font-family:${escapeHtml(fontFamily)};font-size:${fontSize}px;white-space:pre;">${body}</div>`
 }

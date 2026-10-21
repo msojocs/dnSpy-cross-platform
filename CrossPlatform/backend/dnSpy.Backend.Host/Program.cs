@@ -18,6 +18,8 @@ using var languageService = new RoslynLanguageService();
 // engine is created after it and handed the interface. A null engine means the host runs without
 // debugging (see DebugManagerFactory).
 await using var debugManager = DebugManagerFactory.TryCreate(workspaceManager);
+// The Memory window's structures read the debug sessions' processes through the workspace manager.
+workspaceManager.DebugMemory = debugManager;
 using var cancelHandler = new ConsoleCancelHandler(shutdown);
 
 if (options.ParentProcessId is int parentProcessId)

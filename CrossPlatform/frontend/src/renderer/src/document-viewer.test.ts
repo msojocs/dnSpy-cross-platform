@@ -163,6 +163,14 @@ describe('tooltips, links and the clipboard', () => {
     expect(html).toContain('font-family:Consolas')
   })
 
+  it('escapes clipboard colour attributes as well as text and font names', () => {
+    const html = buildClipboardHtml([[{ text: '<&', color: 'red;\" data-injected=\"yes' }]], '\"Consolas\"', 13, 4)
+    expect(html).toContain('color:red;&quot; data-injected=&quot;yes;')
+    expect(html).not.toContain('" data-injected=')
+    expect(html).toContain('&lt;&amp;')
+    expect(html).toContain('font-family:&quot;Consolas&quot;')
+  })
+
   it('turns an offset into a line and a column', () => {
     expect(positionAt('ab\r\ncd\nef', 0)).toEqual({ line: 1, column: 1 })
     expect(positionAt('ab\r\ncd\nef', 5)).toEqual({ line: 2, column: 2 })

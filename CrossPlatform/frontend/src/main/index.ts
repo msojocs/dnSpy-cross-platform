@@ -681,18 +681,30 @@ const registerIpc = (): void => {
   ipcMain.handle('hex:resolvePosition', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/resolvePosition', { workspaceId, moduleId, kind, value }))
   ipcMain.handle('hex:goToMetadata', (_event, workspaceId: string, moduleId: string, kind: string, value: number) => requireBackend().invoke('hex/goToMetadata', { workspaceId, moduleId, kind, value }))
   ipcMain.handle('hex:find', (_event, workspaceId: string, moduleId: string, base64Pattern: string, start: number, reverse: boolean, wrap: boolean) => requireBackend().invoke('hex/find', { workspaceId, moduleId, base64Pattern, start, reverse, wrap }))
+  ipcMain.handle('debugMemory:refresh', (_event, sessionId: string) => requireBackend().invoke('debug/memoryRefresh', { sessionId }))
+  ipcMain.handle('debugMemory:toolTipInfo', (_event, sessionId: string, address: number) => requireBackend().invoke('debug/memoryToolTipInfo', { sessionId, address }))
+  ipcMain.handle('debugMemory:positionInfo', (_event, sessionId: string, address: number) => requireBackend().invoke('debug/memoryPositionInfo', { sessionId, address }))
+  ipcMain.handle('debugMemory:resolvePosition', (_event, sessionId: string, caretAddress: number, kind: string, value: number) => requireBackend().invoke('debug/memoryResolvePosition', { sessionId, caretAddress, kind, value }))
+  ipcMain.handle('debugMemory:goToMetadata', (_event, sessionId: string, caretAddress: number, kind: string, value: number) => requireBackend().invoke('debug/memoryGoToMetadata', { sessionId, caretAddress, kind, value }))
+  ipcMain.handle('debugMemory:fileInfo', (_event, sessionId: string, address: number) => requireBackend().invoke('debug/memoryFileInfo', { sessionId, address }))
+  ipcMain.handle('text:getEncodings', () => requireBackend().invoke('text/getEncodings', {}))
+  ipcMain.handle('text:encode', (_event, codePage: number, text: string) => requireBackend().invoke('text/encode', { codePage, text }))
   ipcMain.handle('hex:search', (_event, workspaceId: string, moduleId: string, request: Record<string, unknown>) => requireBackend().invoke('hex/search', { workspaceId, moduleId, ...request }))
   ipcMain.handle('hex:toolTipInfo', (_event, workspaceId: string, moduleId: string, position: number) => requireBackend().invoke('hex/getToolTipInfo', { workspaceId, moduleId, position }))
   ipcMain.handle('hex:positionInfo', (_event, workspaceId: string, moduleId: string, position: number) => requireBackend().invoke('hex/getPositionInfo', { workspaceId, moduleId, position }))
   // dnSpy's Hex Editor › Save Selection: the bytes are read back in the same bounded chunks the view uses
   // and written to the file the user picks, so a selection of any size saves without being held twice.
-  ipcMain.handle('hex:saveSelection', async (_event, workspaceId: string, moduleId: string, offset: number, count: number, suggestedName?: string) => {
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: nativeText().saveCode,
-      defaultPath: suggestedName ?? 'hex.bin',
-      filters: [{ name: nativeText().allFiles, extensions: ['*'] }],
-    })
+  // dnSpy's PickSaveFilename.GetFilename(null, "bin"): the system's own title, no name to start from, All Files and
+  // a default extension of .bin when the name picked has none.
+  const pickHexSaveFile = async (): Promise<string | undefined> => {
+    const result = await dialog.showSaveDialog(mainWindow!, { filters: [{ name: nativeText().allFiles, extensions: ['*'] }] })
     if (result.canceled || !result.filePath)
+      return undefined
+    return path.extname(result.filePath) === '' ? `${result.filePath}.bin` : result.filePath
+  }
+  ipcMain.handle('hex:saveSelection', async (_event, workspaceId: string, moduleId: string, offset: number, count: number) => {
+    const filePath = await pickHexSaveFile()
+    if (!filePath)
       return undefined
     const chunks: Buffer[] = []
     const maxRead = 1024 * 1024
@@ -701,8 +713,16 @@ const registerIpc = (): void => {
       const response = await requireBackend().invoke<{ base64Data: string }>('hex/readRange', { workspaceId, moduleId, offset: offset + position, count: read })
       chunks.push(Buffer.from(response.base64Data, 'base64'))
     }
-    await writeFile(result.filePath, Buffer.concat(chunks))
-    return result.filePath
+    await writeFile(filePath, Buffer.concat(chunks))
+    return filePath
+  })
+  // The Memory window's Save Selection: the view has read the bytes already, the file is all that is left to pick.
+  ipcMain.handle('hex:saveBytes', async (_event, base64Data: string) => {
+    const filePath = await pickHexSaveFile()
+    if (!filePath)
+      return undefined
+    await writeFile(filePath, Buffer.from(base64Data, 'base64'))
+    return filePath
   })
   ipcMain.handle('module:info', (_event, workspaceId: string, moduleId: string) => requireBackend().invoke('module/getInfo', { workspaceId, moduleId }))
   ipcMain.handle('edit:begin', (_event, workspaceId: string) => requireBackend().invoke('edit/begin', { workspaceId }))

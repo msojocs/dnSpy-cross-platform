@@ -1115,6 +1115,79 @@ test.describe('the workspace shell', () => {
     await expect(page.locator('.hex-structure-view')).toBeVisible()
   })
 
+  test('writes ASCII-column text with a full .NET code page from Hex options', async () => {
+    await openAssemblyAndNamespace()
+    await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Open Hex Editor' }).click()
+    const hex = page.locator('.hex-content')
+    const view = page.locator('.hex-view')
+    await expect(hex).toContainText('4D 5A')
+
+    await page.getByRole('menuitem', { name: 'View', exact: true }).click()
+    await page.getByRole('menuitem', { name: /^Options\.\.\./ }).click()
+    const options = page.getByRole('dialog', { name: 'Options', exact: true })
+    await options.getByRole('treeitem', { name: /^Hex Editor/ }).click()
+    const encoding = options.getByRole('combobox', { name: 'Encoding', exact: true })
+    // This list is the backend's Encoding.GetEncodings(), not the browser's former five choices.
+    await expect(encoding.locator('option[value="936"]')).toHaveCount(1)
+    await expect(encoding.locator('option[value="932"]')).toHaveCount(1)
+    await expect(encoding.locator('option[value="1252"]')).toHaveCount(1)
+    await encoding.selectOption('936')
+    await options.getByRole('button', { name: 'Apply', exact: true }).click()
+
+    await hex.focus()
+    await page.keyboard.press('Control+G')
+    const goto = page.getByRole('dialog', { name: 'Go to Offset' })
+    await goto.getByRole('textbox').fill('0x40')
+    await goto.getByRole('button', { name: 'OK' }).click()
+    await expect(view).toHaveAttribute('data-caret', '64')
+    const bytes = (): Promise<string[]> => page.locator('.hex-byte[data-hex-column="values"]').evaluateAll((cells) => cells
+      .filter((cell) => Number((cell as HTMLElement).dataset.hexByte) >= 0x40 && Number((cell as HTMLElement).dataset.hexByte) < 0x46)
+      .map((cell) => cell.textContent ?? ''))
+    await expect.poll(bytes).toHaveLength(6)
+    const original = await bytes()
+    await page.keyboard.press('Tab')
+    await application.evaluate(({ clipboard }) => clipboard.writeText('你好'))
+    await page.keyboard.press('Control+V')
+    await expect(view).toHaveAttribute('data-caret', '68')
+    // Adjacent inputs must queue their encoding/write/caret transactions instead of overwriting each other.
+    await page.keyboard.type('AB')
+    await expect(view).toHaveAttribute('data-caret', '70')
+    await expect.poll(bytes).toEqual(['C4', 'E3', 'BA', 'C3', '41', '42'])
+
+    for (let edit = 0; edit < 3; edit++) {
+      await page.getByRole('menuitem', { name: 'Edit', exact: true }).click()
+      await page.getByRole('menuitem', { name: /^Undo/ }).click()
+    }
+    await expect.poll(bytes).toEqual(original)
+    await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
+  })
+
+  test('copies Hex text as plain text and themed HTML to the system clipboard', async () => {
+    await openAssemblyAndNamespace()
+    await page.locator('.tree-row[data-kind="module"]').first().click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Open Hex Editor' }).click()
+    const hex = page.locator('.hex-content')
+    await expect(hex).toContainText('4D 5A')
+    await application.evaluate(({ clipboard }) => clipboard.clear())
+    await hex.focus()
+    await page.keyboard.press('Control+Shift+C')
+
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^0+ 4D 5A/)
+    const text = await application.evaluate(({ clipboard }) => clipboard.readText())
+    expect(text).not.toMatch(/[\r\n]/)
+    const readHtml = (): Promise<string> => application.evaluate(async ({ clipboard }) => {
+      const items = await clipboard.read()
+      const item = items.find((entry) => entry.types.includes('text/html'))
+      return item ? (await item.getType('text/html')).text() : ''
+    })
+    await expect.poll(readHtml).toContain('4D')
+    const html = await readHtml()
+    expect(html).toContain('font-family:')
+    expect(html).toMatch(/<span style="color:/)
+    expect(html).toMatch(/<br\s*\/?\s*>/)
+  })
+
   test('deletes a type, renames the namespace and restores both with undo', async () => {
     await openAssemblyAndNamespace()
     const namespaceRow = page.locator('.tree-row[data-kind="namespace"]').filter({ hasText: /^dnSpy\.Backend\.Contracts$/ })
@@ -2183,6 +2256,75 @@ test.describe('the in-process debug engine', () => {
     const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
     await toolbar.getByRole('button', { name: 'Continue' }).click()
     await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
+  })
+
+  test('shows live Memory structure Quick Info, follows a field and navigates with F12', async () => {
+    test.setTimeout(60_000)
+    page.on('pageerror', (error) => console.error('Memory e2e renderer:', error.message))
+    await openDebugTarget()
+    const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
+    await toolbar.getByRole('button', { name: 'Debug a Program' }).click()
+    const debug = page.getByRole('dialog', { name: 'Debug Program' })
+    await debug.getByLabel('Break at').selectOption('entry-point')
+    await debug.getByRole('button', { name: 'OK' }).click()
+    await expect(page.locator('.status-bar')).toContainText('Stopped: entry')
+
+    try {
+      // Read the real loaded module's address from Modules; the Memory window must then ask about process
+      // addresses, not about the disk file or offsets relative to its moving 16 MiB window.
+      await page.keyboard.press('Control+Alt+u')
+      const modules = page.getByRole('grid', { name: 'Modules', exact: true })
+      const module = modules.getByRole('row').filter({ has: page.locator('span').filter({ hasText: /^DebugTarget\.dll$/ }) })
+      await expect(module).toHaveCount(1)
+      const addressText = await module.locator(':scope > span').nth(7).getAttribute('title')
+      const address = addressText?.match(/^0x([0-9a-f]+)/i)
+      if (!address)
+        throw new Error(`The loaded module has no address: ${addressText}`)
+      const base = Number.parseInt(address[1], 16)
+      expect(base).toBeGreaterThan(0)
+
+      await page.keyboard.press('Alt+6')
+      await page.getByRole('tab', { name: 'Memory 1', exact: true }).click()
+      const memory = page.locator('.memory-pane')
+      const hex = memory.locator('.hex-content')
+      const view = memory.locator('.hex-view')
+      await expect(hex).toBeVisible()
+      const goTo = async (position: number): Promise<void> => {
+        await hex.focus()
+        await expect(hex).toBeFocused()
+        await hex.press('Control+G')
+        const goto = page.getByRole('dialog', { name: 'Go to Offset' })
+        await expect(goto).toBeVisible({ timeout: 5_000 })
+        await goto.getByRole('textbox').fill(`0x${position.toString(16)}`)
+        await goto.getByRole('button', { name: 'OK' }).click()
+        await expect.poll(async () => Number.parseInt((await view.getAttribute('data-caret-offset')) ?? '', 16)).toBe(position)
+      }
+      await goTo(base)
+      await expect(hex).toContainText('4D 5A')
+      await page.keyboard.press('Control+k')
+      await page.keyboard.press('Control+i')
+      await expect(page.getByRole('tooltip')).toContainText('IMAGE_DOS_HEADER.e_magic')
+      await expect(memory.locator('.hex-tooltip-current-field')).not.toHaveCount(0)
+
+      await page.keyboard.press('Escape')
+      await goTo(base + 0x3C)
+      await page.keyboard.press('Control+F12')
+      const peOffset = readFileSync(debugTargetPath).readUInt32LE(0x3C)
+      await expect.poll(async () => Number.parseInt((await view.getAttribute('data-caret-offset')) ?? '', 16)).toBe(base + peOffset)
+      await page.keyboard.press('F5')
+      // Hex Refresh must remain inside Memory, never continue the paused debuggee.
+      await expect(page.locator('.status-bar')).toContainText('Stopped: entry')
+      await expect(hex).toContainText('50 45 00 00')
+
+      await goTo(base)
+      await page.keyboard.press('F12')
+      await expect(page.locator('.hex-structure-view')).toBeVisible()
+      await expect(page.getByRole('form', { name: 'IMAGE_DOS_HEADER', exact: true })).toBeVisible()
+    }
+    finally {
+      await toolbar.getByRole('button', { name: 'Stop', exact: true }).click()
+      await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
+    }
   })
 
   test('stops on a function breakpoint for a method of the debuggee', async () => {

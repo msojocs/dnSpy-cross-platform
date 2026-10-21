@@ -7,6 +7,7 @@ import { useCategoryFont } from '../fonts'
 import { useLanguage } from '../localization'
 import { useAppOptions } from './app-options'
 import { HexView, type HexByteSource } from './HexEditor'
+import { memoryStructures } from '../memory-structures'
 
 /**
  * How much of the address space the Memory window's hex view spans at a time: a scroll range the view can draw.
@@ -44,19 +45,29 @@ export const MemoryPane = (): React.JSX.Element => {
   const appendOutput = useAppStore((state) => state.appendOutput)
   const hex = useAppOptions().debugger.useHexadecimal
   const [chosenSession, setChosenSession] = useState<string>()
-  const [base, setBase] = useState(0)
+  const [windowRange, setWindowRange] = useState({ base: 0, length: MEMORY_WINDOW })
+  const { base, length } = windowRange
   const sessionId = chosenSession && sessions.some((entry) => entry.sessionId === chosenSession) ? chosenSession : currentSessionId
   const stopped = sessionId === currentSessionId ? debugState === 'stopped' : sessions.find((entry) => entry.sessionId === sessionId)?.state === 'stopped'
+  const identity = useMemo(() => ({}), [sessionId, stopped, base, length, generation])
+  const currentIdentity = useRef<object | undefined>(identity)
+  currentIdentity.current = identity
+  useEffect(() => {
+    currentIdentity.current = identity
+    return () => { if (currentIdentity.current === identity) currentIdentity.current = undefined }
+  }, [identity])
 
   const source = useMemo<HexByteSource | undefined>(() => {
     if (!sessionId || !stopped)
       return undefined
     return {
-      length: MEMORY_WINDOW,
+      length,
       base,
       end: ADDRESS_SPACE_END,
       optionsView: 'memoryWindow',
       revision: `${sessionId}:${generation}`,
+      structures: memoryStructures(sessionId, base, () => currentIdentity.current === identity),
+      refresh: () => window.dnSpy.refreshDebugMemory(sessionId),
       read: async (offset, count) => {
         const memory = await window.dnSpy.readDebugMemory(sessionId, `0x${(base + offset).toString(16)}`, count)
         return { bytes: fromBase64(memory.data), readable: memory.readable }
@@ -70,21 +81,26 @@ export const MemoryPane = (): React.JSX.Element => {
           return false
         }
       },
-      reveal: (address) => {
-        const next = windowBaseFor(address)
-        setBase(next)
-        return address - next
+      reveal: (address, endAddress) => {
+        const start = Math.max(0, Math.min(ADDRESS_SPACE_END - 1, address))
+        const end = Math.max(start + 1, Math.min(ADDRESS_SPACE_END, endAddress ?? start + 1))
+        const next = windowBaseFor(start)
+        // Selecting a module or structure can span more than the ordinary scrolling window.
+        const windowLength = Math.min(ADDRESS_SPACE_END - next, Math.max(MEMORY_WINDOW, end - next))
+        currentIdentity.current = undefined
+        setWindowRange({ base: next, length: windowLength })
+        return start - next
       },
       menu: [{
         label: t('Process'),
         submenu: sessions.map((entry) => ({
           label: entry.process ? `[${hex ? `0x${entry.process.id.toString(16).toUpperCase()}` : entry.process.id}]${entry.process.name ? ` ${entry.process.name}` : ''}` : entry.sessionId,
           checked: entry.sessionId === sessionId,
-          action: () => setChosenSession(entry.sessionId),
+          action: () => { currentIdentity.current = undefined; setChosenSession(entry.sessionId) },
         })),
       }],
     }
-  }, [sessionId, stopped, base, generation, sessions, hex, appendOutput, t])
+  }, [sessionId, stopped, base, length, generation, identity, sessions, hex, appendOutput, t])
 
   if (!source)
     return <div className="pane-empty">{sessionId ? t('Memory can only be read while the process is paused.') : t('Memory can only be read while debugging.')}</div>

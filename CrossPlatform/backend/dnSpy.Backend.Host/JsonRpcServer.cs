@@ -488,6 +488,29 @@ internal sealed class JsonRpcServer {
 				return GetDebugSessions().ApplyExceptionSettings(ReadParamsElement(request));
 			case RpcMethods.ExceptionReset:
 				return GetDebugSessions().ResetExceptionSettings();
+			case RpcMethods.DebugMemoryToolTipInfo:
+				GetDebugSessions();
+				return await workspaces.GetDebugMemoryToolTipInfoAsync(DeserializeParams<DebugMemoryPositionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryPositionInfo:
+				GetDebugSessions();
+				return await workspaces.GetDebugMemoryPositionInfoAsync(DeserializeParams<DebugMemoryPositionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryResolvePosition:
+				GetDebugSessions();
+				return await workspaces.ResolveDebugMemoryPositionAsync(DeserializeParams<DebugMemoryResolvePositionRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryGoToMetadata:
+				GetDebugSessions();
+				return await workspaces.GoToDebugMemoryMetadataAsync(DeserializeParams<DebugMemoryGoToMetadataRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryFileInfo:
+				GetDebugSessions();
+				return await workspaces.GetDebugMemoryFileInfoAsync(DeserializeParams<DebugMemoryFileInfoRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryRefresh:
+				GetDebugSessions();
+				workspaces.RefreshDebugMemory(DeserializeParams<DebugMemoryRefreshRequest>(request));
+				return new { };
+			case RpcMethods.TextGetEncodings:
+				return TextEncodings.GetEncodings();
+			case RpcMethods.TextEncode:
+				return TextEncodings.Encode(DeserializeParams<EncodeTextRequest>(request));
 			default:
 				throw new RpcException(ErrorCodes.MethodNotFound, $"Unknown method: {request.Method}");
 		}

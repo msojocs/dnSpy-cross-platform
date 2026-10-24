@@ -13,8 +13,6 @@ export interface HexViewMenuContext {
   readOnly: boolean
   /** A process's memory: its bytes change, so Refresh is there (`HexBuffer.IsVolatile`). */
   volatile: boolean
-  /** A module's file, which has metadata to go to and structures to select. */
-  hasFile: boolean
   bytesPerLine: number
   valuesFormat: HexValuesFormat
   editField: HexEditField | undefined
@@ -44,7 +42,7 @@ export function buildHexViewMenu(ctx: HexViewMenuContext): MenuItem[] {
   const groups: MenuItem[][] = []
   groups.push([
     { label: t('Go to Offset...'), shortcut: 'Ctrl+G', action: () => ctx.dialog('goToPosition') },
-    { label: t('Go to Metadata...'), shortcut: 'Ctrl+M', disabled: !ctx.hasFile, action: () => ctx.dialog('goToMetadata') },
+    { label: t('Go to Metadata...'), shortcut: 'Ctrl+M', action: () => ctx.dialog('goToMetadata') },
     { label: t('Go to Code or Structure'), shortcut: 'F12', action: () => ctx.run('goToCodeOrStructure') },
     { label: t('Follow Reference'), shortcut: 'Ctrl+F12', action: () => ctx.run('followFieldValueReference') },
     { label: t('Save Selection...'), icon: 'Save', shortcut: 'Ctrl+Alt+S', disabled: !ctx.hasSelection, action: () => ctx.run('saveSelection') },
@@ -110,9 +108,9 @@ export function buildHexViewMenu(ctx: HexViewMenuContext): MenuItem[] {
       icon: 'Select',
       submenu: [
         { label: t('Select...'), icon: 'Select', shortcut: 'Ctrl+L', action: () => ctx.dialog('select') },
-        { label: t('Select File'), shortcut: 'Ctrl+E, Ctrl+F', disabled: !ctx.hasFile, action: () => ctx.run('selectFile') },
-        { label: t('Select Nested File'), shortcut: 'Ctrl+E, Ctrl+N', disabled: !ctx.hasFile, action: () => ctx.run('selectNestedFile') },
-        { label: t('Select Structure'), shortcut: 'Ctrl+E, Ctrl+S', disabled: !ctx.hasFile, action: () => ctx.run('selectStructure') },
+        { label: t('Select File'), shortcut: 'Ctrl+E, Ctrl+F', action: () => ctx.run('selectFile') },
+        { label: t('Select Nested File'), shortcut: 'Ctrl+E, Ctrl+N', action: () => ctx.run('selectNestedFile') },
+        { label: t('Select Structure'), shortcut: 'Ctrl+E, Ctrl+S', action: () => ctx.run('selectStructure') },
       ],
     },
   ])

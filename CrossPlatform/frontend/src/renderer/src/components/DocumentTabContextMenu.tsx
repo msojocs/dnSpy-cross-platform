@@ -190,9 +190,26 @@ export const closeDocumentTab = (tab: TabNode): void => {
 
 /** Closes every tab showing `documentId` — what deleting its node does to the documents it had open. A module's
  *  hex and information tabs name it by its root's id, so taking the root away closes those too. */
-export const closeDocumentTabsFor = (model: Model, documentId: string): void => {
+/** What a hex tab shows once the workspace no longer holds its document: the file itself, by its path. */
+export const HEX_FILE_PREFIX = 'hexfile:'
+
+/**
+ * Closes the tabs that show a node that is gone. A hex tab stays: dnSpy's hex view is the file's
+ * (HexViewDocumentTabContent has no nodes, so TabContentImpl.OnNodesRemoved leaves it), and it goes on showing the
+ * file as it is on disk — `keepHexFile` hears which id it now goes by.
+ */
+export const closeDocumentTabsFor = (model: Model, documentId: string, keepHexFile?: (oldId: string, newId: string) => void): void => {
   for (const tab of getDocumentTabSets(model).flatMap(allTabs)) {
     const config = tab.getConfig() as { documentId?: string; moduleId?: string } | undefined
+    if (tab.getComponent() === 'hex' && config?.moduleId === documentId) {
+      const path = tab.getHelpText()
+      if (path) {
+        const fileId = `${HEX_FILE_PREFIX}${path}`
+        keepHexFile?.(documentId, fileId)
+        model.doAction(Actions.updateNodeAttributes(tab.getId(), { config: { ...config, moduleId: fileId } }))
+        continue
+      }
+    }
     // A tab of several nodes goes with any one of them.
     if (tab.isCloseable() && ((config?.documentId !== undefined && documentShowsNode(config.documentId, documentId)) || config?.moduleId === documentId))
       model.doAction(Actions.deleteTab(tab.getId()))

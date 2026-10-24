@@ -2821,7 +2821,19 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return found;
 		}
 
+		/// <summary>
+		/// What a hex view names a file by once the workspace no longer holds it — dnSpy's hex tabs are a file's
+		/// (HexBufferService keys its buffers by file name), so removing the document leaves its hex tab open and a
+		/// session brings it back whether or not the file is loaded.
+		/// </summary>
+		internal const string HexFilePrefix = "hexfile:";
+
+		/// <summary>The files hex views show without the workspace holding them, read as they are on disk.</summary>
+		readonly Dictionary<string, UnknownFileEntry> standaloneHexFiles = new(StringComparer.Ordinal);
+
 		IModuleEntry FindHexEntry(string moduleId) {
+			if (moduleId.StartsWith(HexFilePrefix, StringComparison.Ordinal))
+				return FindHexFileEntry(moduleId);
 			if (modules.TryGetValue(moduleId, out var module))
 				return module;
 			if (nodes.TryGetValue(moduleId, out var node) && node.Module is IModuleEntry entry)
@@ -2834,6 +2846,27 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				return unknown;
 			throw new RpcException(ErrorCodes.NodeNotFound, "The module no longer exists.");
 		}
+
+		/// <summary>A file named by its path: the document of it the workspace holds, or else the file on disk.</summary>
+		IModuleEntry FindHexFileEntry(string id) {
+			var path = id[HexFilePrefix.Length..];
+			var fullPath = Path.GetFullPath(path);
+			var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+			foreach (var entry in OrderedEntries()) {
+				if (entry is not ModuleEntry { InMemory: true } && Path.GetFullPath(entry.Path).Equals(fullPath, comparison))
+					return entry;
+			}
+			if (standaloneHexFiles.TryGetValue(id, out var standalone))
+				return standalone;
+			if (!File.Exists(fullPath))
+				throw new RpcException(ErrorCodes.NodeNotFound, "The file no longer exists.");
+			standalone = new UnknownFileEntry(fullPath) { Id = id };
+			standaloneHexFiles.Add(id, standalone);
+			return standalone;
+		}
+
+		/// <summary>Whether a hex entry is a file the workspace does not hold, which has no document to save edits to.</summary>
+		bool IsStandaloneHexFile(IModuleEntry entry) => entry is UnknownFileEntry unknown && standaloneHexFiles.ContainsKey(unknown.Id);
 
 		/// <summary>The PE image behind a hex document, which is what RVA and PE-relative addresses need.</summary>
 		static IPEImage? GetPeImage(IModuleEntry entry) => entry switch {
@@ -3060,7 +3093,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			var (structure, structureData) = GetHexStructureRanges(node);
 			switch (node.Value) {
 			case MethodDef value:
-				method = ResolveMethodTarget(value);
+				method = ResolveMethodTarget(node.AsModuleEntry, value);
 				break;
 			case FieldDef value:
 				fieldInitialValue = ResolveFieldInitialValue(value);
@@ -3072,12 +3105,29 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				resource = ResolveResourceElementTarget(owner, value);
 				break;
 			}
-			return new HexTargetResponse(moduleEntry.Id, moduleEntry.FileLength, method, fieldInitialValue, resource, structure, structureData);
+			return new HexTargetResponse(HexFileIdOf(moduleEntry), moduleEntry.FileLength, method, fieldInitialValue, resource, structure, structureData);
 		}
 
-		static HexMethodTargetDto? ResolveMethodTarget(MethodDef method) {
+		/// <summary>
+		/// The id the hex commands name a document's file by. A net module's entry carries the id of the assembly it
+		/// belongs to — that is how a save or a removal of the assembly finds its net modules — so naming its file by
+		/// that id would open the assembly's manifest module instead. A net module is named by its own module row,
+		/// which <see cref="FindHexEntry"/> resolves to the net module's entry: dnSpy's commands open
+		/// <c>mod.Location</c>, the file of the module the node is in.
+		/// </summary>
+		string HexFileIdOf(IModuleEntry entry) {
+			if (entry is ModuleEntry module && modules.TryGetValue(module.Id, out var owner) && !ReferenceEquals(owner, module))
+				return GetOrAddNode($"module:{module.Path}", NodeKind.Module, module.Module, module).Id;
+			return entry.Id;
+		}
+
+		static HexMethodTargetDto? ResolveMethodTarget(ModuleEntry? moduleEntry, MethodDef method) {
 			if (!HexTargets.TryGetMethodBody(method, out var bodyOffset, out var bodySize, out var codeOffset, out var codeSize))
 				return null;
+			// TVShowMethodInstructionsInHexEditorCommand: a body an edit has replaced is no longer the file's, so the
+			// instructions are pointed at but none of the file's bytes are selected as theirs.
+			if (moduleEntry is not null && IsBodyModified(moduleEntry, method))
+				codeSize = 0;
 			// The write commands only appear when their bytes fit the body they would overwrite, which is
 			// dnSpy's own test (LengthAndOffset.Size >= data.Length).
 			return new HexMethodTargetDto(
@@ -3093,15 +3143,23 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		static string? EncodeTemplate(byte[]? data, long bodySize) =>
 			data is not null && data.LongLength <= bodySize ? Convert.ToBase64String(data) : null;
 
+		/// <summary>
+		/// TVShowFieldInitialValueInHexEditorCommand: a field with an RVA and an initial value — an empty one included,
+		/// which the command still opens on, selecting nothing.
+		/// </summary>
 		static HexRangeDto? ResolveFieldInitialValue(FieldDef field) {
-			if (field.RVA == 0 || field.InitialValue is not { Length: > 0 } initialValue)
+			if (field.RVA == 0 || field.InitialValue is not { } initialValue)
 				return null;
 			return HexTargets.GetMemberFileOffset(field) is { } offset ? new HexRangeDto(offset, initialValue.Length) : null;
 		}
 
+		/// <summary>
+		/// TVShowResourceInHexEditorCommand over ResourceNode.FileOffset: a resource read from the file — an empty one
+		/// included — and not one an edit made, whose bytes are in memory and start at offset 0.
+		/// </summary>
 		static HexRangeDto? ResolveResourceTarget(EmbeddedResource resource) {
 			var reader = resource.CreateReader();
-			return reader.Length == 0 ? null : new HexRangeDto(reader.StartOffset, reader.Length);
+			return reader.StartOffset == 0 ? null : new HexRangeDto(reader.StartOffset, reader.Length);
 		}
 
 		/// <summary>
@@ -3127,20 +3185,34 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 		/// code starts in the file.
 		/// </summary>
 		public HexStatementResponse ResolveHexStatement(HexStatementRequest request) {
-			var module = FindModuleEntry(request.ModulePath);
+			// A statement of a net module's method is in the net module's own file, which is the file the command opens.
+			var module = FindModuleEntry(request.ModulePath) ?? FindNetModuleEntry(request.ModulePath);
 			if (module is null || request.MetadataToken == 0)
 				return new HexStatementResponse(null, null);
 			if (module.Module.ResolveToken(unchecked((uint)request.MetadataToken)) is not MethodDef method)
 				return new HexStatementResponse(null, null);
-			if (!HexTargets.TryGetMethodBody(method, out _, out _, out var codeOffset, out var codeSize))
+			if (!HexTargets.TryGetMethodBody(method, out var bodyOffset, out _, out var codeOffset, out var codeSize))
 				return new HexStatementResponse(null, null);
+			// ShowILSpanInHexEditorCommand: a body an edit has replaced has no statement bytes in the file, so the command
+			// goes to where the method's body starts and selects nothing.
+			if (IsBodyModified(module, method))
+				return new HexStatementResponse(HexFileIdOf(module), new HexRangeDto(bodyOffset, 0));
 			var start = (long)request.IlOffset;
 			var end = Math.Max((long)request.IlEndOffset, start);
 			if (start < 0 || start > codeSize)
 				return new HexStatementResponse(null, null);
 			// A statement covering several sequence points, or one running past the code, is clipped to
 			// what the method actually holds.
-			return new HexStatementResponse(module.Id, new HexRangeDto(codeOffset + start, Math.Min(end, codeSize) - start));
+			return new HexStatementResponse(HexFileIdOf(module), new HexRangeDto(codeOffset + start, Math.Min(end, codeSize) - start));
+		}
+
+		/// <summary>The entry of a net module an assembly of the workspace lists, by the file it was read from.</summary>
+		ModuleEntry? FindNetModuleEntry(string path) {
+			foreach (var entry in netModules.Values) {
+				if (!string.IsNullOrEmpty(entry.Path) && Path.GetFullPath(entry.Path).Equals(Path.GetFullPath(path), StringComparison.Ordinal))
+					return entry;
+			}
+			return null;
 		}
 
 		/// <summary>
@@ -3153,6 +3225,8 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// hex editor edits any file; only a managed module's patches are tied to the member they were aimed at.
 			if (!nodes.TryGetValue(request.NodeId, out var node) || node.AsModuleEntry is null) {
 				var entry = GetHexEntry(request.NodeId);
+				if (IsStandaloneHexFile(entry))
+					throw new RpcException(ErrorCodes.EditValidationFailed, "The file is not open in the workspace, so its bytes cannot be changed.");
 				var bytes = DecodeHexPatch(request, entry.FileLength);
 				transaction.Add(request.NodeId, entry, () => HexPatchList.ApplyRaw(entry.HexPatches, request.NodeId, request.Offset, bytes), isHexPatch: true);
 				return;
@@ -4019,6 +4093,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			peModules.Clear();
 			elfFiles.Clear();
 			unknownFiles.Clear();
+			standaloneHexFiles.Clear();
 			autoLoadedRoots.Clear();
 			netModules.Clear();
 			referenceModules.Clear();
@@ -4882,6 +4957,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			// nothing to dispose of here.
 			elfFiles.Clear();
 			unknownFiles.Clear();
+			standaloneHexFiles.Clear();
 			foreach (var module in referenceModules.Values)
 				module.Module.Dispose();
 			referenceModules.Clear();

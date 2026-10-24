@@ -43,7 +43,7 @@ beforeEach(() => {
       findHex: vi.fn(async () => ({ offset: -1 })),
       resolveHexPosition: vi.fn(async () => ({ offset: -1 })),
       goToHexMetadata: vi.fn(async () => ({ range: null })),
-      saveHexSelection: vi.fn(async () => undefined),
+      pickHexSaveFile: vi.fn(async () => undefined),
     },
   })
   useAppStore.setState({
@@ -254,10 +254,9 @@ describe('HexView', () => {
 
   it('opens Go to Offset even when the current memory cannot be read', async () => {
     const { container } = render(<HexView source={{
-      length: 0x10000, base: 0, revision: 'unmapped',
+      length: 0x10000, revision: 'unmapped',
       read: async () => { throw new Error('unreadable memory') },
       write: async () => false,
-      reveal: (address) => address,
     }} />)
     fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'g', code: 'KeyG', ctrlKey: true })
     expect(await screen.findByRole('dialog', { name: 'Go to Offset' })).toBeInTheDocument()
@@ -267,5 +266,128 @@ describe('HexView', () => {
     render(<HexView moduleId={moduleId} />)
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull())
     expect(screen.getByRole('textbox', { name: 'Hex' })).toBeInTheDocument()
+  })
+})
+
+describe('HexView, as dnSpy’s operations behave', () => {
+  /** The module search over the test file: FindAll forward from the start, wrapping, as far as `maxResults`. */
+  const searchHex = vi.fn(async (_workspaceId: string, _moduleId: string, request: { base64Pattern: string; start: number; reverse: boolean; rangeStart: number; rangeEnd: number; maxResults: number; noOverlaps: boolean }) => {
+    const pattern = Array.from(atob(request.base64Pattern), (character) => character.charCodeAt(0))
+    const matchAt = (offset: number): boolean => offset + pattern.length <= request.rangeEnd && pattern.every((byte, index) => fileByte(offset + index) === byte)
+    const offsets: number[] = []
+    for (let offset = request.start; offset < request.rangeEnd && offsets.length < request.maxResults; offset++) {
+      if (matchAt(offset)) {
+        offsets.push(offset)
+        if (request.noOverlaps)
+          offset += pattern.length - 1
+      }
+    }
+    for (let offset = request.rangeStart; offset < request.start && offsets.length < request.maxResults; offset++) {
+      if (matchAt(offset))
+        offsets.push(offset)
+    }
+    return { offsets }
+  })
+
+  beforeEach(() => {
+    searchHex.mockClear()
+    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, searchHex } })
+  })
+
+  const content = (container: HTMLElement): HTMLElement => container.querySelector<HTMLElement>('.hex-content')!
+
+  it('runs nothing for a second key that completes no chord', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    fireEvent.keyDown(content(container), { key: 'e', code: 'KeyE', ctrlKey: true })
+    fireEvent.keyDown(content(container), { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(view(container).dataset.caret).toBe('0')
+    fireEvent.keyDown(content(container), { key: 'ArrowRight', code: 'ArrowRight' })
+    fireEvent.keyDown(content(container), { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(view(container).dataset.caret).toBe('1')
+  })
+
+  it('keeps an incremental search going through its own matches, the typed keys never written', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    fireEvent.keyDown(content(container), { key: 'i', code: 'KeyI', ctrlKey: true })
+    for (const key of '0102') {
+      fireEvent.keyDown(content(container), { key })
+      // Each key searches before the next is typed, as the user would see it.
+      await waitFor(() => expect(searchHex).toHaveBeenCalled())
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    }
+    await waitFor(() => {
+      expect(view(container).dataset.selectionStart).toBe('1')
+      expect(view(container).dataset.selectionEnd).toBe('3')
+    })
+    expect(patchHex).not.toHaveBeenCalled()
+    // F3 ends the incremental search and finds the next match with the Find options.
+    fireEvent.keyDown(content(container), { key: 'F3', code: 'F3' })
+    await waitFor(() => expect(view(container).dataset.selectionStart).toBe(String(252)))
+  })
+
+  it('closes the search control with Esc even with bytes selected, the selection kept', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    fireEvent.keyDown(content(container), { key: 'f', code: 'KeyF', ctrlKey: true })
+    await screen.findByRole('textbox', { name: 'Find' })
+    fireEvent.keyDown(content(container), { key: 'ArrowRight', code: 'ArrowRight', shiftKey: true })
+    fireEvent.keyDown(content(container), { key: 'Escape', code: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Find' })).toBeNull())
+    expect(view(container).dataset.selectionEnd).toBe('1')
+  })
+
+  it('replaces every match as one edit', async () => {
+    const hexWriteBytesMany = vi.fn(async () => true)
+    useAppStore.setState({ hexWriteBytesMany })
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    fireEvent.keyDown(content(container), { key: 'h', code: 'KeyH', ctrlKey: true })
+    const find = await screen.findByRole('textbox', { name: 'Find' })
+    fireEvent.change(find, { target: { value: '0102' } })
+    const replaceAll = screen.getByRole('button', { name: 'Replace all' })
+    // Replace All needs a valid replacement: "zz" is not bytes.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Replace' }), { target: { value: 'zz' } })
+    await waitFor(() => expect(replaceAll).toBeDisabled())
+    fireEvent.change(screen.getByRole('textbox', { name: 'Replace' }), { target: { value: 'FFFF' } })
+    await waitFor(() => expect(replaceAll).toBeEnabled())
+    fireEvent.click(replaceAll)
+    await waitFor(() => expect(hexWriteBytesMany).toHaveBeenCalledTimes(1))
+    const [, patches] = hexWriteBytesMany.mock.calls[0] as unknown as [string, { offset: number; data: Uint8Array }[]]
+    expect(patches.map((patch) => patch.offset)).toEqual(Array.from({ length: Math.ceil((fileLength - 2) / 251) }, (_, index) => 1 + index * 251).filter((offset) => offset + 2 <= fileLength))
+    expect(Array.from(patches[0].data)).toEqual([0xFF, 0xFF])
+  })
+
+  it('draws a 0x3F byte in the ASCII colour and only bytes that cannot be read in the error colour', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    for (let i = 0; i < 3; i++)
+      fireEvent.keyDown(content(container), { key: 'ArrowDown', code: 'ArrowDown' })
+    await waitFor(() => expect(container.querySelector('[data-hex-column="ascii"][data-hex-byte="63"]')).not.toBeNull())
+    const question = container.querySelector<HTMLElement>('[data-hex-column="ascii"][data-hex-byte="63"]')!
+    expect(question.textContent).toBe('?')
+    expect(question.className).toContain('hex-ascii')
+    expect(question.className).not.toContain('hex-byte-error')
+  })
+
+  it('scrolls with Ctrl+wheel when mouse wheel zoom is off', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    const options = loadAppOptions()
+    act(() => saveAppOptions({ ...options, hexEditor: { ...options.hexEditor, hexViewer: { ...options.hexEditor.hexViewer, advanced: { ...options.hexEditor.hexViewer.advanced, enableMouseWheelZoom: false } } } }))
+    fireEvent.wheel(content(container), { deltaY: 100, ctrlKey: true })
+    await waitFor(() => expect(lines(container)[0].dataset.lineOffset).toBe(String(3 * 16)))
+  })
+
+  it('treats a fourth click as a click', async () => {
+    const { container } = render(<HexView moduleId={moduleId} />)
+    await loadedLines(container)
+    // Well inside the values column, past the offset.
+    fireEvent.mouseDown(content(container), { button: 0, detail: 3, clientX: 200, clientY: 1 })
+    expect(view(container).dataset.selectionEnd).toBe('16')
+    fireEvent.mouseUp(window)
+    fireEvent.mouseDown(content(container), { button: 0, detail: 4, clientX: 200, clientY: 1 })
+    expect(view(container).dataset.selectionEnd).toBeUndefined()
   })
 })

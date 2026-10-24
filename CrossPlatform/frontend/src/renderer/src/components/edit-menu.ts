@@ -1,13 +1,11 @@
 import type { HexBodyKind } from '../app-store'
-import type { AddressReference, HexRange, HexTargetResponse, ResourceCreateKind } from '../../../shared/protocol'
+import type { AddressReference, HexRange, ResourceCreateKind } from '../../../shared/protocol'
 import type { TranslationValues } from '../localization'
 import type { TreeNode } from '../../../shared/protocol'
 import { compilerCommandLanguage } from './compiler-language'
 import { deleteHeader, deletionTargets } from './delete-commands'
-import { hexMenuEntries, type HexShowKind } from './hex-menu'
+import { hexMenuEntries, type HexBodyTarget, type HexContextParts } from './hex-menu'
 import type { MetadataTableCommands } from '../metadata-table'
-
-export type { HexShowKind }
 
 export interface MenuItem {
   label?: string
@@ -25,7 +23,12 @@ export interface MenuItem {
 /** The tab component the Edit menu's hex groups key off, mirroring dnSpy's hex/metadata-table documents. */
 export type ActiveDocument = 'code' | 'hex' | 'module-info' | 'md-table' | null
 
-export interface EditMenuContext {
+/**
+ * Everything the Edit menu reads. Its hex group reads dnSpy's HexMenuCommand.CreateContext: the document viewer
+ * when it has the focus, the documents tree when that has it, and nothing otherwise — the `HexContextParts` the
+ * shell builds from whichever of the two had the focus last.
+ */
+export interface EditMenuContext extends HexContextParts {
   t(message: string, values?: TranslationValues): string
   hasWorkspace: boolean
   /** `selectedNode.kind`, or undefined with nothing selected in the assembly explorer. */
@@ -46,12 +49,6 @@ export interface EditMenuContext {
   /** Where the selection is among its parent's rows; an assembly's manifest module is the first. */
   selectionIndexInParent?: number
   activeDocument: ActiveDocument
-  /**
-   * Whether a code document is open in a viewer. dnSpy's Edit-menu hex commands fall back to the file the
-   * active document belongs to when the tree's selection names no file of its own, and a hex or
-   * metadata-table document is not a viewer, so only a code document counts.
-   */
-  documentAvailable: boolean
   canUndo: boolean
   canRedo: boolean
   /**
@@ -107,24 +104,14 @@ export interface EditMenuContext {
   onCreateMember(kind: CreatedKind, nested?: boolean): void
   /** Opens the edit dialog for the selected node, which is also what Alt+Enter does. */
   onEditNode(): void
-  /**
-   * Where the hex commands point for the selected node. dnSpy resolves this from the selection itself;
-   * here the backend answers it when the selection changes, so the menu only has to read it.
-   */
-  hexTarget?: HexTargetResponse
-  /** The statement under the caret of the focused code document, which is what "Show Instructions in
-   * Hex Editor" acts on when the selection is not a method. */
-  hexStatement?: { moduleId: string; range: HexRange }
-  /** The address reference under the code document's caret, which Show in Hex Editor opens. */
-  addressReference?: AddressReference
   onShowAddress?(address: AddressReference): void
-  /** Opens the selected module in a hex tab. */
-  onOpenHex(): void
-  /** Opens the module in a hex tab and jumps to the bytes of this part of the selection. */
-  onShowHexAt(kind: HexShowKind): void
-  onHexWriteBody(kind: HexBodyKind): void
-  onHexCopyBody(): void
-  onHexPasteBody(): void
+  /** Opens a file in the hex editor, at its start. */
+  onOpenHex(moduleId: string): void
+  /** Opens a file in the hex editor on a range of its bytes. */
+  onShowHex(moduleId: string, range: HexRange): void
+  onHexWriteBody(kind: HexBodyKind, target: HexBodyTarget): void
+  onHexCopyBody(target: HexBodyTarget): void
+  onHexPasteBody(target: HexBodyTarget): void
   /** The commands of the metadata table document that last had the focus — dnSpy's MDTableContext. */
   mdTable?: MetadataTableCommands
   /** Whether Go to MD Table Row has a module to look in: the open code document's or the selection's, read from a
@@ -145,7 +132,7 @@ interface EditEntry {
    *  the language they are in. */
   icon?: string | ((ctx: EditMenuContext) => string)
   label(ctx: EditMenuContext): string
-  shortcut?: string
+  shortcut?: string | ((ctx: EditMenuContext) => string | undefined)
   visible(ctx: EditMenuContext): boolean
   /** Only consulted for entries that have an action; entries without one render disabled. */
   enabled?(ctx: EditMenuContext): boolean
@@ -234,7 +221,8 @@ const canDelete = (kind: string) => (ctx: EditMenuContext): boolean => ctx.selec
 const deleteSelected = (ctx: EditMenuContext): void => ctx.onDelete()
 
 /** The shared hex group, wearing this menu's entry shape. `EditMenuContext` carries everything the hex
- *  entries read, so their predicates and actions drop straight in. */
+ *  entries read — the context the shell built from the pane with the focus — so their predicates and actions
+ *  drop straight in. */
 const HEX_ENTRIES: EditEntry[] = hexMenuEntries.map((entry) => ({
   group: GROUP_HEX,
   order: entry.order,
@@ -342,7 +330,9 @@ const EDIT_ENTRIES: EditEntry[] = [
 
   // 8000 — Go to metadata table row: the one that asks for a token, and the one that goes to the selected row's.
   { group: GROUP_HEX_GOTO_MD, order: 0, label: (ctx) => ctx.t('Go to MD Table Row...'), shortcut: 'Ctrl+Shift+D', visible: (ctx) => ctx.canGoToMdTableRow === true && ctx.onGoToMdTableRow !== undefined, action: (ctx) => ctx.onGoToMdTableRow?.() },
-  { group: GROUP_HEX_GOTO_MD, order: 10, label: (ctx) => ctx.t('Go to MD Table Row ({token})', { token: (ctx.mdTableRowToken ?? 0).toString(16).toUpperCase().padStart(8, '0') }), visible: (ctx) => ctx.mdTableRowToken !== undefined && ctx.onGoToMdTableRow !== undefined, action: (ctx) => ctx.onGoToMdTableRow?.(ctx.mdTableRowToken) },
+  // GoToMDTableRowHexEditorCommand.GetInputGestureTextInternal: Shift+Alt+R for a context the tree or a document
+  // viewer built, and no gesture for an empty one.
+  { group: GROUP_HEX_GOTO_MD, order: 10, label: (ctx) => ctx.t('Go to MD Table Row ({token})', { token: (ctx.mdTableRowToken ?? 0).toString(16).toUpperCase().padStart(8, '0') }), shortcut: (ctx) => (ctx.hexCreator ? 'Shift+Alt+R' : undefined), visible: (ctx) => ctx.mdTableRowToken !== undefined && ctx.onGoToMdTableRow !== undefined, action: (ctx) => ctx.onGoToMdTableRow?.(ctx.mdTableRowToken) },
 
   // 9000 — Metadata table copy/paste
   { group: GROUP_HEX_COPY, order: 0, label: (ctx) => ctx.t('Copy as Text'), shortcut: 'Ctrl+Shift+C', visible: documentIs('md-table'), enabled: (ctx) => ctx.mdTable?.hasSelection === true, action: (ctx) => ctx.mdTable?.copyAsText() },
@@ -376,7 +366,7 @@ export const buildEditMenu = (ctx: EditMenuContext): MenuItem[] => {
       const action = entry.action
       items.push({
         label: entry.label(ctx),
-        shortcut: entry.shortcut,
+        shortcut: typeof entry.shortcut === 'function' ? entry.shortcut(ctx) : entry.shortcut,
         icon: typeof entry.icon === 'function' ? entry.icon(ctx) : entry.icon,
         disabled: action ? entry.enabled?.(ctx) === false : true,
         action: action ? () => action(ctx) : undefined,

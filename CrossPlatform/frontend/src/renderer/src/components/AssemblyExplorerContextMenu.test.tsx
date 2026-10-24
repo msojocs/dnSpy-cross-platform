@@ -33,7 +33,7 @@ const commands = (): AssemblyExplorerCommands => ({
   copyText: vi.fn(),
   onShowModuleInfo: vi.fn(),
   onOpenHex: vi.fn(),
-  onShowHexAt: vi.fn(),
+  onShowHex: vi.fn(),
   onHexWriteBody: vi.fn(),
   onHexCopyBody: vi.fn(),
   onHexPasteBody: vi.fn(),
@@ -189,6 +189,8 @@ describe('buildAssemblyExplorerMenuItems', () => {
         fieldInitialValue: null,
         resource: null,
       },
+      // The clipboard holds hexadecimal bytes that fit the body, which is what puts Hex Paste Method Body on it.
+      clipboardHexLength: 4,
     }))
     expect(keys.filter((key) => key.startsWith('delete-'))).toEqual(['delete-method'])
     expect(keys.filter((key) => key.startsWith('create-'))).toEqual(['create-nested-type', 'create-method', 'create-field', 'create-property', 'create-event'])
@@ -199,6 +201,13 @@ describe('buildAssemblyExplorerMenuItems', () => {
     // The method's bytes are what the hex group points at, so the group is at its widest here — bar the
     // file command, which a method row is not a file for.
     expect(keys.filter((key) => key.startsWith('hex-'))).toEqual(['hex-50', 'hex-60', 'hex-90', 'hex-120', 'hex-130'])
+  })
+
+  it('leaves the hex group to a selection of one row', () => {
+    // dnSpy's tree commands need `context.Nodes.Length == 1`: right-clicking into a selection of several rows acts
+    // on all of them, and no hex command acts on more than one.
+    const keys = menuKeys(richContext(moduleNode, { selection: [moduleNode, typeNode] }))
+    expect(keys.filter((key) => key.startsWith('hex-'))).toEqual([])
   })
 
   it('offers a module the module commands, which is where its tools and its dependencies live', () => {

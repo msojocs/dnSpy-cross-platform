@@ -295,6 +295,9 @@ public static class RpcMethods {
 	public const string DebugMemoryFileInfo = "debug/memoryFileInfo";
 	/// <summary>Drops the Memory window's cached structure bytes, including writes made outside the debugger.</summary>
 	public const string DebugMemoryRefresh = "debug/memoryRefresh";
+	public const string DebugMemorySpace = "debug/memorySpace";
+	public const string DebugMemoryValidSpan = "debug/memoryValidSpan";
+	public const string DebugMemorySearch = "debug/memorySearch";
 	/// <summary>The encodings the hex editor's ASCII column can type in — dnSpy's hex options page list.</summary>
 	public const string TextGetEncodings = "text/getEncodings";
 	/// <summary>Text as the bytes one encoding makes of it, for typing or pasting into the hex editor's ASCII column.</summary>
@@ -3377,3 +3380,52 @@ public interface IDebugMemoryProvider {
 
 /// <summary>Refreshes the cached structures of one debugged process without resuming it.</summary>
 public sealed record DebugMemoryRefreshRequest(string SessionId);
+
+/// <summary>
+/// A region of a process's memory: what WPF's <c>HexProcessSimpleBufferStream.GetSpanInfo</c> asks VirtualQueryEx, the
+/// bounds of the region an address is in and whether its bytes can be read.
+/// </summary>
+public readonly record struct DebugMemoryRegion(ulong Start, ulong End, bool IsReadable);
+
+/// <summary>
+/// What a process knows of its address space beyond its bytes, which the Memory window's whole-address-space buffer
+/// needs: where the space ends and which regions are mapped. A process that cannot answer is read a page at a time.
+/// </summary>
+public interface IDebugProcessMemoryRegions {
+	/// <summary>One past the last address: 2^32 for a 32-bit process, one past the highest user address otherwise.</summary>
+	ulong AddressSpaceEnd { get; }
+
+	/// <summary>The region <paramref name="address"/> is in, or null when the system cannot say.</summary>
+	DebugMemoryRegion? GetRegion(ulong address);
+}
+
+/// <summary>The Memory window's buffer: a debugged process's address space.</summary>
+public sealed record DebugMemorySpaceRequest(string SessionId);
+
+/// <summary>One past the last address of the process's address space.</summary>
+public sealed record DebugMemorySpaceResponse(long End);
+
+/// <summary>
+/// dnSpy's <c>HexBuffer.GetNextValidSpan</c> (<paramref name="Forward"/>) or <c>GetPreviousValidSpan</c> over a debugged
+/// process's memory: the readable bytes from <paramref name="Position"/> on (or back), no further than
+/// <paramref name="Bounds"/>, consecutive readable regions merged.
+/// </summary>
+public sealed record DebugMemoryValidSpanRequest(string SessionId, long Position, long Bounds, bool Forward, bool FullSpan);
+
+/// <summary>The span, or nulls when there are no readable bytes that way.</summary>
+public sealed record DebugMemoryValidSpanResponse(long? Start, long? End);
+
+/// <summary>A hex search (see <see cref="HexSearchRequest"/>) over the readable memory of a debugged process.</summary>
+public sealed record DebugMemorySearchRequest(
+	string SessionId,
+	string Base64Pattern,
+	string? Base64Mask,
+	string? Base64Alternate,
+	IReadOnlyList<int>? CharLengths,
+	long RangeStart,
+	long RangeEnd,
+	long Start,
+	bool Reverse,
+	bool Wrap,
+	bool NoOverlaps,
+	int MaxResults);

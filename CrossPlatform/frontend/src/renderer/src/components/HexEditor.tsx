@@ -19,7 +19,7 @@ import {
 } from '../hex-model'
 import { encodeHexText, hexCodePageOf } from '../hex-encodings'
 import { findAllInBytes, type HexSearchPattern } from '../hex-search'
-import { NOT_LOADED, useHexChunks, type HexChunkReader } from '../hex-view-data'
+import { NOT_LOADED, PAGE_SIZE, useHexChunks, type HexChunkReader } from '../hex-view-data'
 import { HexViewModel } from '../hex-view-model'
 import { useLanguage } from '../localization'
 import { useHexSearch, type HexSearchRun } from '../use-hex-search'
@@ -28,7 +28,7 @@ import { loadAppOptions, saveAppOptions, useAppOptions, type HexEditorView } fro
 import { AskDialog } from './AskDialog'
 import { ColoredText } from './ColoredText'
 import { DsIcon } from './DsIcon'
-import { HexGoToMetadataDialog, HexGoToPositionDialog, HexLocalSettingsDialog, HexSelectDialog, parseUnsignedText, type HexLocalSettings } from './HexDialogs'
+import { HexGoToMetadataDialog, HexGoToPositionDialog, HexLocalSettingsDialog, HexSaveProgressDialog, HexSelectDialog, parseUnsignedText, type HexLocalSettings } from './HexDialogs'
 import { HexLines, spanLeft, type HexLineGeometry, type HexLineMarker } from './HexLines'
 import { HexSearchControl } from './HexSearchControl'
 import { buildHexViewMenu } from './hex-view-menu'
@@ -48,8 +48,11 @@ const MOUSE_HOVER_DELAY = 150
 const TEXT_LEFT = 2
 /** Lines a wheel notch scrolls (`SystemParameters.WheelScrollLines`). */
 const WHEEL_LINES = 3
-/** The tallest scroll range the vertical bar is given; a longer file maps onto it. */
-const MAX_SCROLL_HEIGHT = 1_000_000
+/** `RepeatButton`'s defaults: the first repeat after the keyboard delay, then at the keyboard speed. */
+const REPEAT_DELAY = 500
+const REPEAT_INTERVAL = 33
+/** The shortest the vertical bar's thumb gets. */
+const MIN_THUMB = 16
 const CARET_BLINK_MS = 530
 /** `HexEditorOperationsImpl`'s copy limits and the text it copies instead past them. */
 const BYTES_MAX_TO_COPY = 10 * 1024 * 1024
@@ -64,30 +67,32 @@ const themeColor = (name: string): string | undefined => {
 }
 
 /**
- * Bytes the hex view shows that are not a module's file — the Memory windows' window onto a process's memory.
- * Offsets are from the start of the window; the offset column reads them as addresses from `base`.
+ * Bytes the hex view shows that are not a module's file — the Memory windows' process memory, every position an
+ * address, from 0 to the end of the process's address space (dnSpy's `HexProcessSimpleBufferStream`).
  */
 export interface HexByteSource {
   /** Where the view's state is remembered; a source without one remembers nothing. */
   stateKey?: string
   length: number
-  base: number
   /** Changes whenever the bytes may have: every chunk is read again. */
   revision: string
   /** The bytes from `offset` on, and for each 4 KiB page from the one `offset` is in whether it could be read. */
   read(offset: number, count: number): Promise<{ bytes: Uint8Array; readable?: boolean[] }>
   write(offset: number, data: Uint8Array): Promise<boolean>
-  /** Moves the window so it holds `address`; answers the address's offset in the new window. */
-  reveal(address: number, endAddress?: number): number
   /** Refreshes volatile structure data before the view reads its bytes again. */
   refresh?(): Promise<void>
-  /** One past the last address the window may move to, when the source is a window onto a larger space. */
-  end?: number
+  /**
+   * `HexBuffer.GetNextValidSpan` (`forward`, no further than `bounds`) or `GetPreviousValidSpan` (no lower than
+   * `bounds`): the readable bytes around a position, consecutive ones merged. Without it every byte is readable.
+   */
+  validSpan?(position: number, bounds: number, forward: boolean, fullSpan: boolean): Promise<{ start: number; end: number } | undefined>
+  /** dnSpy's FindAll over the source's readable bytes; without it the view searches the bytes it reads. */
+  search?(pattern: HexSearchPattern, run: HexSearchRun): Promise<number[]>
   /** Entries the source's owner adds to the context menu, such as the Memory window's Process submenu. */
   menu?: MenuItem[]
   /** The options page the view follows: the Memory windows have one of their own. */
   optionsView?: HexEditorView
-  /** The files in the bytes and their structures — the modules a process has loaded — in window offsets. */
+  /** The files in the bytes and their structures — the modules a process has loaded. */
   structures?: HexStructureSource
 }
 
@@ -200,6 +205,15 @@ const parseFillByte = (text: string): number | undefined => {
   return value === undefined ? undefined : value
 }
 
+/** `TryParseUnsigned`'s errors for a byte: a minus sign, no number at all, or a number past 255. */
+const fillByteError = (text: string, t: (key: string, args?: Record<string, string | number>) => string): string | undefined => {
+  if (parseFillByte(text) !== undefined)
+    return undefined
+  if (parseUnsignedText(text) !== undefined)
+    return t('Value must be between {min} and {max} (0x{maxHex}) inclusive', { min: 0, max: 255, maxHex: 'FF' })
+  return text.trim().startsWith('-') ? t('Only non-negative integers are allowed') : t('The value is not an unsigned hexadecimal or decimal integer')
+}
+
 /**
  * dnSpy's hex editor: the bytes between a start and an end position as lines of offset, values and ASCII, with
  * dnSpy's caret, selection, keyboard, mouse, context menu, search control, Quick Info over the file's structures,
@@ -226,7 +240,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   const [scrollLeft, setScrollLeft] = useState(initialState?.viewportLeft ?? 0)
   const [focused, setFocused] = useState(false)
   const textAreaRef = useRef<HTMLDivElement>(null)
-  const vScrollRef = useRef<HTMLDivElement>(null)
   const hScrollRef = useRef<HTMLDivElement>(null)
 
   // ---- The bytes ---------------------------------------------------------------------------------------
@@ -258,6 +271,23 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     return concatBytes(parts)
   }, [reader])
 
+  /** The bytes from `offset` on, -1 for each one a source could not read (`TryGetByte`). */
+  const readBytesChecked = useCallback(async (offset: number, count: number): Promise<number[]> => {
+    const result: number[] = []
+    if (count <= 0 || !reader)
+      return result
+    for (let position = 0; position < count; position += 1024 * 1024) {
+      const start = offset + position
+      const part = await reader(start, Math.min(1024 * 1024, count - position))
+      const firstPage = Math.floor(start / PAGE_SIZE)
+      for (let i = 0; i < Math.min(1024 * 1024, count - position); i++) {
+        const readable = part.readable?.[Math.floor((start + i) / PAGE_SIZE) - firstPage] ?? true
+        result.push(readable && i < part.bytes.length ? part.bytes[i] : -1)
+      }
+    }
+    return result
+  }, [reader])
+
   const writeBytes = useCallback(async (offset: number, bytes: Uint8Array): Promise<boolean> => {
     if (bytes.length === 0)
       return true
@@ -267,6 +297,20 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       return written
     }
     return useAppStore.getState().hexWriteBytes(moduleId, offset, bytes)
+  }, [source, moduleId, data])
+
+  /** Several writes as one edit (Replace All): a module's file in one transaction, a process's memory one by one. */
+  const writeAllBytes = useCallback(async (patches: { offset: number; data: Uint8Array }[]): Promise<boolean> => {
+    if (patches.length === 0)
+      return false
+    if (source) {
+      let any = false
+      for (const patch of patches)
+        any = await source.write(patch.offset, patch.data) || any
+      data.invalidate()
+      return any
+    }
+    return useAppStore.getState().hexWriteBytesMany(moduleId, patches)
   }, [source, moduleId, data])
 
   // ---- Local settings and the line layout --------------------------------------------------------------
@@ -286,13 +330,13 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     offsetFormat: pane.general.hexOffsetFormat,
     startPosition,
     endPosition,
-    basePosition: local.basePosition + (source?.base ?? 0),
+    basePosition: local.basePosition,
     useRelativePositions: local.useRelativePositions,
     offsetLowerCaseHex: pane.general.offsetLowerCaseHex,
     valuesLowerCaseHex: pane.general.valuesLowerCaseHex,
     offsetBitSize: local.offsetBitSize,
     valuesFormat: local.valuesFormat,
-  }), [charsPerLine, textAreaWidth, local, pane.general, startPosition, endPosition, source?.base])
+  }), [charsPerLine, textAreaWidth, local, pane.general, startPosition, endPosition])
 
   const modelRef = useRef<HexViewModel | undefined>(undefined)
   if (!modelRef.current)
@@ -395,31 +439,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   const contentWidth = TEXT_LEFT + formatter.charsPerLine * charWidth + charWidth
 
   // ---- Scrolling ---------------------------------------------------------------------------------------
-  const scrollRange = Math.min(MAX_SCROLL_HEIGHT, formatter.lineCount * lineHeight)
-  const syncingScroll = useRef(false)
-  useLayoutEffect(() => {
-    const bar = vScrollRef.current
-    if (!bar)
-      return
-    const max = Math.max(0, bar.scrollHeight - bar.clientHeight)
-    const target = model.maxTopLine === 0 ? 0 : Math.round(topLine / model.maxTopLine * max)
-    if (Math.abs(bar.scrollTop - target) > 1) {
-      syncingScroll.current = true
-      bar.scrollTop = target
-    }
-  }, [topLine, model.maxTopLine, scrollRange])
-  const onVerticalScroll = (): void => {
-    const bar = vScrollRef.current
-    if (!bar)
-      return
-    if (syncingScroll.current) {
-      syncingScroll.current = false
-      return
-    }
-    const max = Math.max(1, bar.scrollHeight - bar.clientHeight)
-    model.setTopLine(Math.round(bar.scrollTop / max * model.maxTopLine))
-    moveSourceWindowIfAtEdge()
-  }
   useLayoutEffect(() => {
     const maxLeft = Math.max(0, contentWidth - viewport.width)
     if (scrollLeft > maxLeft)
@@ -447,27 +466,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       setScrollLeft(right + extra - width)
   }, [model, geometry.charWidth, viewport.width, scrollLeft]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A source's window moves when the view reaches its edge, so the view scrolls on through the address space.
-  const previousBase = useRef(source?.base ?? 0)
-  const pendingReveal = useRef<{ address: number; caret: boolean; selection?: { anchor: number; active: number; moveCaret: boolean } } | undefined>(undefined)
-  const revealAddress = (address: number, caret: boolean, selection?: { anchor: number; active: number; moveCaret: boolean }): void => {
-    if (!source)
-      return
-    pendingReveal.current = { address, caret, selection }
-    source.reveal(selection ? Math.min(address, selection.anchor, selection.active) : address,
-      selection ? Math.max(address + 1, selection.anchor, selection.active) : undefined)
-  }
-  /** Structure spans are window offsets, not necessarily inside the currently visible memory window. */
+  /** A position a command goes to: the caret there with nothing selected, or a span selected. */
   const revealPosition = (position: number, selection?: { anchor: number; active: number; moveCaret: boolean }): void => {
     if (!Number.isFinite(position))
       return
-    if (source && (position < 0 || position >= source.length
-      || (selection && (Math.min(selection.anchor, selection.active) < 0 || Math.max(selection.anchor, selection.active) > source.length)))) {
-      revealAddress(source.base + position, true, selection && {
-        anchor: source.base + selection.anchor, active: source.base + selection.active, moveCaret: selection.moveCaret,
-      })
-      return
-    }
     if (selection) {
       if (selection.moveCaret)
         model.selectAndMoveCaret(selection.anchor, selection.active)
@@ -480,45 +482,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       model.ensureSpanVisible(position, position, true)
       model.ensureCaretVisible()
     }
-  }
-  useLayoutEffect(() => {
-    if (!source)
-      return
-    const delta = previousBase.current - source.base
-    previousBase.current = source.base
-    const pending = pendingReveal.current
-    pendingReveal.current = undefined
-    if (delta === 0 && !pending)
-      return
-    const clamp = (position: number): number => Math.max(0, Math.min(source.length - 1, position))
-    if (pending?.caret) {
-      model.moveCaretTo(clamp(pending.address - source.base))
-      model.clearSelection()
-    }
-    else {
-      model.moveCaretToCell({ ...model.activePosition, position: clamp(model.caretPosition + delta) }, false)
-      model.select(clamp(model.anchorPoint + delta), clamp(model.activePoint + delta), false)
-    }
-    if (pending?.selection) {
-      const { anchor, active, moveCaret } = pending.selection
-      if (moveCaret)
-        model.selectAndMoveCaret(anchor - source.base, active - source.base)
-      else
-        model.selectSpan(anchor - source.base, active - source.base)
-    }
-    if (pending)
-      model.displayLineContaining(clamp(pending.address - source.base), 'top', pending.caret ? 2 : 0)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source?.base, source?.length])
-  const moveSourceWindowIfAtEdge = (): void => {
-    if (!source || source.end === undefined || pendingReveal.current)
-      return
-    const edge = 64
-    const topAddress = source.base + formatter.getLineStart(model.topLine)
-    if (model.topLine < edge && source.base > 0)
-      revealAddress(topAddress, false)
-    else if (model.topLine + model.viewportLines > model.lineCount - edge && source.base + source.length < source.end)
-      revealAddress(topAddress, false)
   }
 
   // ---- Structures: Quick Info, references and the caret's field ----------------------------------------
@@ -537,7 +500,15 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         return offset < 0 ? Number.NaN : offset
       },
       goToMetadata: async (_caret, kind, value) => (await window.dnSpy.goToHexMetadata(workspaceId, moduleId, kind, value)).range,
-      fileInfo: async () => ({ hasMetadata: true, hasPeHeaders: true }),
+      // The file at the caret is the module's: it has metadata when its Module table has a row, PE headers when an
+      // RVA can be turned into an offset.
+      fileInfo: async () => {
+        const [metadata, peHeaders] = await Promise.all([
+          window.dnSpy.goToHexMetadata(workspaceId, moduleId, 'table', 0x00000001),
+          window.dnSpy.resolveHexPosition(workspaceId, moduleId, 'rva', 0),
+        ])
+        return { hasMetadata: metadata.range !== null, hasPeHeaders: peHeaders.offset >= 0 }
+      },
     }
   }, [source, workspaceId, moduleId])
   const hasStructures = structures !== undefined
@@ -602,11 +573,12 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }, [workspaceId, appendOutput, t])
 
   // ---- Edits -------------------------------------------------------------------------------------------
-  const readOnly = !source && !hasFile
+  // A file the workspace no longer holds is shown as it is on disk, with no document to keep an edit in.
+  const readOnly = !source && (!hasFile || moduleId.startsWith('hexfile:'))
   const codePage = hexCodePageOf(pane.general.encoding)
 
   const editQueue = useRef(Promise.resolve())
-  const editContext = `${workspaceId}:${moduleId}:${source?.base ?? ''}:${source?.revision ?? ''}`
+  const editContext = `${workspaceId}:${moduleId}:${source?.revision ?? ''}`
   const currentEditContext = useRef<string | undefined>(editContext)
   currentEditContext.current = editContext
   useEffect(() => () => { currentEditContext.current = undefined }, [])
@@ -659,7 +631,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     const cell = cellAt(model.caret.activeColumn === 'values' ? line.valueCells : line.asciiCells, model.caretPosition)
     if (!cell)
       return
-    const available = Math.max(0, model.bufferEnd - cell.bufferStart)
+    // The buffer takes what fits in it, whatever part of it the view shows (Show Only Selected Bytes).
+    const available = Math.max(0, length - cell.bufferStart)
     const data = bytes.length > available ? bytes.subarray(0, available) : bytes
     if (!await writeBytes(cell.bufferStart, data) || !isCurrent())
       return
@@ -702,6 +675,14 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       return
     }
     void selectedBytes().then((bytes) => copy(format(bytes)))
+  }
+  /** The arrays write a byte that cannot be read as `??`. */
+  const copySelectedChecked = (format: (bytes: number[]) => string): void => {
+    if (model.selectionEnd - model.selectionStart > BYTES_MAX_TO_COPY) {
+      void copy(TOO_MUCH_DATA)
+      return
+    }
+    void readBytesChecked(model.selectionStart, model.selectionEnd - model.selectionStart).then((bytes) => copy(format(bytes)))
   }
   const copyData = (kind: 'uint16' | 'uint16Be' | 'uint32Be' | 'uint64' | 'uint64Be'): void => {
     const sizes = { uint16: [2, false], uint16Be: [2, true], uint32Be: [4, true], uint64: [8, false], uint64Be: [8, true] } as const
@@ -766,13 +747,72 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }, [workspaceId, moduleId])
   const search = useHexSearch({
     model,
-    run: source ? localSearch : workspaceId ? moduleSearch : undefined,
+    run: source ? (source.search ?? localSearch) : workspaceId ? moduleSearch : undefined,
     readBytes,
     write: writeBytes,
+    writeAll: writeAllBytes,
     canWrite: !readOnly,
     focusView,
     visibleRange: { start: firstVisible, end: lastVisibleEnd },
   })
+
+  /** The buffer's readable bytes around a position: a source asks its process, a file is readable throughout. */
+  const validSpan = async (position: number, bounds: number, forward: boolean): Promise<{ start: number; end: number } | undefined> => {
+    if (source?.validSpan)
+      return source.validSpan(position, bounds, forward, false)
+    if (length === 0)
+      return undefined
+    return (forward ? position < Math.min(bounds, length) : position >= bounds) ? { start: 0, end: length } : undefined
+  }
+  /** `MoveToNextValidStartEnd` / `MoveToPreviousValidStartEnd`: Alt+Down and Alt+Up, to the start or the end of the
+   * readable bytes the caret is in, or on to the next (previous) ones. */
+  const moveToValidStartEnd = async (forward: boolean, extendSelection: boolean): Promise<void> => {
+    const m = model
+    const startPos = m.caretPosition
+    const context = editContext
+    const still = (): boolean => currentEditContext.current === context && m.caretPosition === startPos
+    let newPos: number
+    try {
+      if (forward) {
+        let span = await validSpan(startPos, m.bufferEnd, true)
+        if (!span || span.end === span.start || !still())
+          return
+        if (startPos < span.start)
+          newPos = span.start
+        else if (startPos < span.end - 1)
+          newPos = span.end - 1
+        else {
+          if (startPos >= m.bufferEnd)
+            return
+          span = await validSpan(startPos + 1, m.bufferEnd, true)
+          if (!span || !still())
+            return
+          newPos = span.start
+        }
+      }
+      else {
+        let span = await validSpan(startPos, m.bufferStart, false)
+        if (!span || span.end === span.start || !still())
+          return
+        if (startPos >= span.end)
+          newPos = span.end - 1
+        else if (startPos > span.start)
+          newPos = span.start
+        else {
+          if (startPos <= m.bufferStart)
+            return
+          span = await validSpan(startPos - 1, m.bufferStart, false)
+          if (!span || span.end === span.start || !still())
+            return
+          newPos = span.end - 1
+        }
+      }
+    }
+    catch {
+      return
+    }
+    m.moveToValidStartEnd(newPos, extendSelection)
+  }
 
   const setLocalSettings = (next: Partial<HexLocalSettings>): void => setLocal((current) => ({ ...current, ...next }))
   const zoomTo = (level: number): void => {
@@ -787,19 +827,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       case 'leftExt': m.moveToPreviousCharacter(true); break
       case 'right': m.moveToNextCharacter(false); break
       case 'rightExt': m.moveToNextCharacter(true); break
-      case 'up':
-      case 'upExt':
-        // A caret walking off a source's window takes the window along.
-        if (source && source.base > 0 && m.caretLine === 0 && command === 'up')
-          revealAddress(source.base + m.caretPosition - formatter.bytesPerLine, true)
-        else m.moveLineUp(command === 'upExt')
-        break
-      case 'down':
-      case 'downExt':
-        if (source && source.end !== undefined && m.caretLine === m.lineCount - 1 && command === 'down' && source.base + source.length < source.end)
-          revealAddress(source.base + m.caretPosition + formatter.bytesPerLine, true)
-        else m.moveLineDown(command === 'downExt')
-        break
+      case 'up': m.moveLineUp(false); break
+      case 'upExt': m.moveLineUp(true); break
+      case 'down': m.moveLineDown(false); break
+      case 'downExt': m.moveLineDown(true); break
       case 'pageUp': m.pageUp(false); break
       case 'pageUpExt': m.pageUp(true); break
       case 'pageDown': m.pageDown(false); break
@@ -822,10 +853,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       case 'wordNextExt': m.moveToNextWord(true); break
       case 'wordPrev': m.moveToPreviousWord(false); break
       case 'wordPrevExt': m.moveToPreviousWord(true); break
-      case 'moveToNextValidStartEnd': m.moveToNextValidStartEnd(false); break
-      case 'moveToNextValidStartEndExt': m.moveToNextValidStartEnd(true); break
-      case 'moveToPreviousValidStartEnd': m.moveToPreviousValidStartEnd(false); break
-      case 'moveToPreviousValidStartEndExt': m.moveToPreviousValidStartEnd(true); break
+      case 'moveToNextValidStartEnd': void moveToValidStartEnd(true, false); break
+      case 'moveToNextValidStartEndExt': void moveToValidStartEnd(true, true); break
+      case 'moveToPreviousValidStartEnd': void moveToValidStartEnd(false, false); break
+      case 'moveToPreviousValidStartEndExt': void moveToValidStartEnd(false, true); break
       case 'selectAll': m.selectAll(); break
       case 'selectCurrentWord': m.selectCurrentWord(); break
       case 'swapAnchor': m.swapCaretAndAnchor(); break
@@ -834,7 +865,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       case 'delete': {
         // ClearData: the selection, or the cell under the caret, becomes zeros.
         const span = m.selectedSpanOrCell()
-        if (!span || readOnly)
+        if (!span || readOnly || span.end - span.start > BYTES_MAX_TO_COPY)
           break
         const empty = m.isSelectionEmpty
         void writeBytes(span.start, new Uint8Array(span.end - span.start)).then((written) => {
@@ -861,10 +892,10 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       }
       case 'copy': if (!m.isSelectionEmpty) copySelected((bytes) => hexText(bytes, !formatter.valuesLowerCaseHex)); break
       case 'copyText': void copyText().catch((error: unknown) => appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))); break
-      case 'copyUtf8String': copySelected((bytes) => new TextDecoder('utf-8').decode(bytes)); break
-      case 'copyUnicodeString': copySelected((bytes) => new TextDecoder('utf-16le').decode(bytes)); break
-      case 'copyCSharpArray': copySelected((bytes) => csharpArrayText(bytes, !formatter.valuesLowerCaseHex)); break
-      case 'copyVisualBasicArray': copySelected((bytes) => visualBasicArrayText(bytes, !formatter.valuesLowerCaseHex)); break
+      case 'copyUtf8String': copySelected((bytes) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes)); break
+      case 'copyUnicodeString': copySelected((bytes) => new TextDecoder('utf-16le', { ignoreBOM: true }).decode(bytes)); break
+      case 'copyCSharpArray': copySelectedChecked((bytes) => csharpArrayText(bytes, !formatter.valuesLowerCaseHex)); break
+      case 'copyVisualBasicArray': copySelectedChecked((bytes) => visualBasicArrayText(bytes, !formatter.valuesLowerCaseHex)); break
       case 'copyOffset': void copy(formatter.formatOffset(formatter.toLogicalPosition(m.caretPosition))); break
       case 'copyValue': {
         if (!formatter.showValues)
@@ -874,15 +905,16 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
           const cell = cellAt(line.valueCells, m.caretPosition)
           if (!cell)
             return
-          const bytes = await readBytes(cell.bufferStart, formatter.bytesPerValue)
+          // The cell's text as the view shows it, `?` for bytes that cannot be read.
+          const bytes = await readBytesChecked(cell.bufferStart, cell.bufferEnd - cell.bufferStart)
           const text = formatter.getLine(line.bufferStart, (at) => at >= cell.bufferStart && at < cell.bufferEnd ? bytes[at - cell.bufferStart] ?? -1 : 0).text
           await copy(text.slice(cell.textSpan.start, cell.textSpan.end))
         })()
         break
       }
       case 'copyUInt32': void readInteger(4, false).then((value) => copy(hexNumber(value))); break
-      case 'copyAbsoluteFileOffset': void copy(hexNumber((source?.base ?? 0) + m.caretPosition)); break
-      case 'copyFileOffset': void positionInfo(m.caretPosition).then((info) => copy(hexNumber(info?.fileOffset ?? (source?.base ?? 0) + m.caretPosition))); break
+      case 'copyAbsoluteFileOffset': void copy(hexNumber(m.caretPosition)); break
+      case 'copyFileOffset': void positionInfo(m.caretPosition).then((info) => copy(hexNumber(info?.fileOffset ?? m.caretPosition))); break
       case 'copyRva': void positionInfo(m.caretPosition).then((info) => { if (info?.rva !== null && info?.rva !== undefined) void copy(hexNumber(info.rva)) }); break
       case 'paste':
         void clipboardText().then((text) => {
@@ -908,7 +940,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       case 'followFieldValueReference':
         void positionInfo(m.caretPosition).then((info) => {
           const span = info?.fieldReference
-          if (span)
+          // FollowFieldValueReference: only to a position the view shows.
+          if (span && formatter.isValidPosition(span.offset))
             revealPosition(span.offset)
         })
         break
@@ -955,21 +988,50 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     }
   }
 
-  /** dnSpy's Save Selection: the selected bytes to a file the user picks; a process's memory is read here first. */
+  /**
+   * dnSpy's Save Selection (HexBufferDataSaver): the selected bytes to a file the user picks, read and written a chunk
+   * at a time under a progress dialog whose Cancel stops it. A save that is cancelled or fails deletes the file it
+   * began, and a failure is reported in a message box.
+   */
+  const [saveProgress, setSaveProgress] = useState<{ title: string; filePath: string; done: number; total: number } | undefined>()
+  const saveCancelled = useRef(false)
   const saveSelection = (): void => {
-    if (model.isSelectionEmpty)
+    if (model.isSelectionEmpty || !reader)
       return
     const start = model.selectionStart
-    const count = model.selectionEnd - start
+    const end = model.selectionEnd
     void (async () => {
+      let filePath: string | undefined
       try {
-        if (source)
-          await window.dnSpy.saveHexBytes(toBase64(await readBytes(start, count)))
-        else if (workspaceId)
-          await window.dnSpy.saveHexSelection(workspaceId, moduleId, start, count)
+        filePath = await window.dnSpy.pickHexSaveFile()
+        if (!filePath)
+          return
+        saveCancelled.current = false
+        const title = t('Save Selection 0x{start}-0x{end}', { start: start.toString(16).toUpperCase(), end: (end - 1).toString(16).toUpperCase() })
+        setSaveProgress({ title, filePath, done: 0, total: end - start })
+        const chunk = 1024 * 1024
+        let position = start
+        do {
+          if (saveCancelled.current)
+            throw new DOMException('cancelled', 'AbortError')
+          const count = Math.min(chunk, end - position)
+          const { bytes } = count > 0 ? await reader(position, count) : { bytes: new Uint8Array(0) }
+          // A page that cannot be read is saved as zeros.
+          const data = bytes.length === count ? bytes : (() => { const padded = new Uint8Array(count); padded.set(bytes.subarray(0, count)); return padded })()
+          await window.dnSpy.writeHexFileChunk(filePath, toBase64(data), position !== start)
+          position += count
+          setSaveProgress((current) => current && { ...current, done: position - start })
+        } while (position < end)
       }
       catch (error) {
-        appendOutput(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))
+        if (filePath)
+          await window.dnSpy.deleteHexFile(filePath).catch(() => undefined)
+        if (!(error instanceof DOMException && error.name === 'AbortError'))
+          await window.dnSpy.showMessage(t('An error occurred: {message}', { message: error instanceof Error ? error.message : String(error) }))
+      }
+      finally {
+        setSaveProgress(undefined)
+        focusView()
       }
     })()
   }
@@ -1032,27 +1094,32 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }, [search.visible, model.selectionStart, model.selectionEnd, topLine])
 
   // ---- Current value highlight ---------------------------------------------------------------------------
-  const [currentValue, setCurrentValue] = useState<{ column: 'values' | 'ascii'; bytes: number[] } | undefined>()
+  const [currentValue, setCurrentValue] = useState<{ column: 'values' | 'ascii'; format: HexValuesFormat; bytes: number[] } | undefined>()
   const highlightCurrentValue = pane.general.highlightCurrentValue && model.isSelectionEmpty
   useEffect(() => {
     if (!highlightCurrentValue) {
       setCurrentValue(undefined)
       return
     }
-    // dnSpy clears the old highlight at once and shows the new one after a pause, so paging stays fast.
-    setCurrentValue(undefined)
-    const handle = setTimeout(() => {
+    const read = (): { column: 'values' | 'ascii'; format: HexValuesFormat; bytes: number[] } | undefined => {
       const column = model.caret.activeColumn
       const line = model.line(model.caretPosition)
       const cell = cellAt(column === 'values' ? line.valueCells : line.asciiCells, model.caretPosition)
       if (!cell)
-        return
+        return undefined
       const bytes: number[] = []
       for (let position = cell.bufferStart; position < cell.bufferEnd; position++)
         bytes.push(data.readByte(position))
-      if (bytes.every((byte) => byte >= 0))
-        setCurrentValue({ column, bytes })
-    }, HIGHLIGHT_CURRENT_VALUE_DELAY)
+      return bytes.every((byte) => byte >= 0) ? { column, format: formatter.valuesFormat, bytes } : undefined
+    }
+    // SavedValue.TryUpdate: a caret that moves to the same value in the same column and format keeps the highlight.
+    const now = read()
+    if (currentValue && now && currentValue.column === now.column && currentValue.format === now.format
+      && currentValue.bytes.length === now.bytes.length && currentValue.bytes.every((byte, index) => byte === now.bytes[index]))
+      return
+    // dnSpy clears the old highlight at once and shows the new one after a pause, so paging stays fast.
+    setCurrentValue(undefined)
+    const handle = setTimeout(() => setCurrentValue(read()), HIGHLIGHT_CURRENT_VALUE_DELAY)
     return () => clearTimeout(handle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightCurrentValue, caretKey, data.version, formatter])
@@ -1070,7 +1137,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         markers.push({ row: rowOf(line), span, className })
     }
   }
-  const caretLineVisible = model.isLineVisible(model.caretLine)
+  // The caret and the current line are drawn on a line that is only partly in the viewport too.
+  const caretLineVisible = model.caretLine >= topLine && model.caretLine < topLine + drawnLines
   if (pane.general.highlightCurrentLine && model.isSelectionEmpty && caretLineVisible)
     markers.push({ row: model.caretLine - topLine, span: { start: Math.floor((scrollLeft - TEXT_LEFT) / charWidth), end: Math.ceil((scrollLeft + viewport.width) / charWidth) }, className: focused ? 'hex-current-line' : 'hex-current-line-no-focus' })
   if (!model.isSelectionEmpty)
@@ -1132,9 +1200,9 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }
 
   // ---- Keyboard ----------------------------------------------------------------------------------------
-  const chord = useRef<{ prefix: HexChordPrefix; until: number } | undefined>(undefined)
+  const chord = useRef<{ prefix: HexChordPrefix } | undefined>(undefined)
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if ((event.target as HTMLElement).matches('input, textarea, select') || dialog || menu)
+    if ((event.target as HTMLElement).matches('input, textarea, select') || dialog || menu || saveProgress)
       return
     const stop = (): void => {
       event.preventDefault()
@@ -1144,38 +1212,38 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       return
     if (toolTip)
       dismissToolTip()
+    // RegisteredCommandElement.GetCommand: a second key that completes no chord runs nothing (and has no time limit).
     const armed = chord.current
     chord.current = undefined
     let command: HexCommand | undefined
-    if (armed && armed.until > Date.now())
+    if (armed)
       command = hexChordCommand(armed.prefix, event)
-    if (!command && !armed) {
+    else {
       const prefix = hexChordPrefix(event)
       if (prefix) {
         stop()
-        chord.current = { prefix, until: Date.now() + 2000 }
+        chord.current = { prefix }
         return
       }
+      command = hexKeyCommand(event)
     }
-    command ??= hexKeyCommand(event)
     // Typing a character: dnSpy's TYPECHAR, which an incremental search takes first.
     const typed = !command && event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey ? event.key : undefined
     if (search.incrementalKey(typed ?? '', command)) {
       stop()
       return
     }
-    if (command === 'cancel' && model.isSelectionEmpty) {
-      if (search.visible) {
-        stop()
-        search.close()
-      }
+    // The search control's filter comes first: Esc closes it, whatever is selected.
+    if (command === 'cancel' && search.visible) {
+      stop()
+      search.close()
       return
     }
+    if (command === 'cancel' && model.isSelectionEmpty)
+      return
     if (command) {
       stop()
       run(command)
-      if (command !== 'cut' && command !== 'backspace' && command !== 'return')
-        moveSourceWindowIfAtEdge()
       return
     }
     if (typed) {
@@ -1185,22 +1253,121 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }
 
   // ---- Mouse -------------------------------------------------------------------------------------------
-  /** The line and the character a point of the text area is over. */
-  const hitTest = (clientX: number, clientY: number): { lineNumber: number; linePosition: number; insertion: number } | undefined => {
+  /**
+   * `HexMouseLocation.Create`: the line a point of the text area is over — the first or the last line on screen
+   * for a point above or below them — and where on it the point is, `x` in characters from the line's start.
+   */
+  const hitTest = (clientX: number, clientY: number): { lineNumber: number; linePosition: number; x: number } | undefined => {
     const area = textAreaRef.current
     if (!area)
       return undefined
     const bounds = area.getBoundingClientRect()
-    const row = Math.floor((clientY - bounds.top) / lineHeight)
-    const x = clientX - bounds.left + scrollLeft - TEXT_LEFT
-    const lineNumber = Math.max(0, Math.min(formatter.lineCount - 1, topLine + row))
-    return { lineNumber, linePosition: Math.max(0, Math.floor(x / charWidth)), insertion: Math.max(0, Math.round(x / charWidth)) }
+    const top = model.topLine
+    const linesOnScreen = Math.max(1, Math.min(formatter.lineCount - top, Math.ceil(viewport.height / lineHeight)))
+    const row = Math.max(0, Math.min(linesOnScreen - 1, Math.floor((clientY - bounds.top) / lineHeight)))
+    const x = Math.max(0, (clientX - bounds.left + scrollLeft - TEXT_LEFT) / charWidth)
+    const lineNumber = Math.max(0, Math.min(formatter.lineCount - 1, top + row))
+    return { lineNumber, linePosition: Math.floor(x), x }
   }
-  const drag = useRef<{ x: number; y: number; clicks: number; captured: boolean; span: { start: number; end: number } } | undefined>(undefined)
-  const scrollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
-  const stopAutoScroll = (): void => {
-    clearInterval(scrollTimer.current)
-    scrollTimer.current = undefined
+  const drag = useRef<{ x: number; y: number; clicks: number; captured: boolean; span: { start: number; end: number }; formatter: HexLineFormatter } | undefined>(undefined)
+
+  // DefaultHexViewMouseProcessor's scrolling while a drag is outside the viewport: a timer in the direction the drag
+  // first left it, faster the further the mouse is.
+  type ScrollDirection = 'left' | 'right' | 'up' | 'down'
+  const autoScroll = useRef<{ direction: ScrollDirection; interval: number; timer: ReturnType<typeof setInterval>; x: number } | undefined>(undefined)
+  const stopAutoScroll = useCallback((): void => {
+    if (autoScroll.current)
+      clearInterval(autoScroll.current.timer)
+    autoScroll.current = undefined
+  }, [])
+  useEffect(() => stopAutoScroll, [stopAutoScroll])
+  /** `OnScroll`: one step of the drag's scrolling, the selection extended to the line or character it reaches. */
+  const onAutoScroll = (direction: ScrollDirection, x: number): void => {
+    const m = model
+    switch (direction) {
+      case 'left': {
+        const line = m.line(m.caretPosition)
+        if (scrollLeft <= 0)
+          stopAutoScroll()
+        else if (m.caretPosition !== line.bufferStart)
+          m.moveToPreviousCharacter(true)
+        else {
+          setScrollLeft(0)
+          stopAutoScroll()
+        }
+        break
+      }
+      case 'right': {
+        const line = m.line(m.caretPosition)
+        const textRight = TEXT_LEFT + line.text.length * charWidth
+        if (textRight <= scrollLeft + viewport.width)
+          stopAutoScroll()
+        else if (m.caretPosition < line.bufferEnd)
+          m.moveToNextCharacter(true)
+        else {
+          setScrollLeft(Math.max(0, textRight - viewport.width))
+          stopAutoScroll()
+        }
+        break
+      }
+      case 'up': {
+        const line = Math.max(0, m.topLine - 1)
+        if (line < m.topLine)
+          m.setTopLine(line)
+        if (line === 0)
+          stopAutoScroll()
+        m.moveCaretByMouse(line, x, true)
+        break
+      }
+      case 'down': {
+        const line = Math.min(m.lineCount - 1, m.topLine + m.viewportLines)
+        if (line >= m.topLine + m.viewportLines)
+          m.setTopLine(line - m.viewportLines + 1)
+        if (line === m.lineCount - 1)
+          stopAutoScroll()
+        m.moveCaretByMouse(line, x, true)
+        break
+      }
+    }
+    m.ensureCaretVisible()
+  }
+  const onAutoScrollRef = useRef(onAutoScroll)
+  onAutoScrollRef.current = onAutoScroll
+  /** `UpdateScrolling`. */
+  const updateAutoScroll = (clientX: number, clientY: number): void => {
+    const bounds = textAreaRef.current?.getBoundingClientRect()
+    if (!bounds)
+      return
+    const x = Math.max(0, (clientX - bounds.left + scrollLeft - TEXT_LEFT) / charWidth)
+    const bottom = bounds.top + viewport.height
+    const right = bounds.left + viewport.width
+    // GetInterval: 250 ms within two lines (or characters) of the edge, sixteen times as fast past them.
+    const interval = (distance: number, size: number): number => Math.abs(distance) < 2 * size ? 250 : 250 / 16
+    let direction: ScrollDirection | undefined
+    let every = 0
+    if (clientY < bounds.top) { direction = 'up'; every = interval(clientY - bounds.top, lineHeight) }
+    else if (clientY >= bottom) { direction = 'down'; every = interval(clientY - bottom, lineHeight) }
+    else if (clientX < bounds.left) { direction = 'left'; every = interval(clientX - bounds.left, charWidth) }
+    else if (clientX >= right) { direction = 'right'; every = interval(clientX - right, charWidth) }
+    if (!direction) {
+      stopAutoScroll()
+      model.ensureCaretVisible()
+      return
+    }
+    const current = autoScroll.current
+    if (current) {
+      current.x = x
+      if (current.interval !== every) {
+        clearInterval(current.timer)
+        current.interval = every
+        current.timer = setInterval(() => onAutoScrollRef.current(current.direction, current.x), every)
+      }
+      return
+    }
+    const state = { direction, interval: every, x, timer: undefined as unknown as ReturnType<typeof setInterval> }
+    state.timer = setInterval(() => onAutoScrollRef.current(state.direction, state.x), every)
+    autoScroll.current = state
+    onAutoScroll(direction, x)
   }
 
   const onMouseDown = (event: React.MouseEvent<HTMLDivElement>): void => {
@@ -1214,7 +1381,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     if (event.button === 2) {
       // OnMouseRightButtonDown: the caret goes to the click; a click outside the selection clears it.
       const before = { start: model.selectionStart, end: model.selectionEnd, empty: model.isSelectionEmpty }
-      model.moveCaretToLinePosition(hit.lineNumber, hit.linePosition, true)
+      model.moveCaretToLinePosition(hit.lineNumber, hit.x, true)
       if (before.empty || model.caretPosition < before.start || model.caretPosition >= before.end)
         model.clearSelection()
       else
@@ -1227,25 +1394,26 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     event.preventDefault()
     const line = model.line(formatter.getLineStart(hit.lineNumber))
     const isOffset = linePositionInfo(formatter, line, hit.linePosition).type === 'offset'
-    let clicks = Math.min(3, event.detail || 1)
+    // A fourth click and more are a click again, as in dnSpy's switch on the click count.
+    let clicks = event.detail === 2 || event.detail === 3 ? event.detail : 1
     if (isOffset)
       clicks = 3
     else if (event.ctrlKey && !event.shiftKey)
       clicks = 2
     if (clicks === 1)
-      model.moveCaretByMouse(hit.lineNumber, hit.linePosition, event.shiftKey)
+      model.moveCaretByMouse(hit.lineNumber, hit.x, event.shiftKey)
     else if (clicks === 2) {
-      model.moveCaretToLinePosition(hit.lineNumber, hit.linePosition, true)
+      model.moveCaretToLinePosition(hit.lineNumber, hit.x, true)
       model.selectCurrentWord()
     }
     else {
       model.selectLine(hit.lineNumber, false)
-      // dnSpy moves the caret to the line's start when the click is on the line's text.
-      if (hit.linePosition <= formatter.charsPerLine + 1)
-        model.moveCaretTo(model.line(formatter.getLineStart(hit.lineNumber)).bufferStart)
+      // dnSpy moves the caret to the line's start when the click is before the line's text ends (and a character).
+      if (hit.x < line.text.length + 1)
+        model.moveCaretTo(line.bufferStart)
     }
     model.ensureCaretVisible()
-    drag.current = { x: event.clientX, y: event.clientY, clicks, captured: false, span: { start: model.isSelectionEmpty ? model.caretPosition : model.selectionStart, end: model.isSelectionEmpty ? model.caretPosition : model.selectionEnd } }
+    drag.current = { x: event.clientX, y: event.clientY, clicks, captured: false, formatter, span: { start: model.isSelectionEmpty ? model.caretPosition : model.selectionStart, end: model.isSelectionEmpty ? model.caretPosition : model.selectionEnd } }
   }
 
   useEffect(() => {
@@ -1253,38 +1421,36 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       const state = drag.current
       if (!state || (event.buttons & 1) === 0)
         return
+      // New line options while the button is down end the drag (`TryUpdateBufferLines`).
+      if (state.formatter !== formatter) {
+        drag.current = undefined
+        stopAutoScroll()
+        return
+      }
       if (!state.captured) {
         if (Math.abs(event.clientX - state.x) < 4 && Math.abs(event.clientY - state.y) < 4)
           return
         state.captured = true
+        return
       }
       const hit = hitTest(event.clientX, event.clientY)
       if (!hit)
         return
       if (state.clicks === 1) {
-        model.moveCaretByMouse(hit.lineNumber, hit.linePosition, true)
-        // UpdateScrolling: past the viewport's top or bottom the view scrolls while the mouse stays there.
-        const bounds = textAreaRef.current?.getBoundingClientRect()
-        stopAutoScroll()
-        if (bounds && (event.clientY < bounds.top || event.clientY > bounds.bottom)) {
-          const up = event.clientY < bounds.top
-          scrollTimer.current = setInterval(() => {
-            model.scrollByLineAndMoveCaret(up ? 'up' : 'down')
-            const again = hitTest(event.clientX, up ? bounds.top + 1 : bounds.bottom - 1)
-            if (again)
-              model.moveCaretByMouse(again.lineNumber, again.linePosition, true)
-          }, 50)
-        }
+        model.moveCaretByMouse(hit.lineNumber, hit.x, true)
+        updateAutoScroll(event.clientX, event.clientY)
         return
       }
+      stopAutoScroll()
       // A word or a line selection grows a word or a line at a time and does not scroll.
-      if (!model.isLineVisible(hit.lineNumber))
+      const bounds = textAreaRef.current?.getBoundingClientRect()
+      if (!bounds || event.clientY < bounds.top || event.clientY >= bounds.top + viewport.height)
         return
-      model.moveCaretToLinePosition(hit.lineNumber, hit.linePosition, true)
+      model.moveCaretToLinePosition(hit.lineNumber, hit.x, true)
       if (state.clicks === 2)
         model.selectCurrentWord()
       else
-        model.selectLine(hit.lineNumber, false)
+        model.selectLine(model.caretLine, false)
       const selStart = model.isSelectionEmpty ? model.caretPosition : model.selectionStart
       const selEnd = model.isSelectionEmpty ? model.caretPosition : model.selectionEnd
       if (selStart < state.span.start) {
@@ -1293,8 +1459,9 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       }
       else {
         model.select(state.span.start, selEnd, true)
-        model.moveCaretTo(state.clicks === 2 && selStart + 1 === selEnd ? selStart : Math.max(selStart, selEnd - 1))
+        model.moveCaretTo(state.clicks === 2 && selStart + 1 === selEnd ? selStart : selEnd)
       }
+      model.ensureCaretVisible()
     }
     const onUp = (): void => {
       drag.current = undefined
@@ -1305,7 +1472,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
-      stopAutoScroll()
     }
   })
 
@@ -1342,13 +1508,16 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
   }
 
   const onWheel = (event: React.WheelEvent<HTMLDivElement>): void => {
-    if (event.ctrlKey) {
+    // WpfHexViewHostImpl: Ctrl+wheel zooms when the options let it, and scrolls like any wheel otherwise.
+    if (event.ctrlKey && pane.advanced.enableMouseWheelZoom) {
       event.preventDefault()
       event.stopPropagation()
-      if (pane.advanced.enableMouseWheelZoom && event.deltaY !== 0)
+      if (event.deltaY !== 0)
         zoomTo(event.deltaY < 0 ? zoomIn(zoom) : zoomOut(zoom))
       return
     }
+    if (event.ctrlKey)
+      event.stopPropagation()
     if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       const delta = event.shiftKey ? event.deltaY : event.deltaX
       setScrollLeft((current) => Math.max(0, Math.min(Math.max(0, contentWidth - viewport.width), current + delta)))
@@ -1357,7 +1526,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     const lines = event.deltaMode === 1 ? event.deltaY : Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / 100 * WHEEL_LINES))
     model.setTopLine(model.topLine + lines)
     dismissToolTip()
-    moveSourceWindowIfAtEdge()
   }
 
   // The selection margin: a click selects the line, a drag extends it a line at a time (`LeftSelectionMargin`).
@@ -1374,8 +1542,20 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     marginDrag.current = true
     const onMove = (move: MouseEvent): void => {
       const next = hitTest(move.clientX, move.clientY)
-      if (next && marginDrag.current)
-        model.selectLine(next.lineNumber, true)
+      if (!next || !marginDrag.current)
+        return
+      model.selectLine(next.lineNumber, true)
+      // Above or below the viewport the view scrolls a line for each move, as long as there is more to show.
+      const bounds = textAreaRef.current?.getBoundingClientRect()
+      if (!bounds)
+        return
+      if (move.clientY <= bounds.top)
+        model.scrollByLineAndMoveCaret('up')
+      else if (move.clientY >= bounds.top + viewport.height) {
+        const lastOnScreen = Math.min(model.lineCount, model.topLine + Math.ceil(viewport.height / lineHeight)) - 1
+        if (lastOnScreen !== model.lineCount - 1 || model.topLine + model.viewportLines - 1 < model.lineCount - 1)
+          model.scrollByLineAndMoveCaret('down')
+      }
     }
     const onUp = (): void => {
       marginDrag.current = false
@@ -1414,7 +1594,6 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     narrowed: model.bufferStart !== 0 || model.bufferEnd !== length,
     readOnly,
     volatile: source !== undefined,
-    hasFile: hasStructures,
     bytesPerLine: local.bytesPerLine,
     valuesFormat: local.valuesFormat,
     editField,
@@ -1440,7 +1619,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       const origin = model.caretPosition
       let position: number
       if (result.kind === 'absolute')
-        position = source ? result.value - source.base : formatter.toPhysicalPosition(result.value)
+        position = formatter.toPhysicalPosition(result.value)
       else if (result.kind === 'current')
         position = origin + result.value
       else {
@@ -1454,12 +1633,11 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
           if (error instanceof DOMException && error.name === 'AbortError')
             return
         }
-        position = Number.isFinite(resolved) ? resolved : source ? result.value - source.base : result.value
+        position = Number.isFinite(resolved) ? resolved : result.value
       }
-      if (currentEditContext.current !== editContext || !Number.isFinite(position) || (source ? source.base + position < 0 || source.base + position >= (source.end ?? Number.MAX_SAFE_INTEGER) : position < 0))
+      if (currentEditContext.current !== editContext || !Number.isFinite(position) || position < 0)
         return
-      if (!source)
-        position = Math.max(model.bufferStart, Math.min(model.bufferEnd, position))
+      position = Math.max(model.bufferStart, Math.min(model.bufferEnd, position))
       if (!result.selectToNewPosition) {
         revealPosition(position)
         return
@@ -1501,10 +1679,12 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
     void (async () => {
       setDialog(undefined)
       focusView()
-      const origin = model.isSelectionEmpty ? model.caretPosition : model.selectionStart
+      // SelectionToUserValue: the start the dialog showed, which follows the anchor of a reversed selection.
+      // dnSpy adds a Current Position value to that start's logical position.
+      const origin = formatter.toLogicalPosition(model.isSelectionEmpty ? model.caretPosition : model.anchorPoint < model.activePoint ? model.anchorPoint : model.anchorPoint - 1)
       const toBuffer = async (value: number): Promise<number> => {
         if (result.kind === 'absolute')
-          return source ? value - source.base : formatter.toPhysicalPosition(value)
+          return formatter.toPhysicalPosition(value)
         if (result.kind === 'current')
           return origin + value
         let resolved = Number.NaN
@@ -1516,15 +1696,17 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
           if (error instanceof DOMException && error.name === 'AbortError')
             return Number.NaN
         }
-        return Number.isFinite(resolved) ? resolved : source ? value - source.base : value
+        return Number.isFinite(resolved) ? resolved : value
       }
       const start = await toBuffer(result.start)
       const end = result.mode === 'length' ? (result.end === 0 ? start : start + result.end - 1) : await toBuffer(result.end)
-      if (currentEditContext.current !== editContext || !Number.isFinite(start) || !Number.isFinite(end) || (source ? Math.min(start, end) + source.base < 0 : Math.min(start, end) < 0))
+      if (currentEditContext.current !== editContext || !Number.isFinite(start) || !Number.isFinite(end) || Math.min(start, end) < 0)
         return
-      revealPosition(end, start <= end
-        ? { anchor: start, active: end + 1, moveCaret: true }
-        : { anchor: start + 1, active: end, moveCaret: true })
+      // MoveTo: nothing happens unless the selection's ends and the caret are all in the view's bytes.
+      const selection = start <= end ? { anchor: start, active: end + 1 } : { anchor: start + 1, active: end }
+      if (!formatter.isValidPosition(selection.anchor) || !formatter.isValidPosition(selection.active) || !formatter.isValidPosition(end))
+        return
+      revealPosition(end, { ...selection, moveCaret: true })
     })()
   }
 
@@ -1571,6 +1753,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
             <HexSearchControl
               state={search.state}
               canReplace={search.canReplace}
+              replaceReady={search.replaceReady}
               focusRequest={search.focusRequest}
               atBottom={searchAtBottom}
               controlRef={searchControlRef}
@@ -1587,15 +1770,11 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
             <HexToolTipView toolTip={toolTip.toolTip} left={toolTip.x} top={(toolTip.row + 1) * lineHeight} />
           )}
         </div>
-        {showVertical && (
-          <div ref={vScrollRef} className="hex-vscroll" onScroll={onVerticalScroll}>
-            <div style={{ height: scrollRange + (vScrollRef.current?.clientHeight ?? 0) }} />
-          </div>
-        )}
+        {showVertical && <HexVerticalScrollBar topLine={topLine} maxTopLine={model.maxTopLine} viewportLines={model.viewportLines} onScroll={(line) => { model.setTopLine(line); dismissToolTip() }} />}
       </div>
       {showHorizontal && (
         <div className="hex-hscroll-row">
-          {showZoomControl && <HexZoomControl zoom={zoom} onZoom={zoomTo} />}
+          {showZoomControl && <HexZoomControl zoom={zoom} onZoom={zoomTo} onDone={focusView} />}
           <div ref={hScrollRef} className="hex-hscroll" onScroll={(event) => setScrollLeft(event.currentTarget.scrollLeft)}>
             <div style={{ width: contentWidth + GLYPH_MARGIN_WIDTH + SELECTION_MARGIN_WIDTH, height: 1 }} />
           </div>
@@ -1606,6 +1785,14 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
         <div className="hex-context-menu" style={{ left: menu.x, top: menu.y }}>
           <MenuPopup items={menuItems(menu.editField)} onClose={() => { setMenu(undefined); focusView() }} />
         </div>
+      )}
+      {saveProgress && (
+        <HexSaveProgressDialog
+          title={saveProgress.title}
+          description={saveProgress.filePath}
+          progress={saveProgress.total === 0 ? 1 : saveProgress.done / saveProgress.total}
+          onCancel={() => { saveCancelled.current = true }}
+        />
       )}
       {dialog?.kind === 'goToPosition' && <HexGoToPositionDialog initial={dialog.initial ?? 0} onAccept={goToPosition} onClose={() => { setDialog(undefined); focusView() }} />}
       {dialog?.kind === 'goToMetadata' && <HexGoToMetadataDialog initial={dialog.initial ?? 0} hasPeHeaders={dialog.hasPeHeaders !== false} validate={validateMetadata} onAccept={goToMetadata} onClose={() => { setDialog(undefined); focusView() }} />}
@@ -1630,7 +1817,7 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
           title="Enter Value"
           label={t('Byte')}
           initial="0xFF"
-          validate={(text) => parseFillByte(text) === undefined ? t('The value is not an unsigned hexadecimal or decimal integer') : undefined}
+          validate={(text) => fillByteError(text, t)}
           onAccept={(text) => {
             setDialog(undefined)
             const value = parseFillByte(text)
@@ -1657,8 +1844,8 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       action()
     }
     if (key === 'Escape') handled(search.close)
-    else if (ctrl && !event.shiftKey && event.code === 'KeyF') handled(search.showFind)
-    else if (ctrl && !event.shiftKey && event.code === 'KeyH') handled(search.showReplace)
+    else if (ctrl && !event.shiftKey && event.code === 'KeyF') handled(() => search.showFind(true))
+    else if (ctrl && !event.shiftKey && event.code === 'KeyH') handled(() => search.showReplace(true))
     else if (key === 'Enter' && (event.target as HTMLElement).matches('input')) handled(() => search.findNext(!event.shiftKey))
     else if (key === 'F3' && !event.ctrlKey) handled(() => search.findNext(!event.shiftKey))
     else if (key === 'F3' && event.ctrlKey) handled(() => search.findNextSelected(!event.shiftKey))
@@ -1735,13 +1922,19 @@ const HexToolTipView = ({ toolTip, left, top }: { toolTip: HexToolTip; left: num
 }
 
 /** dnSpy's `ZoomControlMargin`: the zoom as "100 %" in an editable box at the start of the horizontal bar. */
-const HexZoomControl = ({ zoom, onZoom }: { zoom: number; onZoom(value: number): void }): React.JSX.Element => {
+const HexZoomControl = ({ zoom, onZoom, onDone }: { zoom: number; onZoom(value: number): void; onDone(): void }): React.JSX.Element => {
   const { t } = useLanguage()
   const [text, setText] = useState(`${zoom} %`)
+  // OnLostKeyboardFocus forgets the zoom Escape goes back to; the box gets it again when it is focused.
+  const original = useRef<number | undefined>(undefined)
   useEffect(() => setText(`${zoom} %`), [zoom])
+  const parse = (value: string): number | undefined => {
+    const level = Number.parseFloat(value.replace('%', '').trim())
+    return Number.isFinite(level) && level >= zoomLevels[0] && level <= zoomLevels[zoomLevels.length - 1] ? level : undefined
+  }
   const apply = (): void => {
-    const value = Number.parseFloat(text.replace('%', '').trim())
-    if (Number.isFinite(value) && value >= zoomLevels[0] && value <= zoomLevels[zoomLevels.length - 1])
+    const value = parse(text)
+    if (value !== undefined)
       onZoom(value)
     else
       setText(`${zoom} %`)
@@ -1752,15 +1945,146 @@ const HexZoomControl = ({ zoom, onZoom }: { zoom: number; onZoom(value: number):
         aria-label={t('Zoom')}
         list="hex-zoom-levels"
         value={text}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => setText(`${zoom} %`)}
+        onFocus={() => { original.current = zoom }}
+        onChange={(event) => {
+          setText(event.target.value)
+          // OnSelectionChanged: a level picked from the list applies at once.
+          const native = event.nativeEvent as InputEvent
+          if (native.inputType === undefined || native.inputType === 'insertReplacementText') {
+            const value = parse(event.target.value)
+            if (value !== undefined && zoomLevels.includes(value))
+              onZoom(value)
+          }
+        }}
+        onBlur={() => { original.current = undefined; setText(`${zoom} %`) }}
         onKeyDown={(event) => {
           event.stopPropagation()
-          if (event.key === 'Enter') { event.preventDefault(); apply() }
-          else if (event.key === 'Escape') { event.preventDefault(); setText(`${zoom} %`) }
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            apply()
+            onDone()
+          }
+          else if (event.key === 'Escape') {
+            event.preventDefault()
+            if (original.current !== undefined)
+              onZoom(original.current)
+            setText(`${original.current ?? zoom} %`)
+            onDone()
+          }
         }}
       />
       <datalist id="hex-zoom-levels">{[...zoomLevels].reverse().map((level) => <option key={level} value={`${level} %`} />)}</datalist>
+    </div>
+  )
+}
+
+/**
+ * dnSpy's VerticalScrollBarMargin: a bar over the lines — an arrow a line, the track a page, both repeating while
+ * held, and the thumb's place in the track the top line's place in the bytes, however many lines there are.
+ */
+const HexVerticalScrollBar = ({ topLine, maxTopLine, viewportLines, onScroll }: { topLine: number; maxTopLine: number; viewportLines: number; onScroll(line: number): void }): React.JSX.Element => {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const [trackHeight, setTrackHeight] = useState(0)
+  useLayoutEffect(() => {
+    const track = trackRef.current
+    if (!track)
+      return
+    const measure = (): void => setTrackHeight(track.clientHeight)
+    measure()
+    if (typeof ResizeObserver === 'undefined')
+      return
+    const observer = new ResizeObserver(measure)
+    observer.observe(track)
+    return () => observer.disconnect()
+  }, [])
+  const latest = useRef({ topLine, maxTopLine, viewportLines, onScroll })
+  latest.current = { topLine, maxTopLine, viewportLines, onScroll }
+  const thumb = Math.min(trackHeight, Math.max(MIN_THUMB, trackHeight * viewportLines / Math.max(1, maxTopLine + viewportLines)))
+  const thumbTop = maxTopLine === 0 ? 0 : (trackHeight - thumb) * topLine / maxTopLine
+  const scrollTo = (line: number): void => {
+    const { maxTopLine: max, onScroll: scroll } = latest.current
+    scroll(Math.max(0, Math.min(max, Math.round(line))))
+  }
+  /** RepeatButton: the action at once, then again and again while the button stays down. */
+  const repeat = (event: React.PointerEvent<HTMLElement>, action: () => boolean): void => {
+    if (event.button !== 0)
+      return
+    event.preventDefault()
+    const target = event.currentTarget
+    target.setPointerCapture?.(event.pointerId)
+    if (!action())
+      return
+    let interval: ReturnType<typeof setInterval> | undefined
+    const delay = setTimeout(() => { interval = setInterval(() => { if (!action()) stop() }, REPEAT_INTERVAL) }, REPEAT_DELAY)
+    const stop = (): void => {
+      clearTimeout(delay)
+      clearInterval(interval)
+      target.removeEventListener('pointerup', stop)
+      target.removeEventListener('pointercancel', stop)
+    }
+    target.addEventListener('pointerup', stop)
+    target.addEventListener('pointercancel', stop)
+  }
+  const line = (delta: number) => (event: React.PointerEvent<HTMLElement>): void =>
+    repeat(event, () => { scrollTo(latest.current.topLine + delta); return true })
+  // The track pages towards the pointer until the thumb is under it.
+  const onTrackDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget)
+      return
+    let pointerY = event.clientY
+    const track = event.currentTarget
+    const onMove = (move: PointerEvent): void => { pointerY = move.clientY }
+    track.addEventListener('pointermove', onMove)
+    const up = (): void => {
+      track.removeEventListener('pointermove', onMove)
+      track.removeEventListener('pointerup', up)
+    }
+    track.addEventListener('pointerup', up)
+    repeat(event, () => {
+      const { topLine: top, maxTopLine: max, viewportLines: page } = latest.current
+      const bounds = track.getBoundingClientRect()
+      const height = track.clientHeight
+      const size = Math.min(height, Math.max(MIN_THUMB, height * page / Math.max(1, max + page)))
+      const start = bounds.top + (max === 0 ? 0 : (height - size) * top / max)
+      if (pointerY < start)
+        scrollTo(top - page)
+      else if (pointerY >= start + size)
+        scrollTo(top + page)
+      else
+        return false
+      return true
+    })
+  }
+  const onThumbDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0)
+      return
+    event.preventDefault()
+    const thumbElement = event.currentTarget
+    thumbElement.setPointerCapture?.(event.pointerId)
+    const startY = event.clientY
+    const startTop = latest.current.topLine
+    const onMove = (move: PointerEvent): void => {
+      const { maxTopLine: max } = latest.current
+      const free = trackHeight - thumb
+      if (free > 0)
+        scrollTo(startTop + (move.clientY - startY) / free * max)
+    }
+    const up = (): void => {
+      thumbElement.removeEventListener('pointermove', onMove)
+      thumbElement.removeEventListener('pointerup', up)
+      thumbElement.removeEventListener('pointercancel', up)
+    }
+    thumbElement.addEventListener('pointermove', onMove)
+    thumbElement.addEventListener('pointerup', up)
+    thumbElement.addEventListener('pointercancel', up)
+  }
+  return (
+    <div className="hex-vscroll" role="scrollbar" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={maxTopLine} aria-valuenow={topLine} aria-controls={undefined}>
+      <button type="button" tabIndex={-1} className="hex-vscroll-arrow hex-vscroll-up" aria-label="Line up" disabled={topLine <= 0} onPointerDown={line(-1)} />
+      <div ref={trackRef} className="hex-vscroll-track" onPointerDown={onTrackDown}>
+        {maxTopLine > 0 && <div className="hex-vscroll-thumb" style={{ top: thumbTop, height: thumb }} onPointerDown={onThumbDown} />}
+      </div>
+      <button type="button" tabIndex={-1} className="hex-vscroll-arrow hex-vscroll-down" aria-label="Line down" disabled={topLine >= maxTopLine} onPointerDown={line(1)} />
     </div>
   )
 }

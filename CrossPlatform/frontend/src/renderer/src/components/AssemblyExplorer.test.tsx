@@ -13,7 +13,7 @@ const assembly: TreeNode = { id: 'assembly', kind: 'assembly', label: 'Example',
 const explorerCommands = (overrides: Partial<AssemblyExplorerCommands> = {}): AssemblyExplorerCommands => ({
   onOpenNode: vi.fn(),
   onOpenHex: vi.fn(),
-  onShowHexAt: vi.fn(),
+  onShowHex: vi.fn(),
   onHexWriteBody: vi.fn(),
   onHexCopyBody: vi.fn(),
   onHexPasteBody: vi.fn(),
@@ -282,6 +282,28 @@ it('activates a row that names something elsewhere instead of opening it', async
   activateNode.mockResolvedValueOnce(false)
   fireEvent.keyDown(screen.getByRole('treeitem'), { key: 'Enter' })
   await vi.waitFor(() => expect(onOpenNode).toHaveBeenCalledWith(baseType))
+})
+
+it('opens the selected document row in the hex editor on Ctrl+X, and does nothing for a row that names no file', async () => {
+  // dnSpy's OpenHexEditorCommand is a main window command on Ctrl+X, and from the tree it acts on the selection.
+  const onOpenHex = vi.fn()
+  const resolveHexTarget = vi.fn(async (_workspaceId: string, nodeId: string) => ({ moduleId: `file-of-${nodeId}`, fileLength: 64, method: null, fieldInitialValue: null, resource: null }))
+  Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, resolveHexTarget } })
+  useAppStore.setState({ workspaceId: 'w1', selectedNode: assembly, selectedNodes: [assembly], parents: {} })
+  render(<AssemblyExplorer commands={explorerCommands({ onOpenHex })} />)
+
+  fireEvent.keyDown(screen.getByRole('treeitem'), { key: 'x', code: 'KeyX', ctrlKey: true })
+  await vi.waitFor(() => expect(onOpenHex).toHaveBeenCalledWith('file-of-assembly'))
+
+  cleanup()
+  onOpenHex.mockClear()
+  const namespaceRow: TreeNode = { id: 'ns', kind: 'namespace', label: 'N', hasChildren: false }
+  useAppStore.setState({ roots: [namespaceRow], selectedNode: namespaceRow, selectedNodes: [namespaceRow] })
+  render(<AssemblyExplorer commands={explorerCommands({ onOpenHex })} />)
+  fireEvent.keyDown(screen.getByRole('treeitem'), { key: 'x', code: 'KeyX', ctrlKey: true })
+  await vi.waitFor(() => expect(resolveHexTarget).toHaveBeenCalledWith('w1', 'ns'))
+  await act(async () => { await Promise.resolve() })
+  expect(onOpenHex).not.toHaveBeenCalled()
 })
 
 it('opens files dropped on the tree in front of the root they land on, through the dragged-items filter', () => {

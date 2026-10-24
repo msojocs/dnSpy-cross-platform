@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   compressedUIntPrefix,
   csharpArrayText,
+  formatGeneral,
   editValueCell,
   formatHexOffset,
   formatHexValue,
@@ -109,5 +110,20 @@ describe('editing a value cell', () => {
     expect(editValueCell('hexSByte', Uint8Array.of(0x7F), 1, 'F')).toEqual({ offset: 0, data: Uint8Array.of(0x7F) })
     expect(editValueCell('bit8', Uint8Array.of(0), 0, '1')).toEqual({ offset: 0, data: Uint8Array.of(0x80) })
     expect(editValueCell('decimalByte', Uint8Array.of(0), 0, '1')).toBeUndefined()
+  })
+})
+
+describe('.NET formatting of copied and shown values', () => {
+  it('switches to an exponent below 1E-04 and keeps the sign of negative zero', () => {
+    expect(formatGeneral(1.5e-5, 7)).toBe('1.5E-05')
+    expect(formatGeneral(0.0001, 7)).toBe('0.0001')
+    expect(formatGeneral(-0.000015, 7)).toBe('-1.5E-05')
+    expect(formatGeneral(-0, 7)).toBe('-0')
+    expect(formatGeneral(123456789, 7)).toBe('1.234568E+08')
+  })
+
+  it('writes a byte that cannot be read as ?? in the copied arrays', () => {
+    expect(csharpArrayText([0x12, -1], true)).toBe('new byte[] {\n\t0x12, 0x??\n};\n')
+    expect(visualBasicArrayText([-1], true)).toBe('New Byte() { _\n\t&H?? _\n}\n')
   })
 })

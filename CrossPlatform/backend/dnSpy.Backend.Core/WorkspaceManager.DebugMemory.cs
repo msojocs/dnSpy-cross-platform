@@ -248,6 +248,54 @@ public sealed partial class WorkspaceManager {
 		}, none, cancellationToken);
 	}
 
+	IDebugProcessMemory FindDebugProcessMemory(string sessionId) {
+		var provider = debugMemory ?? throw new RpcException(ErrorCodes.InvalidRequest, "The CoreCLR debug adapter is not installed.");
+		return provider.FindProcessMemory(sessionId) ?? throw new RpcException(ErrorCodes.InvalidParams, "The debug session no longer exists.");
+	}
+
+	/// <summary>The Memory window's buffer span: HexProcessSimpleBufferStream's, the process's address space.</summary>
+	public Task<DebugMemorySpaceResponse> GetDebugMemorySpaceAsync(DebugMemorySpaceRequest request, CancellationToken cancellationToken) {
+		var memory = FindDebugProcessMemory(request.SessionId);
+		return Task.Run(() => {
+			var end = new HexBuffer(new ProcessMemoryHexBufferSource(memory)).Span.End;
+			return new DebugMemorySpaceResponse(end > new HexPosition(long.MaxValue) ? long.MaxValue : (long)end.ToUInt64());
+		}, cancellationToken);
+	}
+
+	/// <summary>
+	/// dnSpy's HexBuffer.GetNextValidSpan / GetPreviousValidSpan over the process's memory, which Alt+Down / Alt+Up
+	/// (MoveToNextValidStartEnd, MoveToPreviousValidStartEnd) and Select All Bytes Block ask.
+	/// </summary>
+	public Task<DebugMemoryValidSpanResponse> GetDebugMemoryValidSpanAsync(DebugMemoryValidSpanRequest request, CancellationToken cancellationToken) {
+		var memory = FindDebugProcessMemory(request.SessionId);
+		var none = new DebugMemoryValidSpanResponse(null, null);
+		if (request.Position < 0 || request.Bounds < 0)
+			return Task.FromResult(none);
+		return Task.Run(() => {
+			var buffer = new HexBuffer(new ProcessMemoryHexBufferSource(memory));
+			var position = new HexPosition((ulong)request.Position);
+			if (position >= buffer.Span.End)
+				return none;
+			var bounds = HexPosition.Min(new HexPosition((ulong)request.Bounds), buffer.Span.End);
+			var span = request.Forward
+				? buffer.GetNextValidSpan(position, bounds, request.FullSpan, cancellationToken)
+				: buffer.GetPreviousValidSpan(position, bounds, request.FullSpan, cancellationToken);
+			return span is { } found ? new DebugMemoryValidSpanResponse(Address(found.Start), Address(HexPosition.Min(found.End, buffer.Span.End))) : none;
+		}, cancellationToken);
+	}
+
+	/// <summary>A hex search over the process's memory (HexViewSearchService over the whole buffer), the readable parts of it only.</summary>
+	public async Task<HexSearchResponse> SearchDebugMemoryAsync(DebugMemorySearchRequest request, CancellationToken cancellationToken) {
+		var memory = FindDebugProcessMemory(request.SessionId);
+		if (request.MaxResults <= 0)
+			throw new RpcException(ErrorCodes.InvalidParams, "A hex search has to ask for at least one result.");
+		var pattern = Workspace.DecodeSearchPattern(new HexSearchRequest(string.Empty, string.Empty, request.Base64Pattern, request.Base64Mask, request.Base64Alternate,
+			request.CharLengths, request.RangeStart, request.RangeEnd, request.Start, request.Reverse, request.Wrap, request.NoOverlaps, request.MaxResults));
+		using var searcher = new HexSearcher(memory, pattern, request.NoOverlaps, request.MaxResults, cancellationToken);
+		var offsets = await Task.Run(() => searcher.FindAllAsync(request.RangeStart, request.RangeEnd, request.Start, request.Reverse, request.Wrap), cancellationToken).ConfigureAwait(false);
+		return new HexSearchResponse(offsets.ToArray());
+	}
+
 	/// <summary>
 	/// dnSpy's Go to Metadata in the Memory window: the value is checked the way GoToMetadataVM's OffsetTokenVM checks it
 	/// and turned into a span by HexCommandOperationsImpl.GetGoToMetadataSpan, over the metadata headers of the top-level

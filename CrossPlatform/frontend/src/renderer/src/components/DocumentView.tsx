@@ -3,12 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 // A reference that goes somewhere is decorated and clickable; which spans those are is a rule about the
 // spans themselves, so it is asked of them rather than decided here.
-import { isLocalSpan, isNavigableSpan, type AddressReference, type CodeStatement, type DecompilerLanguage, type TextSpan, type TreeNode } from '../../../shared/protocol'
+import { isLocalSpan, isNavigableSpan, type AddressReference, type CodeStatement, type DecompilerLanguage, type HexRange, type TextSpan, type TreeNode } from '../../../shared/protocol'
 import { ilSelectionOf } from './il-selection'
 import { bookmarkMarkers, breakpointPositionInDocument, breakpointStatementsOf, codeStatementAt, findNode, isBamlDocumentLanguage, lineBreakpointAt, lineBreakpointsAt, memoryModulePathOf, statementOfLocation, useAppStore } from '../app-store'
 import { breakpointDecorations, callStackDecorations } from '../debugger-markers'
 import { bookmarkChords, bookmarkFunctionKeys } from '../bookmark-commands'
-import type { Bookmark, BookmarkDocument, HexBodyKind, MethodBreakpointTarget } from '../app-store'
+import { clipboardHexLength, codeHexContextOf, type Bookmark, type BookmarkDocument, type HexBodyKind, type MethodBreakpointTarget } from '../app-store'
 import { isActiveDocumentEditor, registerDocumentEditor, unregisterDocumentEditor } from '../editor-registry'
 import { useLanguage } from '../localization'
 import { monacoThemeName } from '../monaco'
@@ -30,7 +30,8 @@ import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } fro
 import { GoToLineDialog } from './EditDialogs'
 import { loadAppOptions, saveAppOptions, useAppOptions, type BlockStructureLineKind } from './app-options'
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './document-viewer-options'
-import type { CreatedKind, HexShowKind } from './edit-menu'
+import type { CreatedKind } from './edit-menu'
+import { runHexShortcut, type HexBodyTarget, type HexContextParts, type HexMenuContext } from './hex-menu'
 
 // A bookmark draws in the lines-decorations strip rather than the glyph margin, which the breakpoints
 // already own: a bookmark and a breakpoint on the same line then sit side by side instead of on top of
@@ -184,11 +185,11 @@ export interface DocumentViewCommands {
   onGoToToken(node: TreeNode): void
   /** dnSpy's Go to MD Table Row, asking for a token in the node's module, or going to the one given. */
   onGoToMdTableRow?(node: TreeNode, token?: number): void
-  onOpenHex(): void
-  onShowHexAt(kind: HexShowKind): void
-  onHexWriteBody(kind: HexBodyKind): void
-  onHexCopyBody(): void
-  onHexPasteBody(): void
+  onOpenHex(moduleId: string): void
+  onShowHex(moduleId: string, range: HexRange): void
+  onHexWriteBody(kind: HexBodyKind, target: HexBodyTarget): void
+  onHexCopyBody(target: HexBodyTarget): void
+  onHexPasteBody(target: HexBodyTarget): void
 }
 
 /** The language a document's Quick Info is asked in: the one it was decompiled in. */
@@ -741,11 +742,9 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
    * Builds and shows the code viewer's context menu for a click at `line`/`column`. What the caret is on
    * decides most of it: the span under it names the reference, the statement under it stands in for a
    * member when there is no reference, and the breakpoint on its line is what the breakpoint commands act
-   * on. The hex groups are the exception — they answer for the assembly explorer's selection, exactly as
-   * the Edit menu does, because the commands behind them act on the selected node: dnSpy resolves them
-   * from the document instead, but showing another node's target here would put entries on screen whose
-   * action is somewhere else entirely. The hex group's file command is the other exception: it opens the
-   * file this viewer is showing, which is the document dnSpy's `GetActiveAssemblyTreeNode` hands it.
+   * on. The hex group reads dnSpy's HexContext for a document viewer: the address reference and the statement
+   * under the caret, the member whose definition the caret is on, and the file this viewer is showing — the
+   * document dnSpy's `GetActiveAssemblyTreeNode` hands its file command.
    */
   const openContextMenu = async (line: number, column: number, screen: { x: number; y: number }): Promise<void> => {
     const current = document
@@ -770,7 +769,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       : memberSpan?.targetModulePath && memberSpan.targetMetadataToken !== undefined
         ? { modulePath: memberSpan.targetModulePath, metadataToken: memberSpan.targetMetadataToken }
         : undefined
-    const [referenceNode, readsResource, documentNode, entryPoint, globalCctor, , debugTargets] = await Promise.all([
+    const [referenceNode, readsResource, documentNode, entryPoint, globalCctor, , debugTargets, pasteLength] = await Promise.all([
       memberSpan?.targetNodeId ? referenceNodeOf(memberSpan.targetNodeId) : undefined,
       // Go to Resource shows only on a member that reads a .resources entry, which only the backend can tell
       // — ResourceRef.TryCreate reads the member's IL — so it is asked alongside the rest.
@@ -780,6 +779,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       state0.workspaceId ? window.dnSpy.getSpecialNode(state0.workspaceId, current.nodeId, 'globalCctor').then((found) => Boolean(found.nodeId), () => false) : false,
       useAppStore.getState().setCodeCaret({ documentId, line, column }),
       debugReference ? state0.debugCodeTargets([debugReference]) : Promise.resolve(undefined),
+      // Hex Paste Method Body shows only while the clipboard holds hexadecimal bytes that fit.
+      clipboardHexLength(),
     ])
     const state = useAppStore.getState()
     const statements = statementsRef.current
@@ -816,11 +817,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
       breakpoint,
       breakpoints,
       debugTargets,
-      selectionKind: state.selectedNode?.kind,
-      // A code document is open in a viewer, which is what dnSpy's file command reads the file from.
-      documentAvailable: true,
-      hexTarget: state.hexTarget,
-      hexStatement: state.hexStatement,
+      ...codeHexContextOf(state, documentId),
+      clipboardHexLength: pasteLength,
       debugState: state.debugState,
       stopped: state.debugState === 'stopped' && state.stoppedLocation !== undefined,
       canStartDebug: commandsRef.current.canStartDebug,
@@ -876,13 +874,7 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
         const options = loadAppOptions()
         saveAppOptions({ ...options, baml: { ...options.baml, disassembleBaml: !options.baml.disassembleBaml } })
       },
-      addressReference: span?.address ?? undefined,
-      onShowAddress: (address) => commandsRef.current.onFollowAddress(address),
-      onOpenHex: () => commandsRef.current.onOpenHex(),
-      onShowHexAt: (kind) => commandsRef.current.onShowHexAt(kind),
-      onHexWriteBody: (kind) => commandsRef.current.onHexWriteBody(kind),
-      onHexCopyBody: () => commandsRef.current.onHexCopyBody(),
-      onHexPasteBody: () => commandsRef.current.onHexPasteBody(),
+      ...hexCommands(),
     }, screen, {
       onClose: () => {
         setMenuOpen(false)
@@ -898,6 +890,18 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
   }
   const openContextMenuRef = useRef(openContextMenu)
   openContextMenuRef.current = openContextMenu
+
+  /** The hex group's commands, which the shell runs. */
+  const hexCommands = (): Omit<HexMenuContext, 't' | keyof HexContextParts> => ({
+    onShowAddress: (address) => commandsRef.current.onFollowAddress(address),
+    onOpenHex: (moduleId) => commandsRef.current.onOpenHex(moduleId),
+    onShowHex: (moduleId, range) => commandsRef.current.onShowHex(moduleId, range),
+    onHexWriteBody: (kind, target) => commandsRef.current.onHexWriteBody(kind, target),
+    onHexCopyBody: (target) => commandsRef.current.onHexCopyBody(target),
+    onHexPasteBody: (target) => commandsRef.current.onHexPasteBody(target),
+  })
+  const hexCommandsRef = useRef(hexCommands)
+  hexCommandsRef.current = hexCommands
 
   useEffect(() => () => unregisterDocumentEditor(viewId), [viewId])
 
@@ -1304,20 +1308,20 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               editor.addCommand(monaco.KeyCode.Enter, () => followAtCaret(false), '!findWidgetVisible && !findInputFocussed')
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12, () => followAtCaret(true))
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => followAtCaret(true), '!findWidgetVisible && !findInputFocussed')
-              // dnSpy's OpenHexEditorCommand.ExecuteCommand, Ctrl+X: the address reference under the caret, else
-              // the statement's instructions, else the PE structure the document is, else the document's file.
+              // dnSpy's HexCommandTargetFilter, Ctrl+X: OpenHexEditorCommand.ExecuteCommand over the viewer's caret —
+              // the address reference under it, else its statement's instructions, else the document's file. The
+              // caret is read again first, so a key pressed straight after a move acts on where the caret went.
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX, () => {
-                const offset = referenceOffsetAtCaret()
-                const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
-                const state = useAppStore.getState()
-                if (span?.address)
-                  commandsRef.current.onFollowAddress(span.address)
-                else if (state.hexStatement && !state.hexTarget?.method)
-                  commandsRef.current.onShowHexAt('statement')
-                else if (state.hexTarget?.structure)
-                  commandsRef.current.onShowHexAt('structure')
-                else
-                  commandsRef.current.onOpenHex()
+                const position = editor.getPosition()
+                void (async () => {
+                  if (position)
+                    await useAppStore.getState().setCodeCaret({ documentId, line: position.lineNumber, column: position.column })
+                  const hex = codeHexContextOf(useAppStore.getState(), documentId)
+                  // A caret in virtual space is on no reference (GetCurrentSpanReference).
+                  if (referenceOffsetAtCaret() === undefined)
+                    hex.addressReference = undefined
+                  runHexShortcut({ t: tRef.current, ...hex, ...hexCommandsRef.current() })
+                })()
               })
               // dnSpy's MoveToNextReference and MoveToPreviousReference — Tab and Ctrl+Shift+Down, Shift+Tab and
               // Ctrl+Shift+Up — and MoveToNextDefinition and MoveToPreviousDefinition, Alt+Down and Alt+Up.

@@ -6,7 +6,7 @@ import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { compilerCommandLanguage } from './compiler-language'
 import { deleteHeader, deletionTargets } from './delete-commands'
 import type { CreatedKind } from './edit-menu'
-import { hexMenuEntries, type HexMenuContext } from './hex-menu'
+import { hexMenuEntries, treeHexContext, type HexContextParts, type HexMenuContext } from './hex-menu'
 import { MenuEntryIcon } from './DsIcon'
 
 /**
@@ -15,7 +15,7 @@ import { MenuEntryIcon } from './DsIcon'
  * shell never has to know which row was clicked. The hex group's own callbacks come along unchanged: the
  * tree shows that group exactly as the Edit menu and the code viewer do.
  */
-export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | 'selectionKind' | 'hexTarget' | 'hexStatement'> {
+export interface AssemblyExplorerCommands extends Omit<HexMenuContext, 't' | keyof HexContextParts> {
   /** Opens the node in the code viewer and gives the viewer the focus — dnSpy's NodeActivated, which a double
    *  click or Enter on the row runs. */
   onOpenNode(node: TreeNode): void
@@ -356,13 +356,14 @@ export const hasEmptyNamespaceSibling = (
   return siblings?.some((sibling) => sibling.kind === 'namespace' && sibling.label === '-') ?? false
 }
 
-/** The shared hex group (GROUP_HEX), wearing this menu's entry shape. Its predicates read the selection
- *  kind — because in the Edit menu and the code viewer the group answers for the assembly explorer's
- *  selection rather than for what was clicked — and in the tree the row that was clicked *is* the
- *  selection, so the kind comes from the node and the two can never disagree. `documentAvailable` is left
- *  unset: the click is in the tree, so no document viewer is the one the hex commands answer for. */
+/** The shared hex group (GROUP_HEX), wearing this menu's entry shape. The click is in the tree, so the group reads
+ *  dnSpy's HexContext for the documents tree: the rows the menu acts on — the one that was clicked, or the
+ *  selection it was clicked in — with `hexTarget` resolved for the clicked one, and no document viewer's caret. */
 const HEX_ENTRIES: AsmMenuEntry[] = hexMenuEntries.map((entry) => {
-  const hexCtx = (ctx: AssemblyExplorerMenuContext): HexMenuContext => ({ ...ctx, selectionKind: ctx.node.kind })
+  const hexCtx = (ctx: AssemblyExplorerMenuContext): HexMenuContext => ({
+    ...ctx,
+    ...treeHexContext(ctx.selection ?? [ctx.node], ctx.hexTarget),
+  })
   return {
     group: GROUP_HEX,
     order: entry.order,

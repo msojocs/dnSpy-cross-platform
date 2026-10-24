@@ -58,11 +58,145 @@ namespace dnSpy.Backend.Core.HexFiles {
 				return new HexSpanInfo(HexSpan.FromBounds(HexPosition.Zero, Span.Start), HexSpanInfoFlags.None);
 			if (!source.HasUnreadableBytes)
 				return new HexSpanInfo(Span, HexSpanInfoFlags.HasData);
+			if (source.GetRegionInfo(position) is { } region)
+				return region;
 			var index = position.ToUInt64() >> pageShift;
 			var pageStart = new HexPosition(index << pageShift);
 			var pageEnd = HexPosition.Min(pageStart + pageSize, Span.End);
 			var start = HexPosition.Max(pageStart, Span.Start);
 			return new HexSpanInfo(HexSpan.FromBounds(start, pageEnd), GetPage(index) is null ? HexSpanInfoFlags.None : HexSpanInfoFlags.HasData);
+		}
+
+		/// <summary>
+		/// dnSpy's <c>HexBuffer.GetNextValidSpan</c>: the readable span <paramref name="position"/> is in, or the next one
+		/// before <paramref name="upperBounds"/>, consecutive readable spans merged (even past the bounds); with
+		/// <paramref name="fullSpan"/> the readable bytes before the position are included too.
+		/// </summary>
+		public HexSpan? GetNextValidSpan(HexPosition position, HexPosition upperBounds, bool fullSpan, CancellationToken cancellationToken = default) {
+			if (position >= HexPosition.MaxEndPosition)
+				throw new ArgumentOutOfRangeException(nameof(position));
+			if (upperBounds > HexPosition.MaxEndPosition)
+				throw new ArgumentOutOfRangeException(nameof(upperBounds));
+			bool checkBackwards = true;
+			while (position < upperBounds) {
+				cancellationToken.ThrowIfCancellationRequested();
+				var info = GetSpanInfo(position);
+				if (info.HasData) {
+					var start = info.Span.Start;
+					var end = info.Span.End;
+					while (end < HexPosition.MaxEndPosition) {
+						cancellationToken.ThrowIfCancellationRequested();
+						info = GetSpanInfo(end);
+						if (!info.HasData)
+							break;
+						end = info.Span.End;
+					}
+					if (fullSpan && checkBackwards)
+						start = GetStartOfData(start, validData: true, cancellationToken);
+					return HexSpan.FromBounds(start, end);
+				}
+				checkBackwards = false;
+				position = info.Span.End;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// dnSpy's <c>HexBuffer.GetPreviousValidSpan</c>: the readable span <paramref name="position"/> is in, or the one
+		/// before it no lower than <paramref name="lowerBounds"/>; with <paramref name="fullSpan"/> the readable bytes
+		/// after the position are included too.
+		/// </summary>
+		public HexSpan? GetPreviousValidSpan(HexPosition position, HexPosition lowerBounds, bool fullSpan, CancellationToken cancellationToken = default) {
+			if (position >= HexPosition.MaxEndPosition)
+				throw new ArgumentOutOfRangeException(nameof(position));
+			if (lowerBounds > HexPosition.MaxEndPosition)
+				throw new ArgumentOutOfRangeException(nameof(lowerBounds));
+			bool checkForwards = true;
+			while (position >= lowerBounds) {
+				cancellationToken.ThrowIfCancellationRequested();
+				var info = GetSpanInfo(position);
+				if (info.HasData) {
+					var start = GetStartOfData(info.Span.Start, validData: true, cancellationToken);
+					var end = info.Span.End;
+					if (fullSpan && checkForwards) {
+						while (end < HexPosition.MaxEndPosition) {
+							cancellationToken.ThrowIfCancellationRequested();
+							info = GetSpanInfo(end);
+							if (!info.HasData)
+								break;
+							end = info.Span.End;
+						}
+					}
+					return HexSpan.FromBounds(start, end);
+				}
+				checkForwards = false;
+				position = GetStartOfData(info.Span.Start, validData: false, cancellationToken);
+				if (position == HexPosition.Zero)
+					break;
+				position = position - 1;
+			}
+			return null;
+		}
+
+		/// <summary>dnSpy's <c>GetValidSpans</c>: every readable span overlapping <paramref name="span"/>, merged.</summary>
+		public IEnumerable<HexSpan> GetValidSpans(HexSpan span, bool fullSpan, CancellationToken cancellationToken = default) {
+			var pos = span.Start;
+			for (;;) {
+				var info = GetNextValidSpan(pos, span.End, fullSpan, cancellationToken);
+				if (info is null)
+					break;
+				yield return info.Value;
+				pos = info.Value.End;
+				fullSpan = false;
+			}
+		}
+
+		/// <summary>dnSpy's <c>GetStartOfDataCore</c>: where the run of readable (or unreadable) bytes holding
+		/// <paramref name="start"/> begins, found by stepping back ever further rather than a span at a time.</summary>
+		HexPosition GetStartOfData(HexPosition start, bool validData, CancellationToken cancellationToken) {
+			var bestGuess = start;
+			var pos = start;
+			ulong d = 0x10000;
+			while (pos > HexPosition.Zero) {
+				cancellationToken.ThrowIfCancellationRequested();
+				var testPos = pos >= d ? pos - d : HexPosition.Zero;
+				var info = GetSpanInfo(testPos);
+				if (d < 0x8000_0000_0000_0000)
+					d <<= 1;
+				if (info.HasData == validData && info.Span.End >= bestGuess) {
+					bestGuess = info.Span.Start;
+					pos = info.Span.Start;
+					continue;
+				}
+				if (info.HasData != validData && info.Span.End == bestGuess)
+					return bestGuess;
+				pos = info.Span.End;
+				var lastCorrectDataPos = info.HasData == validData ? info.Span.Start : (HexPosition?)null;
+				bool foundOppositeData = info.HasData != validData;
+				for (;;) {
+					cancellationToken.ThrowIfCancellationRequested();
+					if (pos >= bestGuess)
+						return lastCorrectDataPos ?? bestGuess;
+					info = GetSpanInfo(pos);
+					if (info.HasData == validData) {
+						if (lastCorrectDataPos is null)
+							lastCorrectDataPos = info.Span.Start;
+					}
+					else {
+						lastCorrectDataPos = null;
+						foundOppositeData = true;
+					}
+					if (info.Span.End >= bestGuess) {
+						pos = lastCorrectDataPos ?? bestGuess;
+						if (foundOppositeData)
+							return pos;
+						bestGuess = pos;
+						break;
+					}
+					pos = info.Span.End;
+				}
+			}
+			return bestGuess;
 		}
 
 		public int TryReadByte(HexPosition position) {
@@ -204,6 +338,10 @@ namespace dnSpy.Backend.Core.HexFiles {
 		/// <summary>The bytes of the page at <paramref name="start"/> (at most <paramref name="size"/> of them, fewer at
 		/// the end of a file), or null when the page cannot be read.</summary>
 		public abstract byte[]? ReadPage(HexPosition start, int size);
+
+		/// <summary>The span around a position the system can say is readable or not, which is wider than a page; null
+		/// leaves the buffer to read the page.</summary>
+		public virtual HexSpanInfo? GetRegionInfo(HexPosition position) => null;
 	}
 
 	/// <summary>
@@ -261,7 +399,19 @@ namespace dnSpy.Backend.Core.HexFiles {
 	/// the debugger can ask about here.
 	/// </summary>
 	sealed class ProcessMemoryHexBufferSource(IDebugProcessMemory memory) : HexBufferSource {
-		public override HexSpan Span { get; } = HexSpan.FromBounds(HexPosition.Zero, HexPosition.MaxEndPosition);
+		// HexProcessSimpleBufferStream's span is the process's address space.
+		public override HexSpan Span { get; } = HexSpan.FromBounds(HexPosition.Zero,
+			memory is IDebugProcessMemoryRegions regions ? new HexPosition(regions.AddressSpaceEnd) : HexPosition.MaxEndPosition);
+
+		/// <summary>HexProcessSimpleBufferStream.GetSpanInfo: the memory region the system says the position is in.</summary>
+		public override HexSpanInfo? GetRegionInfo(HexPosition position) {
+			if (memory is not IDebugProcessMemoryRegions regions || regions.GetRegion(position.ToUInt64()) is not { } region)
+				return null;
+			var end = region.End == ulong.MaxValue ? HexPosition.MaxEndPosition : new HexPosition(region.End);
+			if (end <= position)
+				return null;
+			return new HexSpanInfo(HexSpan.FromBounds(new HexPosition(region.Start), end), region.IsReadable ? HexSpanInfoFlags.HasData : HexSpanInfoFlags.None);
+		}
 
 		public override string Name { get; } = $"<MEMORY: pid {memory.ProcessId}>";
 

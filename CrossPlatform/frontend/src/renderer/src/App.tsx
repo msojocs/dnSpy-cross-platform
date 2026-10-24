@@ -1,9 +1,8 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Actions, DockLocation, I18nLabelDefaults, Layout, Model, Orientation, RowNode, TabNode, TabSetNode, type IJsonModel } from 'flexlayout-react'
-import { isLocalSpan, type AddressReference, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
+import { isLocalSpan, type AddressReference, type AppCommandLine, type CompilerMode, type DecompilerLanguage, type HexRange, type ResourceCreateKind, type SearchLocation, type SearchType, type TextSpan, type TreeNode } from '../../shared/protocol'
 import { resolveCultureArgument } from '../../shared/ui-locales'
-import { offsetOfLineColumn } from './analyzer-model'
-import { buildSession, debugSessionIds, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession, codeStatementAt, type MethodBreakpointTarget, type BreakpointSettings } from './app-store'
+import { buildSession, clipboardHexLength, codeHexContextOf, debugSessionIds, enableSessionPersistence, findNode, loadSession, methodBreakpointName, nodesByIdOf, orderedDocumentKeys, ownerTypeIdOf, syncDockTabStrips, useAppStore, type SavedSession, codeStatementAt, type MethodBreakpointTarget, type BreakpointSettings, type HexBodyKind } from './app-store'
 import { useShallow } from 'zustand/react/shallow'
 import { bookmarkChords, clearBookmarks, clearBookmarksInDocument, showBookmarksWindow, stepBookmark, toggleBookmarkAtCaret, toggleBookmarkEnabledAtCaret } from './bookmark-commands'
 import { parseToolWindowInfos, resolveDecompilerLanguage, resolveSearchLocation, resolveSearchType, resolveThemeName, toolWindowIdForGuid, type ToolWindowLocation } from './command-line-options'
@@ -59,12 +58,13 @@ import { WindowsDialog, type WindowTabEntry } from './components/WindowsDialog'
 import { NodeOptionsDialog } from './components/NodeOptionsDialog'
 import { OptionsDialog } from './components/OptionsDialog'
 import { BackgroundImage } from './components/BackgroundImage'
-import { cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, isToolWindowTab, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
+import { HEX_FILE_PREFIX, cloneDocumentTab, closeAllDocumentTabs, closeDocumentTab, closeDocumentTabsFor, createDocumentTabGroup, getDocumentTabMenuState, getDocumentTabSets, getDocumentTabs, isToolWindowTab, showDocumentTabContextMenu } from './components/DocumentTabContextMenu'
 import { showToolWindowTabContextMenu } from './components/ToolWindowTabContextMenu'
 import { DockPane } from './components/DockPane'
 // Only the interface: the component itself is loaded lazily, when a document tab first draws one.
 import type { DocumentViewCommands } from './components/DocumentView'
-import type { ActiveDocument, CreatedKind, HexShowKind } from './components/edit-menu'
+import type { ActiveDocument, CreatedKind } from './components/edit-menu'
+import { treeHexContext, type HexBodyTarget, type HexContextParts } from './components/hex-menu'
 import { caretPosition, documentEditorScrollTop, findInActiveDocumentEditor, focusDocumentEditor } from './editor-registry'
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './components/document-viewer-options'
 import { positionAt } from './document-viewer'
@@ -333,13 +333,19 @@ const viewChords = [
 ]
 
 /** One step of a tab's history — dnSpy's TabHistory entry: the document the tab showed, in which language, and
- *  where its caret and its scroll were. */
-interface TabHistoryEntry {
+ *  where its caret and its scroll were; or the file a hex view showed (HexViewDocumentTabContent) with the view
+ *  state it was left in (its HexViewUIState). */
+type TabHistoryEntry = {
+  kind?: 'document'
   documentId: string
   language?: DecompilerLanguage
   line?: number
   column?: number
   scrollTop?: number
+} | {
+  kind: 'hex'
+  moduleId: string
+  state?: HexViewUiState
 }
 
 interface TabHistory {
@@ -557,17 +563,48 @@ export const App = (): React.JSX.Element => {
   const renameNamespace = useAppStore((state) => state.renameNamespace)
   const moveTypesToEmptyNamespace = useAppStore((state) => state.moveTypesToEmptyNamespace)
   const replaceMethodBodyWithStub = useAppStore((state) => state.replaceMethodBodyWithStub)
-  const hexTarget = useAppStore((state) => state.hexTarget)
-  const hexStatement = useAppStore((state) => state.hexStatement)
-  // The address reference the code document's caret is on — what the Edit menu's Show in Hex Editor opens.
-  const hexCaret = useAppStore((state) => state.codeCaret)
-  const caretDocument = useAppStore((state) => hexCaret ? state.documents[hexCaret.documentId] : undefined)
-  const hexAddress = useMemo(() => {
-    if (!hexCaret || !caretDocument || caretDocument.loading)
-      return undefined
-    const offset = offsetOfLineColumn(caretDocument.text, hexCaret.line, hexCaret.column ?? 1)
-    return caretDocument.spans.find((span) => span.address && offset >= span.start && offset <= span.start + span.length)?.address ?? undefined
-  }, [hexCaret, caretDocument])
+  // What the Edit menu's hex group is built from, subscribed to so the menu follows them: the tree selection's target
+  // and the code viewer's caret.
+  useAppStore((state) => state.hexTarget)
+  useAppStore((state) => state.hexStatement)
+  useAppStore((state) => state.codeHexContext)
+  useAppStore((state) => state.codeCaret)
+  /**
+   * The pane dnSpy's HexMenuCommand.CreateContext reads its context from: the one with the keyboard focus. A WPF
+   * menu takes no focus, so the focus is still in the pane while its Edit menu is open; here the menu bar takes
+   * it, and the pane that had it last stands in. A dialog or a menu passes the focus back to where it was.
+   */
+  const [hexFocus, setHexFocus] = useState<'code' | 'tree' | 'other'>('other')
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent): void => {
+      const target = event.target instanceof Element ? event.target : undefined
+      if (!target || target.closest('[role="menubar"], [role="menu"], [role="dialog"]'))
+        return
+      setHexFocus(target.closest('.document-view:not(.disassembly-document)') ? 'code' : target.closest('.assembly-tree:not(.analyzer-tree)') ? 'tree' : 'other')
+    }
+    window.addEventListener('focusin', onFocusIn)
+    return () => window.removeEventListener('focusin', onFocusIn)
+  }, [])
+  // Hex Paste Method Body is on the Edit menu only while the clipboard holds hexadecimal bytes that fit, which is
+  // read as the menu bar is reached for — by the pointer or by Alt.
+  const [menuClipboardHexLength, setMenuClipboardHexLength] = useState<number>()
+  useEffect(() => {
+    const refresh = (): void => { void clipboardHexLength().then(setMenuClipboardHexLength) }
+    const onPointerDown = (event: PointerEvent): void => {
+      if (event.target instanceof Element && event.target.closest('.menu-bar'))
+        refresh()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.altKey)
+        refresh()
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [])
   const resolveHexTarget = useAppStore((state) => state.resolveHexTarget)
   const showHexAt = useAppStore((state) => state.showHexAt)
   const hexWriteMethodBody = useAppStore((state) => state.hexWriteMethodBody)
@@ -660,6 +697,13 @@ export const App = (): React.JSX.Element => {
   }
 
   /** dnSpy's Remove NetModule from Assembly, which asks about the net module's unsaved changes first. */
+  /** Closes what showed a removed node; a hex tab keeps its view state as it goes on showing the file. */
+  const closeTabsFor = (nodeId: string): void => closeDocumentTabsFor(model, nodeId, (oldId, newId) => {
+    const kept = useAppStore.getState().hexTabs.find((tab) => tab.moduleId === oldId)?.state
+    if (kept)
+      useAppStore.getState().setHexTabState(newId, kept)
+  })
+
   const removeNetModuleCommand = async (node: TreeNode): Promise<void> => {
     const modified = await getModifiedModules([node.id])
     if (modified.length > 0) {
@@ -668,7 +712,7 @@ export const App = (): React.JSX.Element => {
         return
     }
     if (await removeNetModule(node))
-      closeDocumentTabsFor(model, node.id)
+      closeTabsFor(node.id)
   }
 
   /** Where a row is among its parent's rows, which tells an assembly's manifest module from its net modules. */
@@ -716,7 +760,7 @@ export const App = (): React.JSX.Element => {
       }
       if (await deleteNodes(targets)) {
         for (const target of targets)
-          closeDocumentTabsFor(model, target.id)
+          closeTabsFor(target.id)
       }
     })()
   }
@@ -725,13 +769,13 @@ export const App = (): React.JSX.Element => {
   const undo = (): void => {
     void undoEdit().then((removed) => {
       for (const nodeId of removed)
-        closeDocumentTabsFor(model, nodeId)
+        closeTabsFor(nodeId)
     })
   }
   const redo = (): void => {
     void redoEdit().then((removed) => {
       for (const nodeId of removed)
-        closeDocumentTabsFor(model, nodeId)
+        closeTabsFor(nodeId)
     })
   }
   const enableAllBreakpoints = (enabled: boolean): void => {
@@ -1615,8 +1659,13 @@ export const App = (): React.JSX.Element => {
     return history
   }
 
-  /** Where a document tab is now: the document, its language, and the caret and scroll of its view. */
+  /** Where a document tab is now: the document, its language, and the caret and scroll of its view — or the file
+   *  its hex view shows, and where that view is. */
   const currentHistoryEntry = (tab: TabNode): TabHistoryEntry | undefined => {
+    if (tab.getComponent() === 'hex') {
+      const moduleId = (tab.getConfig() as { moduleId?: string } | undefined)?.moduleId
+      return moduleId ? { kind: 'hex', moduleId, state: useAppStore.getState().hexTabs.find((candidate) => candidate.moduleId === moduleId)?.state } : undefined
+    }
     const documentId = documentIdOfTab(tab)
     if (!documentId)
       return undefined
@@ -1667,7 +1716,8 @@ export const App = (): React.JSX.Element => {
       && (language === undefined || shownDocument.requestedLanguage === language)
       && shownDocument.failure === undefined
       && (shownDocument.loading === true || shownDocument.diagnostics.every((diagnostic) => diagnostic.severity !== 'error'))
-    if (target && recordHistory && shown && shown !== documentId)
+    // A hex view the document takes the place of is a step of the history too (dnSpy's tab content, whatever it is).
+    if (target && recordHistory && (shown ? shown !== documentId : target.getComponent() === 'hex'))
       recordTabHistory(target)
     // A tab that moves on to another document calls off what it was still decompiling — unless another tab
     // shows that document too.
@@ -1819,6 +1869,12 @@ export const App = (): React.JSX.Element => {
     if (current)
       (back ? history.forward : history.back).push(current)
     setHistoryVersion((value) => value + 1)
+    if (entry.kind === 'hex') {
+      // The view comes back where it was left rather than on the bytes the last hex command asked for.
+      useAppStore.getState().clearHexNavigation()
+      await showHexContent(entry.moduleId, { intoTab: tab, recordHistory: false, state: entry.state })
+      return
+    }
     const workspaceId = useAppStore.getState().workspaceId
     if (!workspaceId)
       return
@@ -1833,29 +1889,31 @@ export const App = (): React.JSX.Element => {
   }
 
   /**
+   * dnSpy's hex tabs come back by file (HexViewDocumentTabContentFactory.Deserialize), each with the view state it
+   * was left in, at the place among the other tabs it was saved at. A file the workspace does not hold is shown as
+   * it is on disk, as dnSpy's hex buffer of the file would be.
+   */
+  const restoreHexTabs = async (tabs: { path: string; state?: HexViewUiState; index?: number }[]): Promise<number> => {
+    let restored = 0
+    // In the order they were saved at, so each lands where it was among the tabs restored before it.
+    const ordered = [...tabs].sort((left, right) => (left.index ?? Number.MAX_SAFE_INTEGER) - (right.index ?? Number.MAX_SAFE_INTEGER))
+    for (const tab of ordered) {
+      const state = useAppStore.getState()
+      const module = state.modules.find((candidate) => candidate.path === tab.path)
+      const root = module ? state.roots.find((candidate) => candidate.id === module.id) : undefined
+      if (await showHexContent(root?.id ?? `${HEX_FILE_PREFIX}${tab.path}`, { newTab: true, recordHistory: false, select: false, state: tab.state, index: tab.index }))
+        restored++
+    }
+    return restored
+  }
+
+  /**
    * Puts the branches, the selection and the tabs a session names back on the tree the workspace holds now.
    * Every node the session names is looked up by key — walking down from the roots, materialising each branch on
    * the way, because only the roots exist after the files were opened — and whatever no longer resolves is passed
    * over so the rest still comes back. Answers how many tabs came back, or undefined when the workspace changed
    * under it.
    */
-  /** dnSpy's hex tabs come back by file, each with the view state it was left in. */
-  const restoreHexTabs = (tabs: { path: string; state?: HexViewUiState }[]): number => {
-    let restored = 0
-    for (const tab of tabs) {
-      const state = useAppStore.getState()
-      const module = state.modules.find((candidate) => candidate.path === tab.path)
-      const root = module ? state.roots.find((candidate) => candidate.id === module.id) : undefined
-      if (!root)
-        continue
-      if (tab.state)
-        state.setHexTabState(root.id, tab.state)
-      addSpecialTab('hex', root)
-      restored++
-    }
-    return restored
-  }
-
   const restoreTreeAndTabs = async (session: SavedSession, isCurrent: () => boolean): Promise<number | undefined> => {
     const byKey = new Map<string, TreeNode>()
     for (const root of useAppStore.getState().roots) {
@@ -1927,7 +1985,7 @@ export const App = (): React.JSX.Element => {
         return // openPaths has already reported why
       const restoredDocuments = await restoreTreeAndTabs(session, isCurrent)
       if (restoredDocuments === undefined) return
-      const restoredHexTabs = restoreHexTabs(session.hexTabs ?? [])
+      const restoredHexTabs = await restoreHexTabs(session.hexTabs ?? [])
       // Opening a document takes the Start tab away, so one only comes back when nothing was restored
       // to take its place.
       if (restoredDocuments === 0 && restoredHexTabs === 0)
@@ -1968,14 +2026,15 @@ export const App = (): React.JSX.Element => {
     const current = useAppStore.getState()
     const session = buildSession(current)
     // A module tab names its module by the root's id, which the reload issues again; the file is what stays.
-    const moduleTabs: { component: 'hex' | 'module-info'; path: string; state?: HexViewUiState }[] = []
+    const moduleTabs: { component: 'hex' | 'module-info'; path: string; state?: HexViewUiState; index?: number }[] = []
     model.visitNodes((node) => {
       const component = node instanceof TabNode ? node.getComponent() : undefined
       if (node instanceof TabNode && (component === 'hex' || component === 'module-info')) {
         const moduleId = (node.getConfig() as { moduleId?: string } | undefined)?.moduleId
         const module = current.modules.find((candidate) => candidate.id === moduleId)
+        const hexTab = component === 'hex' ? current.hexTabs.find((tab) => tab.moduleId === moduleId) : undefined
         if (module)
-          moduleTabs.push({ component, path: module.path, state: component === 'hex' ? current.hexTabs.find((tab) => tab.moduleId === module.id)?.state : undefined })
+          moduleTabs.push({ component, path: module.path, state: hexTab?.state, index: hexTab?.index })
       }
     })
     // DocumentListLoader adds back the auto-loaded documents a tab shows something of, auto-loaded as they were.
@@ -2001,13 +2060,11 @@ export const App = (): React.JSX.Element => {
       }
       const restoredDocuments = await restoreTreeAndTabs(session, isCurrent)
       if (restoredDocuments === undefined) return
-      let restoredModuleTabs = 0
+      let restoredModuleTabs = await restoreHexTabs(moduleTabs.filter((tab) => tab.component === 'hex'))
       for (const tab of moduleTabs) {
         const target = useAppStore.getState().modules.find((module) => module.path === tab.path)
         const root = target ? useAppStore.getState().roots.find((candidate) => candidate.id === target.id) : undefined
-        if (root) {
-          if (tab.state)
-            useAppStore.getState().setHexTabState(root.id, tab.state)
+        if (root && tab.component === 'module-info') {
           addSpecialTab(tab.component, root)
           restoredModuleTabs++
         }
@@ -2386,21 +2443,18 @@ export const App = (): React.JSX.Element => {
     return saveModule()
   }
 
-  const addSpecialTab = (component: 'hex' | 'module-info', module: { id: string; label: string }): void => {
+  /** A module's information tab: one per module, brought forward when it is open already. */
+  const addSpecialTab = (component: 'module-info', module: { id: string; label: string }): void => {
     const tabId = `${component}:${module.id}`
     if (model.getNodeById(tabId)) {
       model.doAction(Actions.selectTab(tabId))
     } else {
       const targetTabSet = getTargetDocumentTabSet(model)
       if (!targetTabSet) return
-      // HexViewDocumentTabContent: the tab is named after the file, and its tooltip is the file's path.
-      const path = useAppStore.getState().modules.find((candidate) => candidate.id === module.id)?.path
-      const fileName = path?.split(/[\\/]/).pop()
       model.doAction(Actions.addNode({
         type: 'tab',
         id: tabId,
-        name: component === 'hex' ? fileName ?? module.label : `${module.label} [${t('Info')}]`,
-        helpText: component === 'hex' ? path : undefined,
+        name: `${module.label} [${t('Info')}]`,
         component,
         config: { moduleId: module.id },
       }, targetTabSet.getId(), DockLocation.CENTER, -1, true))
@@ -2409,21 +2463,102 @@ export const App = (): React.JSX.Element => {
     forceLayoutUpdate((value) => value + 1)
   }
 
-  // The hex commands name their module by node id, and the tab needs a label with it. Both come from the
-  // store rather than from the render, because a menu built for a freshly clicked node runs its commands
-  // after the click that showed it — by which time the target it was built from is the current one.
-  const moduleTabTarget = (moduleId: string): { id: string; label: string } | undefined => {
-    const node = useAppStore.getState().roots.find((root) => root.id === moduleId)
-    return node ? { id: node.id, label: node.label } : undefined
+  /**
+   * The file a hex view shows, named the way HexViewDocumentTabContent names it: the tab after the file, the tooltip
+   * its path. The hex commands name a file by its document root's id, or — for a net module, whose file is its own —
+   * by the net module's row, which may not be in the tree yet and is then asked for.
+   */
+  const hexFileOf = async (moduleId: string): Promise<{ name: string; path?: string } | undefined> => {
+    if (moduleId.startsWith(HEX_FILE_PREFIX)) {
+      const path = moduleId.slice(HEX_FILE_PREFIX.length)
+      return { name: path.split(/[\\/]/).pop() || path, path }
+    }
+    const state = useAppStore.getState()
+    const root = state.roots.find((candidate) => candidate.id === moduleId)
+    if (root) {
+      const path = state.modules.find((candidate) => candidate.id === moduleId)?.path
+      return { name: path?.split(/[\\/]/).pop() || root.label, path }
+    }
+    let row = findNode(state, moduleId)
+    if (!row && state.workspaceId) {
+      try {
+        row = await window.dnSpy.getNode(state.workspaceId, moduleId)
+      } catch {
+        return undefined
+      }
+    }
+    if (row?.kind !== 'module')
+      return undefined
+    const path = row.key?.startsWith('module:') ? row.key.slice('module:'.length) : row.description
+    return { name: path?.split(/[\\/]/).pop() || row.label, path }
   }
 
-  /** Opens the hex tab of a document on a range — what the metadata table's Show in Hex Editor does. */
+  /**
+   * dnSpy's FollowReference(AddressReference) with no new tab (DocumentTabService.FollowReference and
+   * HexAddressReferenceFileTabContentProvider): the file's hex view takes the place of what the tab in front shows,
+   * which goes on that tab's history so Back returns to it. With no tab in front — or with `newTab` — the view gets
+   * a tab of its own. A tab already showing the file keeps showing it: only where its view is changes. `range` is
+   * the bytes the view selects, with the caret on the first (HexAddressReferenceFileTabContentCreator's
+   * InitializeHexView); `state` is the view state a step of the history left it in. Answers with the tab the view
+   * is in.
+   */
+  const showHexContent = async (
+    moduleId: string,
+    options: { intoTab?: TabNode; newTab?: boolean; recordHistory?: boolean; range?: HexRange; state?: HexViewUiState; select?: boolean; index?: number } = {},
+  ): Promise<string | undefined> => {
+    const file = await hexFileOf(moduleId)
+    if (!file)
+      return undefined
+    if (options.range)
+      showHexAt(moduleId, options.range.offset, options.range.length)
+    if (options.state)
+      useAppStore.getState().setHexTabState(moduleId, options.state)
+    const front = options.intoTab ?? (options.newTab ? undefined : frontDocumentTab())
+    const target = front && front.getComponent() !== 'start' && model.getNodeById(front.getId()) ? front : undefined
+    let tabId: string
+    if (target) {
+      tabId = target.getId()
+      const showsIt = target.getComponent() === 'hex' && (target.getConfig() as { moduleId?: string } | undefined)?.moduleId === moduleId
+      if (!showsIt) {
+        if (options.recordHistory !== false)
+          recordTabHistory(target)
+        // A tab that moves on from a document calls off what it was still decompiling — unless another tab shows
+        // that document too.
+        const shown = documentIdOfTab(target)
+        if (shown && useAppStore.getState().documents[shown]?.loading && !getDocumentTabs(model).some((tab) => tab !== target && documentIdOfTab(tab) === shown))
+          useAppStore.getState().cancelDocument(shown)
+        model.doAction(Actions.updateNodeAttributes(tabId, { name: file.name, helpText: file.path, component: 'hex', config: { moduleId } }))
+      }
+      if (!target.isSelected())
+        model.doAction(Actions.selectTab(tabId))
+    } else {
+      const targetTabSet = (front?.getParent() instanceof TabSetNode ? front.getParent() as TabSetNode : undefined) ?? getTargetDocumentTabSet(model)
+      if (!targetTabSet)
+        return undefined
+      tabId = newDocumentTabId()
+      model.doAction(Actions.addNode({
+        type: 'tab',
+        id: tabId,
+        name: file.name,
+        helpText: file.path,
+        component: 'hex',
+        config: { moduleId },
+      }, targetTabSet.getId(), DockLocation.CENTER, options.index === undefined ? -1 : Math.min(options.index, targetTabSet.getChildren().length), options.select !== false || targetTabSet.getChildren().length === 0))
+      if (front?.getComponent() === 'start' && front.isCloseable() && model.getNodeById(front.getId()))
+        model.doAction(Actions.deleteTab(front.getId()))
+      if (model.getNodeById('start'))
+        model.doAction(Actions.deleteTab('start'))
+    }
+    forceLayoutUpdate((value) => value + 1)
+    return tabId
+  }
+
+  /**
+   * Opens a file's hex view on a range, which it selects with the caret on its first byte — what every "Show ... in
+   * Hex Editor" command, an address reference and the metadata table's Show in Hex Editor do.
+   */
   const showHexRange = (moduleId: string, offset: number, length: number): void => {
-    const target = moduleTabTarget(moduleId)
-    if (!target)
-      return
-    showHexAt(moduleId, offset, length)
-    addSpecialTab('hex', target)
+    void showHexContent(moduleId, { range: { offset, length } })
   }
 
   /**
@@ -2471,35 +2606,36 @@ export const App = (): React.JSX.Element => {
     })
   }
 
-  const openHex = (): void => {
-    const target = useAppStore.getState().hexTarget
-    const tab = target ? moduleTabTarget(target.moduleId) : undefined
-    if (tab)
-      addSpecialTab('hex', tab)
+  /**
+   * dnSpy's OpenHexEditorCommand.ExecuteInternal: the file opens at its start with nothing selected — unless the tab
+   * in front is a hex view already, which the command leaves as it is.
+   */
+  const openHex = (moduleId: string): void => {
+    if (frontDocumentTab()?.getComponent() === 'hex')
+      return
+    showHexRange(moduleId, 0, 0)
   }
 
-  /** Opens the hex tab on the bytes one of the "Show ... in Hex Editor" commands names. */
-  const showSelectionInHex = (kind: HexShowKind): void => {
-    const hexTarget = useAppStore.getState().hexTarget
-    if (kind === 'statement') {
-      const statement = useAppStore.getState().hexStatement
-      const target = statement ? moduleTabTarget(statement.moduleId) : undefined
-      if (!statement || !target) return
-      showHexAt(statement.moduleId, statement.range.offset, statement.range.length)
-      addSpecialTab('hex', target)
-      return
+  /**
+   * The hex group's context for the Edit menu — dnSpy's HexMenuCommand.CreateContext: the code viewer in front when
+   * it had the focus last, the tree when that had it, and when neither did, the viewer as long as the tree has a
+   * selection; otherwise nothing. A metadata table document is no viewer.
+   */
+  const editMenuHexContext = (): HexContextParts => {
+    const state = useAppStore.getState()
+    const front = frontDocumentTab()
+    const documentId = documentIdOfTab(front)
+    const nodeId = documentId ? state.documents[documentId]?.nodeId : undefined
+    const viewer = documentId && !(nodeId && findNode(state, nodeId)?.kind === 'metadatatable') ? documentId : undefined
+    if (hexFocus === 'code' && viewer)
+      return codeHexContextOf(state, viewer)
+    if (hexFocus === 'tree') {
+      const selection = topLevelSelection(state.selectedNodes, state.parents)
+      return treeHexContext(selection, state.hexTargetNodeId === selection[0]?.id ? state.hexTarget : undefined)
     }
-    const range = !hexTarget ? undefined
-      : kind === 'instructions' ? hexTarget.method && { offset: hexTarget.method.codeOffset, length: hexTarget.method.codeSize }
-      : kind === 'body' ? hexTarget.method && { offset: hexTarget.method.bodyOffset, length: hexTarget.method.bodySize }
-      : kind === 'fieldInitialValue' ? hexTarget.fieldInitialValue
-      : kind === 'structure' ? hexTarget.structure
-      : kind === 'structureData' ? hexTarget.structureData
-      : hexTarget.resource
-    const target = hexTarget ? moduleTabTarget(hexTarget.moduleId) : undefined
-    if (!hexTarget || !target || !range) return
-    showHexAt(hexTarget.moduleId, range.offset, range.length)
-    addSpecialTab('hex', target)
+    if (state.selectedNodes.length > 0 && viewer)
+      return codeHexContextOf(state, viewer)
+    return {}
   }
 
   const closeCurrentWorkspace = (): void => {
@@ -2524,7 +2660,7 @@ export const App = (): React.JSX.Element => {
         return
     }
     for (const nodeId of await remove())
-      closeDocumentTabsFor(model, nodeId)
+      closeTabsFor(nodeId)
   }
 
   const closeAllFrameworkAssemblies = async (): Promise<void> => {
@@ -2624,6 +2760,15 @@ export const App = (): React.JSX.Element => {
     }, 30)
   }
 
+  /** The hex group's commands, which the Edit menu, the tree's menu and the code viewer's run alike. */
+  const hexCommands = {
+    onOpenHex: openHex,
+    onShowHex: (moduleId: string, range: HexRange) => showHexRange(moduleId, range.offset, range.length),
+    onHexWriteBody: (kind: HexBodyKind, target: HexBodyTarget) => { void hexWriteMethodBody(kind, target) },
+    onHexCopyBody: (target: HexBodyTarget) => { void hexCopyMethodBody(target) },
+    onHexPasteBody: (target: HexBodyTarget) => { void hexPasteMethodBody(target) },
+  }
+
   const explorerCommands: AssemblyExplorerCommands = {
     // dnSpy's NodeActivated: the node is in the tab in front already — the selection put it there — and the
     // focus goes to it.
@@ -2680,11 +2825,7 @@ export const App = (): React.JSX.Element => {
       })
     },
     onShowModuleInfo: (node) => addSpecialTab('module-info', node),
-    onOpenHex: openHex,
-    onShowHexAt: showSelectionInHex,
-    onHexWriteBody: (kind) => void hexWriteMethodBody(kind),
-    onHexCopyBody: () => void hexCopyMethodBody(),
-    onHexPasteBody: () => void hexPasteMethodBody(),
+    ...hexCommands,
   }
 
   /**
@@ -2742,11 +2883,7 @@ export const App = (): React.JSX.Element => {
     onAnalyzeReference: (target) => void analyzeReference(target),
     onOpenUrl: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
     onGoToResource: (node) => { void goToResource(node) },
-    onOpenHex: openHex,
-    onShowHexAt: showSelectionInHex,
-    onHexWriteBody: (kind) => void hexWriteMethodBody(kind),
-    onHexCopyBody: () => void hexCopyMethodBody(),
-    onHexPasteBody: () => void hexPasteMethodBody(),
+    ...hexCommands,
   })
 
   /** The tree nodes the analyzer's and the search window's commands name by id; one that cannot be read is
@@ -2944,9 +3081,7 @@ export const App = (): React.JSX.Element => {
         selectionParentKind={selectedNode && useAppStore.getState().parents[selectedNode.id] ? findNode(useAppStore.getState(), useAppStore.getState().parents[selectedNode.id])?.kind : undefined}
         onLoadDependencies={(recursive) => { if (selectedNode) void loadDependencies(selectedNode, recursive) }}
         onReplaceMethodBodyWithStub={() => { if (selectedNode?.kind === 'method') void replaceMethodBodyWithStub(selectedNode) }}
-        hexTarget={hexTarget}
-        hexStatement={hexStatement}
-        hexAddress={activeDocument === 'code' ? hexAddress : undefined}
+        hex={{ ...editMenuHexContext(), clipboardHexLength: menuClipboardHexLength }}
         onShowAddress={(address) => { void followAddress(address) }}
         canGoToMdTableRow={mdTableRowTarget() !== undefined}
         mdTableRowToken={selectedNodes.length <= 1 && selectedNode && hasMetadataTables(useAppStore.getState(), selectedNode.id) ? selectedNode.metadataToken : undefined}
@@ -2955,11 +3090,7 @@ export const App = (): React.JSX.Element => {
           if (node)
             goToMdTableRow(node, token)
         }}
-        onOpenHex={openHex}
-        onShowHexAt={showSelectionInHex}
-        onHexWriteBody={(kind) => void hexWriteMethodBody(kind)}
-        onHexCopyBody={() => void hexCopyMethodBody()}
-        onHexPasteBody={() => void hexPasteMethodBody()}
+        {...hexCommands}
         onCreateMember={createMember}
         onEditNode={openEditNode}
         onShowCode={() => void showCode()}
@@ -3111,14 +3242,17 @@ export const App = (): React.JSX.Element => {
             // order — and the tab order is part of the session the next run restores.
             const { order, active } = orderedDocumentKeys(nextModel)
             setDocumentOrder(order, active)
-            // The hex tabs too: dnSpy keeps a hex tab and its view state in the session.
-            const hexTabs: string[] = []
+            // The hex tabs too: dnSpy keeps a hex tab and its view state in the session, in its place among the
+            // document tabs, which are what a session restores along with it.
+            const hexTabs: { moduleId: string; index: number }[] = []
+            let tabIndex = 0
             nextModel.visitNodes((node) => {
-              if (node instanceof TabNode && node.getComponent() === 'hex') {
-                const moduleId = (node.getConfig() as { moduleId?: string } | undefined)?.moduleId
-                if (moduleId)
-                  hexTabs.push(moduleId)
-              }
+              if (!(node instanceof TabNode) || !['document', 'hex'].includes(node.getComponent() ?? ''))
+                return
+              const moduleId = node.getComponent() === 'hex' ? (node.getConfig() as { moduleId?: string } | undefined)?.moduleId : undefined
+              if (moduleId)
+                hexTabs.push({ moduleId, index: tabIndex })
+              tabIndex++
             })
             useAppStore.getState().setHexTabs(hexTabs)
             // Closing dnSpy's analyzer window throws away what it held; opening it again starts empty.

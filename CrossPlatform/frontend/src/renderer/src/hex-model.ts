@@ -132,7 +132,13 @@ const invalidValue = (width: number): string => '?'.repeat(width)
  * plain removed ("1.00000" is "1"), coefficients of an exponent trimmed the same way ("1E+20").
  */
 export function formatGeneral(value: number, precision: number): string {
-  const text = value.toPrecision(precision)
+  // .NET Core keeps the sign of a negative zero.
+  if (value === 0)
+    return Object.is(value, -0) ? '-0' : '0'
+  // Plain notation only for an exponent from -5 up to the precision; JavaScript goes on to -7 before it switches.
+  let text = value.toPrecision(precision)
+  if (!text.includes('e') && Number(Number(text).toExponential().split('e')[1]) < -4)
+    text = value.toExponential(precision - 1)
   const exponent = text.indexOf('e')
   const coefficient = exponent < 0 ? text : text.slice(0, exponent)
   const trimmed = coefficient.includes('.') ? coefficient.replace(/\.?0+$/, '') : coefficient
@@ -321,21 +327,23 @@ export const hexText = (bytes: Uint8Array, upper: boolean): string => {
 }
 
 /** dnSpy's `HexEditorOperationsImpl.CopyCSharpArray`. */
-export function csharpArrayText(bytes: Uint8Array, upper: boolean): string {
-  const rows: string[] = []
-  for (let i = 0; i < bytes.length; i += 16)
-    rows.push('\t' + Array.from(bytes.subarray(i, i + 16), (value) => '0x' + hexText(Uint8Array.of(value), upper)).join(', '))
-  // dnSpy numbers each row's entries with a comma after every one but the span's last byte.
-  return `new byte[] {\n${rows.join(',\n')}\n};\n`
+export function csharpArrayText(bytes: ArrayLike<number>, upper: boolean): string {
+  return arrayText(bytes, upper, '0x', 'new byte[] {', '};', '')
 }
 
 /** dnSpy's `HexEditorOperationsImpl.CopyVisualBasicArray`: every row but the last ends in a comma, and every
  * row — the last one too — in the line continuation. */
-export function visualBasicArrayText(bytes: Uint8Array, upper: boolean): string {
+export function visualBasicArrayText(bytes: ArrayLike<number>, upper: boolean): string {
+  return arrayText(bytes, upper, '&H', 'New Byte() {', '}', ' _')
+}
+
+/** `CopyArray`: 16 bytes a row, a byte that cannot be read (a negative value) written `??`. */
+function arrayText(bytes: ArrayLike<number>, upper: boolean, prefix: string, start: string, end: string, eol: string): string {
+  const byteText = (value: number): string => value < 0 ? '??' : hexText(Uint8Array.of(value), upper)
   const rows: string[] = []
   for (let i = 0; i < bytes.length; i += 16)
-    rows.push('\t' + Array.from(bytes.subarray(i, i + 16), (value) => '&H' + hexText(Uint8Array.of(value), upper)).join(', '))
-  return `New Byte() { _\n${rows.join(', _\n')} _\n}\n`
+    rows.push('\t' + Array.from(Array.prototype.slice.call(bytes, i, i + 16) as number[], (value) => prefix + byteText(value)).join(', '))
+  return `${start}${eol}\n${rows.join(`,${eol}\n`)}${eol}\n${end}\n`
 }
 
 /** A `0x` number of the width its bytes hold, as every Copy Special number is written. */

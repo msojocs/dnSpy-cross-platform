@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { languageChoices, useLanguage, type LanguagePreference } from '../localization'
-import { buildEditMenu, type ActiveDocument, type CreatedKind, type HexShowKind, type MenuItem } from './edit-menu'
+import { buildEditMenu, type ActiveDocument, type CreatedKind, type MenuItem } from './edit-menu'
+import type { HexBodyTarget, HexContextParts } from './hex-menu'
 import { buildFileMenu } from './file-menu'
 import type { HexBodyKind } from '../app-store'
-import type { AddressReference, HexRange, HexTargetResponse, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
+import type { AddressReference, HexRange, ResourceCreateKind, TreeNode } from '../../../shared/protocol'
 import { WindowControls } from './WindowControls'
 import { MenuEntryIcon } from './DsIcon'
 import { SubmenuArrowGlyph } from './DsGlyphs'
@@ -105,17 +106,15 @@ interface MenuBarProps {
    *  commands, which it registers on this menu as well as on the assembly explorer's. */
   onLoadDependencies(recursive: boolean): void
   onReplaceMethodBodyWithStub(): void
-  /** Where the hex commands point for the selection, and for the code document's caret. */
-  hexTarget?: HexTargetResponse
-  hexStatement?: { moduleId: string; range: HexRange }
-  /** The address reference under the code document's caret. */
-  hexAddress?: AddressReference
+  /** What the hex commands act on: dnSpy's HexMenuCommand.CreateContext, built by the shell from the code viewer or
+   *  the tree — whichever had the focus last — or nothing at all. */
+  hex?: HexContextParts
   onShowAddress?(address: AddressReference): void
-  onOpenHex(): void
-  onShowHexAt(kind: HexShowKind): void
-  onHexWriteBody(kind: HexBodyKind): void
-  onHexCopyBody(): void
-  onHexPasteBody(): void
+  onOpenHex(moduleId: string): void
+  onShowHex(moduleId: string, range: HexRange): void
+  onHexWriteBody(kind: HexBodyKind, target: HexBodyTarget): void
+  onHexCopyBody(target: HexBodyTarget): void
+  onHexPasteBody(target: HexBodyTarget): void
   /** dnSpy's Go to MD Table Row: whether there is a module to ask about, the selected row's token for the entry
    *  that goes to it directly, and the command — asking for a token when it is given none. */
   canGoToMdTableRow?: boolean
@@ -315,15 +314,13 @@ export const MenuBar = ({
   onRemoveNetModule,
   onLoadDependencies,
   onReplaceMethodBodyWithStub,
-  hexTarget,
-  hexStatement,
-  hexAddress,
+  hex,
   onShowAddress,
   canGoToMdTableRow,
   mdTableRowToken,
   onGoToMdTableRow,
   onOpenHex,
-  onShowHexAt,
+  onShowHex,
   onHexWriteBody,
   onHexCopyBody,
   onHexPasteBody,
@@ -539,7 +536,6 @@ export const MenuBar = ({
       parents,
       hasEmptyNamespaceSibling,
       activeDocument,
-      documentAvailable: activeDocument === 'code',
       canUndo,
       canRedo,
       onUndo,
@@ -572,16 +568,14 @@ export const MenuBar = ({
       onRemoveNetModule,
       onLoadDependencies,
       onReplaceMethodBodyWithStub,
-      hexTarget,
-      hexStatement,
-      addressReference: hexAddress,
+      ...hex,
       onShowAddress,
       mdTable: activeDocument === 'md-table' ? mdTableCommands : undefined,
       canGoToMdTableRow,
       mdTableRowToken,
       onGoToMdTableRow,
       onOpenHex,
-      onShowHexAt,
+      onShowHex,
       onHexWriteBody,
       onHexCopyBody,
       onHexPasteBody,

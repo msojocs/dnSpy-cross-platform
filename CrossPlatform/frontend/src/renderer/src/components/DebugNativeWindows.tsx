@@ -9,19 +9,6 @@ import { useAppOptions } from './app-options'
 import { HexView, type HexByteSource } from './HexEditor'
 import { memoryStructures } from '../memory-structures'
 
-/**
- * How much of the address space the Memory window's hex view spans at a time: a scroll range the view can draw.
- * Scrolling or moving the caret to its edge, or going to an address outside it, moves the window there.
- */
-const MEMORY_WINDOW = 16 * 1024 * 1024
-/** Where the user address space ends: 48 bits on x64 and ARM64. */
-const ADDRESS_SPACE_END = 2 ** 48
-/** The window starts on a chunk boundary, which keeps the pages the hex view reads aligned. */
-const WINDOW_ALIGNMENT = 64 * 1024
-
-const windowBaseFor = (address: number): number =>
-  Math.max(0, Math.floor((address - MEMORY_WINDOW / 2) / WINDOW_ALIGNMENT) * WINDOW_ALIGNMENT)
-
 const fromBase64 = (data: string): Uint8Array => Uint8Array.from(atob(data), (character) => character.charCodeAt(0))
 
 const toBase64 = (bytes: Uint8Array): string => {
@@ -32,9 +19,10 @@ const toBase64 = (bytes: Uint8Array): string => {
 }
 
 /**
- * dnSpy's Memory window (MemoryContent): the hex editor over the debuggee's memory, with its caret, selection, Go to
- * Offset (an address), Copy Special, Find and in-place edits. A page the process does not map shows as `??`. Its
- * context menu's Process submenu picks which process's memory it shows; it is the current process's otherwise.
+ * dnSpy's Memory window (MemoryContent): the hex editor over the debuggee's whole address space (the span of
+ * HexProcessSimpleBufferStream), with its caret, selection, Go to Offset (an address), Copy Special, Find over the
+ * readable memory and in-place edits. A page the process does not map shows as `??`. Its context menu's Process
+ * submenu picks which process's memory it shows; it is the current process's otherwise.
  */
 export const MemoryPane = (): React.JSX.Element => {
   const { t } = useLanguage()
@@ -45,11 +33,21 @@ export const MemoryPane = (): React.JSX.Element => {
   const appendOutput = useAppStore((state) => state.appendOutput)
   const hex = useAppOptions().debugger.useHexadecimal
   const [chosenSession, setChosenSession] = useState<string>()
-  const [windowRange, setWindowRange] = useState({ base: 0, length: MEMORY_WINDOW })
-  const { base, length } = windowRange
   const sessionId = chosenSession && sessions.some((entry) => entry.sessionId === chosenSession) ? chosenSession : currentSessionId
   const stopped = sessionId === currentSessionId ? debugState === 'stopped' : sessions.find((entry) => entry.sessionId === sessionId)?.state === 'stopped'
-  const identity = useMemo(() => ({}), [sessionId, stopped, base, length, generation])
+  // The address space of the session's process: 2^32 for a 32-bit process, the user space of a 64-bit one.
+  const [space, setSpace] = useState<{ sessionId: string; end: number }>()
+  useEffect(() => {
+    if (!sessionId || !stopped || space?.sessionId === sessionId)
+      return
+    let current = true
+    void window.dnSpy.getDebugMemorySpace(sessionId).then(
+      (response) => { if (current) setSpace({ sessionId, end: response.end }) },
+      () => { if (current) setSpace({ sessionId, end: 2 ** 47 }) })
+    return () => { current = false }
+  }, [sessionId, stopped, space?.sessionId])
+  const end = space && space.sessionId === sessionId ? space.end : undefined
+  const identity = useMemo(() => ({}), [sessionId, stopped, generation, end])
   const currentIdentity = useRef<object | undefined>(identity)
   currentIdentity.current = identity
   useEffect(() => {
@@ -58,39 +56,40 @@ export const MemoryPane = (): React.JSX.Element => {
   }, [identity])
 
   const source = useMemo<HexByteSource | undefined>(() => {
-    if (!sessionId || !stopped)
+    if (!sessionId || !stopped || end === undefined)
       return undefined
+    const optionalBase64 = (bytes: Uint8Array | undefined): string | null => bytes ? toBase64(bytes) : null
     return {
-      length,
-      base,
-      end: ADDRESS_SPACE_END,
+      length: end,
+      base: 0,
       optionsView: 'memoryWindow',
       revision: `${sessionId}:${generation}`,
-      structures: memoryStructures(sessionId, base, () => currentIdentity.current === identity),
+      structures: memoryStructures(sessionId, 0, () => currentIdentity.current === identity),
       refresh: () => window.dnSpy.refreshDebugMemory(sessionId),
       read: async (offset, count) => {
-        const memory = await window.dnSpy.readDebugMemory(sessionId, `0x${(base + offset).toString(16)}`, count)
+        const memory = await window.dnSpy.readDebugMemory(sessionId, `0x${offset.toString(16)}`, count)
         return { bytes: fromBase64(memory.data), readable: memory.readable }
       },
       write: async (offset, data) => {
         try {
-          await window.dnSpy.writeDebugMemory(sessionId, `0x${(base + offset).toString(16)}`, toBase64(data))
+          await window.dnSpy.writeDebugMemory(sessionId, `0x${offset.toString(16)}`, toBase64(data))
           return true
         } catch (reason) {
           appendOutput(t('Could not write the memory: {message}', { message: reason instanceof Error ? reason.message : String(reason) }), 'debug')
           return false
         }
       },
-      reveal: (address, endAddress) => {
-        const start = Math.max(0, Math.min(ADDRESS_SPACE_END - 1, address))
-        const end = Math.max(start + 1, Math.min(ADDRESS_SPACE_END, endAddress ?? start + 1))
-        const next = windowBaseFor(start)
-        // Selecting a module or structure can span more than the ordinary scrolling window.
-        const windowLength = Math.min(ADDRESS_SPACE_END - next, Math.max(MEMORY_WINDOW, end - next))
-        currentIdentity.current = undefined
-        setWindowRange({ base: next, length: windowLength })
-        return start - next
+      validSpan: async (position, bounds, forward, fullSpan) => {
+        const span = await window.dnSpy.getDebugMemoryValidSpan(sessionId, position, bounds, forward, fullSpan)
+        return span.start === null || span.end === null ? undefined : { start: span.start, end: span.end }
       },
+      search: async (pattern, run) => (await window.dnSpy.searchDebugMemory(sessionId, {
+        base64Pattern: toBase64(pattern.pattern),
+        base64Mask: optionalBase64(pattern.mask),
+        base64Alternate: optionalBase64(pattern.alternate),
+        charLengths: pattern.charLengths ?? null,
+        ...run,
+      })).offsets,
       menu: [{
         label: t('Process'),
         submenu: sessions.map((entry) => ({
@@ -100,13 +99,13 @@ export const MemoryPane = (): React.JSX.Element => {
         })),
       }],
     }
-  }, [sessionId, stopped, base, length, generation, identity, sessions, hex, appendOutput, t])
+  }, [sessionId, stopped, end, generation, identity, sessions, hex, appendOutput, t])
 
   if (!source)
-    return <div className="pane-empty">{sessionId ? t('Memory can only be read while the process is paused.') : t('Memory can only be read while debugging.')}</div>
+    return <div className="pane-empty">{!sessionId ? t('Memory can only be read while debugging.') : stopped ? t('Loading...') : t('Memory can only be read while the process is paused.')}</div>
   return (
     <div className="debug-tool-pane memory-pane">
-      <HexView source={source} />
+      <HexView key={sessionId} source={source} />
     </div>
   )
 }

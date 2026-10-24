@@ -688,6 +688,28 @@ public sealed class WorkspaceManagerTests : IDisposable {
 	}
 
 	[Fact]
+	public async Task AHexViewNamesAFileByItsPathWhenTheWorkspaceDoesNotHoldIt() {
+		var opened = await OpenContractsAssemblyAsync();
+		var token = TestContext.Current.CancellationToken;
+		var loadedPath = typeof(HelloRequest).Assembly.Location;
+		// The loaded file by its path is its document, which the hex editor writes to.
+		var loaded = await manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, "hexfile:" + loadedPath), token);
+		Assert.Equal(new FileInfo(loadedPath).Length, loaded.Length);
+
+		// Another file is read as it is on disk, and cannot be changed: there is no document to keep the change in.
+		var otherPath = typeof(WorkspaceManager).Assembly.Location;
+		var other = "hexfile:" + otherPath;
+		Assert.Equal(new FileInfo(otherPath).Length, (await manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, other), token)).Length);
+		var bytes = Convert.FromBase64String((await manager.ReadHexAsync(new HexReadRequest(opened.WorkspaceId, other, 0, 2), token)).Base64Data);
+		Assert.Equal("MZ"u8.ToArray(), bytes);
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), token);
+		await Assert.ThrowsAsync<RpcException>(() => manager.QueueHexPatchAsync(new HexPatchRequest(opened.WorkspaceId, transaction.TransactionId, other, 0, Convert.ToBase64String([0])), token));
+		await manager.RollbackEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), token);
+
+		await Assert.ThrowsAsync<RpcException>(() => manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, "hexfile:/no/such/file.dll"), token));
+	}
+
+	[Fact]
 	public async Task ReturnsModuleMetadataAndBoundedHexRanges() {
 		var opened = await OpenContractsAssemblyAsync();
 		var moduleId = Assert.Single(opened.Modules).Id;
@@ -1015,6 +1037,90 @@ public sealed class WorkspaceManagerTests : IDisposable {
 		}
 		finally {
 			File.Delete(destination);
+		}
+	}
+
+	[Fact]
+	public async Task AModifiedBodyIsPointedAtButNoneOfItsFileBytesAreSelected() {
+		var opened = await OpenContractsAssemblyAsync();
+		var method = await FindRpcExceptionGetterAsync(opened.WorkspaceId);
+		var document = await manager.DecompileAsync(
+			new DecompileRequest(opened.WorkspaceId, method.Id, DecompilerLanguage.CSharp),
+			TestContext.Current.CancellationToken);
+		var statement = Assert.Single(document.CodeStatements!, s => !s.IsHidden);
+		var before = Assert.IsType<HexMethodTargetDto>((await manager.ResolveHexTargetAsync(new HexTargetRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken)).Method);
+		Assert.True(before.CodeSize > 0);
+
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueMethodBodyStubAsync(
+			new ReplaceMethodBodyWithStubRequest(opened.WorkspaceId, transaction.TransactionId, method.Id),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+		// TVShowMethodInstructionsInHexEditorCommand: IsBodyModified leaves the instructions' length at 0, the offset
+		// where the file's code starts. The body commands still read the file's body.
+		var after = Assert.IsType<HexMethodTargetDto>((await manager.ResolveHexTargetAsync(new HexTargetRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken)).Method);
+		Assert.Equal(before.CodeOffset, after.CodeOffset);
+		Assert.Equal(0, after.CodeSize);
+		Assert.Equal(before.BodySize, after.BodySize);
+		// ShowILSpanInHexEditorCommand: the statement's command goes to the method's RVA, selecting nothing.
+		var resolved = await manager.ResolveHexStatementAsync(
+			new HexStatementRequest(opened.WorkspaceId, typeof(HelloRequest).Assembly.Location, statement.MetadataToken, statement.IlOffset, statement.IlEndOffset),
+			TestContext.Current.CancellationToken);
+		Assert.Equal(new HexRangeDto(before.BodyOffset, 0), resolved.Range);
+	}
+
+	[Fact]
+	public async Task ANetModulesHexTargetsNameTheNetModulesOwnFile() {
+		var opened = await OpenContractsAssemblyAsync();
+		var root = Assert.Single((await manager.GetRootsAsync(new WorkspaceRequest(opened.WorkspaceId), TestContext.Current.CancellationToken)).Nodes);
+		var netModulePath = Path.Combine(Path.GetTempPath(), $"dnspy-hex-{Guid.NewGuid():N}.netmodule");
+		var netModule = new ModuleDefUser("Extra.netmodule") { Kind = ModuleKind.NetModule };
+		var worker = new TypeDefUser("Extra", "Worker", netModule.CorLibTypes.Object.TypeDefOrRef);
+		netModule.Types.Add(worker);
+		var run = new MethodDefUser("Run", MethodSig.CreateStatic(netModule.CorLibTypes.Int32), MethodImplAttributes.IL | MethodImplAttributes.Managed, MethodAttributes.Public | MethodAttributes.Static) {
+			Body = new CilBody(),
+		};
+		run.Body.Instructions.Add(OpCodes.Ldc_I4_1.ToInstruction());
+		run.Body.Instructions.Add(OpCodes.Ret.ToInstruction());
+		worker.Methods.Add(run);
+		netModule.Write(netModulePath);
+		try {
+			var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+			var added = await manager.QueueAddNetModuleAsync(new AddNetModuleRequest(opened.WorkspaceId, transaction.TransactionId, root.Id, Path: netModulePath), TestContext.Current.CancellationToken);
+			await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+
+			// dnSpy's commands open mod.Location, the net module's own file — not the manifest module the net
+			// module's entry is filed under.
+			var moduleTarget = await manager.ResolveHexTargetAsync(new HexTargetRequest(opened.WorkspaceId, added.NodeId), TestContext.Current.CancellationToken);
+			Assert.NotEqual(root.Id, moduleTarget.ModuleId);
+			Assert.Equal(new FileInfo(netModulePath).Length, moduleTarget.FileLength);
+			Assert.Equal(new FileInfo(netModulePath).Length, (await manager.GetHexLengthAsync(new HexLengthRequest(opened.WorkspaceId, moduleTarget.ModuleId), TestContext.Current.CancellationToken)).Length);
+
+			var ns = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, added.NodeId), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "namespace" && node.Label == "Extra");
+			var type = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, ns.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "type");
+			var method = Assert.Single((await manager.GetChildrenAsync(new NodeRequest(opened.WorkspaceId, type.Id), TestContext.Current.CancellationToken)).Nodes, node => node.Kind == "method");
+			var methodTarget = await manager.ResolveHexTargetAsync(new HexTargetRequest(opened.WorkspaceId, method.Id), TestContext.Current.CancellationToken);
+			Assert.Equal(moduleTarget.ModuleId, methodTarget.ModuleId);
+			var body = Assert.IsType<HexMethodTargetDto>(methodTarget.Method);
+			var bytes = Convert.FromBase64String((await manager.ReadHexAsync(
+				new HexReadRequest(opened.WorkspaceId, methodTarget.ModuleId, body.CodeOffset, (int)body.CodeSize),
+				TestContext.Current.CancellationToken)).Base64Data);
+			Assert.Equal(new byte[] { 0x17, 0x2A }, bytes);
+
+			// The statement command finds the net module by its file too.
+			var statement = await manager.ResolveHexStatementAsync(
+				new HexStatementRequest(opened.WorkspaceId, netModulePath, 0x06000001, 0, 2),
+				TestContext.Current.CancellationToken);
+			Assert.Equal(moduleTarget.ModuleId, statement.ModuleId);
+			Assert.Equal(new HexRangeDto(body.CodeOffset, 2), statement.Range);
+		}
+		finally {
+			try {
+				File.Delete(netModulePath);
+			}
+			catch (IOException) {
+			}
 		}
 	}
 

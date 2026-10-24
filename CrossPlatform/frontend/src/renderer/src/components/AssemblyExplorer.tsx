@@ -29,7 +29,7 @@ import {
 import type { TextPart, TreeNode } from '../../../shared/protocol'
 import { tokenParts } from '../analyzer-model'
 import { topLevelSelection } from '../document-ids'
-import { findNode, memoryModulePathOf, useAppStore } from '../app-store'
+import { clipboardHexLength, findNode, memoryModulePathOf, useAppStore } from '../app-store'
 import { useDsImageClass } from '../ds-image'
 import { useLanguage } from '../localization'
 import { TreeExpanderGlyph } from './DsGlyphs'
@@ -38,6 +38,7 @@ import { ColoredText } from './ColoredText'
 import { isAnalyzableNode } from './CodeEditorContextMenu'
 import { hasEmptyNamespaceSibling, resourceTargets, showAssemblyExplorerContextMenu, type AssemblyExplorerCommands } from './AssemblyExplorerContextMenu'
 import { hasMetadataTables } from '../metadata-table'
+import { runHexShortcut, treeHexContext } from './hex-menu'
 
 interface AssemblyExplorerProps {
   /**
@@ -656,12 +657,14 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       // Save commands are headed by the files they would write, which only the backend can name too.
       // dnSpy's debugger commands read the selected rows' references; rows that name no metadata have none.
       const tokenRows = selection.filter((row) => row.metadataToken !== undefined)
-      const [readsResource, resourceNames, analyzeTargets, , debugTargets] = await Promise.all([
+      const [readsResource, resourceNames, analyzeTargets, , debugTargets, pasteLength] = await Promise.all([
         RESOURCE_READER_KINDS.has(node.kind) ? store.findResource(node.id).then((id) => id !== null) : Promise.resolve(false),
         resources.length > 0 ? store.getResourceItemNames(resources.map((resource) => resource.id)) : Promise.resolve(undefined),
         resolveAnalyzeTargets(selection),
         store.resolveHexTarget(node),
         tokenRows.length > 0 ? store.debugCodeTargets(tokenRows) : Promise.resolve(undefined),
+        // Hex Paste Method Body shows only while the clipboard holds hexadecimal bytes that fit.
+        clipboardHexLength(),
       ])
       const state = useAppStore.getState()
       showAssemblyExplorerContextMenu({
@@ -677,7 +680,8 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
         readsResource,
         resourceNames,
         mdTableRowAvailable: hasMetadataTables(state, node.id),
-        hexTarget: state.hexTarget,
+        hexTarget: state.hexTargetNodeId === node.id ? state.hexTarget : undefined,
+        clipboardHexLength: pasteLength,
         hasEmptyNamespaceSibling: hasEmptyNamespaceSibling(node, state.children, state.parents),
         analyzeTargets,
         debugTargets: debugTargets ?? { methods: [] },
@@ -800,6 +804,20 @@ export const AssemblyExplorer = ({ commands }: AssemblyExplorerProps): React.JSX
       default:
         if (ctrl && !shift && event.key.toLowerCase() === 'a') {
           store.selectNodes(rows, store.selectedNode)
+        } else if (ctrl && !shift && event.code === 'KeyX') {
+          // dnSpy's OpenHexEditorCommand, a main window command on Ctrl+X: from the tree it acts on the one selected
+          // row — the bytes of a PE structure, else the file a document row is — read from the backend afresh.
+          const selection = topLevelSelection(store.selectedNodes, store.parents)
+          void (async () => {
+            if (selection.length === 1)
+              await useAppStore.getState().resolveHexTarget(selection[0])
+            const state = useAppStore.getState()
+            runHexShortcut({
+              t: tRef.current,
+              ...commandsRef.current,
+              ...treeHexContext(selection, state.hexTargetNodeId === selection[0]?.id ? state.hexTarget : undefined),
+            })
+          })()
         } else if (!ctrl && event.key.length === 1 && !inChord) {
           const texts = rows.map((row) => rowSearchText(row, display, tRef.current))
           const selectedIndex = store.selectedNode ? rows.findIndex((row) => row.id === store.selectedNode?.id) : -1

@@ -282,8 +282,9 @@ export const HexLocalSettingsDialog = ({ settings, defaults, onAccept, onClose }
     start: formatNumberText(from.startPosition),
     end: formatNumberText(from.endPosition > 0 ? from.endPosition - 1 : from.endPosition),
     base: formatNumberText(from.basePosition),
-    bits: formatNumberText(from.offsetBitSize),
-    bytes: formatNumberText(from.bytesPerLine),
+    // Int32VM(useDecimal: true): these two are written in decimal.
+    bits: String(from.offsetBitSize),
+    bytes: String(from.bytesPerLine),
   })
   const [value, setValue] = useState(settings)
   const [texts, setTexts] = useState(() => textsOf(settings))
@@ -347,7 +348,7 @@ export const HexLocalSettingsDialog = ({ settings, defaults, onAccept, onClose }
             {HEX_VALUE_FORMATS.map((choice) => <option key={choice.format} value={choice.format}>{choice.label}</option>)}
           </select>
         </label>
-        <label className="hex-check-row"><input type="checkbox" checked={value.showOffset} onChange={(event) => set('showOffset', event.target.checked)} />{t('Show Offset')}</label>
+        <label className="hex-check-row" title={t('All offsets are relative to the start offset')}><input type="checkbox" checked={value.showOffset} onChange={(event) => set('showOffset', event.target.checked)} />{t('Show Offset')}</label>
         <label className="hex-check-row"><input type="checkbox" checked={value.showValues} onChange={(event) => set('showValues', event.target.checked)} />{t('Show Values')}</label>
         <label className="hex-check-row"><input type="checkbox" checked={value.showAscii} onChange={(event) => set('showAscii', event.target.checked)} />{t('Show ASCII')}</label>
         <label className="hex-check-row"><input type="checkbox" checked={value.useRelativePositions} onChange={(event) => set('useRelativePositions', event.target.checked)} />{t('Use Relative Offsets')}</label>
@@ -358,3 +359,22 @@ export const HexLocalSettingsDialog = ({ settings, defaults, onAccept, onClose }
 
 /** The value-format submenu and the local settings offer the same list, in dnSpy's order and English words. */
 export const VALUE_FORMAT_CHOICES: { value: HexValuesFormat; label: string }[] = HEX_VALUE_FORMATS.map((info) => ({ value: info.format, label: info.label }))
+
+/**
+ * dnSpy's ProgressDlg as Save Selection shows it: the file being written under the title, a bar that fills a chunk at
+ * a time and Cancel, which stops the save (and the file it had begun is deleted).
+ */
+export const HexSaveProgressDialog = ({ title, description, progress, onCancel }: { title: string; description: string; progress: number; onCancel(): void }): React.JSX.Element => {
+  const { t } = useLanguage()
+  return (
+    <Modal
+      title={title}
+      onClose={onCancel}
+      className="hex-progress-dialog"
+      footer={<button type="button" onClick={onCancel}>{t('Cancel')}</button>}
+    >
+      <div className="hex-progress-description" title={description}>{description}</div>
+      <progress aria-label={t('Progress')} max={1} value={Math.max(0, Math.min(1, progress))} />
+    </Modal>
+  )
+}

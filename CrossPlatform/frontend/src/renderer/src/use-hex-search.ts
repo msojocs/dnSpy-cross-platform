@@ -49,11 +49,13 @@ const isIncremental = (kind: HexSearchState['kind']): boolean => kind === 'incre
  * dnSpy's `HexViewSearchServiceImpl`: Find, Replace and incremental search over the view's bytes, the search
  * control's state, and the matches in view that the markers draw.
  */
-export function useHexSearch({ model, run, readBytes, write, canWrite, focusView, visibleRange }: {
+export function useHexSearch({ model, run, readBytes, write, writeAll, canWrite, focusView, visibleRange }: {
   model: HexViewModel
   run: HexSearchRunner | undefined
   readBytes(offset: number, count: number): Promise<Uint8Array>
   write(offset: number, data: Uint8Array): Promise<boolean>
+  /** Writes every patch as one edit, going on past one that cannot be written; answers whether any was. */
+  writeAll(patches: { offset: number; data: Uint8Array }[]): Promise<boolean>
   canWrite: boolean
   focusView(): void
   /** The bytes on screen, which the match markers are looked for in. */
@@ -64,8 +66,11 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
   focusRequest: { target: 'search' | 'replace'; token: number }
   markers: { start: number; length: number }[]
   canReplace: boolean
-  showFind(): void
-  showReplace(): void
+  /** Whether the search and the replacement are both valid data, which Replace Next and Replace All need. */
+  replaceReady: boolean
+  /** Ctrl+F; `focusWithin` when the search control has the focus, which then only changes the kind. */
+  showFind(focusWithin?: boolean): void
+  showReplace(focusWithin?: boolean): void
   showIncremental(forward: boolean): void
   findNext(forward: boolean): void
   findNextSelected(forward: boolean): void
@@ -88,7 +93,8 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
   const visibleRef = useRef(visible)
   visibleRef.current = visible
   const incrementalStart = useRef<number | undefined>(undefined)
-  const searchMovesCaret = useRef(false)
+  /** Where a search left the caret: the caret's move there is the search's own, which does not end it. */
+  const searchCaret = useRef<number | undefined>(undefined)
   const searchToken = useRef(0)
 
   const update = useCallback((change: Partial<HexSearchState>): void => {
@@ -142,14 +148,10 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
     }
   }, [model, run])
 
+  /** `ShowSearchResult`, which `isIncrementalSearchCaretMove` keeps from ending an incremental search. */
   const showResult = (start: number, length: number): void => {
-    searchMovesCaret.current = true
-    try {
-      model.selectAndMoveCaret(start, start + length)
-    }
-    finally {
-      searchMovesCaret.current = false
-    }
+    model.selectAndMoveCaret(start, start + length)
+    searchCaret.current = model.caretPosition
   }
 
   const search = useCallback(async (reverse: boolean, restart: boolean, options?: { matchCase?: boolean; current?: HexSearchState }): Promise<void> => {
@@ -174,7 +176,8 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
       setMarkers([])
       return
     }
-    const pattern = patternOf(state, matchCaseOf(state))
+    // UpdateHexMarkerSearch uses the Find options: the Match case box, in incremental search too.
+    const pattern = patternOf(state, state.matchCase)
     if (!pattern) {
       setMarkers([])
       return
@@ -203,7 +206,13 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
     return Array.from(bytes, (byte) => byte.toString(16).toUpperCase().padStart(2, '0')).join('')
   }
 
-  const show = async (kind: 'find' | 'replace'): Promise<void> => {
+  const show = async (kind: 'find' | 'replace', focusWithin = false): Promise<void> => {
+    // ShowFind with the focus in the control: only the kind changes, the search string stays.
+    if (visibleRef.current && focusWithin) {
+      update({ kind })
+      setFocusRequest((old) => ({ target: 'search', token: old.token + 1 }))
+      return
+    }
     const fromSelection = await searchStringFromSelection()
     incrementalStart.current = undefined
     const next: Partial<HexSearchState> = { kind }
@@ -218,7 +227,11 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
 
   const close = useCallback((): void => {
     incrementalStart.current = undefined
+    searchCaret.current = undefined
     searchToken.current++
+    // A command that ends an incremental search runs at once and must see the control closed.
+    visibleRef.current = false
+    stateRef.current = { ...stateRef.current, kind: 'find', searching: false }
     setVisible(false)
     setState((current) => ({ ...current, kind: 'find', searching: false }))
     focusView()
@@ -266,11 +279,10 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
   }
 
   const canReplace = state.kind === 'replace' && canWrite
-  const replaceReady = (): boolean => {
-    const current = stateRef.current
-    return current.kind === 'replace' && canWrite && isSearchDataValid(current.dataKind, current.searchString, current.bigEndian)
+  const readyFor = (current: HexSearchState): boolean =>
+    current.kind === 'replace' && canWrite && isSearchDataValid(current.dataKind, current.searchString, current.bigEndian)
       && tryParseData(current.replaceString, current.dataKind, current.bigEndian) !== undefined
-  }
+  const replaceReady = (): boolean => readyFor(stateRef.current)
 
   /** `ReplaceNext`: the selected match is replaced and the next one selected; without one, the next is found. */
   const replaceNext = async (): Promise<void> => {
@@ -314,10 +326,9 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
     const data = replacementFor(length)
     if (!data || offsets.length === 0)
       return
-    for (const offset of offsets) {
-      if (!await write(offset, data))
-        break
-    }
+    // One edit for every match; the selection is cleared only when the bytes changed.
+    if (!await writeAll(offsets.map((offset) => ({ offset, data }))))
+      return
     model.clearSelection()
     model.ensureCaretVisible()
   }
@@ -328,8 +339,9 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
     focusRequest,
     markers,
     canReplace,
-    showFind: () => { void show('find') },
-    showReplace: () => { void show('replace') },
+    replaceReady: readyFor(state),
+    showFind: (focusWithin) => { void show('find', focusWithin) },
+    showReplace: (focusWithin) => { void show('replace', focusWithin) },
     showIncremental,
     findNext: (forward) => {
       if (!visibleRef.current)
@@ -381,14 +393,20 @@ export function useHexSearch({ model, run, readBytes, write, canWrite, focusView
         close()
         return false
       }
+      // Backspace on an empty string changes nothing.
+      if (command === 'backspace' && current.searchString.length === 0)
+        return true
       const next = { ...current, searchString: text }
-      update({ searchString: text })
+      // An empty string has nothing to find, so it is not "not found" either.
+      update(text.length > 0 ? { searchString: text } : { searchString: text, foundMatch: true })
       if (text.length > 0)
         void search(current.kind === 'incrementalBackward', true, { current: next })
       return true
     },
     caretMoved: () => {
-      if (!searchMovesCaret.current && visibleRef.current && isIncremental(stateRef.current.kind))
+      const own = searchCaret.current === model.caretPosition
+      searchCaret.current = undefined
+      if (!own && visibleRef.current && isIncremental(stateRef.current.kind))
         close()
     },
   }

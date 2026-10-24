@@ -223,8 +223,14 @@ const encodeByCharacter = (text: string, encode: (part: string) => Uint8Array): 
 /** `StringHexSearchService.Initialize`: a case-insensitive string, or undefined when its lower and upper case
  * forms do not encode to bytes of the same shape — the search then finds nothing, as dnSpy's does. */
 function caseInsensitivePattern(text: string, encode: (part: string) => Uint8Array): HexSearchPattern | undefined {
-  const lower = text.toLowerCase()
-  const upper = text.toUpperCase()
+  // .NET's invariant ToLower/ToUpper map a character to one character: ß stays ß where JavaScript writes SS.
+  const simple = (map: (character: string) => string): string =>
+    Array.from(text, (character) => {
+      const mapped = map(character)
+      return Array.from(mapped).length === 1 ? mapped : character
+    }).join('')
+  const lower = simple((character) => character.toLowerCase())
+  const upper = simple((character) => character.toUpperCase())
   if (lower.length !== upper.length)
     return undefined
   const lowerBytes = encodeByCharacter(lower, encode)

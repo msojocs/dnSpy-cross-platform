@@ -27,9 +27,11 @@ const SearchIcon = ({ name }: { name: keyof typeof HEX_SEARCH_ICONS }): React.JS
  * replace row and the options row (Match Case, Big Endian and the data kind). It floats over the view's top
  * right corner; the view owns the search itself and hands this the state and the commands.
  */
-export const HexSearchControl = ({ state, canReplace, focusRequest, atBottom = false, controlRef, onChange, onFindNext, onReplaceNext, onReplaceAll, onToggleReplace, onClose, onKeyDown }: {
+export const HexSearchControl = ({ state, canReplace, replaceReady = canReplace, focusRequest, atBottom = false, controlRef, onChange, onFindNext, onReplaceNext, onReplaceAll, onToggleReplace, onClose, onKeyDown }: {
   state: HexSearchState
   canReplace: boolean
+  /** Whether the search and the replacement are valid, which the two replace buttons need. */
+  replaceReady?: boolean
   /** Bumped to move the focus into the search box (or the replace box) and select its text. */
   focusRequest: { target: 'search' | 'replace'; token: number }
   /** `SearchControlPosition.BottomRight`: the control moves out of the way of a match it would cover. */
@@ -108,8 +110,8 @@ export const HexSearchControl = ({ state, canReplace, focusRequest, atBottom = f
             onChange={(event) => onChange({ replaceString: event.target.value })}
             onFocus={(event) => event.currentTarget.select()}
           />
-          <button type="button" className="icon-button hex-search-button" tabIndex={-1} aria-label={t('Replace next')} title={tip('Replace next', 'Alt+R')} disabled={!canReplace} onClick={onReplaceNext}><SearchIcon name="replaceNext" /></button>
-          <button type="button" className="icon-button hex-search-button" tabIndex={-1} aria-label={t('Replace all')} title={tip('Replace all', 'Alt+A')} disabled={!canReplace} onClick={onReplaceAll}><SearchIcon name="replaceAll" /></button>
+          <button type="button" className="icon-button hex-search-button" tabIndex={-1} aria-label={t('Replace next')} title={tip('Replace next', 'Alt+R')} disabled={!replaceReady} onClick={onReplaceNext}><SearchIcon name="replaceNext" /></button>
+          <button type="button" className="icon-button hex-search-button" tabIndex={-1} aria-label={t('Replace all')} title={tip('Replace all', 'Alt+A')} disabled={!replaceReady} onClick={onReplaceAll}><SearchIcon name="replaceAll" /></button>
         </div>
       )}
       {showOptions && (

@@ -1468,11 +1468,77 @@ select:focus-visible,
 .hex-column-group-line0 { border-left: 1px dashed var(--tcfg-hexcolumnlinegroup0, var(--border)); }
 .hex-column-group-line1 { border-left: 1px dashed var(--tcfg-hexcolumnlinegroup1, var(--border)); }
 
+/* VerticalScrollBarMargin: the theme's ScrollBar, drawn here so a line and a page are a line and a page. */
 .hex-vscroll {
   flex: none;
+  display: flex;
+  flex-direction: column;
   width: 17px;
-  overflow-x: hidden;
-  overflow-y: scroll;
+  background: var(--wpf-EnvironmentScrollBarBackground);
+  user-select: none;
+}
+
+.hex-vscroll-arrow {
+  flex: none;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  background: var(--wpf-EnvironmentScrollBarArrowBackground);
+  position: relative;
+}
+
+.hex-vscroll-arrow::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  border: 4px solid transparent;
+}
+
+.hex-vscroll-up::after {
+  top: 4px;
+  border-bottom: 5px solid var(--wpf-EnvironmentScrollBarArrowGlyph);
+}
+
+.hex-vscroll-down::after {
+  top: 7px;
+  border-top: 5px solid var(--wpf-EnvironmentScrollBarArrowGlyph);
+}
+
+.hex-vscroll-arrow:hover:not(:disabled) {
+  background: var(--wpf-EnvironmentScrollBarArrowMouseOverBackground);
+}
+
+.hex-vscroll-arrow:active:not(:disabled) {
+  background: var(--wpf-EnvironmentScrollBarArrowPressedBackground);
+}
+
+.hex-vscroll-up:disabled::after {
+  border-bottom-color: var(--wpf-EnvironmentScrollBarArrowGlyphDisabled);
+}
+
+.hex-vscroll-down:disabled::after {
+  border-top-color: var(--wpf-EnvironmentScrollBarArrowGlyphDisabled);
+}
+
+.hex-vscroll-track {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.hex-vscroll-thumb {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  background: var(--wpf-EnvironmentScrollBarThumbBackground);
+}
+
+.hex-vscroll-thumb:hover {
+  background: var(--wpf-EnvironmentScrollBarThumbMouseOverBackground);
+}
+
+.hex-vscroll-thumb:active {
+  background: var(--wpf-EnvironmentScrollBarThumbPressedBackground);
 }
 
 .hex-hscroll-row {
@@ -5006,4 +5072,20 @@ mark.search-match {
 
 .debug-process-filter select {
   width: 150px;
+}
+
+/* ProgressDlg for Save Selection: the file's name over a bar as wide as the dialog. */
+.hex-progress-dialog .hex-dialog-body {
+  min-width: 360px;
+}
+
+.hex-progress-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 6px;
+}
+
+.hex-progress-dialog progress {
+  width: 100%;
 }

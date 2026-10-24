@@ -71,7 +71,7 @@ const commands = () => ({
   onCopy: vi.fn(),
   onFind: vi.fn(),
   onOpenHex: vi.fn(),
-  onShowHexAt: vi.fn(),
+  onShowHex: vi.fn(),
   onHexWriteBody: vi.fn(),
   onHexCopyBody: vi.fn(),
   onHexPasteBody: vi.fn(),
@@ -86,8 +86,9 @@ const context = (overrides: Partial<CodeEditorMenuContext> = {}): CodeEditorMenu
   const ctx: CodeEditorMenuContext = {
     t: (message) => message,
     // This menu is always a code document viewer's, which is what `DocumentView` says when it builds one:
-    // the file command has a document to open whatever the tree happens to have selected.
-    documentAvailable: true,
+    // the file command has the document's file to open whatever the tree happens to have selected.
+    hexCreator: 'code',
+    hexFileModuleId: 'module-1',
     hasSelection: false,
     debugState: 'inactive',
     stopped: false,
@@ -128,8 +129,10 @@ const methodReferenceContext = (overrides: Partial<CodeEditorMenuContext> = {}):
     fieldInitialValue: null,
     resource: null,
   },
+  hexTargetNodeId: methodNode.id,
   hexStatement: { moduleId: 'module-1', range: { offset: 40, length: 5 } },
-  selectionKind: 'method',
+  // The clipboard holds three bytes, which fit the body.
+  clipboardHexLength: 3,
   debugTargets: methodTargets,
   ...overrides,
 })

@@ -29,6 +29,8 @@ export interface HexCell {
   groupIndex: 0 | 1
   /** Whether the line has the cell's bytes; the cells past the end of the last line are blank. */
   hasData: boolean
+  /** Whether every byte of the cell could be read; one that could not is in the error colour (`DefaultTagger.IsValid`). */
+  valid: boolean
   bufferStart: number
   bufferEnd: number
   /** The characters of the value, without the spaces it is padded with. */
@@ -343,12 +345,14 @@ export class HexLineFormatter {
         const groupIndex = (Math.floor(i * this.bytesPerValue / this.groupSizeInBytes) & 1) as 0 | 1
         let spaces: number
         let hasData: boolean
+        let valid = true
         if (position < lineEnd) {
           visibleStart ??= textLength
           const bytes: number[] = []
           for (let b = 0; b < this.bytesPerValue && position + b < this.endPosition; b++)
             bytes.push(readByte(position + b))
-          const text = bytes.some((value) => value < 0)
+          valid = bytes.every((value) => value >= 0)
+          const text = !valid
             ? '?'.repeat(this.formattedValueLength)
             : formatHexValue(Uint8Array.from(bytes), 0, this.options.valuesFormat, this.options.valuesLowerCaseHex)
           spaces = text.length - text.trimStart().length
@@ -367,6 +371,7 @@ export class HexLineFormatter {
           index: i,
           groupIndex,
           hasData,
+          valid,
           bufferStart: position,
           bufferEnd: hasData ? Math.min(this.endPosition, position + this.bytesPerValue) : position,
           textSpan: { start: cellStart + spaces, end: textLength },
@@ -390,9 +395,11 @@ export class HexLineFormatter {
         const cellStart = textLength
         const groupIndex = (Math.floor(i / this.groupSizeInBytes) & 1) as 0 | 1
         const hasData = position < lineEnd
+        let valid = true
         if (hasData) {
           visibleStart ??= textLength
           const value = readByte(position)
+          valid = value >= 0
           append(value < 0 ? '?' : value < 0x20 || value > 0x7E ? '.' : String.fromCharCode(value))
         }
         else {
@@ -405,6 +412,7 @@ export class HexLineFormatter {
           index: i,
           groupIndex,
           hasData,
+          valid,
           bufferStart: position,
           bufferEnd: hasData ? position + 1 : position,
           textSpan: cellSpan,

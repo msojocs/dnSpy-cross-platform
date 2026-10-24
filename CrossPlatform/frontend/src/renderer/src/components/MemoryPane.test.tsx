@@ -35,40 +35,110 @@ const resolveDebugMemoryPosition = vi.fn(async () => ({ offset: -1 }))
 const goToDebugMemoryMetadata = vi.fn(async () => ({ range: null }))
 const getDebugMemoryFileInfo = vi.fn(async () => ({ hasMetadata: true, hasPeHeaders: true }))
 const refreshDebugMemory = vi.fn(async () => undefined)
+const SPACE_END = 2 ** 47
+const getDebugMemorySpace = vi.fn(async () => ({ end: SPACE_END }))
+// The readable regions: [0x1000, 0x5000) and [0x9000, 0xA000), nothing else.
+const regions = [{ start: 0x1000, end: 0x5000 }, { start: 0x9000, end: 0xA000 }]
+const getDebugMemoryValidSpan = vi.fn(async (_session: string, position: number, bounds: number, forward: boolean) => {
+  const found = forward
+    ? regions.find((region) => region.end > position && region.start < bounds)
+    : [...regions].reverse().find((region) => region.start <= position && region.end > bounds)
+  return found ?? { start: null, end: null }
+})
+const searchDebugMemory = vi.fn(async () => ({ offsets: [0x9010] }))
+const pickHexSaveFile = vi.fn(async () => '/tmp/memory.bin')
+const writeHexFileChunk = vi.fn(async (_path: string, _base64Data: string, _append: boolean) => undefined)
+const deleteHexFile = vi.fn(async () => undefined)
 
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
   Object.defineProperty(window, 'dnSpy', {
     configurable: true,
-    value: { ...window.dnSpy, readDebugMemory, writeDebugMemory, getDebugMemoryToolTipInfo, getDebugMemoryPositionInfo, resolveDebugMemoryPosition, goToDebugMemoryMetadata, getDebugMemoryFileInfo, refreshDebugMemory },
+    value: {
+      ...window.dnSpy, readDebugMemory, writeDebugMemory, getDebugMemoryToolTipInfo, getDebugMemoryPositionInfo, resolveDebugMemoryPosition,
+      goToDebugMemoryMetadata, getDebugMemoryFileInfo, refreshDebugMemory, getDebugMemorySpace, getDebugMemoryValidSpan, searchDebugMemory,
+      pickHexSaveFile, writeHexFileChunk, deleteHexFile, showMessage: vi.fn(async () => undefined),
+    },
   })
   useAppStore.setState({ debugSessionId: 'session', debugState: 'stopped', debugSessions: [], debugGeneration: 1 })
 })
 
 afterEach(() => cleanup())
 
+const caretOffset = (container: HTMLElement): string => container.querySelector('.hex-view')!.getAttribute('data-caret-offset') ?? ''
+const caret = (container: HTMLElement): number => Number(container.querySelector('.hex-view')!.getAttribute('data-caret'))
+
 describe('MemoryPane', () => {
-  it('is the hex editor over the process\'s memory, with unmapped pages shown as ??', async () => {
+  it('is the hex editor over the process\'s whole address space, with unmapped pages shown as ??', async () => {
     const { container } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalledWith('session', '0x0', 64 * 1024))
+    expect(getDebugMemorySpace).toHaveBeenCalledWith('session')
     const firstLine = () => container.querySelector('.hex-line')?.textContent ?? ''
     await waitFor(() => expect(firstLine()).toContain('??'))
-    // A 16 MiB window onto a 64-bit address space: the offset column is an address.
-    expect(container.querySelector('.hex-offset')!.textContent).toMatch(/^0+$/)
+    // The offset column is an address of a 47-bit space: twelve digits, whatever line is at the top.
+    expect(container.querySelector('.hex-offset')!.textContent).toBe('000000000000')
+    expect(container.querySelector('.hex-byte-error')).not.toBeNull()
   })
 
-  it('moves its window along when the caret walks off the end of it', async () => {
+  it('goes to the last address and back to the first with Ctrl+End and Ctrl+Home', async () => {
     const { container } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
     const view = container.querySelector<HTMLElement>('.hex-content')!
-    readDebugMemory.mockClear()
     fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
-    fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-    // The view reached the window's end, so the window moved on — 8 MiB in — and the caret went one line past
-    // the old window's last byte.
-    await waitFor(() => expect(readDebugMemory.mock.calls.some(([, address]) => BigInt(address) >= 0x800000n)).toBe(true))
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
+    await waitFor(() => expect(caretOffset(container)).toBe('7FFFFFFFFFFF'))
+    await waitFor(() => expect(readDebugMemory.mock.calls.some(([, address]) => BigInt(address) >= BigInt(SPACE_END - 0x10000))).toBe(true))
+    fireEvent.keyDown(view, { key: 'Home', code: 'Home', ctrlKey: true })
+    await waitFor(() => expect(caretOffset(container)).toBe('000000000000'))
+  })
+
+  it('selects the whole address space with Ctrl+A', async () => {
+    const { container } = render(<MemoryPane />)
+    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
+    fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'a', code: 'KeyA', ctrlKey: true })
+    await waitFor(() => {
+      const hex = container.querySelector('.hex-view')!
+      expect(hex.getAttribute('data-selection-start')).toBe('0')
+      expect(hex.getAttribute('data-selection-end')).toBe(String(SPACE_END))
+    })
+  })
+
+  it('moves between the starts and ends of the readable regions with Alt+Down and Alt+Up', async () => {
+    const { container } = render(<MemoryPane />)
+    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
+    const view = container.querySelector<HTMLElement>('.hex-content')!
+    const altDown = () => fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown', altKey: true })
+    const altUp = () => fireEvent.keyDown(view, { key: 'ArrowUp', code: 'ArrowUp', altKey: true })
+    // Before the first region: to its start; inside it: to its last byte; on its last byte: to the next one's start.
+    altDown()
+    await waitFor(() => expect(caret(container)).toBe(0x1000))
+    altDown()
+    await waitFor(() => expect(caret(container)).toBe(0x4FFF))
+    altDown()
+    await waitFor(() => expect(caret(container)).toBe(0x9000))
+    // Back: on a region's start, to the previous region's last byte, then to that region's start.
+    altUp()
+    await waitFor(() => expect(caret(container)).toBe(0x4FFF))
+    altUp()
+    await waitFor(() => expect(caret(container)).toBe(0x1000))
+    // Shift extends the selection from where the caret was.
+    fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown', altKey: true, shiftKey: true })
+    await waitFor(() => {
+      const hex = container.querySelector('.hex-view')!
+      expect(hex.getAttribute('data-selection-start')).toBe(String(0x1000))
+      expect(hex.getAttribute('data-selection-end')).toBe(String(0x5000))
+    })
+    expect(getDebugMemoryValidSpan).toHaveBeenCalledWith('session', 0, SPACE_END, true, false)
+  })
+
+  it('searches the readable memory of the process in the backend', async () => {
+    const { container, findByRole } = render(<MemoryPane />)
+    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
+    fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'f', code: 'KeyF', ctrlKey: true })
+    const input = await findByRole('textbox', { name: 'Find' })
+    fireEvent.change(input, { target: { value: '1011' } })
+    await waitFor(() => expect(searchDebugMemory).toHaveBeenCalledWith('session', expect.objectContaining({ base64Pattern: toBase64(Uint8Array.of(0x10, 0x11)), rangeEnd: SPACE_END, maxResults: 1 })))
+    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-selection-start')).toBe(String(0x9010)))
   })
 
   it('uses the process structure model for keyboard Quick Info and highlights the field', async () => {
@@ -82,19 +152,7 @@ describe('MemoryPane', () => {
     expect(container.querySelector('.hex-tooltip-current-field')).not.toBeNull()
   })
 
-  it('asks about addresses, not window offsets, after moving to another memory window', async () => {
-    const { container } = render(<MemoryPane />)
-    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
-    const view = container.querySelector<HTMLElement>('.hex-content')!
-    fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
-    fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
-    fireEvent.keyDown(view, { key: 'F12', code: 'F12', ctrlKey: true })
-    await waitFor(() => expect(getDebugMemoryPositionInfo).toHaveBeenCalledWith('session', 0x100000F))
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100002F$/i))
-  })
-
-  it('follows a structure reference outside the current memory window', async () => {
+  it('follows a structure reference far from the caret', async () => {
     getDebugMemoryPositionInfo.mockResolvedValueOnce({
       file: null, nestedFile: null, structure: null, editField: null, rva: null, fileOffset: 0,
       fieldReference: { offset: 0x4000020, length: 4 }, reference: null,
@@ -102,11 +160,11 @@ describe('MemoryPane', () => {
     const { container } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
     fireEvent.keyDown(container.querySelector('.hex-content')!, { key: 'F12', code: 'F12', ctrlKey: true })
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*4000020$/i))
-    expect(readDebugMemory.mock.calls.some(([, address]) => BigInt(address) >= 0x3800000n)).toBe(true)
+    await waitFor(() => expect(caretOffset(container)).toBe('000004000020'))
+    await waitFor(() => expect(readDebugMemory.mock.calls.some(([, address]) => BigInt(address) >= 0x3800000n)).toBe(true))
   })
 
-  it('selects the complete module even when it exceeds the ordinary memory window', async () => {
+  it('selects a complete module larger than 16 MiB', async () => {
     getDebugMemoryPositionInfo.mockResolvedValueOnce({
       file: { offset: 0x2000000, length: 0x2000000 }, nestedFile: null, structure: null, editField: null,
       rva: null, fileOffset: 0, fieldReference: null, reference: null,
@@ -119,36 +177,12 @@ describe('MemoryPane', () => {
     await waitFor(() => expect(getDebugMemoryPositionInfo).toHaveBeenCalledWith('session', 0))
     await waitFor(() => {
       const hex = container.querySelector('.hex-view')!
-      const start = Number(hex.getAttribute('data-selection-start'))
-      const end = Number(hex.getAttribute('data-selection-end'))
-      expect(end - start).toBe(0x2000000)
+      expect(hex.getAttribute('data-selection-start')).toBe(String(0x2000000))
+      expect(hex.getAttribute('data-selection-end')).toBe(String(0x4000000))
     })
   })
 
-  it('selects relative to the current address after moving to a nonzero window', async () => {
-    const { container, findByRole } = render(<MemoryPane />)
-    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
-    const view = container.querySelector('.hex-content')!
-    fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
-    fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
-    const before = Number(container.querySelector('.hex-view')!.getAttribute('data-caret'))
-    fireEvent.keyDown(view, { key: 'l', code: 'KeyL', ctrlKey: true })
-    const dialog = await findByRole('dialog', { name: 'Select' })
-    fireEvent.change(dialog.querySelector('select[aria-label="Position"]')!, { target: { value: 'current' } })
-    const inputs = dialog.querySelectorAll('input')
-    fireEvent.change(inputs[0], { target: { value: '0' } })
-    fireEvent.change(inputs[1], { target: { value: '1' } })
-    fireEvent.click([...dialog.querySelectorAll('button')].find((button) => button.textContent === 'OK')!)
-    await waitFor(() => {
-      const hex = container.querySelector('.hex-view')!
-      expect(hex.getAttribute('data-selection-start')).toBe(String(before))
-      expect(hex.getAttribute('data-selection-end')).toBe(String(before + 2))
-      expect(hex.getAttribute('data-caret-offset')).toMatch(/0*1000010$/i)
-    })
-  })
-
-  it('does not use a late position translation to move a newer memory window', async () => {
+  it('does not use a position translation that arrives after the next stop', async () => {
     let answer!: (value: { offset: number }) => void
     resolveDebugMemoryPosition.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
     const { container, findByRole } = render(<MemoryPane />)
@@ -160,16 +194,12 @@ describe('MemoryPane', () => {
     fireEvent.change(dialog.querySelector('input')!, { target: { value: '0x20' } })
     fireEvent.click([...dialog.querySelectorAll('button')].find((button) => button.textContent === 'OK')!)
     await waitFor(() => expect(resolveDebugMemoryPosition).toHaveBeenCalled())
-    fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
-    fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-    await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
+    act(() => useAppStore.setState({ debugGeneration: 2 }))
     await act(async () => { answer({ offset: 0x4000020 }) })
-    expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i)
+    expect(caretOffset(container)).toBe('000000000000')
   })
 
-  it('saves a memory selection beyond the debugger read limit without truncating it', async () => {
-    const saveHexBytes = vi.fn(async (_base64Data: string) => undefined)
-    Object.defineProperty(window, 'dnSpy', { configurable: true, value: { ...window.dnSpy, saveHexBytes } })
+  it('saves a selection a chunk at a time under a progress dialog', async () => {
     const { container, findByRole } = render(<MemoryPane />)
     await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
     const view = container.querySelector('.hex-content')!
@@ -182,15 +212,35 @@ describe('MemoryPane', () => {
     await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-selection-end')).toBe(String(0x100010)))
     readDebugMemory.mockClear()
     fireEvent.keyDown(view, { key: 's', code: 'KeyS', ctrlKey: true, altKey: true })
-    await waitFor(() => expect(saveHexBytes).toHaveBeenCalled())
-    const bytes = atob(saveHexBytes.mock.calls[0][0])
+    await waitFor(() => expect(writeHexFileChunk).toHaveBeenCalledTimes(2))
+    const [first, second] = writeHexFileChunk.mock.calls
+    expect(first[0]).toBe('/tmp/memory.bin')
+    expect(first[2]).toBe(false)
+    expect(second[2]).toBe(true)
+    const bytes = atob(first[1]) + atob(second[1])
     expect(bytes.length).toBe(0x100010)
     expect(bytes.charCodeAt(0x10000F)).toBe(0x0F)
     expect(readDebugMemory.mock.calls.every(([, , count]) => count <= 1024 * 1024)).toBe(true)
-    expect(readDebugMemory).toHaveBeenCalledWith('session', '0x100000', 16)
+    expect(deleteHexFile).not.toHaveBeenCalled()
   })
 
-  it('copies an absolute memory address rather than its window-relative offset', async () => {
+  it('deletes the file a cancelled save had begun', async () => {
+    let release!: () => void
+    writeHexFileChunk.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(undefined) }))
+    const { container, findByRole } = render(<MemoryPane />)
+    await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
+    const view = container.querySelector('.hex-content')!
+    fireEvent.keyDown(view, { key: 'a', code: 'KeyA', ctrlKey: true })
+    fireEvent.keyDown(view, { key: 's', code: 'KeyS', ctrlKey: true, altKey: true })
+    const progress = await findByRole('dialog', { name: 'Save Selection 0x0-0x7FFFFFFFFFFF' })
+    expect(progress).toHaveTextContent('/tmp/memory.bin')
+    fireEvent.click([...progress.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')!)
+    await act(async () => { release() })
+    await waitFor(() => expect(deleteHexFile).toHaveBeenCalledWith('/tmp/memory.bin'))
+    await waitFor(() => expect(container.querySelector('[role="dialog"]')).toBeNull())
+  })
+
+  it('copies the caret\'s address as its absolute offset', async () => {
     const writeText = vi.fn(async (_text: string) => undefined)
     const oldClipboard = navigator.clipboard
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
@@ -199,10 +249,9 @@ describe('MemoryPane', () => {
       await waitFor(() => expect(readDebugMemory).toHaveBeenCalled())
       const view = container.querySelector('.hex-content')!
       fireEvent.keyDown(view, { key: 'End', code: 'End', ctrlKey: true })
-      fireEvent.keyDown(view, { key: 'ArrowDown', code: 'ArrowDown' })
-      await waitFor(() => expect(container.querySelector('.hex-view')!.getAttribute('data-caret-offset')).toMatch(/0*100000F$/i))
+      await waitFor(() => expect(caretOffset(container)).toBe('7FFFFFFFFFFF'))
       fireEvent.keyDown(view, { key: 'a', code: 'KeyA', ctrlKey: true, shiftKey: true })
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith('0x100000F'))
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('0x7FFFFFFFFFFF'))
     }
     finally {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: oldClipboard })

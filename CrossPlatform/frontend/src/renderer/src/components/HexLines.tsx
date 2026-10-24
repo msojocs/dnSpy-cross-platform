@@ -20,8 +20,7 @@ export interface HexLineGeometry {
 export const spanLeft = (geometry: HexLineGeometry, position: number): number => geometry.textLeft + position * geometry.charWidth
 
 /** The cells of a line that have a byte the view could not read: dnSpy's `HexByteError`. */
-const isErrorCell = (line: HexBufferLine, cell: HexCell): boolean =>
-  cell.hasData && line.text.slice(cell.textSpan.start, cell.textSpan.end).includes('?') && /^\?+$/.test(line.text.slice(cell.textSpan.start, cell.textSpan.end))
+const isErrorCell = (cell: HexCell): boolean => cell.hasData && !cell.valid
 
 /**
  * One line of the dump, drawn as dnSpy's `DefaultTagger` colours it: the offset, the values in their two group
@@ -47,7 +46,7 @@ const HexLineText = memo(({ line, formatter, colorize, loaded, selection }: {
       if (formatter.showOffset)
         pieces.push(' ')
       line.valueCells.forEach((cell, index) => {
-        const error = isErrorCell(line, cell)
+        const error = isErrorCell(cell)
         pieces.push(
           <span
             key={`v${index}`}
@@ -71,7 +70,7 @@ const HexLineText = memo(({ line, formatter, colorize, loaded, selection }: {
         pieces.push(
           <span
             key={`a${index}`}
-            className={['hex-byte', classOf(cell.hasData && text === '?' ? 'hex-byte-error' : 'hex-ascii')].filter(Boolean).join(' ')}
+            className={['hex-byte', classOf(isErrorCell(cell) ? 'hex-byte-error' : 'hex-ascii')].filter(Boolean).join(' ')}
             data-hex-byte={cell.hasData ? cell.bufferStart : undefined}
             data-hex-column="ascii"
             data-selected={selected(cell)}

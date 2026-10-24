@@ -1,3 +1,4 @@
+using dnSpy.Backend.Contracts;
 using Microsoft.Win32.SafeHandles;
 
 namespace dnSpy.Backend.Core.HexFiles {
@@ -130,8 +131,11 @@ namespace dnSpy.Backend.Core.HexFiles {
 	/// </summary>
 	sealed class HexSearcher : IDisposable {
 		const int ChunkSize = 1024 * 1024;
-		readonly WorkspaceManager.IModuleEntry entry;
-		readonly SafeFileHandle handle;
+		readonly WorkspaceManager.IModuleEntry? entry;
+		readonly SafeFileHandle? handle;
+		/// <summary>A process's memory, searched only where it can be read (HexSearchServiceImpl.GetValidSpans).</summary>
+		readonly HexBuffer? memoryBuffer;
+		readonly IDebugProcessMemory? memory;
 		readonly long fileLength;
 		readonly HexSearchPattern pattern;
 		readonly bool noOverlaps;
@@ -148,6 +152,34 @@ namespace dnSpy.Backend.Core.HexFiles {
 			this.cancellationToken = cancellationToken;
 			fileLength = entry.FileLength;
 			handle = File.OpenHandle(entry.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.Asynchronous | FileOptions.RandomAccess);
+		}
+
+		/// <summary>A search of a debugged process's address space, over the spans of it that can be read.</summary>
+		public HexSearcher(IDebugProcessMemory memory, HexSearchPattern pattern, bool noOverlaps, int maxResults, CancellationToken cancellationToken) {
+			this.memory = memory;
+			memoryBuffer = new HexBuffer(new ProcessMemoryHexBufferSource(memory));
+			this.pattern = pattern;
+			this.noOverlaps = noOverlaps;
+			this.maxResults = maxResults;
+			this.cancellationToken = cancellationToken;
+			var end = memoryBuffer.Span.End;
+			fileLength = end > new HexPosition(long.MaxValue) ? long.MaxValue : (long)end.ToUInt64();
+		}
+
+		/// <summary>The readable parts of <c>[lo, hi)</c>: the whole range in a file, the readable regions in memory.</summary>
+		IEnumerable<(long Lo, long Hi)> SearchedSpans(long lo, long hi) {
+			if (memoryBuffer is null) {
+				yield return (lo, hi);
+				yield break;
+			}
+			if (hi <= lo)
+				yield break;
+			foreach (var span in memoryBuffer.GetValidSpans(HexSpan.FromBounds(new HexPosition((ulong)lo), new HexPosition((ulong)hi)), fullSpan: false, cancellationToken)) {
+				var start = Math.Max(lo, (long)span.Start.ToUInt64());
+				var end = span.End >= new HexPosition((ulong)hi) ? hi : (long)span.End.ToUInt64();
+				if (start < end)
+					yield return (start, end);
+			}
 		}
 
 		bool IsFull => results.Count >= maxResults;
@@ -196,6 +228,28 @@ namespace dnSpy.Backend.Core.HexFiles {
 		/// is followed by the next one starting after it, or — overlapping matches being wanted — one byte later.</summary>
 		async Task<long?> ForwardAsync(long lo, long hi) {
 			long? first = null;
+			foreach (var (spanLo, spanHi) in SearchedSpans(lo, hi)) {
+				if (IsFull)
+					break;
+				var found = await ForwardCoreAsync(spanLo, spanHi).ConfigureAwait(false);
+				first ??= found;
+			}
+			return first;
+		}
+
+		async Task<long?> ReverseAsync(long lo, long hi) {
+			long? first = null;
+			foreach (var (spanLo, spanHi) in SearchedSpans(lo, hi).Reverse()) {
+				if (IsFull)
+					break;
+				var found = await ReverseCoreAsync(spanLo, spanHi).ConfigureAwait(false);
+				first ??= found;
+			}
+			return first;
+		}
+
+		async Task<long?> ForwardCoreAsync(long lo, long hi) {
+			long? first = null;
 			var length = pattern.Length;
 			var lastStart = hi - length;
 			var next = lo;
@@ -219,7 +273,7 @@ namespace dnSpy.Backend.Core.HexFiles {
 		/// <summary>FindAllCoreReverse(state, span, options): the matches lying entirely inside <c>[lo, hi)</c>, descending.
 		/// A match is followed by the last one ending before it, or — overlapping matches being wanted — starting one byte
 		/// before it.</summary>
-		async Task<long?> ReverseAsync(long lo, long hi) {
+		async Task<long?> ReverseCoreAsync(long lo, long hi) {
 			long? first = null;
 			var length = pattern.Length;
 			var limit = hi - length;
@@ -247,20 +301,27 @@ namespace dnSpy.Backend.Core.HexFiles {
 			cancellationToken.ThrowIfCancellationRequested();
 			if (buffer is null || buffer.Length < count)
 				buffer = new byte[Math.Max(count, Math.Min(ChunkSize + pattern.Length - 1, (int)Math.Min(int.MaxValue, fileLength)))];
+			if (this.memory is { } process) {
+				var bytes = new byte[count];
+				var read = await Task.Run(() => process.ReadMemory((ulong)offset, bytes), cancellationToken).ConfigureAwait(false);
+				bytes.AsSpan(0, read).CopyTo(buffer);
+				buffer.AsSpan(read, count - read).Clear();
+				return buffer;
+			}
 			var memory = buffer.AsMemory(0, count);
 			var done = 0;
 			while (done < count) {
-				var read = await RandomAccess.ReadAsync(handle, memory[done..], offset + done, cancellationToken).ConfigureAwait(false);
+				var read = await RandomAccess.ReadAsync(handle!, memory[done..], offset + done, cancellationToken).ConfigureAwait(false);
 				if (read == 0)
 					break;
 				done += read;
 			}
 			buffer.AsSpan(done, count - done).Clear();
 			// The patches only ever cover what the tab shows; past `count` the buffer holds nothing the search reads.
-			HexPatchList.Overlay(entry, offset, buffer);
+			HexPatchList.Overlay(entry!, offset, buffer);
 			return buffer;
 		}
 
-		public void Dispose() => handle.Dispose();
+		public void Dispose() => handle?.Dispose();
 	}
 }

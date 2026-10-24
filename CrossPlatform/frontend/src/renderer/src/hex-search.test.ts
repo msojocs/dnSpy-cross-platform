@@ -29,4 +29,11 @@ describe('hex search', () => {
     // Backwards, the start is the last byte a match may end on.
     expect(findAllInBytes(pattern, data, 0, 2, { reverse: true, maxResults: 1 })).toEqual([2])
   })
+
+  it('maps case a character to a character, as .NET does: ß matches itself', () => {
+    const pattern = createSearchPattern('utf8String', 'straße', false, false)!
+    expect(pattern).toBeTruthy()
+    const data = new TextEncoder().encode('xSTRAßE')
+    expect(findAllInBytes(pattern, data, 0, 0, {})).toEqual([1])
+  })
 })

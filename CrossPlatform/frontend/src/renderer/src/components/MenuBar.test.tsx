@@ -65,7 +65,7 @@ const baseProps = (breakpoints: { canToggle?: boolean; onToggle?: () => void; it
   onLoadDependencies: vi.fn(),
   onReplaceMethodBodyWithStub: vi.fn(),
   onOpenHex: vi.fn(),
-  onShowHexAt: vi.fn(),
+  onShowHex: vi.fn(),
   onHexWriteBody: vi.fn(),
   onHexCopyBody: vi.fn(),
   onHexPasteBody: vi.fn(),
@@ -649,7 +649,7 @@ describe('MenuBar', () => {
       onLoadDependencies={vi.fn()}
       onReplaceMethodBodyWithStub={vi.fn()}
       onOpenHex={vi.fn()}
-      onShowHexAt={vi.fn()}
+      onShowHex={vi.fn()}
       onHexWriteBody={vi.fn()}
       onHexCopyBody={vi.fn()}
       onHexPasteBody={vi.fn()}
@@ -809,7 +809,7 @@ describe('MenuBar', () => {
       onLoadDependencies={vi.fn()}
       onReplaceMethodBodyWithStub={vi.fn()}
       onOpenHex={vi.fn()}
-      onShowHexAt={vi.fn()}
+      onShowHex={vi.fn()}
       onHexWriteBody={vi.fn()}
       onHexCopyBody={vi.fn()}
       onHexPasteBody={vi.fn()}
@@ -1294,52 +1294,50 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Go to MD Table Row/ })).not.toBeInTheDocument()
   })
 
-  it('opens the hex editor for the file the selection names, or for the open document', () => {
-    // dnSpy's file command reads the active document's tree node, and only falls back to the selected row
-    // when no document is open — and only a row that *is* a document (an assembly, a module, a PE-only or
-    // unknown file) can answer for a file. A namespace or a member names no file of its own.
+  it('opens the hex editor for the file the context names', () => {
+    // dnSpy's file command reads the context the Edit menu was given: the tree's selected row when that is a file
+    // (an assembly, a module, a PE-only or unknown file), or the file of the document in front of the viewer.
     const onOpenHex = vi.fn()
-    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', onOpenHex })
+    renderMenuWith({ selectionKind: 'module', selectionLabel: 'Example.dll', hex: { hexCreator: 'tree', hexFileModuleId: 'file-1' }, onOpenHex })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /^Open Hex Editor/ }))
-    expect(onOpenHex).toHaveBeenCalledTimes(1)
+    expect(onOpenHex).toHaveBeenCalledWith('file-1')
 
-    // A code document is open, so there is a file to open whether or not the tree names one.
+    // A context with no file — a part inside one, or the focus in neither the tree nor a viewer — has no entry.
     cleanup()
-    renderMenuWith({ activeDocument: 'code' })
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-    expect(screen.getByRole('menuitem', { name: /^Open Hex Editor/ })).toBeInTheDocument()
-
-    // A selection inside a module is not a file, and a hex or metadata-table tab is not a code document
-    // viewer, so neither puts the entry on the menu on its own.
-    cleanup()
-    renderMenuWith({ selectionKind: 'namespace', selectionLabel: 'N' })
+    renderMenuWith({ selectionKind: 'namespace', selectionLabel: 'N', hex: { hexCreator: 'tree' } })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
 
     cleanup()
-    renderMenuWith({ activeDocument: 'hex' })
+    renderMenuWith({ activeDocument: 'code' })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.queryByRole('menuitem', { name: /^Open Hex Editor/ })).not.toBeInTheDocument()
   })
 
   it('offers the method hex commands once the backend has resolved a method target', () => {
-    const onShowHexAt = vi.fn()
+    const onShowHex = vi.fn()
     const onHexWriteBody = vi.fn()
     const onHexCopyBody = vi.fn()
     const onHexPasteBody = vi.fn()
+    const method = { bodyOffset: 0x200, bodySize: 3, codeOffset: 0x201, codeSize: 2, returnTrueBody: 'Chcq', returnFalseBody: 'ChYq', emptyBody: null }
     renderMenuWith({
       selectionKind: 'method',
       selectionLabel: 'Run',
-      // What the backend sends for a method: the templates it does not have are nulls, not missing keys.
-      hexTarget: {
-        moduleId: 'm',
-        fileLength: 4096,
-        method: { bodyOffset: 0x200, bodySize: 3, codeOffset: 0x201, codeSize: 2, returnTrueBody: 'Chcq', returnFalseBody: 'ChYq', emptyBody: null },
-        fieldInitialValue: null,
-        resource: null,
+      hex: {
+        hexCreator: 'tree',
+        // What the backend sends for a method: the templates it does not have are nulls, not missing keys.
+        hexTarget: {
+          moduleId: 'm',
+          fileLength: 4096,
+          method,
+          fieldInitialValue: null,
+          resource: null,
+        },
+        hexTargetNodeId: 'n-run',
+        clipboardHexLength: 2,
       },
-      onShowHexAt,
+      onShowHex,
       onHexWriteBody,
       onHexCopyBody,
       onHexPasteBody,
@@ -1348,15 +1346,16 @@ describe('MenuBar', () => {
     // The statement command and the method command share a header; only the method one is on screen.
     expect(screen.getAllByRole('menuitem', { name: /^Show Instructions in Hex Editor/ })).toHaveLength(1)
     fireEvent.click(screen.getByRole('menuitem', { name: /^Show Instructions in Hex Editor/ }))
-    expect(onShowHexAt).toHaveBeenCalledWith('instructions')
+    expect(onShowHex).toHaveBeenCalledWith('m', { offset: 0x201, length: 2 })
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /^Show Method Body in Hex Editor/ }))
-    expect(onShowHexAt).toHaveBeenCalledWith('body')
+    expect(onShowHex).toHaveBeenCalledWith('m', { offset: 0x200, length: 3 })
 
+    const target = { nodeId: 'n-run', moduleId: 'm', method }
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /^Hex Write 'return true' Body/ }))
-    expect(onHexWriteBody).toHaveBeenCalledWith('returnTrue')
+    expect(onHexWriteBody).toHaveBeenCalledWith('returnTrue', target)
 
     // No empty-body template was resolved (none fits this body), so the entry is not on screen at all —
     // and neither are the field's or the resource's, whose parts of the target came back as nulls.
@@ -1365,15 +1364,15 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Show Initial Value in Hex Editor/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Show in Hex Editor/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('menuitem', { name: /^Hex Copy Method Body/ }))
-    expect(onHexCopyBody).toHaveBeenCalledTimes(1)
+    expect(onHexCopyBody).toHaveBeenCalledWith(target)
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /^Hex Paste Method Body/ }))
-    expect(onHexPasteBody).toHaveBeenCalledTimes(1)
+    expect(onHexPasteBody).toHaveBeenCalledWith(target)
   })
 
-  it('shows the statement hex command only while no method target is resolved', () => {
-    renderMenuWith({ activeDocument: 'code', hexStatement: { moduleId: 'm', range: { offset: 0x201, length: 2 } } })
+  it('shows the statement hex command only while no method definition is under the caret', () => {
+    renderMenuWith({ activeDocument: 'code', hex: { hexCreator: 'code', hexFileModuleId: 'm', hexStatement: { moduleId: 'm', range: { offset: 0x201, length: 2 } } } })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.getAllByRole('menuitem', { name: /^Show Instructions in Hex Editor/ })).toHaveLength(1)
     // dnSpy builds this command and the file one from the same tree node and shows only the more specific
@@ -1382,19 +1381,34 @@ describe('MenuBar', () => {
 
     cleanup()
     renderMenuWith({
-      hexStatement: { moduleId: 'm', range: { offset: 0x201, length: 2 } },
-      hexTarget: {
-        moduleId: 'm',
-        fileLength: 4096,
-        method: { bodyOffset: 0x200, bodySize: 3, codeOffset: 0x201, codeSize: 2, returnTrueBody: null, returnFalseBody: null, emptyBody: null },
-        fieldInitialValue: null,
-        resource: null,
+      hex: {
+        hexCreator: 'code',
+        hexStatement: { moduleId: 'm', range: { offset: 0x201, length: 2 } },
+        hexTarget: {
+          moduleId: 'm',
+          fileLength: 4096,
+          method: { bodyOffset: 0x200, bodySize: 3, codeOffset: 0x201, codeSize: 2, returnTrueBody: null, returnFalseBody: null, emptyBody: null },
+          fieldInitialValue: null,
+          resource: null,
+        },
+        hexTargetNodeId: 'n-run',
       },
     })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-    // Both would resolve to the same header; the selected method wins and the caret's entry goes away.
+    // Both would resolve to the same header; the method wins and the caret's statement entry goes away.
     expect(screen.getAllByRole('menuitem', { name: /^Show Instructions in Hex Editor/ })).toHaveLength(1)
     expect(screen.queryByRole('menuitem', { name: /^Show Method Body in Hex Editor/ })).toBeInTheDocument()
+  })
+
+  it('wears Go to MD Table Row\'s Shift+Alt+R for a context the tree or a viewer built', () => {
+    renderMenuWith({ selectionKind: 'method', mdTableRowToken: 0x06000002, onGoToMdTableRow: vi.fn(), hex: { hexCreator: 'tree' } })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByRole('menuitem', { name: /^Go to MD Table Row \(06000002\)/ })).toHaveTextContent('Shift+Alt+R')
+
+    cleanup()
+    renderMenuWith({ selectionKind: 'method', mdTableRowToken: 0x06000002, onGoToMdTableRow: vi.fn() })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByRole('menuitem', { name: /^Go to MD Table Row \(06000002\)/ })).not.toHaveTextContent('Shift+Alt+R')
   })
 
   it('drops the menu bar down with Alt, and puts it away with Alt again', async () => {

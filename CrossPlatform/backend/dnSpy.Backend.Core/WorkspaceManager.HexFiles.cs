@@ -377,7 +377,7 @@ public sealed partial class WorkspaceManager {
 			}
 		}
 
-		static HexSearchPattern DecodeSearchPattern(HexSearchRequest request) {
+		internal static HexSearchPattern DecodeSearchPattern(HexSearchRequest request) {
 			byte[] pattern;
 			byte[]? mask = null;
 			byte[]? alternate = null;

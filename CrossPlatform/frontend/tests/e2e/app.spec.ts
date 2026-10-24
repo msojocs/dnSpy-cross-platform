@@ -1007,15 +1007,18 @@ test.describe('the workspace shell', () => {
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
     // in it: an int getter gets no 'return true'/'return false' body, whose commands belong to bool
-    // methods. The row the click selected is shown in the tab in front, as dnSpy's tree shows its
-    // selection, so the file command has that document's file to open, ahead of the method's own bytes.
+    // methods. The tree has the focus, so the group acts on its selected row (dnSpy's HexMenuCommand.CreateContext),
+    // and a method row is not a file: the file command is not on the menu. Hex Paste Method Body is there only
+    // while the clipboard holds hexadecimal bytes that fit the body.
     await expect(page.getByRole('tab', { name: 'get_Code() : int' })).toBeVisible()
+    await application.evaluate(({ clipboard }) => clipboard.writeText('2A'))
     await page.getByRole('menuitem', { name: 'Edit' }).click()
+    await expect(page.getByRole('menuitem', { name: /^Hex Paste Method Body/ })).toBeVisible()
     // The shortcut rides along with the label in the item's own text, so it is trimmed off to compare order.
     const labels = (await page.getByRole('menu').last().getByRole('menuitem').allTextContents())
       .map((text) => text.replace(/(Ctrl|Shift|Alt)\+.*$/, '').trim())
     const start = labels.indexOf('Show Instructions in Hex Editor')
-    expect(labels.indexOf('Open Hex Editor')).toBe(start - 1)
+    expect(labels).not.toContain('Open Hex Editor')
     expect(start).toBeGreaterThanOrEqual(0)
     expect(labels.slice(start, start + 5)).toEqual([
       'Show Instructions in Hex Editor',
@@ -1026,6 +1029,10 @@ test.describe('the workspace shell', () => {
     ])
 
     await page.getByRole('menuitem', { name: 'Show Method Body in Hex Editor' }).click()
+    // dnSpy's FollowReference: the hex view takes the place of the getter's document in the tab in front, named
+    // after the file, and Back would return to the document.
+    await expect(page.getByRole('tab', { name: 'get_Code() : int' })).toHaveCount(0)
+    await expect(page.getByRole('tab', { name: /^dnSpy\.Backend\.Contracts\.dll$/ })).toBeVisible()
 
     // The command selects the bytes it names, so the getter's own body is read off the dump before anything
     // is written over it.
@@ -1038,15 +1045,11 @@ test.describe('the workspace shell', () => {
 
     // The write posts dnSpy's empty-body bytes: a tiny header whose two code bytes return the default. The
     // getter's real body is longer, so its remaining bytes stay where they are under the patch. The getter is
-    // still the tree's selection, which the Edit menu's hex commands act on; a click on its row would show it in
-    // the tab in front — the hex view's — the way dnSpy's tree replaces what the active tab shows.
+    // still the tree's selection, and the tree had the focus last, so the Edit menu's hex commands act on it; a
+    // click on its row would show it in the tab in front — the hex view's — the way dnSpy's tree replaces what the
+    // active tab shows. dnSpy writes without a word to the Output window.
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Hex Write Empty Body' }).click()
-    // The write narrates itself to the Output window, which the default layout no longer docks, so it is
-    // brought up before the line is read — the pane keeps the backlog, so opening it after the write still
-    // shows the message.
-    await showOutput()
-    await expect(page.getByText('Updated method body bytes for get_Code().')).toBeVisible()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
     await expect.poll(async () => (await markedBytes()).slice(0, 3)).toEqual(['0A', '16', '2A'])
 
@@ -1161,6 +1164,65 @@ test.describe('the workspace shell', () => {
     }
     await expect.poll(bytes).toEqual(original)
     await expect(page.getByText('Modified', { exact: true })).not.toBeVisible()
+  })
+
+  test('scrolls a drag selection past the hex view and keeps an incremental search typing', async () => {
+    await openAssemblyAndNamespace()
+    // Two document tabs, so the hex view can share the tab set with one that stays behind it: the tree shows what
+    // it selects in the tab in front, and the hex tab must not be that one when the assembly goes.
+    await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^HelloRequest @02000005$/ }).dblclick()
+    await expect.poll(async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll('\u00a0', ' ')).toContain('record HelloRequest')
+    await page.keyboard.press('Control+t')
+    await expect(page.getByRole('tab', { name: 'HelloRequest' })).toHaveCount(2)
+    const moduleRow = page.locator('.tree-row[data-kind="module"]').first()
+    await moduleRow.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Open Hex Editor' }).click()
+    const hex = page.locator('.hex-content')
+    const view = page.locator('.hex-view')
+    await expect(hex).toContainText('4D 5A')
+
+    // DefaultHexViewMouseProcessor: a drag held below the viewport keeps scrolling and extending the selection.
+    const area = (await hex.boundingBox())!
+    const first = (await page.locator('.hex-byte[data-hex-column="values"][data-hex-byte="0"]').boundingBox())!
+    await page.mouse.move(first.x + 2, first.y + first.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(first.x + 2, first.y + 20, { steps: 3 })
+    await page.mouse.move(first.x + 2, area.y + area.height + 80, { steps: 5 })
+    await expect.poll(async () => Number(await page.locator('.hex-line').first().getAttribute('data-line-offset'))).toBeGreaterThan(0x100)
+    await page.mouse.up()
+    expect(await view.getAttribute('data-selection-start')).toBe('0')
+    expect(Number(await view.getAttribute('data-selection-end'))).toBeGreaterThan(0x100)
+
+    // Ctrl+I: each key extends the search; the search's own caret moves do not end it, so no key is typed into
+    // the file.
+    await hex.focus()
+    await page.keyboard.press('Control+G')
+    const goto = page.getByRole('dialog', { name: 'Go to Offset' })
+    await goto.getByRole('textbox').fill('0x40')
+    await goto.getByRole('button', { name: 'OK' }).click()
+    await expect(view).toHaveAttribute('data-caret', String(0x40))
+    await page.keyboard.press('Control+I')
+    await page.keyboard.type('4D5A', { delay: 50 })
+    // The next "4D 5A" after the caret, its bytes as they were.
+    await expect.poll(async () => Number(await view.getAttribute('data-selection-end')) - Number(await view.getAttribute('data-selection-start'))).toBe(2)
+    expect(Number(await view.getAttribute('data-selection-start'))).toBeGreaterThan(0x40)
+    await expect(page.locator('.hex-byte[data-hex-column="values"][data-selected]')).toHaveText(['4D', '5A'])
+    await expect(page.getByRole('search')).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    // The hex tab is the file's: removing the assembly leaves it open on the file as it is on disk, read-only.
+    // The document tab behind it goes, and the tree selection the removal starts from shows there instead.
+    await page.getByRole('tab', { name: 'HelloRequest' }).first().click()
+    await page.locator('.tree-row[data-kind="assembly"]').first().click({ button: 'right' })
+    await page.getByRole('menu').getByRole('menuitem', { name: /^Remove dnSpy\.Backend\.Contracts/ }).click()
+    await expect(page.getByText('No assemblies loaded')).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'dnSpy.Backend.Contracts.dll' })).toBeVisible()
+    await page.getByRole('tab', { name: 'dnSpy.Backend.Contracts.dll' }).click()
+    await expect(hex).toBeVisible()
+    await hex.focus()
+    await page.keyboard.press('Control+Home')
+    await expect(hex).toContainText('4D 5A')
+    await expect(hex).toHaveAttribute('aria-readonly', 'true')
   })
 
   test('copies Hex text as plain text and themed HTML to the system clipboard', async () => {
@@ -2316,6 +2378,22 @@ test.describe('the in-process debug engine', () => {
       await expect(page.locator('.status-bar')).toContainText('Stopped: entry')
       await expect(hex).toContainText('50 45 00 00')
 
+      // The buffer is the whole address space: Alt+Down goes to the last byte of the readable run the module is in,
+      // Alt+Up back to the run's start, from the regions the system maps.
+      const caret = async (): Promise<number> => Number(await view.getAttribute('data-caret'))
+      await goTo(base)
+      await hex.press('Alt+ArrowDown')
+      await expect.poll(caret).toBeGreaterThan(base)
+      await hex.press('Alt+ArrowUp')
+      await expect.poll(caret).toBeLessThanOrEqual(base)
+      // Find searches the readable memory in the backend; the module's own header is one match.
+      await goTo(base)
+      await hex.press('Control+F')
+      await page.getByRole('search').getByRole('textbox', { name: 'Find', exact: true }).fill('4D5A9000')
+      await expect.poll(async () => Number(await view.getAttribute('data-selection-end')) - Number(await view.getAttribute('data-selection-start'))).toBe(4)
+      await hex.press('Escape')
+      await expect(page.getByRole('search')).toHaveCount(0)
+
       await goTo(base)
       await page.keyboard.press('F12')
       await expect(page.locator('.hex-structure-view')).toBeVisible()
@@ -2781,10 +2859,13 @@ test.describe('the code viewer context menu', () => {
     expect(index('Edit IL Instructions...')).toBeGreaterThan(index('Edit Method Body...'))
     expect(index('Copy MD Token')).toBeGreaterThan(index('Edit IL Instructions...'))
     expect(index('Copy Full Name')).toBeGreaterThan(index('Copy MD Token'))
-    // A code document is open in front of this menu, so the hex editor is one command away from it: the
-    // file the command opens is this document's, and the caret's own statement follows it inside the group.
-    expect(index('Open Hex Editor')).toBeGreaterThan(index('Copy Full Name'))
-    expect(index('Show Instructions in Hex Editor')).toBeGreaterThan(index('Open Hex Editor'))
+    // The hex group acts on the caret: it is on a call inside Main's last statement, so the statement's own
+    // instructions are what the group offers. dnSpy's file command steps aside for it (GetDocumentNode answers
+    // null while the statement's command is visible), and a call names no member of its own (GetMemberDef takes
+    // a definition only), so none of the method commands are on the menu either.
+    expect(index('Show Instructions in Hex Editor')).toBeGreaterThan(index('Copy Full Name'))
+    expect(index('Open Hex Editor')).toBe(-1)
+    expect(index('Show Method Body in Hex Editor')).toBe(-1)
     expect(index('Analyze')).toBeGreaterThan(index('Show Instructions in Hex Editor'))
     expect(index('Find')).toBeGreaterThan(index('Analyze'))
     // Nothing this port cannot run is on screen, and neither the bookmark group nor Select All is in it.
@@ -2811,9 +2892,11 @@ test.describe('the code viewer context menu', () => {
     await rightClickThrowAndCatch()
     await page.getByRole('menu', { name: 'Code editor' }).getByRole('menuitem', { name: 'Show Instructions in Hex Editor' }).click()
     // The hex view selects the bytes the command named, so the selection is what says the tab really opened on
-    // the selected method's code rather than on the module at large. The tab is named after the file.
+    // the statement's code rather than on the module at large. dnSpy's FollowReference puts the view in the tab in
+    // front, in place of Main's document, and names the tab after the file.
     await expect(page.locator('.hex-byte[data-hex-column="values"][data-selected]').first()).toBeVisible()
     await expect(page.getByRole('tab', { name: /^DebugTarget\.dll$/ })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Main(string[]) : void' })).toHaveCount(0)
   })
 
   test('follows the reference under the caret into a tab of its own', async () => {

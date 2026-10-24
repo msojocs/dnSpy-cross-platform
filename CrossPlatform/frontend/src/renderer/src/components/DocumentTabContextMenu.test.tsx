@@ -5,6 +5,7 @@ import {
   buildDocumentTabMenuItems,
   cloneDocumentTab,
   closeAllDocumentTabs,
+  closeDocumentTabsFor,
   closeOtherDocumentTabs,
   createDocumentTabGroup,
   getDocumentTabMenuState,
@@ -235,5 +236,29 @@ describe('DocumentTabContextMenu tab group commands', () => {
     if (!entry || entry.type === 'divider') throw new Error('Missing menu item close-other-groups')
     entry.onSelect?.({} as never)
     expect(onCloseOtherGroups).toHaveBeenCalledWith(tab)
+  })
+})
+
+describe('closeDocumentTabsFor', () => {
+  it('closes the tabs of a removed document but keeps its hex tab on the file, with the id it now goes by', () => {
+    const model = Model.fromJson({
+      global: {},
+      layout: {
+        type: 'row',
+        children: [{
+          type: 'tabset',
+          id: 'documents',
+          children: [
+            { type: 'tab', id: 'doc', name: 'A', component: 'document', config: { documentId: 'm1' } },
+            { type: 'tab', id: 'hex', name: 'A.dll', helpText: '/x/A.dll', component: 'hex', config: { moduleId: 'm1' } },
+          ],
+        }],
+      },
+    } satisfies IJsonModel)
+    const kept = vi.fn()
+    closeDocumentTabsFor(model, 'm1', kept)
+    expect(model.getNodeById('doc')).toBeUndefined()
+    expect((getTab(model, 'hex').getConfig() as { moduleId: string }).moduleId).toBe('hexfile:/x/A.dll')
+    expect(kept).toHaveBeenCalledWith('m1', 'hexfile:/x/A.dll')
   })
 })

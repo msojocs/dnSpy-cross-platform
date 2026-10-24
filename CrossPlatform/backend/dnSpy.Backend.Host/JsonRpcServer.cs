@@ -503,6 +503,15 @@ internal sealed class JsonRpcServer {
 			case RpcMethods.DebugMemoryFileInfo:
 				GetDebugSessions();
 				return await workspaces.GetDebugMemoryFileInfoAsync(DeserializeParams<DebugMemoryFileInfoRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemorySpace:
+				GetDebugSessions();
+				return await workspaces.GetDebugMemorySpaceAsync(DeserializeParams<DebugMemorySpaceRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemoryValidSpan:
+				GetDebugSessions();
+				return await workspaces.GetDebugMemoryValidSpanAsync(DeserializeParams<DebugMemoryValidSpanRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.DebugMemorySearch:
+				GetDebugSessions();
+				return await workspaces.SearchDebugMemoryAsync(DeserializeParams<DebugMemorySearchRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugMemoryRefresh:
 				GetDebugSessions();
 				workspaces.RefreshDebugMemory(DeserializeParams<DebugMemoryRefreshRequest>(request));

@@ -2418,6 +2418,12 @@ export interface DnSpyApi {
   resolveDebugMemoryPosition(sessionId: string, caretAddress: number, kind: 'file' | 'rva', value: number): Promise<HexResolvePositionResponse>
   goToDebugMemoryMetadata(sessionId: string, caretAddress: number, kind: HexMetadataKind, value: number): Promise<HexGoToMetadataResponse>
   getDebugMemoryFileInfo(sessionId: string, address: number): Promise<{ hasMetadata: boolean; hasPeHeaders: boolean }>
+  /** One past the last address of the process's address space, which the Memory window's buffer spans. */
+  getDebugMemorySpace(sessionId: string): Promise<{ end: number }>
+  /** `HexBuffer.GetNextValidSpan` (forward) or `GetPreviousValidSpan` over the process's memory; nulls for none. */
+  getDebugMemoryValidSpan(sessionId: string, position: number, bounds: number, forward: boolean, fullSpan: boolean): Promise<{ start: number | null; end: number | null }>
+  /** dnSpy's hex search over the readable memory of a debugged process. */
+  searchDebugMemory(sessionId: string, request: HexSearchRequest): Promise<HexSearchResponse>
   /** The encodings .NET lists (`Encoding.GetEncodings()`), sorted by display name. */
   getEncodings(): Promise<{ encodings: { codePage: number; name: string; displayName: string }[] }>
   /** Text as bytes in a code page. */
@@ -2428,11 +2434,14 @@ export interface DnSpyApi {
   getHexToolTipInfo(workspaceId: string, moduleId: string, position: number): Promise<HexToolTipInfoResponse>
   /** The file, structure, field and references at a byte, for the hex view's commands. */
   getHexPositionInfo(workspaceId: string, moduleId: string, position: number): Promise<HexPositionInfoResponse>
-  /** Saves a byte range of the file to a file the user picks — dnSpy's Save Selection. Answers the path
-   * written, or undefined when the dialog was cancelled. */
-  saveHexSelection(workspaceId: string, moduleId: string, offset: number, count: number): Promise<string | undefined>
-  /** Saves bytes the view has read — a process's memory — to a file the user picks. */
-  saveHexBytes(base64Data: string): Promise<string | undefined>
+  /** dnSpy's `PickSaveFilename.GetFilename(null, "bin")` for Save Selection; undefined when cancelled. */
+  pickHexSaveFile(): Promise<string | undefined>
+  /** The system clipboard's text, read at once by the main process (`clipboard.readText`). */
+  readClipboardText(): Promise<string>
+  /** Writes a chunk of a file Save Selection is saving: the first one creates the file, the others are appended. */
+  writeHexFileChunk(filePath: string, base64Data: string, append: boolean): Promise<void>
+  /** Deletes a file Save Selection could not finish, as `HexBufferDataSaver` does. */
+  deleteHexFile(filePath: string): Promise<void>
   getModuleInfo(workspaceId: string, moduleId: string): Promise<ModuleInfoResponse>
   beginEdit(workspaceId: string): Promise<BeginEditResponse>
   getMethodBody(workspaceId: string, methodNodeId: string): Promise<MethodBodyResponse>

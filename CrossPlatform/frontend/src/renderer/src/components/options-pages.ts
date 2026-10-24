@@ -810,7 +810,7 @@ const hexEditorGroups = (base: string): PageSpec[] => [
           { kind: 'checkbox', path: `${base}.general.valuesLowerCaseHex`, labelKey: 'Lower case hex (values)' },
           { kind: 'checkbox', path: `${base}.general.offsetLowerCaseHex`, labelKey: 'Lower case hex (offset)' },
           { kind: 'checkbox', path: `${base}.general.enableColorization`, labelKey: 'Colorize the text' },
-          { kind: 'number', path: `${base}.general.groupSizeInBytes`, labelKey: 'Group size', min: 0, max: 64 },
+          { kind: 'number', path: `${base}.general.groupSizeInBytes`, labelKey: 'Group size', min: 0, max: 2147483647 },
           {
             kind: 'select',
             path: `${base}.general.hexOffsetFormat`,

@@ -27,7 +27,7 @@ export class HexViewModel {
   /** The lines the viewport holds whole. */
   viewportLines = 1
   overwriteMode = true
-  /** The character of the line the caret wants to be at when it moves up or down — `preferredXCoordinate`. */
+  /** Where on the line, in characters, the caret wants to be when it moves up or down — `preferredXCoordinate`. */
   private preferredLinePosition: number | undefined
   /** The caret line's place in the viewport, which paging keeps — `preferredYCoordinate`. */
   private preferredViewportLine = 0
@@ -87,12 +87,42 @@ export class HexViewModel {
     const filter = (position: number): number => Math.max(formatter.startPosition, Math.min(formatter.endPosition, position))
     this.anchorPoint = filter(this.anchorPoint)
     this.activePoint = filter(this.activePoint)
-    this.setCaretCore(this.createColumnPosition({ ...this.activePosition, position: formatter.filterAndVerify(this.activePosition.position), cellPosition: 0 }, this.caret.activeColumn))
+    this.caret = this.updatedCaretPosition()
     this.topLine = Math.min(this.maxTopLine, formatter.getLineNumber(filter(firstVisible)))
     // A new layout moves the characters (a wider offset column, another value format), so the column the caret
     // keeps going up and down in is taken again from where the caret is now.
     this.capturePreferredLinePosition()
     this.changed()
+  }
+
+  /**
+   * `HexCaretImpl.GetUpdatedCaretPosition`: the caret's byte in the new lines, in the other column when its own has
+   * no cell there (a column that is no longer shown), kept as it was when both cells still hold it.
+   */
+  private updatedCaretPosition(): HexCaretPosition {
+    const formatter = this.formatter
+    const start = formatter.startPosition
+    if ((!formatter.showValues && !formatter.showAscii) || formatter.endPosition === start)
+      return { activeColumn: 'values', valuePosition: { column: 'values', position: start, cellPosition: 0 }, asciiPosition: { column: 'ascii', position: start, cellPosition: 0 } }
+    // The ASCII position is the byte itself, which a value cell's start is not.
+    const position = Math.max(start, Math.min(formatter.endPosition, this.caret.asciiPosition.position))
+    const line = this.line(position)
+    const valueCell = cellAt(line.valueCells, position)
+    const asciiCell = cellAt(line.asciiCells, position)
+    let activeColumn = this.caret.activeColumn
+    if (activeColumn === 'values' && !valueCell)
+      activeColumn = 'ascii'
+    else if (activeColumn === 'ascii' && !asciiCell)
+      activeColumn = 'values'
+    const valuePosition: HexCellPosition = { column: 'values', position: valueCell ? valueCell.bufferStart : start, cellPosition: 0 }
+    const asciiPosition: HexCellPosition = { column: 'ascii', position: asciiCell ? (valueCell?.bufferStart ?? asciiCell.bufferStart) : start, cellPosition: 0 }
+    const canReUse = (old: HexCellPosition, cell: HexCell | undefined): boolean => cell !== undefined && old.position >= cell.bufferStart && old.position < cell.bufferEnd
+    if (canReUse(this.caret.valuePosition, valueCell) && canReUse(this.caret.asciiPosition, asciiCell)) {
+      // The character in the cell stays, on a cell that may now be narrower.
+      const width = valueCell!.cellSpan.end - valueCell!.cellSpan.start
+      return { ...this.caret, valuePosition: { ...this.caret.valuePosition, cellPosition: Math.min(width - 1, this.caret.valuePosition.cellPosition) } }
+    }
+    return { activeColumn, valuePosition, asciiPosition }
   }
 
   setViewportLines(count: number): void {
@@ -168,7 +198,8 @@ export class HexViewModel {
     const line = this.line(this.caretPosition)
     const cells = this.caret.activeColumn === 'values' ? line.valueCells : line.asciiCells
     const cell = cellAt(cells, this.caretPosition)
-    this.preferredLinePosition = cell ? cell.cellSpan.start + this.activePosition.cellPosition : undefined
+    // SavePreferredXCoordinate: the middle of the caret's character.
+    this.preferredLinePosition = cell ? cell.cellSpan.start + this.activePosition.cellPosition + 0.5 : undefined
   }
 
   private capturePreferredViewportLine(): void {
@@ -198,18 +229,21 @@ export class HexViewModel {
     this.moveCaretTo(position, this.caret.activeColumn)
   }
 
-  /** `HexCaret.MoveTo(HexViewLine, xCoordinate)`: the cell closest to a character of a line. */
-  moveCaretToLinePosition(lineNumber: number, linePosition: number | undefined, captureHorizontal: boolean): void {
+  /**
+   * `HexCaret.MoveTo(HexViewLine, xCoordinate)`: the cell closest to a point of a line, `x` in characters from the
+   * line's start. A point on the space between two values goes to the value on its nearer side.
+   */
+  moveCaretToLinePosition(lineNumber: number, x: number | undefined, captureHorizontal: boolean, captureVertical = true): void {
     const line = this.line(this.formatter.getLineStart(Math.max(0, Math.min(this.lineCount - 1, lineNumber))))
     let position: HexCellPosition | undefined
-    if (linePosition === undefined)
+    if (x === undefined)
       position = { column: this.caret.activeColumn, position: line.bufferStart, cellPosition: 0 }
     else {
-      let info = linePositionInfo(this.formatter, line, linePosition)
+      let info = linePositionInfo(this.formatter, line, Math.max(0, Math.floor(x)))
       if (info.type === 'valueCellSeparator') {
-        const next = linePositionInfo(this.formatter, line, linePosition + 1)
-        if (next.type === 'valueCell')
-          info = next
+        const insertion = linePositionInfo(this.formatter, line, Math.max(0, Math.round(x)))
+        if (insertion.type === 'valueCell')
+          info = insertion
       }
       position = closestCellPosition(this.formatter, line, info, true)
     }
@@ -217,7 +251,8 @@ export class HexViewModel {
     this.setCaretCore(this.createColumnPosition(position))
     if (captureHorizontal)
       this.capturePreferredLinePosition()
-    this.capturePreferredViewportLine()
+    if (captureVertical)
+      this.capturePreferredViewportLine()
     this.changed()
   }
 
@@ -228,7 +263,7 @@ export class HexViewModel {
 
   /** `HexCaret.MoveToPreferredCoordinates`: the line at the caret's place in the viewport. */
   private moveCaretToPreferredCoordinates(): void {
-    this.moveCaretToLine(Math.min(this.lineCount - 1, this.topLine + this.preferredViewportLine))
+    this.moveCaretToLinePosition(Math.min(this.lineCount - 1, this.topLine + this.preferredViewportLine), this.preferredLinePosition, false, false)
   }
 
   /** `HexCaret.ToggleActiveColumn`. */
@@ -628,9 +663,9 @@ export class HexViewModel {
   }
 
   /** `MoveCaret(HexViewLine, x, extendSelection)`: a click, Shift extending the selection. */
-  moveCaretByMouse(lineNumber: number, linePosition: number, extendSelection: boolean): void {
+  moveCaretByMouse(lineNumber: number, x: number, extendSelection: boolean): void {
     const anchor = this.anchorPositionOrCaret()
-    this.moveCaretToLinePosition(lineNumber, linePosition, true)
+    this.moveCaretToLinePosition(lineNumber, x, true)
     if (extendSelection)
       this.selectToCaret(anchor)
     else
@@ -638,31 +673,11 @@ export class HexViewModel {
     this.changed()
   }
 
-  /** `MoveToValidStartEnd` over a buffer that is all readable: the start and the end of the bytes. */
-  moveToNextValidStartEnd(extendSelection: boolean): void {
-    const start = this.caretPosition
-    const last = Math.max(this.bufferStart, this.bufferEnd - 1)
-    if (start >= last)
-      return
-    this.moveToValidStartEnd(last, extendSelection)
-  }
-
-  moveToPreviousValidStartEnd(extendSelection: boolean): void {
-    const start = this.caretPosition
-    if (start <= this.bufferStart)
-      return
-    this.moveToValidStartEnd(this.bufferStart, extendSelection)
-  }
-
-  private moveToValidStartEnd(position: number, extendSelection: boolean): void {
+  /** `MoveToValidStartEnd`: the caret to a position the view's range is clipped to, the selection extended or cleared. */
+  moveToValidStartEnd(position: number, extendSelection: boolean): void {
     const anchor = this.anchorPositionOrCaret()
     this.moveCaretToPosition(Math.max(this.bufferStart, Math.min(this.bufferEnd, position)))
     this.afterMove(anchor, extendSelection)
-  }
-
-  /** `SelectAllBytesBlock`: the readable block around the caret, which for a file is all of it. */
-  selectAllBytesBlock(): void {
-    this.selectAndMove(this.bufferStart, this.bufferEnd)
   }
 
   /** `SelectCore`: a span selected and the caret on its last byte, clipped to the visible bytes. */

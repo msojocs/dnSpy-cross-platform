@@ -46,7 +46,7 @@
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
 | 调试器 | ~97% | 82 | 1 | 2 | 5 | 除 Mono/Unity 外对齐 WPF：断点按 IL 位置在 C#/VB/IL 视图都能下、WPF 的 Breakpoints 窗口与 XML 断点文件、跨 await 单步、多进程与「中断所有进程」、hex 编辑器式的 Memory 窗口与 Disassembly 标签、动态模块与内存模块；Roslyn 表达式求值与 func-eval |
 | 程序集编辑（AsmEditor） | 100% | 71 | 0 | 0 | 1 | 全部功能点对齐 WPF：C#/VB 源码编辑与编译器设置、方法体三页编辑器（含指令剪贴板与四个操作数窗口）、图像与 ImageListStreamer 资源、新建程序集与 NetModule、按保存点的修改标记、Save Module 五页写出选项与带进度/取消的 Save All、PE 头与元数据表字段编辑、MD 表命令、Copy IL Bytes |
-| C# 交互窗口 | ~98% | 24 | 1 | 0 | 2 | 除 UI 线程与 VB 外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页 |
+| C# 交互窗口 | 100% | 25 | 0 | 0 | 2 | 除 UI 线程与 VB（WPF 自身排除）外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API 与完整的 CachedWriter 打印接口、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页全部生效（行压缩、选择边距、缩放控制） |
 | 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
 | 反编译与语言 | ~92% | 22 | 4 | 0 | 1 | C#、IL、IL with C# 对齐 WPF：IL 为分支反汇编器的移植，C# 页的分支独有选项（token 注释、成员顺序、修饰符等）写在包的输出上，程序集/模块/命名空间节点照 WPF 只写头部与特性；BAML 选项与 Disassemble BAML、GUI 导出项目齐备；VB 仍是 C# 的转换，三个 C# 选项包不支持 |
 | 代码编辑器与文档标签 | 100% | 31 | 0 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info（含图标）、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；2026-10-20 补上选择边距、行压缩与虚拟空格，Text Viewer 页全部生效 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 469 / 🟡 14 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 470 / 🟡 13 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-25 补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -875,7 +875,9 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 
 ### 4.14 C# 交互窗口（Scripting）
 
-完成度约 98%（✅ 24 / 🟡 1 / ❌ 0 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`FE/script-lines.ts`、`BE/Scripting/CSharpScriptService.cs`；RPC `script/evaluate`、`script/reset`、`script/isComplete`、`script/classify`，通知 `script/output`，以及宿主反向请求 `client/request` / `client/response`。
+完成度 100%（✅ 25 / 🟡 0 / ❌ 0 / ⛔ 2）。WPF 范围：`Extensions/dnSpy.Scripting.Roslyn/`、`WPF/Scripting/`。跨平台实现：`FE/components/CSharpInteractive.tsx`、`FE/script-lines.ts`、`BE/Scripting/CSharpScriptService.cs`；RPC `script/evaluate`、`script/reset`、`script/isComplete`、`script/classify`，通知 `script/output`，以及宿主反向请求 `client/request` / `client/response`。
+
+2026-10-25 补齐 REPL 选项页的最后几项：日志与输入框共用 Word Wrap、行号、滚动条、行压缩、选择边距与缩放；日志按 `ReplCustomLineNumberMarginOwner` 的规则每个子缓冲区从 1 编号。另按 WPF 修正 Ctrl+Enter（`Submit()` 先移到末尾并清除选区）与无选区时 Copy 取当前行（`CutOrCopyBlankLineIfNoSelection`），`#help` 的命令名用 `PreprocessorKeyword` 着色，并补上 `CachedWriter` 的 `ITextPrinter` / `IOutputWriter` 全部方法（创建时克隆 PrintOptions）。
 
 脚本在后端 Host 进程内执行；计划文档 §3.2 写的是「独立子进程隔离执行环境」，与实现不符。
 
@@ -885,28 +887,28 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 | 持久会话，变量跨提交保留 | `Common/ScriptControlVM.cs` | ✅ | |
 | 返回值、诊断、异常格式化 | 同上 | ✅ | 诊断最多 5 条，其余按 WPF 写成 `+ additional N error(s)` |
 | 横幅与提示语 | `CSharp/CSharpControlVM.cs` | ✅ | 开窗依次打印引擎版本、`Loading context from '...'`（找到响应文件时）和 `Type "#help" for more information.` |
-| `#help` | `Common/HelpCommand.cs` | ✅ | 与 WPF 同一张表：Enter、Ctrl+Enter、Shift+Enter、Esc、Alt+↑/↓、Ctrl+Alt+↑/↓、Ctrl+A |
-| 清屏 | `Common/ClearCommand.cs` | ✅ | 工具栏、右键菜单与 Ctrl+L |
-| 重置 | `Common/ResetCommand.cs` | ✅ | `#reset [noconfig]`；取消旧会话、触发 `ScriptResetting`，随即建立新会话，不等待不响应取消的脚本（缺陷 #8 已修复） |
+| `#help` | `Common/HelpCommand.cs` | ✅ | 与 WPF 同一张表：Enter、Ctrl+Enter、Shift+Enter、Esc、Alt+↑/↓、Ctrl+Alt+↑/↓、Ctrl+A；命令名按 `HelpCommand` 用 `PreprocessorKeyword` 着色，`#clear, #cls` 这类多个名字逐个着色 |
+| 清屏 | `Common/ClearCommand.cs` | ✅ | 工具栏、右键菜单与 Ctrl+L；同 WPF 的 `ClearScreen`，日志与当前输入一起清掉 |
+| 重置 | `Common/ResetCommand.cs` | ✅ | `#reset [noconfig]`；取消旧会话、触发 `ScriptResetting`，随即建立新会话，不等待不响应取消的脚本（缺陷 #8 已修复）；当前输入随 `ReplEditor.Reset` 一起丢弃 |
 | `#r` / `#load` 与搜索路径 | `ScriptControlVM.cs` | ✅ | 相对路径按用户目录、`~/scripts`、数据目录/scripts、程序目录/scripts 解析；`#r` 的简单程序集名先查运行时程序集，再交给 Roslyn |
 | 预置引用与 `.rsp` | `CSharpInteractive.rsp` | ✅ | 读程序目录与数据目录的 `CSharpInteractive.rsp`（随 Host 发布并可改），支持 `/r`、`/u`、`/lib`、`/loadpath`；`#reset noconfig` 跳过 |
-| 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | ✅ | Enter 只提交 `#` 命令或 `IsCompleteSubmission` 为真的输入，否则换行；Ctrl+Enter 强制提交；Shift+Enter 换行；Escape 清空输入 |
+| 提交键（按完整性提交） | `WPF/Text/Editor/ReplEditor.cs` | ✅ | Enter 只提交 `#` 命令或 `IsCompleteSubmission` 为真的输入，否则换行；Ctrl+Enter 照 `Submit()` 先移到输入末尾、清除选区再强制提交；Shift+Enter 换行；Escape 清空输入 |
 | 历史 | `Text/Editor/ReplCommandInfoProvider.cs` | ✅ | Alt+↑/↓ 遍历；Ctrl+Alt+↑/↓ 只选匹配当前输入的命令；保留最近 100 条 |
 | Escape 清空输入、Ctrl+A 两段选择 | `ReplCommandTargetFilter.cs` | ✅ | 第一次 Ctrl+A 选当前输入，第二次选整个日志 |
 | 输入代码语义着色 | `ScriptControlVM.cs` | ✅ | `script/classify` 按会话的下一次提交编译输入，用 `RoslynClassifier` 的映射给出 dnSpy 主题色，未绑定的名字为红色；回显保留输入时的颜色（见 4.15） |
 | Print / PrintLine / PrintError | `dnSpy.Contracts.DnSpy/Scripting/Roslyn/IScriptGlobals.cs` | ✅ | 全套重载：格式串、`TextColor`、`object` 值、异常、`PrintLineError`；`Print` 留在当前行，`PrintLine` 结束它 |
-| 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ✅ | `TextColor` 枚举（复制 WPF 的全部颜色名）、`Write(ColorAndText)`、`CreateWriter()`、`IOutputWriter` / `IOutputWritable` |
+| 彩色输出 API | `Common/ScriptGlobals.cs`、`CachedWriter.cs` | ✅ | `TextColor` 枚举（复制 WPF 的全部颜色名）、`Write(ColorAndText)`、`CreateWriter()`、`IOutputWriter` / `IOutputWritable`；`ICachedWriter` 实现 `ITextPrinter` 的全部打印方法（含 `PrintError`/`PrintLineError`）与 `IOutputWriter`，创建时克隆 `PrintOptions`（同 WPF 的 `CachedWriter`） |
 | 输出实时出现 | 同上 | ✅ | 每行以 `script/output` 通知推送，带 generation；脚本在后台线程的打印也继续追加到日志 |
 | PrintOptions | `Common/PrintOptionsImpl.cs` | ✅ | Ellipsis、EscapeNonPrintableCharacters、MaximumOutputLength、MemberDisplayFormat、NumberRadix、AutoColorizeObjects |
 | `Resolve<T>` 访问 dnSpy 服务 | `WPF/Scripting/ServiceLocator.cs` | ✅ | 后端服务注册表；Host 登记 `WorkspaceManager`，脚本可用 `Resolve<WorkspaceManager>()` 读取已打开的程序集。可解析的服务比 WPF 的窗口服务少 |
 | 消息框与输入框 | `ScriptGlobals.cs` | ✅ | `Show`/`ShowYesNo`/… 走客户端原生消息框，`Ask<T>` 弹输入框并按 converter/verifier 重问直到有效或取消；没有 `ownerWindow` 参数（WPF 的 `Window` 类型） |
 | UI 线程（UIDispatcher、`UI(...)`） | 同上 | ⛔ | WPF Dispatcher 专属 |
 | 生命周期与协作取消（Token、Break） | 同上 | ✅ | `Token`、`ScriptResetting`（重置时先取消令牌再触发，未注销的脚本输出仍可见）、`Break()` |
-| 复制、Copy Code、剪切、粘贴 | `Common/Commands.cs` | ✅ | 右键菜单与 Ctrl+C / Ctrl+Shift+C / Ctrl+X / Ctrl+V；Copy Code 要有选区，取提交过的代码（日志里的选区按整行取，WPF 是精确字符区间） |
+| 复制、Copy Code、剪切、粘贴 | `Common/Commands.cs` | ✅ | 右键菜单与 Ctrl+C / Ctrl+Shift+C / Ctrl+X / Ctrl+V；Copy Code 要有选区，取提交过的代码（日志里的选区按整行取，WPF 是精确字符区间）；没有选区时 Copy 取输入框的当前行，同 WPF 默认打开的 `CutOrCopyBlankLineIfNoSelection` |
 | 保存文本 / 保存代码 | `Commands/RoslynReplIds.cs` | ✅ | Ctrl+S / Ctrl+Shift+S 与右键菜单；Save 写整个窗口（含提示符），Save Code 只写提交过的代码与当前输入（选中的日志行按整行取） |
-| 自动换行开关 | `Common/ReplSettings.cs` | ✅ | 工具栏复选框，状态存进 REPL 选项 |
-| 显示行号开关 | `Common/Commands.cs` | ✅ | 右键菜单与选项页；默认开（同 WPF 的 `ShowLineNumbers`）；日志与输入框是分开的视图，行号画在输入框上 |
-| REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | 🟡 | General（自动换行、行号、当前行高亮）、Scroll Bars、Tabs 与 Advanced 的 Indicator margin / Mouse wheel zoom / Don't add extra line spacing 已生效；Advanced 的压缩空行、Selection margin、Zoom control、引用高亮与缩进参考线在拆分后的 Monaco 输入框里没有对应 |
+| 自动换行开关 | `Common/ReplSettings.cs` | ✅ | 工具栏复选框，状态存进 REPL 选项；日志与输入框一起换行，关闭后日志横向滚动 |
+| 显示行号开关 | `Common/Commands.cs` | ✅ | 右键菜单与选项页；默认开（同 WPF 的 `ShowLineNumbers`）；日志与输入框都画行号。日志按 `ReplCustomLineNumberMarginOwner` 每个子缓冲区（每次提交、每段输出）从 1 计，连续提交在 Input1/Input2 两种颜色间交替，输出行用 Output 色；行号是边距的伪元素，不进入复制/选择的文本 |
+| REPL 选项页 | `WPF/Text/Repl/*AppSettingsPage.cs` | ✅ | General（自动换行、行号、当前行高亮）、Scroll Bars（日志与输入框都生效）、Tabs（制表符宽度与是否用空格）与 Advanced 全部生效：空行/非字母行压缩（日志逐行画高度，输入框用 Monaco 的行高装饰）、Selection margin（日志的空白边距与 Monaco 的行装饰边距，按住可整行选择并拖动扩选）、Indicator margin、Mouse wheel zoom、Zoom control、Don't add extra line spacing。缩放级别按 REPL 选项保存（WPF 的 `ZoomLevel`），Ctrl+滚轮、缩放键与 Zoom control 都改它；缩放作用于日志与输入框的文字，不放大工具栏。Monaco 只有一个 Tab 宽度，无法把缩进宽度与显示宽度分开设置；WPF 的 REPL 按 Tab 键插入时用的也是 Tab 宽度（`ReplEditorOperations.Indent` 取 `GetTabSize`），所以两条路径的文字一致 |
 | VB Interactive | `VisualBasic/*` | ⛔ | WPF 自己在 csproj 中排除了 VB 文件 |
 
 实现要点：
@@ -914,14 +916,16 @@ Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `
 - **实时输出**：`script/output` 通知把每一行（连同颜色类）在脚本运行时推给窗口，响应只在没有客户端时（单测、无窗口宿主）返回整批结果。帧改成了同步写管道：脚本线程会阻塞到行写进管道，而单核宿主上「同步等待异步写」会让异步续体排在被阻塞的线程池线程之后，形成死锁。
 - **重置与隔离**：每个会话有自己的执行锁、取消源和 generation。Reset 只取消旧会话并换上新会话，所以不响应取消的脚本不会拖住新引擎；旧会话的输出与迟到结果按 generation 丢弃。排队中的提交用旧令牌取消。
 - **反向请求**：脚本的 `Show`/`Ask<T>` 由宿主发出 `client/request` 通知，主进程用原生消息框回答，或把输入框交给渲染进程的弹窗（`onScriptAsk` / `respondScriptAsk`），答案以 `client/response` 通知回到宿主。无窗口的宿主按「用户取消」回答。
-- **脚本可见性与兼容层**：`dnSpy.Backend.Contracts/Scripting.cs` 复刻了 WPF 的 `TextColor`、`IPrintOptions`、`IOutputWriter`、`IOutputWritable`、`ICachedWriter`、`MsgBoxButton`，因为脚本只能引用后端契约程序集。默认引用包含 `dnSpy.Backend.Contracts`、`dnSpy.Backend.Core`、`dnlib`，默认导入再加两个 dnSpy 命名空间。
+- **日志与输入框共用的视图选项**：Word Wrap、行号、滚动条、行压缩、选择边距与缩放在两边都生效。日志按行渲染成「行号边距 + 选择边距 + 文本」的网格，行号是边距的 `::before`，所以复制/选择拿到的文本不含行号；压缩沿用文档视图的 `LineCompressor` 判定（空行/无字母行、且不换行时按 75% 行高画）。输入框用 Monaco 的行高装饰做同样的压缩，选择边距用 `lineDecorationsWidth` 加鼠标处理实现。缩放的级别存在 `repl.cSharp.zoomLevel`，只缩放日志与输入框的字号/行高。
+- **打印接口**：`ICachedWriter` 与 `ScriptGlobals` 一样实现 `ITextPrinter`（含 `PrintError`/`PrintLineError`）和 `IOutputWriter`，`CreateWriter()` 时克隆当前的 `PrintOptions`，脚本在后台打印时不会受后续改动的选项影响；这与 WPF 的 `CachedWriter` 一致。
+- **脚本可见性与兼容层**：`dnSpy.Backend.Contracts/Scripting.cs` 复刻了 WPF 的 `TextColor`、`IPrintOptions`、`IOutputWriter`、`IOutputWritable`、`ITextPrinter`、`ICachedWriter`、`MsgBoxButton`，因为脚本只能引用后端契约程序集。默认引用包含 `dnSpy.Backend.Contracts`、`dnSpy.Backend.Core`、`dnlib`，默认导入再加两个 dnSpy 命名空间。
 
 实现文件：
 
 - 后端：`BE/Scripting/CSharpScriptService.cs`（会话、输出路由、globals）、`ScriptAssemblyResolver.cs`（`#r` 与 `/r` 的解析）、`ResponseFileReader.cs`（rsp 与 `RespFileUtils`）、`Scripting/CSharpInteractive.rsp`；`BE/dnSpy.Backend.Contracts/Scripting.cs`；`BE/JsonRpcServer.cs` 的分发、通知与反向请求；`BE/JsonRpcScriptClient.cs`
-- 前端：`FE/components/CSharpInteractive.tsx`（工具栏、命令、右键菜单、Ask 弹窗、选项）、`FE/script-lines.ts`（把带换行的输出片段拼回行、Save/Copy Code 的文本）、`FE/app-store.ts`（`#` 命令、history、generation 过滤）、`MAIN/index.ts` 与 `PRELOAD/index.ts`（`script:isComplete`、`script:output`、`script:ask`）
+- 前端：`FE/components/CSharpInteractive.tsx`（工具栏、命令、右键菜单、Ask 弹窗、日志/输入框的边距与缩放）、`FE/script-lines.ts`（把带换行的输出片段拼回行、子缓冲区行号、Save/Copy Code 的文本）、`FE/editor-margins.ts`（行压缩与选择边距的共用判定，文档视图也用）、`FE/components/repl-options.ts`（REPL 缩放的持久化）、`FE/app-store.ts`（`#` 命令、help 行颜色、history、generation 过滤）、`MAIN/index.ts` 与 `PRELOAD/index.ts`（`script:isComplete`、`script:output`、`script:ask`）
 
-测试：后端 `CSharpScriptServiceTests.cs` 37 条（除原有 REPL 语义外，新增完整性判断、Print 重载与颜色、PrintOptions、CachedWriter、rsp 与 noconfig、`#r`/`#load` 搜索路径、Resolve、消息框/输入框与重问、运行中实时输出、不响应取消脚本上的 Reset、ScriptResetting）；前端 `CSharpInteractive.test.tsx` 7 条（输出片段拼行、多行回显、空行、Save/Copy Code 文本）、`app-store.test.ts` 新增 5 条（noconfig、流式输出、generation 过滤与迟到响应）；e2e 3 个场景（提交与会话、编辑键与历史/保存/实时输出/Ask、语义着色）。
+测试：后端 `CSharpScriptServiceTests.cs` 39 条（除原有 REPL 语义外，新增完整性判断、Print 重载与颜色、PrintOptions、CachedWriter 的完整打印接口与 PrintOptions 克隆、rsp 与 noconfig、`#r`/`#load` 搜索路径、Resolve、消息框/输入框与重问、运行中实时输出、不响应取消脚本上的 Reset、ScriptResetting）；前端 `CSharpInteractive.test.tsx` 9 条（输出片段拼行、多行回显、空行、带颜色的行、子缓冲区行号、Save/Copy Code 文本）、`editor-margins.test.ts` 4 条（行压缩的判定与制表符宽度）、`app-store.test.ts` 的 C# Interactive 17 条（noconfig、流式输出、generation 过滤与迟到响应、`#help` 的命令颜色、被 Reset 取消的提交不报错）；e2e 4 个场景（提交与会话、编辑键与历史/保存/实时输出/Ask、行压缩、语义着色），编辑键场景还覆盖日志行号、Word Wrap 对日志的作用、Zoom control、无选区 Copy 与两处选择边距。
 
 ### 4.15 Roslyn 语言服务
 
@@ -1049,19 +1053,21 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-Hex 浏览补齐后的最新完整验证（2026-10-21 收尾）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
+C# 交互窗口 REPL 选项页补齐后的最新完整验证（2026-10-25 收尾）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
 
 | 套件 | 本轮结果 |
 |---|---|
 | 后端 `dotnet build` | 0 警告、0 错误 |
-| 后端 `dotnet test` | 657 通过、0 跳过、0 失败 |
+| 后端 `dotnet test` | 668 通过、0 跳过、0 失败 |
 | 前端 `pnpm build`（包含两个 tsconfig 的 typecheck） | 通过，TypeScript 0 错误 |
-| 前端 vitest | 135 个测试文件、1514 项全部通过 |
-| 完整 e2e（Playwright Electron） | 113 通过、3 跳过、0 失败，耗时约 6.8 分钟；新增 3 项覆盖完整代码页写入、纯文本/HTML 剪贴板与真实 Memory 结构导航 |
+| 前端 vitest | 136 个测试文件、1556 项全部通过 |
+| 完整 e2e（Playwright Electron） | 115 通过、3 跳过、0 失败，耗时约 6.7 分钟；全量跑中有一次 114 通过、1 条与本轮无关的「标题栏最大化/还原」用例超时，单独重跑通过。新增 1 个行压缩场景，编辑键场景新增日志行号、Word Wrap 作用于日志、Zoom control、无选区 Copy 与两处选择边距的断言 |
 
-3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。Hex 与 Memory 的具体新增回归见 4.7。新增协议记录追加在文件末尾，现有 e2e 使用的 `get_Code @06000AD8`、`RpcException @0200008D` 保持不变。
+3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。C# 交互窗口的新增回归见 4.14。本轮没有改 `Protocol.cs`（只在 `Scripting.cs` 增补打印接口方法），现有 e2e 使用的 `get_Code @06000AD8`、`RpcException @0200008D` 保持不变。
 
 以下保留此前各轮验证记录：
+
+2026-10-21 Hex 浏览补齐后的验证：后端 657 通过，前端 135 个测试文件、1514 项通过，e2e 113 通过、3 跳过、0 失败（新增 3 项覆盖完整代码页写入、纯文本/HTML 剪贴板与真实 Memory 结构导航，见 4.7）。
 
 2026-10-20 代码编辑器与文档标签补上选择边距、行压缩、虚拟空格与 Quick Info 图标后在本机重新跑过（真实构建 `dotnet build dnSpy.Backend.Host`、`pnpm build`）：后端 617 通过，前端 `tsc` 0 错误、vitest 1460 通过，e2e 110 通过、3 跳过、0 失败。这一轮给 `Protocol.cs` 中间的 `DocumentQuickInfoResponse` 加了 `Image`，e2e 钉死的 `get_Code @06000AD6` 变为 `@06000AD8`（Go to Token 的 `0x06000AD8` 同改），`RpcException @0200008D` 未动。并行跑时偶发的几条 e2e 一并修了测试一侧：Ctrl+End 之后点 Monaco 里的标记改为等标记的位置稳定后用鼠标坐标点击（`clickEditorToken`）——定位器的 `click()` 会先让 Chromium 把元素滚进视图，它滚的是 Monaco 那个 overflow:hidden 的可滚动元素，Monaco 下一次滚动事件才复位，按下却已落在偏移后的位置、而 Monaco 的命中测试仍按自己的滚动位置算，于是落到上方几行；主题子菜单的选择在窗口刚启动、菜单被关掉时整体重试。
 

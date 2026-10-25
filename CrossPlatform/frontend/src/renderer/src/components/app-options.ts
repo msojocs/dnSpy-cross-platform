@@ -252,6 +252,15 @@ export interface TextViewerOptions extends EditorPaneOptions<TextViewerAdvancedS
   zoomLevel: number
 }
 
+/**
+ * A REPL's options. dnSpy keeps a ZoomLevel for each REPL content type (`ContentTypeOptionDefinitionProvider`
+ * declares it from the options definition), whose Ctrl+wheel and Zoom control commands change it.
+ */
+export interface ReplPaneOptions extends EditorPaneOptions {
+  /** The zoom, in percent, of the REPL's text. */
+  zoomLevel: number
+}
+
 export interface OutputGeneralSettings extends EditorGeneralSettings {
   showTimestamps: boolean
   /** .NET custom date/time format string, e.g. "HH:mm:ss.fff". */
@@ -478,7 +487,7 @@ export interface AppOptions {
   documentViewer: TextViewerOptions
   output: OutputPaneOptions
   codeEditor: Record<EditorLanguageKey, EditorPaneOptions>
-  repl: Record<EditorLanguageKey, EditorPaneOptions>
+  repl: Record<EditorLanguageKey, ReplPaneOptions>
   assemblyExplorer: AssemblyExplorerSettings
   baml: BamlSettings
   hexEditor: Record<HexEditorView, HexEditorPaneOptions>
@@ -748,7 +757,7 @@ export const defaultAppOptions: AppOptions = {
     general: { ...defaultEditorGeneral(), showTimestamps: true, timestampDateTimeFormat: 'HH:mm:ss.fff' },
   },
   codeEditor: { cSharp: defaultPane(true), visualBasic: defaultPane(true) },
-  repl: { cSharp: defaultPane(false), visualBasic: defaultPane(false) },
+  repl: { cSharp: { ...defaultPane(false), zoomLevel: 100 }, visualBasic: { ...defaultPane(false), zoomLevel: 100 } },
   assemblyExplorer: {
     filterDraggedItems: 'allSupported',
     showToken: true,

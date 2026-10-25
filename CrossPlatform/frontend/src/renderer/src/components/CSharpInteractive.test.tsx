@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ScriptOutputEntry } from '../../../shared/protocol'
-import { scriptCodeText, scriptLines, scriptText } from '../script-lines'
+import { scriptCodeText, scriptLineNumbers, scriptLines, scriptText } from '../script-lines'
 
 describe('scriptLines', () => {
   it('joins the fragments a submission prints onto one line until the newline', () => {
@@ -12,7 +12,7 @@ describe('scriptLines', () => {
     ]
 
     expect(scriptLines(entries)).toEqual([
-      { kind: 'echo', parts: [{ text: '> ' }, { text: 'Print("a"); PrintLine("b");' }], code: 'Print("a"); PrintLine("b");' },
+      { kind: 'echo', parts: [{ text: '> ', color: 'replPrompt1' }, { text: 'Print("a"); PrintLine("b");' }], code: 'Print("a"); PrintLine("b");' },
       { kind: 'output', parts: [{ text: 'a' }, { text: 'b' }] },
       { kind: 'result', parts: [{ text: '2', color: 'replOutputText' }] },
     ])
@@ -42,9 +42,9 @@ describe('scriptLines', () => {
     }]
 
     const [first, second, third] = scriptLines(entries)
-    expect(first.parts).toEqual([{ text: '> ' }, { text: 'if (true) {', colors: [{ start: 0, length: 2, color: 'keyword' }] }])
-    expect(second.parts).toEqual([{ text: '. ' }, { text: '  Missing();', colors: [{ start: 2, length: 7, color: 'error' }] }])
-    expect(third.parts).toEqual([{ text: '. ' }, { text: '}' }])
+    expect(first.parts).toEqual([{ text: '> ', color: 'replPrompt1' }, { text: 'if (true) {', colors: [{ start: 0, length: 2, color: 'keyword' }] }])
+    expect(second.parts).toEqual([{ text: '. ', color: 'replPrompt2' }, { text: '  Missing();', colors: [{ start: 2, length: 7, color: 'error' }] }])
+    expect(third.parts).toEqual([{ text: '. ', color: 'replPrompt2' }, { text: '}' }])
   })
 
   it('keeps an empty line that two newlines make', () => {
@@ -52,6 +52,43 @@ describe('scriptLines', () => {
       { kind: 'output', parts: [{ text: 'one' }] },
       { kind: 'output', parts: [{ text: '' }] },
       { kind: 'output', parts: [{ text: 'two' }] },
+    ])
+  })
+
+  it('carries the colors of a line whose parts are colored, like a #help row', () => {
+    expect(scriptLines([{
+      kind: 'output',
+      text: '  #r   Add a reference',
+      color: 'replOutputText',
+      colors: [{ start: 2, length: 2, color: 'preprocessorKeyword' }],
+    }])).toEqual([{
+      kind: 'output',
+      parts: [{ text: '  #r   Add a reference', color: 'replOutputText', colors: [{ start: 2, length: 2, color: 'preprocessorKeyword' }] }],
+    }])
+  })
+})
+
+describe('scriptLineNumbers', () => {
+  it('numbers every output block and submission from one, alternating the input colors', () => {
+    const lines = scriptLines([
+      { kind: 'banner', text: 'banner\n' },
+      { kind: 'output', text: 'loading\n' },
+      { kind: 'echo', text: 'var x = 1;\nvar y = 2;' },
+      { kind: 'echo', text: 'x + y' },
+      { kind: 'result', text: '3\n' },
+      { kind: 'echo', text: 'x' },
+      { kind: 'result', text: '1\n' },
+    ])
+
+    expect(scriptLineNumbers(lines)).toEqual([
+      { lineNumber: 1, color: 'replLineNumberOutput' },
+      { lineNumber: 2, color: 'replLineNumberOutput' },
+      { lineNumber: 1, color: 'replLineNumberInput1' },
+      { lineNumber: 2, color: 'replLineNumberInput1' },
+      { lineNumber: 1, color: 'replLineNumberInput2' },
+      { lineNumber: 1, color: 'replLineNumberOutput' },
+      { lineNumber: 1, color: 'replLineNumberInput1' },
+      { lineNumber: 1, color: 'replLineNumberOutput' },
     ])
   })
 })

@@ -4134,8 +4134,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     subscribeScriptOutput()
     // Opening the window is the one case that prints the engine banner: the WPF window's Logo comes from
     // OnVisible, not from Reset.
-    await rebuildScriptSession(set, { loadConfig: true, showBanner: true })
-    appendScriptEntries(set, [{ kind: 'help', text: t('Type "#help" for more information.') }])
+    const entries = await rebuildScriptSession(set, { loadConfig: true, showBanner: true })
+    // The WPF window prints the hint from inside the successful startup, so a failed engine gets the error
+    // line and no invitation to ask for help from something that never started.
+    if (!entries.some((entry) => entry.kind === 'error'))
+      appendScriptEntries(set, [{ kind: 'help', text: t('Type "#help" for more information.') }])
   },
 
   resetScript: async (loadConfig = true) => {
@@ -4183,6 +4186,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
     }
     set({ scriptRunning: true })
+    const generation = get().scriptGeneration
     try {
       const response = await window.dnSpy.evaluateScript(submission)
       // A host with a client streams every line as it is produced and answers with none; a headless one
@@ -4193,7 +4197,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (response.generation > get().scriptGeneration)
         set({ scriptGeneration: response.generation })
     } catch (error) {
-      appendScriptEntries(set, [scriptFailureEntry(error)])
+      // A submission the reset cancelled belongs to an engine nobody is looking at any more; the WPF window
+      // stops it without printing anything, so only a failure of the session still in front is reported.
+      if (get().scriptGeneration === generation)
+        appendScriptEntries(set, [scriptFailureEntry(error)])
     } finally {
       set({ scriptRunning: false })
     }
@@ -5920,14 +5927,17 @@ const subscribeScriptOutput = (): void => {
   window.dnSpy.onScriptOutput((notification) => useAppStore.getState().appendScriptOutput(notification))
 }
 
-const rebuildScriptSession = async (set: StoreSet, options: { loadConfig: boolean; showBanner: boolean }): Promise<void> => {
+const rebuildScriptSession = async (set: StoreSet, options: { loadConfig: boolean; showBanner: boolean }): Promise<ScriptOutputEntry[]> => {
   set({ scriptRunning: true })
   try {
     const response = await window.dnSpy.resetScript(options)
     appendScriptEntries(set, response.entries)
     set({ scriptGeneration: response.generation })
+    return response.entries
   } catch (error) {
-    appendScriptEntries(set, [scriptFailureEntry(error)])
+    const entry = scriptFailureEntry(error)
+    appendScriptEntries(set, [entry])
+    return [entry]
   } finally {
     set({ scriptRunning: false })
   }
@@ -5938,31 +5948,39 @@ const scriptFailureEntry = (error: unknown): ScriptOutputEntry => ({
   text: t('Script failed: {message}', { message: error instanceof Error ? error.message : String(error) }),
 })
 
-/** A row of `#help`, padded to the two-column layout the window prints. */
-const helpRow = (command: string, description: string): ScriptOutputEntry => ({
-  kind: 'output',
-  text: `  ${command}${' '.repeat(Math.max(1, 21 - command.length))}${description}`,
-})
+/** A row of `#help`, padded to the two-column layout the window prints. The commands are colored the way
+ * dnSpy's HelpCommand colors them (PreprocessorKeyword) and the rest is the REPL's output text. */
+const helpRow = (commands: readonly string[], description: string): ScriptOutputEntry => {
+  const names = commands.join(', ')
+  const text = `  ${names}${' '.repeat(Math.max(1, 21 - names.length))}${description}`
+  const colors: ClassifiedSpan[] = []
+  let start = 2
+  for (const command of commands) {
+    colors.push({ start, length: command.length, color: 'preprocessorKeyword' })
+    start += command.length + 2
+  }
+  return { kind: 'output', text, color: 'replOutputText', colors }
+}
 
 /** The `#help` text, in the order and wording of dnSpy's HelpCommand. */
 const scriptHelpEntries = (): ScriptOutputEntry[] => [
   { kind: 'help', text: t('Keyboard shortcuts:') },
-  helpRow('Enter', t('Execute the command')),
-  helpRow('Ctrl+Enter', t('Execute the command')),
-  helpRow('Shift+Enter', t('Insert a new line')),
-  helpRow('Esc', t('Clear current input')),
-  helpRow('Alt+Up Arrow', t('Show previous command')),
-  helpRow('Alt+Down Arrow', t('Show next command')),
-  helpRow('Ctrl+Alt+Up Arrow', t('Show previous command matching the current input text')),
-  helpRow('Ctrl+Alt+Down Arrow', t('Show next command matching the current input text')),
-  helpRow('Ctrl+A', t('Select input text. Press again to select all text')),
+  helpRow(['Enter'], t('Execute the command')),
+  helpRow(['Ctrl+Enter'], t('Execute the command')),
+  helpRow(['Shift+Enter'], t('Insert a new line')),
+  helpRow(['Esc'], t('Clear current input')),
+  helpRow(['Alt+Up Arrow'], t('Show previous command')),
+  helpRow(['Alt+Down Arrow'], t('Show next command')),
+  helpRow(['Ctrl+Alt+Up Arrow'], t('Show previous command matching the current input text')),
+  helpRow(['Ctrl+Alt+Down Arrow'], t('Show next command matching the current input text')),
+  helpRow(['Ctrl+A'], t('Select input text. Press again to select all text')),
   { kind: 'help', text: t('REPL commands:') },
-  helpRow('#clear, #cls', t('Clear the script editor')),
-  helpRow('#help', t('Display the help')),
-  helpRow('#reset', t('Reset the execution environment')),
+  helpRow(['#clear', '#cls'], t('Clear the script editor')),
+  helpRow(['#help'], t('Display the help')),
+  helpRow(['#reset'], t('Reset the execution environment')),
   { kind: 'help', text: t('Script directives:') },
-  helpRow('#r', t('Add a reference, either an assembly or a path to a file on disk, #r "myfile.dll"')),
-  helpRow('#load', t('Load and execute a script, #load "myscript.csx"')),
+  helpRow(['#r'], t('Add a reference, either an assembly or a path to a file on disk, #r "myfile.dll"')),
+  helpRow(['#load'], t('Load and execute a script, #load "myscript.csx"')),
 ]
 
 type StoreGet = () => AppState

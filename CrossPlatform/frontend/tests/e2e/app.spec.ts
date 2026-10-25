@@ -1956,12 +1956,59 @@ test.describe('the workspace shell', () => {
 
     // ReplSettings.ShowLineNumbers defaults to true, and the Word Wrap button is a pressed toggle.
     await expect(page.locator('.script-input .line-numbers')).toBeVisible()
+    // dnSpy's line number margin numbers the log too, every sub-buffer from one. The number is the margin's
+    // pseudo-element, so the line's own text — and a copy of it — leaves it out.
+    await expect(log).toHaveAttribute('data-line-numbers', 'true')
+    await expect(log.locator('.script-line').first()).toHaveAttribute('data-line-number', '1')
+    await expect.poll(() => log.locator('.script-line').first().evaluate((element) => getComputedStyle(element, '::before').content)).toBe('"1"')
     const wordWrap = page.getByRole('button', { name: 'Toggle Word Wrap' })
     await expect(wordWrap).toHaveAttribute('aria-pressed', 'true')
+    await expect(log).toHaveAttribute('data-wrap', 'true')
     await wordWrap.click()
     await expect(wordWrap).toHaveAttribute('aria-pressed', 'false')
+    // Word wrap is the text view's option, so the log's lines stop wrapping with the input box's.
+    await expect(log).toHaveAttribute('data-wrap', 'false')
     await wordWrap.click()
     await expect(wordWrap).toHaveAttribute('aria-pressed', 'true')
+    await expect(log).toHaveAttribute('data-wrap', 'true')
+
+    // The Zoom control is dnSpy's ZoomControl; it scales the REPL's text and remembers the level.
+    const zoomInput = page.locator('.script-zoom-control input')
+    await expect(zoomInput).toHaveValue('100 %')
+    const fontSize = await log.evaluate((element) => getComputedStyle(element).fontSize)
+    await zoomInput.fill('120 %')
+    await zoomInput.press('Enter')
+    await expect.poll(() => log.evaluate((element) => getComputedStyle(element).fontSize)).not.toBe(fontSize)
+    await zoomInput.fill('100 %')
+    await zoomInput.press('Enter')
+    await expect.poll(() => log.evaluate((element) => getComputedStyle(element).fontSize)).toBe(fontSize)
+
+    // With no selection, Copy takes the current line, as dnSpy's CutOrCopyBlankLineIfNoSelection does.
+    await input.click()
+    await page.keyboard.type('1 + 1')
+    await page.keyboard.press('Control+C')
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toBe('1 + 1')
+
+    // The input box has the same SpacerMargin: a press in the strip just before the text selects the line.
+    const inputEditor = page.locator('.script-input .monaco-editor')
+    const inputLine = await inputEditor.locator('.view-lines .view-line').first().boundingBox()
+    const inputMargin = await inputEditor.locator('.margin').first().boundingBox()
+    await page.mouse.click(inputMargin!.x + inputMargin!.width - 5, inputLine!.y + inputLine!.height / 2)
+    await expect(inputEditor.locator('.selected-text').first()).toBeVisible()
+    await page.keyboard.press('Control+C')
+    await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toBe('1 + 1')
+    await page.keyboard.press('Escape')
+
+    // The Show Line Numbers toggle hides both margins' numbers.
+    await input.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Show Line Numbers' }).click()
+    await expect(log).toHaveAttribute('data-line-numbers', 'false')
+    await expect.poll(() => log.locator('.script-line').first().evaluate((element) => getComputedStyle(element, '::before').content)).toBe('none')
+    await expect(page.locator('.script-input .line-numbers')).toBeHidden()
+    await input.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Show Line Numbers' }).click()
+    await expect(log).toHaveAttribute('data-line-numbers', 'true')
+    await expect(page.locator('.script-input .line-numbers')).toBeVisible()
 
     // Enter submits only a complete submission; an open block gets the line break it was typing.
     await input.click()
@@ -1973,6 +2020,12 @@ test.describe('the workspace shell', () => {
     await expect(log.locator('.script-echo').first()).toContainText('if (true) {')
     await expect(log.locator('.script-echo').last()).toContainText('PrintLine("inside"); }')
     await expect(log).toContainText('inside', { timeout: 60_000 })
+
+    // dnSpy's SpacerMargin: a press in the blank strip before a line selects the whole line, prompt included.
+    await log.locator('.script-echo').first().locator('.script-selection-margin').click({ position: { x: 3, y: 3 } })
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain('if (true) {')
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+    await input.click()
 
     // Escape empties the input, so the help text is all that is submitted next.
     await expect(pane).toHaveAttribute('data-running', 'false', { timeout: 60_000 })
@@ -2030,10 +2083,50 @@ test.describe('the workspace shell', () => {
     await expect.poll(() => readFileSync(saveCodePath, 'utf8')).toContain('var i = 0')
     await expect.poll(() => readFileSync(saveCodePath, 'utf8')).not.toContain('tick0')
 
-    // Ctrl+L clears the log, as dnSpy's Clear Screen does.
+    // Ctrl+L clears the log and the line being typed, as dnSpy's Clear Screen adds a new document.
     await input.click()
+    await page.keyboard.type('cleared with the screen')
     await page.keyboard.press('Control+L')
     await expect(log).toBeEmpty()
+    await expect(input.locator('.view-lines')).toHaveText('')
+  })
+
+  test('compresses blank and non-letter lines the way the WPF LineCompressor does', async () => {
+    await page.getByRole('menuitem', { name: 'View' }).click()
+    await page.getByRole('menuitem', { name: /^C# Interactive/ }).click()
+    const log = page.locator('.script-log')
+    await expect(log).toContainText('Roslyn C# Compiler version', { timeout: 60_000 })
+    const pane = page.locator('.script-pane')
+    const input = page.locator('.script-input .monaco-editor')
+
+    await expect(pane).toHaveAttribute('data-running', 'false', { timeout: 60_000 })
+    await input.click()
+    await page.keyboard.type('PrintLine("alpha"); PrintLine(); PrintLine("..."); PrintLine("omega");')
+    await page.keyboard.press('Enter')
+    const heights = async (): Promise<Record<string, number>> => {
+      const rows = await log.locator('.script-output').evaluateAll((elements) => elements.map((element) => ({
+        text: element.textContent ?? '',
+        height: element.getBoundingClientRect().height,
+      })))
+      return Object.fromEntries(rows.filter((row) => ['alpha', '', '...', 'omega'].includes(row.text)).map((row) => [row.text, row.height]))
+    }
+    await expect.poll(async () => (await heights()).omega).toBeGreaterThan(0)
+    const compressed = await heights()
+    // dnSpy's LineCompressor draws a blank line and a line with no letters at three quarters height; the
+    // lines with letters keep their height.
+    expect(compressed['']).toBeLessThan(compressed.alpha)
+    expect(compressed['...']).toBeLessThan(compressed.alpha)
+    expect(compressed.omega).toBe(compressed.alpha)
+
+    // The two Advanced-page switches turn it off; every line is full height again.
+    await page.evaluate(() => {
+      localStorage.setItem('dnspy.appOptions.v1', JSON.stringify({ repl: { cSharp: { advanced: { compressEmptyOrWhitespaceLines: false, compressNonLetterLines: false } } } }))
+      window.dispatchEvent(new Event('app-options-changed'))
+    })
+    await expect.poll(async () => {
+      const full = await heights()
+      return full[''] === full.alpha && full['...'] === full.alpha
+    }).toBe(true)
   })
 
   test('colors the C# Interactive input the way the WPF window\'s Roslyn classifier does', async () => {

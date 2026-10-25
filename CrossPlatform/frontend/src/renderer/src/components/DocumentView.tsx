@@ -19,6 +19,7 @@ import {
   nextReference, opCodeUrl, referenceHighlights, spanAtCaret, spanAtClick, type ReferenceHighlight, type TextRange,
 } from '../document-viewer'
 import { copyWithFormatting } from '../document-clipboard'
+import { BOOKMARK_STRIP_WIDTH, LINE_COMPRESSION_SCALE, SELECTION_MARGIN_WIDTH, selectWholeLines, visualWidthOf } from '../editor-margins'
 import { installVirtualSpace, virtualSpacesOf, type VirtualSpaceController } from '../virtual-space'
 import { useDocumentAttachments } from '../document-attachments'
 import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
@@ -90,37 +91,6 @@ const highlightClass: Record<ReferenceHighlight['kind'], string> = {
 
 /** The pixel pattern of each BlockStructureLineKind: solid, or dashes and gaps of one to four pixels. */
 const dashLength: Record<BlockStructureLineKind, number> = { solid: 0, dashed1: 1, dashed2: 2, dashed3: 3, dashed4: 4 }
-
-/** dnSpy's SpacerMargin.SELECTION_MARGIN_WIDTH: the blank strip before the text that selects whole lines. */
-const SELECTION_MARGIN_WIDTH = 10
-/** The part of Monaco's line-decorations strip the bookmark markers are drawn in (the rest is the selection margin). */
-const BOOKMARK_STRIP_WIDTH = 14
-/** dnSpy's LineCompressor.SCALE: a compressed line is three quarters as tall as a normal one. */
-const LINE_COMPRESSION_SCALE = 0.75
-
-/** How many character widths a line takes on screen, counting a tab as the next tab stop. */
-const visualWidthOf = (text: string, tabSize: number): number => {
-  let width = 0
-  for (let index = 0; index < text.length; index++)
-    width = text[index] === '\t' ? width + tabSize - (width % tabSize) : width + 1
-  return width
-}
-
-/** Selects the whole of the lines from `anchorLine` to `line`, including the line break, as dnSpy's SelectLine does. */
-const selectWholeLines = (editor: MonacoEditor.IStandaloneCodeEditor, anchorLine: number, line: number): void => {
-  const model = editor.getModel()
-  if (!model)
-    return
-  const from = Math.min(anchorLine, line)
-  const to = Math.max(anchorLine, line)
-  const next = Math.min(to + 1, model.getLineCount())
-  editor.setSelection({
-    startLineNumber: from,
-    startColumn: 1,
-    endLineNumber: next,
-    endColumn: next === to + 1 ? 1 : model.getLineMaxColumn(next),
-  })
-}
 
 // The node a reference names. The tree lists a member only once its type has been expanded, so one it has not
 // loaded yet is asked of the backend; a node that cannot be had leaves the menu without the commands that need it.

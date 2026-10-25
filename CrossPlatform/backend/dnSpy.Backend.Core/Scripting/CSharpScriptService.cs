@@ -123,7 +123,7 @@ public sealed class CSharpScriptService : IDisposable {
 
 	/// <summary>The banner the WPF REPL shows when it builds or rebuilds its engine.</summary>
 	public static string Banner =>
-		$"Microsoft (R) Roslyn C# Compiler version {FileVersionInfo.GetVersionInfo(typeof(CSharpScript).Assembly.Location).FileVersion}";
+		$"Microsoft (R) Roslyn C# Compiler version {FileVersionInfo.GetVersionInfo(typeof(CSharpCommandLineArguments).Assembly.Location).FileVersion}";
 
 	/// <summary>
 	/// <paramref name="client"/> is how the window sees output while it is still being produced, and how a
@@ -358,7 +358,7 @@ public sealed class CSharpScriptService : IDisposable {
 	void PrintDiagnostics(ScriptSession session, ImmutableArray<Diagnostic> diagnostics) {
 		const int MAX_DIAGS = 5;
 		for (int i = 0; i < diagnostics.Length && i < MAX_DIAGS; i++)
-			session.Write(ScriptOutputEntry.Error, CSharpDiagnosticFormatter.Instance.Format(diagnostics[i], CultureInfo.CurrentCulture) + Environment.NewLine, ScriptTextColors.Name(TextColor.Error));
+			session.Write(ScriptOutputEntry.Error, CSharpDiagnosticFormatter.Instance.Format(diagnostics[i], CultureInfo.CurrentUICulture) + Environment.NewLine, ScriptTextColors.Name(TextColor.Error));
 		int extraErrors = diagnostics.Length - MAX_DIAGS;
 		if (extraErrors > 0) {
 			var text = extraErrors == 1
@@ -866,10 +866,16 @@ public sealed class ScriptGlobals : ITextPrinter {
 	sealed class ScriptCachedWriter : ICachedWriter {
 		readonly ScriptGlobals owner;
 		readonly List<ColorAndText> cached = [];
+		readonly ScriptPrintOptions printOptions;
 
-		public ScriptCachedWriter(ScriptGlobals owner) => this.owner = owner;
+		public ScriptCachedWriter(ScriptGlobals owner) {
+			this.owner = owner;
+			// dnSpy's CachedWriter keeps the print options it was created with, so a script that changes the
+			// globals' options while the writer waits to be flushed still formats what it buffered the old way.
+			printOptions = owner.PrintOptions.Clone();
+		}
 
-		public ScriptPrintOptions PrintOptions => owner.PrintOptions;
+		public ScriptPrintOptions PrintOptions => printOptions;
 
 		public void Flush() {
 			owner.Write(new List<ColorAndText>(cached));
@@ -877,6 +883,14 @@ public sealed class ScriptGlobals : ITextPrinter {
 		}
 
 		public void Dispose() => Flush();
+
+		public void Write(string? text, object? color = null) => Print(color, text);
+		public void Write(string? text, TextColor color) => Print(color, text);
+
+		public void PrintError(string? text) => Print(TextColor.Error, text);
+		public void PrintError(string fmt, params object[] args) => PrintError(string.Format(CultureInfo.CurrentCulture, fmt, args));
+		public void PrintLineError(string? text) => PrintLine(TextColor.Error, text);
+		public void PrintLineError(string fmt, params object[] args) => PrintLineError(string.Format(CultureInfo.CurrentCulture, fmt, args));
 
 		public void Print(string? text) => Print(TextColor.ReplScriptOutputText, text);
 		public void Print(string fmt, params object[] args) => Print(string.Format(CultureInfo.CurrentCulture, fmt, args));

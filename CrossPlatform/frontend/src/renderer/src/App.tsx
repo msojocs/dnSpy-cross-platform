@@ -26,6 +26,7 @@ import { useAnalyzerStore } from './analyzer-store'
 import { useSearchStore, updateSearchSettings } from './search-store'
 import { useStringReferencesStore } from './string-references-store'
 import { CSharpInteractive } from './components/CSharpInteractive'
+import { setReplCSharpZoom } from './components/repl-options'
 import { GoToTokenDialog, RenameDialog, RenameNamespaceDialog } from './components/EditDialogs'
 import { MethodBodyDialog } from './components/MethodBodyDialog'
 import { CreateResourceDialog, CreateImageListDialog, CreateResourceElementDialog, ResourceElementDialog, ResourceOptionsDialog } from './components/ResourceDialogs'
@@ -1348,7 +1349,11 @@ export const App = (): React.JSX.Element => {
         bookmarkChord.current = undefined
       // The zoom keys act on the tab in front: a document viewer's text zoom, or the zoom of any other tab's content.
       const zoomTab = (step: (current: number) => number): void => {
-        if (documentIdOfTab(activeDocumentTab()))
+        // dnSpy's Zoom commands go to the focused IZoomable — the C# Interactive window is one, and its text
+        // zooms itself rather than with the tab content around it.
+        if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.script-pane'))
+          setReplCSharpZoom(step)
+        else if (documentIdOfTab(activeDocumentTab()))
           setDocumentViewerZoom(step)
         else
           setDocumentZoom((current) => normalizeZoom(step(current)))

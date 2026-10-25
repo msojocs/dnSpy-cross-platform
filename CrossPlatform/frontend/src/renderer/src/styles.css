@@ -1039,21 +1039,97 @@ select:focus-visible,
   word-break: break-word;
 }
 
-.script-echo {
-  color: var(--text-muted);
+/* dnSpy's Word Wrap option is the text view's, so it wraps the log as well as the input box. */
+.script-log[data-wrap='false'] {
+  white-space: pre;
+  word-break: normal;
 }
 
-.script-result {
-  color: var(--accent);
+/* Every line is a row of the line number margin, dnSpy's SpacerMargin and the text. The margins do not take part
+   in a selection or a copy, as dnSpy's margins never do. */
+.script-line {
+  display: grid;
+  align-items: start;
+  min-width: 100%;
+}
+
+.script-log[data-wrap='false'] .script-line {
+  width: max-content;
+}
+
+/* The line number is drawn by the margin's pseudo-element, so it is not part of the line's text: a copy or a
+   selection of the log takes what dnSpy's text view would give, exactly as its line number margin does. */
+.script-log[data-line-numbers='true'] .script-line::before {
+  content: attr(data-line-number);
+  padding-right: 8px;
+  text-align: right;
+  user-select: none;
+}
+
+.script-number-replLineNumberInput1::before {
+  color: var(--tc-repllinenumberinput1, inherit);
+}
+
+.script-number-replLineNumberInput2::before {
+  color: var(--tc-repllinenumberinput2, inherit);
+}
+
+.script-number-replLineNumberOutput::before {
+  color: var(--tc-repllinenumberoutput, inherit);
+}
+
+.script-selection-margin {
+  width: 10px;
+  height: 100%;
+  user-select: none;
+}
+
+.script-line-content {
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+
+/* The Scroll Bars page's switches hide a bar without taking the view's ability to scroll, as the WPF margins do. */
+.script-no-vertical-scrollbar,
+.script-no-horizontal-scrollbar {
+  scrollbar-width: none;
+}
+
+.script-no-vertical-scrollbar::-webkit-scrollbar-vertical,
+.script-no-horizontal-scrollbar::-webkit-scrollbar-horizontal {
+  display: none;
+}
+
+.script-echo {
+  color: var(--tc-text, var(--text));
+}
+
+.script-result,
+.script-output,
+.script-banner,
+.script-help {
+  color: var(--tc-reploutputtext, var(--tc-text, var(--text)));
 }
 
 .script-error {
-  color: var(--danger);
+  color: var(--tc-error, var(--danger));
 }
 
-.script-banner,
-.script-help {
-  color: var(--text-muted);
+/* dnSpy's ZoomControl, at the end of the tool bar rather than in the text view's bottom margin. */
+.script-zoom-control {
+  margin-left: auto;
+}
+
+.script-zoom-control input {
+  width: 60px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
 }
 
 .script-input {

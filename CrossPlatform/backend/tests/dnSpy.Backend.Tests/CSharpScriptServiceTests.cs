@@ -253,6 +253,35 @@ public sealed class CSharpScriptServiceTests : IDisposable {
 		Assert.Equal(TextColors.Keyword, response.Entries[0].Color);
 	}
 
+	[Fact]
+	public async Task ACachedWriterIsAnOutputWriterAndPrintsErrorsLikeTheGlobals() {
+		var response = await service.EvaluateAsync("""
+			using (var writer = CreateWriter()) {
+				writer.Write("a", TextColor.StaticType);
+				writer.PrintError("b");
+				writer.PrintLineError("c");
+			}
+			""", TestContext.Current.CancellationToken);
+
+		Assert.Equal("abc" + Environment.NewLine, string.Concat(response.Entries.Select(entry => entry.Text)));
+		Assert.Equal(TextColors.StaticType, response.Entries[0].Color);
+		Assert.All(response.Entries.Skip(1), entry => Assert.Equal(TextColors.Error, entry.Color));
+	}
+
+	[Fact]
+	public async Task ACachedWriterKeepsThePrintOptionsItWasCreatedWith() {
+		// dnSpy's CachedWriter clones the globals' options when a script asks for it; changing them while the
+		// writer is open must not change how the values it already formats are written.
+		var response = await service.EvaluateAsync("""
+			using (var writer = CreateWriter()) {
+				PrintOptions.NumberRadix = 16;
+				writer.PrintLine(42);
+			}
+			""", TestContext.Current.CancellationToken);
+
+		Assert.Equal(42 + Environment.NewLine, Assert.Single(response.Entries).Text);
+	}
+
 	[Theory]
 	[InlineData("1 + 1", true)]
 	[InlineData("if (true) {", false)]

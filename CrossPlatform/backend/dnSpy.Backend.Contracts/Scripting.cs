@@ -379,6 +379,16 @@ public sealed class ScriptPrintOptions {
 	/// formatted by the C# object formatter.
 	/// </summary>
 	public bool AutoColorizeObjects { get; set; } = true;
+
+	/// <summary>A copy, which dnSpy's <c>CachedWriter</c> takes when it is created.</summary>
+	public ScriptPrintOptions Clone() => new() {
+		Ellipsis = Ellipsis,
+		EscapeNonPrintableCharacters = EscapeNonPrintableCharacters,
+		MaximumOutputLength = MaximumOutputLength,
+		MemberDisplayFormat = MemberDisplayFormat,
+		NumberRadix = NumberRadix,
+		AutoColorizeObjects = AutoColorizeObjects,
+	};
 }
 
 /// <summary>A stretch of text and the color to write it in: a <see cref="TextColor"/>, or a color class name.</summary>
@@ -445,9 +455,18 @@ public static class OutputWritableExtensions {
 /// dnSpy's <c>ITextPrinter</c>: the printing part of the script globals. Both the globals and
 /// <see cref="ICachedWriter"/> are one.
 /// </summary>
-public interface ITextPrinter {
+public interface ITextPrinter : IOutputWriter {
 	/// <summary>Print options.</summary>
 	ScriptPrintOptions PrintOptions { get; }
+
+	/// <summary>Prints text in the error color.</summary>
+	void PrintError(string? text);
+	/// <summary>Prints formatted text in the error color.</summary>
+	void PrintError(string fmt, params object[] args);
+	/// <summary>Prints text in the error color followed by a newline.</summary>
+	void PrintLineError(string? text);
+	/// <summary>Prints formatted text in the error color followed by a newline.</summary>
+	void PrintLineError(string fmt, params object[] args);
 
 	/// <summary>Prints text.</summary>
 	void Print(string? text);

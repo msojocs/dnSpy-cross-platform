@@ -927,6 +927,20 @@ describe('C# Interactive', () => {
     expect(entries[0]).toEqual({ kind: 'echo', text: '#help' })
     expect(entries.some((entry) => entry.text.includes('#reset'))).toBe(true)
     expect(entries.some((entry) => entry.text.includes('#load'))).toBe(true)
+    // HelpCommand prints the command names in the preprocessor-keyword color and the rest in the output color.
+    const reset = entries.find((entry) => entry.text.includes('#reset'))
+    expect(reset).toMatchObject({
+      kind: 'output',
+      color: 'replOutputText',
+      colors: [{ start: 2, length: 6, color: 'preprocessorKeyword' }],
+    })
+    expect(reset?.text.startsWith('  #reset ')).toBe(true)
+    // A command with two names colors each name and leaves the comma between them the output color.
+    const clear = entries.find((entry) => entry.text.includes('#clear'))
+    expect(clear?.colors).toEqual([
+      { start: 2, length: 6, color: 'preprocessorKeyword' },
+      { start: 10, length: 4, color: 'preprocessorKeyword' },
+    ])
   })
 
   it('resets the session for #reset and reports the new banner', async () => {
@@ -1005,6 +1019,19 @@ describe('C# Interactive', () => {
     const entries = useAppStore.getState().scriptEntries
     expect(entries[0]).toEqual(banner)
     expect(entries[entries.length - 1]).toEqual({ kind: 'help', text: translate('Type "#help" for more information.') })
+  })
+
+  it('drops the failure of a submission a reset cancelled', async () => {
+    evaluateScript.mockImplementation(async () => {
+      // The reset replaced the session while this submission waited behind the old one.
+      useAppStore.setState({ scriptGeneration: 2 })
+      throw new Error('The operation was canceled.')
+    })
+
+    await useAppStore.getState().evaluateScript('x')
+
+    expect(useAppStore.getState().scriptEntries.some((entry) => entry.kind === 'error')).toBe(false)
+    expect(useAppStore.getState().scriptRunning).toBe(false)
   })
 
   it('reports a host failure as an error line', async () => {

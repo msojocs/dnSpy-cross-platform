@@ -2996,9 +2996,85 @@ select:focus-visible,
   height: min(80vh, 600px);
 }
 
+.attach-message {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .debug-program-dialog {
   grid-template-rows: 33px auto 43px;
   width: min(92vw, 560px);
+}
+
+/* dnSpy's EditEnvironmentDlg: a two-column list of editable rows beside its buttons. */
+.environment-dialog {
+  grid-template-rows: 33px auto auto 43px;
+  width: min(92vw, 600px);
+}
+
+.environment-body {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  min-height: 150px;
+}
+
+.environment-table {
+  flex: 1;
+  max-height: 320px;
+  overflow: auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.environment-row {
+  display: contents;
+}
+
+.environment-row input {
+  min-width: 0;
+  height: 23px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  background: var(--wpf-CommonControlsTextBoxBackground);
+  color: var(--text);
+}
+
+.environment-row.selected input {
+  background: var(--wpf-CommonControlsListBoxItemSelectedBackground);
+  color: var(--wpf-CommonControlsListBoxItemSelectedForeground);
+}
+
+.environment-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 96px;
+}
+
+.environment-add-many {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.environment-add-many textarea {
+  height: 60px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  background: var(--wpf-CommonControlsTextBoxBackground);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.environment-error {
+  color: var(--danger);
+}
+
+.environment-add-many-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* Label / control / browse-button rows, mirroring the upstream Debug Program dialog's field grid. */
@@ -5164,4 +5240,47 @@ mark.search-match {
 
 .hex-progress-dialog progress {
   width: 100%;
+}
+
+/* The debugger grids' search box and command bar (Threads, Modules, Processes), above the list. */
+.debug-grid-window {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.debug-grid-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.debug-grid-filter label {
+  white-space: nowrap;
+}
+
+.debug-grid-filter input {
+  flex: 1;
+  min-width: 80px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.debug-grid-toolbar {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The debugger's Syntax highlight option off: every coloured row renders in the plain text colour. */
+.debug-plain [class^='tc-'] {
+  color: inherit;
 }

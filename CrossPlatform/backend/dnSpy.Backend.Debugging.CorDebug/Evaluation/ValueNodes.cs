@@ -1,5 +1,7 @@
 using System.Globalization;
 using dnSpy.Backend.Contracts;
+using ICorDebugSharp;
+using ICorDebugSharp.Extensions;
 using Microsoft.CodeAnalysis;
 
 namespace dnSpy.Backend.Debugging.CorDebug.Evaluation;
@@ -44,6 +46,13 @@ internal sealed class ValueNode {
 
 	/// <summary>The value as Copy Value writes it.</summary>
 	public string? EditText { get; set; }
+
+	/// <summary>The address of the value's raw bytes, when the runtime gives one — what Save and Show in
+	/// Memory Window act on. Hex, because a 64-bit address does not survive a JSON number.</summary>
+	public string? Address { get; set; }
+
+	/// <summary>How many bytes the value occupies, with <see cref="Address"/>.</summary>
+	public int? Size { get; set; }
 }
 
 /// <summary>How a row's children are made, run when the row is expanded.</summary>
@@ -143,11 +152,25 @@ internal sealed class NodeFactory {
 			CanEditValue = canEdit && expression.Length > 0,
 			Children = factory.ChildrenOf(value, expression),
 		};
-		if (value is RemoteValue remote)
+		if (value is RemoteValue remote) {
 			node.ObjectId = ObjectIds.Find(Runtime, remote);
-		else if (value is ScalarValue { Origin: { } origin })
+			SetAddress(node, remote.Object);
+		}
+		else if (value is ScalarValue { Origin: { } origin }) {
 			node.ObjectId = ObjectIds.Find(Runtime, origin);
+			SetAddress(node, origin.Object);
+		}
 		return node;
+	}
+
+	/// <summary>GetRawAddressValue: the address and size of the value itself, never of the reference to it.</summary>
+	static void SetAddress(ValueNode node, ICorDebugValue value) {
+		try {
+			node.Address = "0x" + value.Address.Value.ToString("X", CultureInfo.InvariantCulture);
+			node.Size = (int)value.Size;
+		}
+		catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+		}
 	}
 
 	/// <summary>A row that could not be evaluated: the error is its value.</summary>

@@ -57,8 +57,14 @@ const rowKeys = (parentKey: string | undefined, list: readonly DebugVariable[]):
 const nameOf = (variable: DebugVariable): ReactNode =>
   variable.nameParts?.length ? <ColoredText parts={variable.nameParts} /> : variable.name
 
-const valueOf = (variable: DebugVariable): ReactNode =>
-  variable.valueParts?.length ? <ColoredText parts={variable.valueParts} /> : <span className={variable.isError ? 'tc-error' : undefined}>{variable.value}</span>
+const valueOf = (variable: DebugVariable): ReactNode => {
+  // ValueNodeFormatter.WriteValueAndObjectId: "value {$1}" for a value that has an object id.
+  const objectId = variable.objectId ? <span className="tc-debugObjectIdName">{` {${variable.objectId}}`}</span> : null
+  return <>
+    {variable.valueParts?.length ? <ColoredText parts={variable.valueParts} /> : <span className={variable.isError ? 'tc-error' : undefined}>{variable.value}</span>}
+    {objectId}
+  </>
+}
 
 const typeOf = (variable: DebugVariable): ReactNode =>
   variable.typeParts?.length ? <ColoredText parts={variable.typeParts} /> : variable.type
@@ -66,6 +72,10 @@ const typeOf = (variable: DebugVariable): ReactNode =>
 const copyText = (text: string): void => {
   void navigator.clipboard.writeText(text).catch(() => undefined)
 }
+
+/** VariablesWindowOperationsImpl.GetExpression per line: a copied row pastes the text before the first tab. */
+const pastedExpressions = (text: string): string[] =>
+  text.split(/\r?\n/).map((line) => { const index = line.indexOf('\t'); return (index >= 0 ? line.slice(0, index) : line).trim() }).filter((line) => line.length > 0)
 
 /** Flips one of the debugger's display toggles the way dnSpy's context menu does: the setting is global. */
 const toggleDebuggerOption = (key: keyof DebuggerOptions): void => {
@@ -94,7 +104,8 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
   const debuggerOptions = useAppOptions().debugger
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const [children, setChildren] = useState<Record<string, ChildState>>({})
-  const [selected, setSelected] = useState<string>()
+  const [selected, setSelected] = useState<string[]>([])
+  const anchorRef = useRef<string | undefined>(undefined)
   const [editing, setEditing] = useState<{ key: string; column: 'name' | 'value'; text: string }>()
   const [newWatch, setNewWatch] = useState<string>()
   const tableRef = useRef<HTMLDivElement>(null)
@@ -213,10 +224,43 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
     setEditing({ key: row.key, column, text: column === 'name' ? row.variable.name : row.variable.editText ?? row.variable.value })
   }
 
-  const selectedRow = flat.find((row) => row.key === selected)
+  /** ValueNodeFormatter.WriteValueAndObjectId: the object id follows the value, in braces. */
+  const valueText = (variable: DebugVariable): string => `${variable.value}${variable.objectId ? ` {${variable.objectId}}` : ''}`
 
-  const openMenu = (row: FlatRow | undefined, position: { x: number; y: number }): void => {
+  const selectedRows = flat.filter((row) => selected.includes(row.key) && !row.more)
+
+  const chooseRow = (row: FlatRow, event: React.MouseEvent): void => {
+    if (event.shiftKey && anchorRef.current !== undefined) {
+      const from = flat.findIndex((candidate) => candidate.key === anchorRef.current)
+      const to = flat.findIndex((candidate) => candidate.key === row.key)
+      if (from >= 0 && to >= 0)
+        setSelected(flat.slice(Math.min(from, to), Math.max(from, to) + 1).map((candidate) => candidate.key))
+      return
+    }
+    if (event.ctrlKey || event.metaKey) {
+      setSelected((current) => current.includes(row.key) ? current.filter((key) => key !== row.key) : [...current, row.key])
+    } else {
+      setSelected([row.key])
+    }
+    anchorRef.current = row.key
+  }
+
+  /** VariablesWindowOperationsImpl.Copy: expander, a tab, another tab, name, value with object id, type. */
+  const copyRows = (rows: FlatRow[]): void => {
+    const lines = rows.map((row) => {
+      const variable = row.variable
+      const expander = variable.variablesReference !== 0 ? (expanded.has(row.key) ? '-' : '+') : ' '
+      return `${expander}\t\t${variable.name}\t${valueText(variable)}\t${variable.type ?? ''}`
+    })
+    if (lines.length > 0)
+      copyText(lines.join('\n'))
+  }
+
+  const openMenu = (rows: FlatRow[], position: { x: number; y: number }): void => {
+    const row = rows[0]
     const variable = row?.variable
+    const realRows = rows.filter((candidate) => !candidate.more)
+    const single = realRows.length === 1
     const options = loadAppOptions().debugger
     const items: PopupMenuEntry[] = []
     const add = (key: string, labelText: string, run: () => void, extra?: { icon?: ReactNode; shortcut?: string; disabled?: boolean }): void => {
@@ -235,29 +279,51 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
     }
     const divider = (key: string): void => { items.push({ type: 'divider', key }) }
     const isRealRow = !!variable && !row?.more
-    add('copy', t('Copy'), () => { if (variable) copyText(`${variable.name}\t${variable.value}\t${variable.type ?? ''}`) }, { icon: <MenuEntryIcon name="Copy" />, shortcut: 'Ctrl+C', disabled: !isRealRow })
-    add('copy-value', t('Copy Value'), () => { if (variable) copyText(variable.value) }, { shortcut: 'Ctrl+Shift+C', disabled: !isRealRow })
-    add('copy-expression', t('Copy Expression'), () => { if (variable) copyText(expression(variable)) }, { disabled: !isRealRow || !variable?.evaluateName })
+    add('copy', t('Copy'), () => copyRows(realRows), { icon: <MenuEntryIcon name="Copy" />, shortcut: 'Ctrl+C', disabled: realRows.length === 0 })
+    add('copy-value', t('Copy Value'), () => copyText(realRows.map((candidate) => valueText(candidate.variable)).join('\n')), { shortcut: 'Ctrl+Shift+C', disabled: realRows.length === 0 })
+    add('copy-expression', t('Copy Expression'), () => copyText(realRows.map((candidate) => expression(candidate.variable)).join('\n')), { disabled: realRows.length === 0 })
     if (watch) {
-      add('paste', t('Paste'), () => { void navigator.clipboard.readText().then((text) => { if (text.trim()) void addWatch(text, watchWindow) }) }, { icon: <MenuEntryIcon name="Paste" />, shortcut: 'Ctrl+V' })
-      add('delete-watch', t('Delete Watch'), () => { if (variable) removeWatch(variable.name, watchWindow) }, { icon: <MenuEntryIcon name="Cancel" />, shortcut: 'Del', disabled: !isRealRow || row?.depth !== 0 })
+      add('paste', t('Paste'), () => { void navigator.clipboard.readText().then(async (text) => { for (const line of pastedExpressions(text)) await addWatch(line, watchWindow) }) }, { icon: <MenuEntryIcon name="Paste" />, shortcut: 'Ctrl+V' })
+      add('delete-watch', t('Delete Watch'), () => { for (const candidate of realRows.filter((candidate) => candidate.depth === 0)) removeWatch(candidate.variable.name, watchWindow) }, { icon: <MenuEntryIcon name="Cancel" />, shortcut: 'Del', disabled: !realRows.some((candidate) => candidate.depth === 0) })
       add('clear-all', t('Clear All'), () => clearWatches(watchWindow), { icon: <MenuEntryIcon name="ClearWindowContent" /> })
     }
     divider('edit')
-    add('edit-value', t('Edit Value'), () => { if (row) startEdit(row, 'value') }, { shortcut: 'F2', disabled: !isRealRow || !stopped || !variable?.canEdit })
+    add('edit-value', t('Edit Value'), () => { if (row) startEdit(row, 'value') }, { shortcut: 'F2', disabled: !single || !stopped || !variable?.canEdit })
     if (watch)
-      add('edit-expression', t('Edit Expression'), () => { if (row) startEdit(row, 'name') }, { disabled: !isRealRow || row?.depth !== 0 })
-    add('add-watch', t('Add Watch'), () => { if (variable?.evaluateName) void addWatch(variable.evaluateName) }, { icon: <MenuEntryIcon name="Watch" />, disabled: !isRealRow || !variable?.evaluateName })
+      add('edit-expression', t('Edit Expression'), () => { if (row) startEdit(row, 'name') }, { disabled: !single || row?.depth !== 0 })
+    add('add-watch', t('Add Watch'), () => { for (const candidate of realRows) { if (candidate.variable.evaluateName) void addWatch(candidate.variable.evaluateName) } }, { icon: <MenuEntryIcon name="Watch" />, disabled: realRows.length === 0 })
     if (variable?.objectId)
-      add('delete-object-id', t('Delete Object ID'), () => { if (variable.objectId) void deleteObjectId(variable.objectId) })
+      add('delete-object-id', t('Delete Object ID'), () => { if (variable.objectId) void deleteObjectId(variable.objectId) }, { disabled: !single })
     else
-      add('make-object-id', t('Make Object ID'), () => { if (variable?.evaluateName) void makeObjectId(variable.evaluateName) }, { disabled: !isRealRow || !stopped || !variable?.evaluateName || variable.variablesReference === 0 })
+      add('make-object-id', t('Make Object ID'), () => { if (variable?.evaluateName) void makeObjectId(variable.evaluateName) }, { disabled: !single || !stopped || !variable?.evaluateName || variable.variablesReference === 0 })
+    divider('native')
+    add('save', t('Save...'), () => {
+      if (!single || !variable?.address || !sessionId) return
+      const count = variable.size ?? 0
+      void window.dnSpy.readDebugMemory(sessionId, variable.address, count).then(
+        (memory) => window.dnSpy.saveBinary(`${variable.name || 'value'}.bin`, memory.data),
+        () => undefined)
+    }, { icon: <MenuEntryIcon name="Save" />, disabled: !single || !variable?.address || !sessionId })
+    // VariablesWindowOperations' Show in Memory Window: the value's raw span, in the window Ctrl+X uses
+    // or in the one Ctrl+1..4 names. The popup menu has no submenus, so the windows are flat entries.
+    const showMemory = (window: string): void => {
+      if (!single || !variable?.address || !sessionId) return
+      useAppStore.getState().showInMemoryWindow(sessionId, Number.parseInt(variable.address, 16), variable.size ?? 0, window)
+    }
+    add('show-memory', t('Show in Memory Window'), () => showMemory('memory'), { icon: <MenuEntryIcon name="MemoryWindow" />, shortcut: 'Ctrl+X', disabled: !single || !variable?.address || !sessionId })
+    add('show-memory-1', t('Memory 1'), () => showMemory('memory'), { shortcut: 'Ctrl+1', disabled: !single || !variable?.address || !sessionId })
+    add('show-memory-2', t('Memory 2'), () => showMemory('memory-2'), { shortcut: 'Ctrl+2', disabled: !single || !variable?.address || !sessionId })
+    add('show-memory-3', t('Memory 3'), () => showMemory('memory-3'), { shortcut: 'Ctrl+3', disabled: !single || !variable?.address || !sessionId })
+    add('show-memory-4', t('Memory 4'), () => showMemory('memory-4'), { shortcut: 'Ctrl+4', disabled: !single || !variable?.address || !sessionId })
+    divider('refresh')
+    add('refresh', t('Refresh'), () => { void useAppStore.getState().refreshVariables() }, { icon: <MenuEntryIcon name="Refresh" />, disabled: !stopped })
+    add('select-all', t('Select All'), () => setSelected(flat.filter((candidate) => !candidate.more).map((candidate) => candidate.key)), { icon: <MenuEntryIcon name="Select" />, shortcut: 'Ctrl+A', disabled: flat.length === 0 })
     divider('tree')
     add('collapse-parent', t('Collapse Parent'), () => {
       const parent = flat.find((candidate) => candidate.key === row?.parentKey)
       if (parent) {
         toggle(parent, false)
-        setSelected(parent.key)
+        setSelected([parent.key])
       }
     }, { disabled: !row?.parentKey })
     add('expand-children', t('Expand Children'), () => {
@@ -286,23 +352,46 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
     if (editing) return
-    const index = flat.findIndex((row) => row.key === selected)
+    const primaryKey = selected[0]
+    const index = flat.findIndex((row) => row.key === primaryKey)
     const row = flat[index]
-    const move = (to: number): void => {
+    const move = (to: number, extend: boolean): void => {
       const target = flat[Math.max(0, Math.min(flat.length - 1, to))]
-      if (target) setSelected(target.key)
+      if (!target) return
+      if (extend && anchorRef.current !== undefined) {
+        const from = flat.findIndex((candidate) => candidate.key === anchorRef.current)
+        const toIndex = flat.indexOf(target)
+        setSelected(flat.slice(Math.min(from, toIndex), Math.max(from, toIndex) + 1).map((candidate) => candidate.key))
+      } else {
+        setSelected([target.key])
+        anchorRef.current = target.key
+      }
     }
-    if (event.key === 'ArrowDown') move(index + 1)
-    else if (event.key === 'ArrowUp') move(index - 1)
+    if (event.key === 'ArrowDown') move(index + 1, event.shiftKey)
+    else if (event.key === 'ArrowUp') move(index - 1, event.shiftKey)
+    else if (event.key === 'Home') move(0, event.shiftKey)
+    else if (event.key === 'End') move(flat.length - 1, event.shiftKey)
     else if (event.key === 'ArrowRight' && row) {
       if (!expanded.has(row.key)) toggle(row, true)
-      else move(index + 1)
+      else move(index + 1, false)
     } else if (event.key === 'ArrowLeft' && row) {
       if (expanded.has(row.key)) toggle(row, false)
-      else if (row.parentKey) setSelected(row.parentKey)
-    } else if (event.key === 'F2' && row) startEdit(row, watch && row.depth === 0 && !event.shiftKey ? 'name' : 'value')
-    else if (event.key === 'Delete' && row && watch && row.depth === 0) removeWatch(row.variable.name, watchWindow)
-    else if (event.key === 'c' && event.ctrlKey && row) copyText(event.shiftKey ? row.variable.value : `${row.variable.name}\t${row.variable.value}\t${row.variable.type ?? ''}`)
+      else if (row.parentKey) {
+        setSelected([row.parentKey])
+        anchorRef.current = row.parentKey
+      }
+    } else if (event.key === 'Enter' && row) toggle(row)
+    else if (event.key === 'F2' && selectedRows.length === 1) startEdit(row, watch && row.depth === 0 && !event.shiftKey ? 'name' : 'value')
+    else if (event.key === 'Delete' && watch && selectedRows.some((candidate) => candidate.depth === 0)) {
+      for (const candidate of selectedRows.filter((candidate) => candidate.depth === 0))
+        removeWatch(candidate.variable.name, watchWindow)
+    } else if (event.key === 'a' && (event.ctrlKey || event.metaKey)) setSelected(flat.filter((candidate) => !candidate.more).map((candidate) => candidate.key))
+    else if ((event.key === 'c' && (event.ctrlKey || event.metaKey)) || (event.key === 'Insert' && event.ctrlKey)) {
+      if (event.shiftKey)
+        copyText(selectedRows.map((candidate) => valueText(candidate.variable)).join('\n'))
+      else
+        copyRows(selectedRows)
+    }
     else return
     event.preventDefault()
   }
@@ -333,7 +422,7 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
         event.preventDefault()
-        openMenu(selectedRow, { x: event.clientX, y: event.clientY })
+        openMenu(selectedRows, { x: event.clientX, y: event.clientY })
       }}
     >
       <div className="debug-table-header">{t('Name')}</div><div className="debug-table-header">{t('Value')}</div><div className="debug-table-header">{t('Type')}</div>
@@ -356,18 +445,20 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
         const isEditing = editing?.key === row.key
         return (
           <div
-            className={`debug-table-row${selected === row.key ? ' selected' : ''}${variable.isError ? ' debug-row-error' : ''}`}
+            className={`debug-table-row${selected.includes(row.key) ? ' selected' : ''}${variable.isError ? ' debug-row-error' : ''}`}
             role="row"
             aria-level={row.depth + 1}
             aria-expanded={variable.variablesReference !== 0 ? isOpen : undefined}
-            aria-selected={selected === row.key}
+            aria-selected={selected.includes(row.key)}
             key={row.key}
-            onMouseDown={() => setSelected(row.key)}
+            onMouseDown={(event) => chooseRow(row, event)}
             onContextMenu={(event) => {
               event.preventDefault()
               event.stopPropagation()
-              setSelected(row.key)
-              openMenu(row, { x: event.clientX, y: event.clientY })
+              const rows = selected.includes(row.key) ? selectedRows : [row]
+              if (!selected.includes(row.key))
+                setSelected([row.key])
+              openMenu(rows, { x: event.clientX, y: event.clientY })
             }}
           >
             <span className="debug-variable-name" style={{ paddingLeft: `${7 + row.depth * 15}px` }} onDoubleClick={() => startEdit(row, 'name')}>
@@ -380,7 +471,7 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
               {isEditing && editing.column === 'name' ? editor('name') : <span className="debug-variable-text">{nameOf(variable)}</span>}
             </span>
             <span
-              title={variable.value}
+              title={valueText(variable)}
               className={`${variable.canEdit && stopped ? 'debug-value-editable' : ''}${isChanged(row.key, variable.value) ? ' debug-value-changed' : ''}`}
               onDoubleClick={() => startEdit(row, 'value')}
             >

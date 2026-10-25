@@ -23,16 +23,22 @@ const getDebugChildren = vi.fn(async () => ({
   totalCount: 1,
 }))
 const setDebugExpression = vi.fn(async () => ({ node: factor, error: null }))
+const readDebugMemory = vi.fn(async (_session: string, _address: string, count: number) => ({ address: '0x1000', data: 'AAECAw==', readable: [true], pageSize: 4096, count }))
+const saveBinary = vi.fn(async () => '/tmp/factor.bin')
 
 beforeEach(() => {
   getDebugChildren.mockClear()
   setDebugExpression.mockClear()
+  readDebugMemory.mockClear()
+  saveBinary.mockClear()
   Object.defineProperty(window, 'dnSpy', {
     configurable: true,
     value: {
       ...window.dnSpy,
       getDebugChildren,
       setDebugExpression,
+      readDebugMemory,
+      saveBinary,
       getDebugScopes: vi.fn(async () => []),
       getDebugVariables: vi.fn(async () => []),
       evaluateDebugExpression: vi.fn(async (_session: string, _frame: number, expression: string) => ({ name: expression, value: '42', type: 'int', variablesReference: 0 })),
@@ -61,6 +67,42 @@ describe('LocalsPane', () => {
     expect(screen.getByText('shape')).toHaveClass('tc-local')
     expect(screen.getByText('Shape "square" with 4 sides')).toHaveClass('tc-debuggerDisplayAttributeEval')
     expect(screen.getByText('DebugTarget.Program.Shape')).toHaveClass('tc-type')
+  })
+
+  it('shows the object id after a value that was given one', () => {
+    useAppStore.setState({ debugVariables: [{ ...factor, objectId: '$1' }] })
+    render(<LocalsPane />)
+
+    expect(screen.getByText(/\{\$1\}/)).toHaveClass('tc-debugObjectIdName')
+  })
+
+  it('saves a value\'s raw bytes and shows its address span in a Memory window', async () => {
+    useAppStore.setState({ debugVariables: [{ ...factor, address: '0x1000', size: 4 }] })
+    render(<LocalsPane />)
+    const row = screen.getByText('factor').closest('.debug-table-row')!
+
+    fireEvent.contextMenu(row)
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Save\.\.\./ }))
+    await waitFor(() => expect(readDebugMemory).toHaveBeenCalledWith('session', '0x1000', 4))
+    await waitFor(() => expect(saveBinary).toHaveBeenCalledWith('factor.bin', 'AAECAw=='))
+
+    fireEvent.contextMenu(row)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Show in Memory Window/ }))
+    expect(useAppStore.getState().memoryNavigation).toMatchObject({ window: 'memory', sessionId: 'session', address: 0x1000, length: 4 })
+  })
+
+  it('copies every selected row in the variables window format', () => {
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<LocalsPane />)
+    const rows = screen.getAllByRole('row').filter((row) => row.getAttribute('aria-selected') !== null)
+
+    fireEvent.mouseDown(rows[0])
+    fireEvent.keyDown(screen.getByRole('treegrid', { name: 'Locals' }), { key: 'a', ctrlKey: true })
+    fireEvent.keyDown(screen.getByRole('treegrid', { name: 'Locals' }), { key: 'c', ctrlKey: true })
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('shape\tShape "square" with 4 sides\tDebugTarget.Program.Shape'))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('factor\t2\tint'))
   })
 
   it('reads a row\'s members when it is expanded', async () => {

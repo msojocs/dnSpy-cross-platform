@@ -615,6 +615,8 @@ internal sealed partial class CorDebugSession {
 			needsRefresh = node.NeedsRefresh,
 			objectId = node.ObjectId,
 			editText = node.EditText,
+			address = node.Address,
+			size = node.Size,
 		};
 	}
 

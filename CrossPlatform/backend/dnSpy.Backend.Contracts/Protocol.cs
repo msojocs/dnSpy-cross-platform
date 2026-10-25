@@ -111,6 +111,9 @@ public static class RpcMethods {
 	public const string ModuleSaveWithOptions = "module/saveWithOptions";
 	public const string ModuleSaveAllWithOptions = "module/saveAllWithOptions";
 	public const string WorkspaceReload = "workspace/reload";
+	/// <summary>Re-reads one module's file into the module already in the tree, keeping its node ids —
+	/// the debugger's in-place refresh of a module read out of the process.</summary>
+	public const string WorkspaceReloadModule = "workspace/reloadModule";
 	public const string WorkspaceSortAssemblies = "workspace/sortAssemblies";
 	/// <summary>Removes one assembly from the tree — dnSpy's Remove Assembly.</summary>
 	public const string WorkspaceRemoveModule = "workspace/removeModule";
@@ -1300,7 +1303,9 @@ public sealed record SaveModuleResponse(string Path, long Length, string Sha256)
 /// <paramref name="Host"/> as <c>host hostArgs program args</c>, false runs <paramref name="Program"/>
 /// itself (which must then be a native host, eg. an apphost), and null keeps the engine's own
 /// extension guess — a .dll through the host, anything else directly. <paramref name="HostArguments"/>
-/// are the host's own arguments, eg. <c>exec</c> for the <c>dotnet</c> CLI.
+/// are the host's own arguments, eg. <c>exec</c> for the <c>dotnet</c> CLI. <paramref name="ConnectionTimeout"/>
+/// is the CoreCLR page's Timeout in seconds — how long to wait for the runtime to report that it started —
+/// and null means the upstream default of five seconds.
 /// </summary>
 public sealed record DebugLaunchRequest(
 	string Program,
@@ -1312,7 +1317,8 @@ public sealed record DebugLaunchRequest(
 	string? BreakKind = null,
 	bool? UseHost = null,
 	string? Host = null,
-	IReadOnlyList<string>? HostArguments = null);
+	IReadOnlyList<string>? HostArguments = null,
+	int? ConnectionTimeout = null);
 
 public sealed record DebugProcessDto(int ProcessId, string Name, string? ExecutablePath);
 
@@ -3429,3 +3435,24 @@ public sealed record DebugMemorySearchRequest(
 	bool Wrap,
 	bool NoOverlaps,
 	int MaxResults);
+
+/// <summary>
+/// Re-reads a module from its file into the module the tree already holds. The debugger's dynamic-module
+/// refresh and Reload All Method Bodies write the process's copy over the file first; this then gives the
+/// existing document the new metadata instead of removing and re-adding it, so tabs and node ids survive.
+/// <paramref name="NodeId"/> may be any node of the module.
+/// </summary>
+public sealed record ReloadModuleRequest(string WorkspaceId, string NodeId);
+
+/// <summary>
+/// What the in-place refresh changed: the module list (an unchanged root order), the nodes it had to
+/// drop because the new metadata no longer has them, and the nodes whose contents were replaced — open
+/// documents showing one of the latter are decompiled again.
+/// </summary>
+public sealed record ReloadModuleResponse(
+	IReadOnlyList<OpenedModule> Modules,
+	IReadOnlyList<string> RemovedNodeIds,
+	IReadOnlyList<string> ChangedNodeIds,
+	bool CanUndo,
+	bool CanRedo,
+	string StateId);

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DebugExceptionCategory, DebugExceptionCondition, DebugExceptionSettings } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
+import { SearchMatcher } from '../tool-window-search'
+import { showPopupMenu } from 'flexlayout-react'
 import { useLanguage } from '../localization'
 import { trapTabKey, useModalLayer } from './modal-stack'
 import { DsIcon } from './DsIcon'
@@ -52,6 +54,8 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
   const [selected, setSelected] = useState<string[]>([])
   const [adding, setAdding] = useState(false)
   const [editingConditions, setEditingConditions] = useState<string[]>()
+  const [sort, setSort] = useState<{ column: 'name' | 'category' | 'conditions'; descending: boolean }>()
+  const searchRef = useRef<HTMLInputElement>(null)
   const { t } = useLanguage()
 
   // The engine is only asked when the window is opened, and it answers with the stored diff already
@@ -67,27 +71,42 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
     .map((condition) => `${t(condition.type === 'moduleNameEquals' ? 'Module name equals' : 'Module name not equals')} ${quote(condition.value)}`)
     .join(` ${t('And')} `)
 
+  const columnText = useMemo(() => {
+    const text = new Map<string, { name: string; category: string; conditions: string }>()
+    for (const row of exceptions) {
+      const category = categories.find((candidate) => candidate.name === row.category)
+      text.set(row.key, {
+        name: exceptionLabel(row, category, `<All ${category?.displayName ?? row.category} not in this list>`),
+        category: category?.displayName ?? row.category,
+        conditions: conditionsText(row),
+      })
+    }
+    return text
+  }, [exceptions, categories, t])
+  const matcher = useMemo(() => new SearchMatcher([
+    { id: 'name', shortOption: 'n', name: t('Break When Thrown') },
+    { id: 'category', shortOption: 'cat', name: t('Category') },
+    { id: 'conditions', shortOption: 'c', name: t('Conditions') },
+  ]).setSearchText(query), [query, t])
   const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return exceptions.filter((row) => {
+    const filtered = exceptions.filter((row) => {
       if (categoryFilter !== ALL_CATEGORIES && row.category !== categoryFilter)
         return false
       if (showOnlyEnabled && !row.stopFirstChance)
         return false
-      if (needle === '')
-        return true
-      const category = categories.find((candidate) => candidate.name === row.category)
-      const haystack = [
-        row.name ?? '',
-        row.code !== null ? formatCode(row.code, category) : '',
-        row.description ?? '',
-        category?.displayName ?? row.category,
-        category?.shortDisplayName ?? '',
-        row.conditions.map((condition) => condition.value).join(' '),
-      ].join('\t').toLowerCase()
-      return haystack.includes(needle)
+      const text = columnText.get(row.key)
+      return !text || matcher.isMatchAll([text.name, text.category, text.conditions])
     })
-  }, [exceptions, categories, categoryFilter, showOnlyEnabled, query, t])
+    if (!sort)
+      return filtered
+    const result = [...filtered].sort((a, b) => {
+      const left = columnText.get(a.key)?.[sort.column] ?? ''
+      const right = columnText.get(b.key)?.[sort.column] ?? ''
+      const order = left.localeCompare(right, undefined, { sensitivity: 'base' })
+      return sort.descending ? -order : order
+    })
+    return result
+  }, [exceptions, categoryFilter, showOnlyEnabled, columnText, matcher, sort])
 
   // A selection that outlived its rows would leave the toolbar acting on nothing.
   useEffect(() => {
@@ -111,6 +130,23 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
     })
   }
 
+  const copyRows = (list: DebugExceptionSettings[]): void => {
+    const lines = list.map((row) => {
+      const text = columnText.get(row.key)
+      return [text?.name ?? '', text?.category ?? '', text?.conditions ?? ''].join('\t')
+    })
+    if (lines.length > 0)
+      void navigator.clipboard.writeText(lines.join('\n')).catch(() => undefined)
+  }
+
+  const openContextMenu = (position: { x: number; y: number }): void => {
+    const items = [
+      { key: 'copy', content: <><span className="document-tab-menu-icon"><DsIcon name="Copy" /></span><span className="document-tab-menu-label">{t('Copy')}</span><span className="document-tab-menu-shortcut">Ctrl+C</span></>, disabled: selected.length === 0, onSelect: () => copyRows(exceptions.filter((row) => selected.includes(row.key))) },
+      { key: 'select-all', content: <><span className="document-tab-menu-icon"><DsIcon name="Select" /></span><span className="document-tab-menu-label">{t('Select All')}</span><span className="document-tab-menu-shortcut">Ctrl+A</span></>, onSelect: () => setSelected(rows.map((row) => row.key)) },
+    ]
+    showPopupMenu({ anchor: position, title: t('Exception Settings'), items, onClose: () => undefined })
+  }
+
   const toggleMatching = (): void => {
     // WPF's ToggleAllBreakpoints: if anything in view is still set, clear the lot; otherwise set it.
     const value = !rows.some((row) => row.stopFirstChance)
@@ -131,6 +167,18 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
     } else if (event.ctrlKey && event.key.toLowerCase() === 'a') {
       event.preventDefault()
       setSelected(rows.map((row) => row.key))
+    } else if (event.key === 'Insert' && !event.ctrlKey) {
+      event.preventDefault()
+      if (categories.length > 0) setAdding((value) => !value)
+    } else if (event.key === 'Enter' && selected.length > 0) {
+      event.preventDefault()
+      setEditingConditions(selected)
+    } else if ((event.key === 'c' && (event.ctrlKey || event.metaKey)) || (event.key === 'Insert' && event.ctrlKey)) {
+      event.preventDefault()
+      copyRows(exceptions.filter((row) => selected.includes(row.key)))
+    } else if (event.ctrlKey && (event.key === 'f' || event.key === 'e')) {
+      event.preventDefault()
+      searchRef.current?.focus()
     }
   }
 
@@ -191,7 +239,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           onChange={(event) => setCategoryFilter(event.target.value)}
         >
           <option value={ALL_CATEGORIES}>{t('All')}</option>
-          {categories.map((category) => <option key={category.name} value={category.name}>{category.shortDisplayName}</option>)}
+          {categories.map((category) => <option key={category.name} value={category.name}>{category.displayName}</option>)}
         </select>
         <span className="bookmarks-separator" />
         <button
@@ -207,6 +255,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           className="exception-search"
           aria-label={t('Search for an exception')}
           placeholder={t('Search')}
+          ref={searchRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -227,11 +276,19 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           <span>{loaded ? t('No exception types match your search filter.') : t('Loading')}</span>
         </div>
       ) : (
-        <div className="exception-table" role="table" aria-label={t('Exception Settings')}>
+        <div className="exception-table" role="table" aria-label={t('Exception Settings')} onContextMenu={(event) => { event.preventDefault(); openContextMenu({ x: event.clientX, y: event.clientY }) }}>
           <div className="exception-header" role="row">
-            <span role="columnheader">{t('Break When Thrown')}</span>
-            <span role="columnheader">{t('Category')}</span>
-            <span role="columnheader">{t('Conditions')}</span>
+            {(['name', 'category', 'conditions'] as const).map((column) => (
+              <span
+                role="columnheader"
+                key={column}
+                aria-sort={sort?.column === column ? (sort.descending ? 'descending' : 'ascending') : 'none'}
+                onClick={() => setSort((current) => current?.column !== column ? { column, descending: false } : current.descending ? undefined : { column, descending: true })}
+              >
+                {t(column === 'name' ? 'Break When Thrown' : column === 'category' ? 'Category' : 'Conditions')}
+                {sort?.column === column && <span className="bookmarks-sort-arrow" aria-hidden>{sort.descending ? '▼' : '▲'}</span>}
+              </span>
+            ))}
           </div>
           <div className="exception-rows">
             {rows.map((row) => {
@@ -346,7 +403,9 @@ const ExceptionConditionsDialog = ({ rows, onClose, onSave }: {
   const dialog = useRef<HTMLDivElement>(null)
   const depth = useModalLayer(onClose)
   // WPF edits the first selected row's conditions and applies the result to all of them.
-  const [conditions, setConditions] = useState<DebugExceptionCondition[]>(rows[0]?.conditions ?? [])
+  // EditExceptionConditionsVM opens with one empty row when there is nothing to edit, and its Add
+  // button creates ModuleNameNotEquals rows; blank rows are dropped when OK is pressed.
+  const [conditions, setConditions] = useState<DebugExceptionCondition[]>(() => rows[0]?.conditions?.length ? [...rows[0].conditions] : [{ type: 'moduleNameNotEquals', value: '' }])
 
   const setCondition = (index: number, change: Partial<DebugExceptionCondition>): void =>
     setConditions((current) => current.map((condition, position) => position === index ? { ...condition, ...change } : condition))
@@ -401,14 +460,13 @@ const ExceptionConditionsDialog = ({ rows, onClose, onSave }: {
             className="icon-button exception-condition-add"
             aria-label={t('Add')}
             title={t('Add')}
-            onClick={() => setConditions((current) => [...current, { type: 'moduleNameEquals', value: '' }])}
+            onClick={() => setConditions((current) => [...current, { type: 'moduleNameNotEquals', value: '' }])}
           ><DsIcon name="Add" /></button>
         </div>
         <div className="modal-actions">
           <span className="modal-action-spacer" />
           <button onClick={onClose}>{t('Cancel')}</button>
-          {/* A condition with no pattern would match nothing but read as if it did. */}
-          <button className="primary" disabled={conditions.some((condition) => condition.value.trim() === '')} onClick={() => onSave(conditions)}>{t('OK')}</button>
+          <button className="primary" onClick={() => onSave(conditions.filter((condition) => condition.value.trim() !== ''))}>{t('OK')}</button>
         </div>
       </div>
     </div>

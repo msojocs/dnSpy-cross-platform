@@ -683,7 +683,7 @@ export const MenuBar = ({
       },
       { separator: true },
       { label: debugState === 'stopped' ? t('Continue') : t('Start Debugging...'), icon: 'Run', shortcut: 'F5', disabled: !debugAvailable || (debugState !== 'inactive' && debugState !== 'stopped'), action: debugState === 'stopped' ? onContinueDebug : onStartDebug },
-      ...(onStartWithoutDebugging ? [{ label: t('Start Without Debugging...'), icon: 'RunOutline', shortcut: 'Ctrl+F5', disabled: false, action: onStartWithoutDebugging }] : []),
+      ...(onStartWithoutDebugging ? [{ label: t('Start Without Debugging'), icon: 'RunOutline', shortcut: 'Ctrl+F5', disabled: false, action: onStartWithoutDebugging }] : []),
       // Attach to Process is always there: in the start group before debugging, after Restart while debugging.
       ...(!isDebugging ? [{ label: t('Attach to Process...'), icon: 'Process', shortcut: 'Ctrl+Alt+P', disabled: !debugAvailable, action: onAttachDebug }] : []),
       // DebuggerMenuCommands' continue group: the commands that act on the session as a whole, shown while one runs.

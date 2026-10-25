@@ -3290,13 +3290,14 @@ describe('memory modules', () => {
   const saveDebugModule = vi.fn(async () => '/tmp/dnSpy-memory-modules/7/3/Dyn')
   const removeModules = vi.fn(async () => ({ removedNodeIds: ['root'], roots: [] }))
   const addModules = vi.fn(async () => ({ modules: [{ id: 'root2', name: 'Dyn', path: '/tmp/dnSpy-memory-modules/7/3/Dyn', hasPdb: false }] }))
+  const reloadModule = vi.fn(async () => ({ modules: [{ id: 'root', name: 'Dyn', path: '/tmp/dnSpy-memory-modules/7/3/Dyn', hasPdb: false }], removedNodeIds: [] as string[], changedNodeIds: ['type'], canUndo: false, canRedo: false, stateId: 'state2' }))
 
   beforeEach(() => {
-    for (const mock of [saveDebugModule, removeModules, addModules])
+    for (const mock of [saveDebugModule, removeModules, addModules, reloadModule])
       mock.mockClear()
     Object.defineProperty(window, 'dnSpy', {
       configurable: true,
-      value: { ...window.dnSpy, saveDebugModule, removeModules, addModules, getRoots: vi.fn(async () => ({ nodes: [] })), getModifiedModules: vi.fn(async () => ({ paths: [] })), getModifiedDocuments: vi.fn(async () => ({ documents: [] })) },
+      value: { ...window.dnSpy, saveDebugModule, removeModules, addModules, reloadModule, getRoots: vi.fn(async () => ({ nodes: [] })), getModifiedModules: vi.fn(async () => ({ paths: [] })), getModifiedDocuments: vi.fn(async () => ({ documents: [] })) },
     })
     useAppStore.setState({
       workspaceId: 'w',
@@ -3315,12 +3316,14 @@ describe('memory modules', () => {
     expect(memoryModulePathOf(useAppStore.getState(), 'type')).toBeUndefined()
   })
 
-  it('reads the module out of the process again and puts the new copy in place of the old one', async () => {
+  it('reads the module out of the process again and refreshes the copy in place, keeping its node ids', async () => {
     await useAppStore.getState().reloadMethodBodies('type')
 
     expect(saveDebugModule).toHaveBeenCalledWith('s', 3, '/tmp/dnSpy-memory-modules/7/3/Dyn')
-    expect(removeModules).toHaveBeenCalledWith('w', ['root'])
-    expect(addModules).toHaveBeenCalledWith('w', ['/tmp/dnSpy-memory-modules/7/3/Dyn'])
+    // MemoryModuleDefDocument.UpdateMemory updates the document it already has; it is not removed and reopened.
+    expect(reloadModule).toHaveBeenCalledWith('w', 'root')
+    expect(removeModules).not.toHaveBeenCalled()
+    expect(addModules).not.toHaveBeenCalled()
   })
 
   it('reads a dynamic module again at the stop after a type was created in it, as dnSpy\'s ClassLoader does', async () => {

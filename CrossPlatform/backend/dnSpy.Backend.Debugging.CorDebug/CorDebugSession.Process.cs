@@ -58,7 +58,7 @@ internal sealed partial class CorDebugSession {
 		}
 		if (entry is not null)
 			Emit(DebugEventNames.Module, new { reason = "new", module = DescribeModule(entry) });
-		CheckModuleBreakpoints(module, entry);
+		CheckModuleBreakpoints(module, entry, isLoadedEvent: true);
 	}
 
 	void OnClassLoaded(ICorDebugClass? loaded) {
@@ -73,8 +73,12 @@ internal sealed partial class CorDebugSession {
 
 	void OnModuleUnloading(ICorDebugModule module) {
 		var entry = Modules.FindEntry(module);
-		if (entry is not null)
+		if (entry is not null) {
 			Emit(DebugEventNames.Module, new { reason = "removed", module = DescribeModule(entry) });
+			// ModuleBreakpointHitChecker matches MessageModuleUnloaded too, so a row with IsLoaded false — or
+			// no Loaded filter — stops here as well.
+			CheckModuleBreakpoints(module, entry, isLoadedEvent: false);
+		}
 		breakpoints.UnbindModule(module);
 	}
 
@@ -241,5 +245,5 @@ internal sealed partial class CorDebugSession {
 	}
 
 	// Implemented with the module breakpoints.
-	partial void CheckModuleBreakpoints(ICorDebugModule module, ModuleTable.ModuleEntry? entry);
+	partial void CheckModuleBreakpoints(ICorDebugModule module, ModuleTable.ModuleEntry? entry, bool isLoadedEvent);
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { useAppStore } from '../app-store'
+import { hasValidDebugExtension, useAppStore } from '../app-store'
 import { useLanguage } from '../localization'
 import { CloseGlyph } from './DsGlyphs'
+import { EnvironmentVariablesDialog, parseEnvironmentRows, formatEnvironmentRows, environmentOfRows, type EnvironmentRow } from './EnvironmentVariablesDialog'
 
 /**
  * Splits a command line the way a shell would, so `"a b" c` becomes two arguments. The upstream dialog
@@ -34,23 +35,6 @@ export const splitArguments = (input: string): string[] => {
 }
 
 /**
- * Parses the `KEY=VALUE` lines of the environment box. Returns `undefined` for input that could not be
- * a valid environment, which is what disables the OK button.
- */
-export const parseEnvironment = (input: string): Record<string, string> | undefined => {
-  const environment: Record<string, string> = {}
-  for (const line of input.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const separator = trimmed.indexOf('=')
-    const key = separator > 0 ? trimmed.slice(0, separator).trim() : ''
-    if (!key) return undefined
-    environment[key] = trimmed.slice(separator + 1)
-  }
-  return environment
-}
-
-/**
  * The host a framework-dependent assembly is run through unless the user says otherwise, ie. the
  * upstream CoreCLR page's default. WPF derives it from `IsDotNetAppHostFilename`, which needs the
  * file's bytes; here the dialog only sees the path, so a `.dll` is taken to need the host and an
@@ -58,6 +42,17 @@ export const parseEnvironment = (input: string): Record<string, string> | undefi
  * engine makes when the choice is left out.
  */
 export const defaultsToHost = (program: string): boolean => program.trim().toLowerCase().endsWith('.dll')
+
+/**
+ * `Path.GetDirectoryName` as the upstream page uses it: the directory of a filename, or undefined when
+ * the text names no directory (a bare name). The page rewrites Working Directory with it every time the
+ * filename changes, which is why editing the executable box moves the directory with it.
+ */
+export const directoryOf = (path: string): string | undefined => {
+  const trimmed = path.trim()
+  const slash = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  return slash > 0 ? trimmed.slice(0, slash) : undefined
+}
 
 /** What the dialog remembers of a program it started — dnSpy's StartDebuggingOptionsMru, by file. */
 interface RememberedLaunch {
@@ -68,7 +63,18 @@ interface RememberedLaunch {
   host: string
   hostArgumentsText: string
   breakAt: 'dont-break' | 'create-process' | 'entry-point' | 'module-cctor-or-entry-point'
+  /** The CoreCLR page's Timeout, in seconds. Absent in entries written before the field existed. */
+  connectionTimeoutText?: string
 }
+
+/** The upstream CoreCLR page's default Timeout: DotNetStartDebuggingOptions.ConnectionTimeout. */
+export const DEFAULT_CONNECTION_TIMEOUT_SECONDS = 5
+
+/**
+ * The Timeout box is a uint in WPF (`UInt32VM`), so only a non-empty run of digits in range keeps
+ * OK enabled. The value is the wait for the runtime-startup event, not a general process timeout.
+ */
+export const isValidConnectionTimeout = (text: string): boolean => /^\d+$/.test(text.trim()) && Number(text) <= 0xFFFFFFFF
 
 const launchMruStorageKey = 'dnspy.debugProgramMru.v1'
 const LAUNCH_MRU_SIZE = 20
@@ -89,14 +95,12 @@ const rememberLaunch = (program: string, launch: RememberedLaunch): void => {
 }
 
 /**
- * The Debug Program dialog, and with `mode="run"` the one Start Without Debugging opens: the same fields,
- * and the program runs on its own instead of under the debugger.
+ * The Debug Program dialog: the CoreCLR page's fields, collected into what `debug/launch` takes.
  */
-export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): void; mode?: 'debug' | 'run' }): React.JSX.Element => {
+export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.Element => {
   const dialog = useRef<HTMLDivElement>(null)
   const defaultDebugTarget = useAppStore((state) => state.defaultDebugTarget)
   const launchDebug = useAppStore((state) => state.launchDebug)
-  const appendOutput = useAppStore((state) => state.appendOutput)
   const { t } = useLanguage()
   const [program, setProgram] = useState(() => defaultDebugTarget() ?? '')
   // The options the program was last started with, which the fields open on.
@@ -108,8 +112,11 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
   // anything — but it still keeps OK disabled, exactly like upstream's MissingFilename.
   const [programMissing, setProgramMissing] = useState(false)
   const [argumentsText, setArgumentsText] = useState(remembered?.argumentsText ?? '')
-  const [workingDirectory, setWorkingDirectory] = useState(remembered?.workingDirectory ?? '')
-  const [environmentText, setEnvironmentText] = useState(remembered?.environmentText ?? '')
+  // The upstream page rewrites this from the filename whenever the filename changes, and its MRU
+  // restores an old value afterwards.
+  const [workingDirectory, setWorkingDirectory] = useState(remembered?.workingDirectory ?? directoryOf(program) ?? '')
+  const [environmentRows, setEnvironmentRows] = useState<EnvironmentRow[]>(() => parseEnvironmentRows(remembered?.environmentText ?? ''))
+  const [environmentDialogOpen, setEnvironmentDialogOpen] = useState(false)
   // The "use host executable" choice and the host it names, mirroring the upstream CoreCLR page. The
   // default follows the target kind; a blank host path means "find the dotnet CLI", and its default
   // argument is `exec`, exactly what upstream fills in.
@@ -117,19 +124,43 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
   const [host, setHost] = useState(remembered?.host ?? '')
   const [hostMissing, setHostMissing] = useState(false)
   const [hostArgumentsText, setHostArgumentsText] = useState(remembered?.hostArgumentsText ?? 'exec')
+  const [connectionTimeoutText, setConnectionTimeoutText] = useState(remembered?.connectionTimeoutText ?? String(DEFAULT_CONNECTION_TIMEOUT_SECONDS))
   const [breakAt, setBreakAt] = useState<RememberedLaunch['breakAt']>(remembered?.breakAt ?? 'dont-break')
 
+  /** DotNetCommonStartDebuggingOptionsPage.Filename: a new filename carries its directory with it. */
+  const updateProgram = (value: string): void => {
+    setProgram(value)
+    const directory = directoryOf(value)
+    if (directory !== undefined)
+      setWorkingDirectory(directory)
+  }
+
   // A program picked with Browse... brings back what it was last started with, as dnSpy's MRU does.
-  const chooseProgram = (path: string): void => {
-    setProgram(path)
+  const chooseProgram = async (path: string): Promise<void> => {
+    updateProgram(path)
     const launch = loadLaunchMru()[path]
-    if (!launch) return
+    if (!launch) {
+      // No MRU entry: WPF starts the page afresh for an executable and keeps the last options for a
+      // DLL. The directory is the one the page's Filename setter just wrote.
+      setWorkingDirectory(directoryOf(path) ?? '')
+      if (await window.dnSpy.pathIsPeExecutable(path)) {
+        setArgumentsText('')
+        setEnvironmentRows([])
+        setUseHost(defaultsToHost(path))
+        setHost('')
+        setHostArgumentsText('exec')
+        setConnectionTimeoutText(String(DEFAULT_CONNECTION_TIMEOUT_SECONDS))
+        setBreakAt('dont-break')
+      }
+      return
+    }
     setArgumentsText(launch.argumentsText)
     setWorkingDirectory(launch.workingDirectory)
-    setEnvironmentText(launch.environmentText)
+    setEnvironmentRows(parseEnvironmentRows(launch.environmentText))
     setUseHost(launch.useHost)
     setHost(launch.host)
     setHostArgumentsText(launch.hostArgumentsText)
+    setConnectionTimeoutText(launch.connectionTimeoutText ?? String(DEFAULT_CONNECTION_TIMEOUT_SECONDS))
     setBreakAt(launch.breakAt)
   }
 
@@ -192,14 +223,21 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
     }
   }
 
-  const environment = parseEnvironment(environmentText)
-  const canConfirm = program.trim().length > 0 && !programMissing && environment !== undefined && !(useHost && hostMissing)
+  const environment = environmentOfRows(environmentRows)
+  const connectionTimeoutValid = isValidConnectionTimeout(connectionTimeoutText)
+  const canConfirm = program.trim().length > 0 && !programMissing && !(useHost && hostMissing) && connectionTimeoutValid
 
-  const confirm = (): void => {
+  const confirm = async (): Promise<void> => {
     if (!canConfirm) return
+    // StartDebuggingOptionsProvider asks this after the dialog, and a No cancels the start.
+    if (!hasValidDebugExtension(program.trim())) {
+      const question = t("Are you sure you want to debug this file which doesn't have a valid extension?")
+      const answer = await window.dnSpy.askMessage(question, [t('Yes'), t('No')])
+      if (answer.button !== t('Yes')) return
+    }
     // The dialog closes before the launch, like upstream: the stop lands in the debugger, not in a modal.
     onClose()
-    rememberLaunch(program.trim(), { argumentsText, workingDirectory, environmentText, useHost, host, hostArgumentsText, breakAt })
+    rememberLaunch(program.trim(), { argumentsText, workingDirectory, environmentText: formatEnvironmentRows(environmentRows), useHost, host, hostArgumentsText, breakAt, connectionTimeoutText })
     const options = {
       program: program.trim(),
       arguments: splitArguments(argumentsText),
@@ -216,21 +254,17 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
       useHost,
       host: useHost ? host.trim() || undefined : undefined,
       hostArguments: useHost ? splitArguments(hostArgumentsText) : undefined,
+      connectionTimeout: Number(connectionTimeoutText.trim()),
     }
-    if (mode === 'debug') {
-      void launchDebug(options)
-      return
-    }
-    void window.dnSpy.startWithoutDebugging(options).then(
-      (processId) => appendOutput(t('Started {target} without debugging (process {processId}).', { target: options.program, processId }), 'debug'),
-      (error: unknown) => appendOutput(t('Could not start {target}: {message}', { target: options.program, message: error instanceof Error ? error.message : String(error) }), 'debug'))
+    void launchDebug(options)
   }
 
   return (
+    <>
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <div ref={dialog} className="modal debug-program-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-program-title" onKeyDown={keepFocusInDialog}>
         <div className="modal-title">
-          <span id="debug-program-title">{mode === 'debug' ? t('Debug Program') : t('Start Without Debugging')}</span>
+          <span id="debug-program-title">{t('Debug Program')}</span>
           <button type="button" className="icon-button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><CloseGlyph /></button>
         </div>
         <div className="debug-program-fields">
@@ -239,8 +273,8 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
           <span />
 
           <label htmlFor="debug-program-exe">{t('Executable')}</label>
-          <input id="debug-program-exe" aria-invalid={programMissing} value={program} onChange={(event) => setProgram(event.target.value)} />
-          <button type="button" onClick={() => void window.dnSpy.chooseDebugTarget().then((path) => { if (path) chooseProgram(path) })}>{t('Browse...')}</button>
+          <input id="debug-program-exe" aria-invalid={programMissing} value={program} onChange={(event) => updateProgram(event.target.value)} />
+          <button type="button" onClick={() => void window.dnSpy.chooseDebugTarget().then((path) => { if (path) void chooseProgram(path) })}>{t('Browse...')}</button>
 
           <label htmlFor="debug-program-args">{t('Arguments')}</label>
           <input id="debug-program-args" className="debug-program-wide" value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} />
@@ -250,7 +284,8 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
           <button type="button" onClick={() => void window.dnSpy.chooseDebugDirectory().then((path) => { if (path) setWorkingDirectory(path) })}>{t('Browse...')}</button>
 
           <label htmlFor="debug-program-env">{t('Environment Variables')}</label>
-          <textarea id="debug-program-env" className="debug-program-wide" placeholder={t('One KEY=VALUE per line')} value={environmentText} onChange={(event) => setEnvironmentText(event.target.value)} />
+          <input id="debug-program-env" readOnly value={environmentRows.filter((row) => row.key.length > 0).map((row) => `${row.key}=${row.value};`).join('')} />
+          <button type="button" aria-label={t('Edit Environment Variables')} title={t('Edit Environment Variables')} onClick={() => setEnvironmentDialogOpen(true)}>...</button>
 
           <label className="debug-program-wide debug-program-checkbox" htmlFor="debug-program-use-host">
             <input id="debug-program-use-host" type="checkbox" checked={useHost} onChange={(event) => setUseHost(event.target.checked)} />
@@ -263,6 +298,10 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
 
           <label htmlFor="debug-program-host-args">{t('Host Arguments')}</label>
           <input id="debug-program-host-args" className="debug-program-wide" disabled={!useHost} value={hostArgumentsText} onChange={(event) => setHostArgumentsText(event.target.value)} />
+
+          <label htmlFor="debug-program-timeout">{t('Timeout')}</label>
+          <input id="debug-program-timeout" inputMode="numeric" aria-invalid={!connectionTimeoutValid} value={connectionTimeoutText} onChange={(event) => setConnectionTimeoutText(event.target.value)} />
+          <span />
 
           <label htmlFor="debug-program-break">{t('Break at')}</label>
           <select id="debug-program-break" className="debug-program-wide" value={breakAt} onChange={(event) => {
@@ -278,9 +317,11 @@ export const DebugProgramDialog = ({ onClose, mode = 'debug' }: { onClose(): voi
         <div className="modal-actions">
           <span className="modal-action-spacer" />
           <button type="button" onClick={onClose}>{t('Cancel')}</button>
-          <button type="button" className="primary" disabled={!canConfirm} onClick={confirm}>{t('OK')}</button>
+          <button type="button" className="primary" disabled={!canConfirm} onClick={() => void confirm()}>{t('OK')}</button>
         </div>
       </div>
     </div>
+    {environmentDialogOpen && <EnvironmentVariablesDialog initial={environmentRows} onClose={() => setEnvironmentDialogOpen(false)} onAccept={setEnvironmentRows} />}
+    </>
   )
 }

@@ -1,6 +1,8 @@
+using System.Globalization;
 using dnSpy.Backend.Debugging.CorDebug.Evaluation;
 using ICorDebugSharp;
 using ICorDebugSharp.Extensions;
+using Microsoft.CodeAnalysis;
 
 namespace dnSpy.Backend.Debugging.CorDebug;
 
@@ -118,14 +120,32 @@ internal sealed partial class CorDebugSession {
 		/// Where the breakpoint sits. The engine never sees a native address — it places breakpoints by
 		/// method and IL offset — so that is what this reports instead.
 		/// </summary>
-		public string? BreakpointAddress =>
-			$"{TracepointMessage.Hex(entry.MetadataToken, 8)}+{TracepointMessage.Hex(entry.BoundIlOffset)}";
+		public string? BreakpointAddress {
+			get {
+				try {
+					if (string.IsNullOrEmpty(entry.ModulePath) || session.Modules.Find(entry.ModulePath) is not { } module)
+						return null;
+					var function = module.GetFunctionFromToken(entry.MetadataToken);
+					if (function.TryGetNativeCode(out var code) < 0 || code is null)
+						return null;
+					var nativeOffset = 0u;
+					foreach (var mapping in code.ILToNativeMapping) {
+						if (mapping.ilOffset <= entry.IlOffset)
+							nativeOffset = mapping.nativeStartOffset;
+					}
+					return "0x" + (code.Address.Value + nativeOffset).ToString("X", CultureInfo.InvariantCulture);
+				}
+				catch (Exception ex) when (ModuleTable.IsComFailure(ex)) {
+					return null;
+				}
+			}
+		}
 
 		/// <summary>
-		/// The managed thread id, which lives in a field of the debuggee's <c>Thread</c> object. Reading
-		/// it needs metadata the engine does not have, so <c>$MID</c> has nothing to report.
+		/// The managed thread id, which lives in a field of the debuggee's <c>Thread</c> object. The runtime's
+		/// list of managed threads is what the debugger already reads for the Threads window, so use it.
 		/// </summary>
-		public string? ManagedThreadId => null;
+		public string? ManagedThreadId => session.ReadManagedThreadInfo(session.TryGetTypeSystem(), thread).ManagedId is { } id ? id.ToString(CultureInfo.InvariantCulture) : null;
 
 		public string? ProcessId => TracepointMessage.Hex(session.TargetProcessId);
 
@@ -135,12 +155,19 @@ internal sealed partial class CorDebugSession {
 
 		public string? ThreadName => ThreadTable.TryGetId(thread) is int id ? ThreadTable.Describe(id) : null;
 
-		public string? FrameAddress(int index) =>
+		public string? FrameAddress(int index) => PrecomputedFrame(index, parameterTypes: true, instructionPointer: true) ?? FrameAddressFallback(index);
+
+		public string? FrameCaller(int index) => PrecomputedFrame(index, parameterTypes: false, instructionPointer: false) ?? FrameCallerFallback(index);
+
+		public string? FrameFunction(int index) => PrecomputedFrame(index, parameterTypes: true, instructionPointer: false) ?? FrameCallerFallback(index);
+
+		string? PrecomputedFrame(int index, bool parameterTypes, bool instructionPointer) =>
+			precomputedFrames is not null && precomputedFrames.TryGetValue((index, parameterTypes, instructionPointer), out var name) ? name : null;
+
+		string? FrameAddressFallback(int index) =>
 			Frame(index) is { } frame ? $"{Name(index, frame)}+{TracepointMessage.Hex(ReadIlOffset(frame))}" : null;
 
-		public string? FrameCaller(int index) => Frame(index) is { } frame ? Name(index, frame) : null;
-
-		public string? FrameFunction(int index) => FrameCaller(index);
+		string? FrameCallerFallback(int index) => Frame(index) is { } frame ? Name(index, frame) : null;
 
 		public string? FrameModule(int index) {
 			if (Frame(index) is not { } frame)
@@ -171,6 +198,9 @@ internal sealed partial class CorDebugSession {
 		/// <summary>The tracepoint's expressions, evaluated before the message is rendered on the dispatcher.</summary>
 		Dictionary<string, string?>? precomputed;
 
+		/// <summary>The frame names a tracepoint message needs, formatted before it is rendered on the dispatcher.</summary>
+		Dictionary<(int Index, bool ParameterTypes, bool InstructionPointer), string?>? precomputedFrames;
+
 		/// <summary>
 		/// True when the hit is being decided off the dispatcher, where the expression evaluator can make calls;
 		/// the synchronous path keeps to the subset <see cref="BreakpointExpression"/> reads.
@@ -179,6 +209,9 @@ internal sealed partial class CorDebugSession {
 
 		Task<BreakpointValue>? IBreakpointHitRuntime.EvaluateConditionAsync(string expression) =>
 			UseEvaluator ? session.EvaluateBreakpointExpressionAsync(thread, expression) : null;
+
+		Task<bool>? IBreakpointHitRuntime.EvaluateFilterAsync(string expression) =>
+			UseEvaluator ? session.EvaluateFilterExpressionAsync(thread, expression) : null;
 
 		Task<string>? IBreakpointHitRuntime.RenderTraceAsync(TracepointMessage message) =>
 			UseEvaluator ? RenderWithEvaluatorAsync(message) : null;
@@ -191,15 +224,99 @@ internal sealed partial class CorDebugSession {
 				var value = await session.EvaluateBreakpointExpressionAsync(thread, part.Text).ConfigureAwait(false);
 				values[part.Text] = value.Describe();
 			}
+			var frameNames = await PrecomputeFrameNamesAsync(message).ConfigureAwait(false);
 			return await session.Dispatcher.RunAsync(() => {
 				precomputed = values;
+				precomputedFrames = frameNames;
 				try {
 					return message.Render(this);
 				}
 				finally {
 					precomputed = null;
+					precomputedFrames = null;
 				}
 			}).ConfigureAwait(false);
+		}
+
+		/// <summary>
+		/// Names the frames the message's <c>$ADDRESS</c>, <c>$CALLER</c>, <c>$CALLSTACK</c> and
+		/// <c>$FUNCTION</c> ask for, with the options WPF's TracepointMessageCreator gives each one:
+		/// parameter types for $ADDRESS and $FUNCTION, the instruction pointer only for $ADDRESS. The COM
+		/// reads happen on the dispatcher; formatting them does not.
+		/// </summary>
+		async Task<Dictionary<(int Index, bool ParameterTypes, bool InstructionPointer), string?>> PrecomputeFrameNamesAsync(TracepointMessage message) {
+			var wanted = new HashSet<(int Index, bool ParameterTypes, bool InstructionPointer)>();
+			foreach (var part in message.Parts) {
+				switch (part.Kind) {
+					case TracepointMessageKind.Address:
+						wanted.Add((part.Number, true, true));
+						break;
+					case TracepointMessageKind.Function:
+						wanted.Add((part.Number, true, false));
+						break;
+					case TracepointMessageKind.Caller:
+						wanted.Add((part.Number, false, false));
+						break;
+					case TracepointMessageKind.CallStack:
+						for (var index = 0; index < part.Number; index++)
+							wanted.Add((index, false, false));
+						break;
+				}
+			}
+			var names = new Dictionary<(int Index, bool ParameterTypes, bool InstructionPointer), string?>();
+			foreach (var key in wanted)
+				names[key] = await FormatFrameNameAsync(key.Index, key.ParameterTypes, key.InstructionPointer).ConfigureAwait(false);
+			return names;
+		}
+
+		/// <summary>StackFrameFormatter over the frame at <paramref name="index"/>, or its address when it cannot be named.</summary>
+		async Task<string?> FormatFrameNameAsync(int index, bool parameterTypes, bool instructionPointer) {
+			var threadId = ThreadTable.TryGetId(thread);
+			var raw = await session.Dispatcher.RunAsync(() => {
+				if (Frame(index) is not { } frame)
+					return (RawFrame?)null;
+				var (modulePath, token) = FrameIdentity(frame);
+				var (nativeAddress, nativeOffset) = ReadNativeLocation(frame);
+				return new RawFrame(0, modulePath, token, ReadIlOffset(frame), false, null, nativeAddress, nativeOffset);
+			}).ConfigureAwait(false);
+			if (raw is not { } frameData)
+				return null;
+			DebuggeeTypeSystem? types = null;
+			try {
+				types = session.TryGetTypeSystem();
+			}
+			catch (Exception ex) when (ex is IOException or InvalidOperationException or BadImageFormatException) {
+			}
+			var method = types is not null && session.Modules.FindEntry(frameData.ModulePath) is { } entry
+				? types.GetMember(entry, frameData.MetadataToken) as IMethodSymbol
+				: null;
+			if (method is null || threadId is not { } id)
+				return FrameCallerFallback(index);
+			var runtime = new EvalRuntime(session, types!, id, 0, allowFuncEval: false, CancellationToken.None);
+			var options = new ValueFormatOptions {
+				Language = session.Options.Language,
+				Hexadecimal = session.Options.UseHexadecimal,
+				DigitSeparators = session.Options.UseDigitSeparators,
+				ShowNamespaces = true,
+				IntrinsicTypeKeywords = true,
+				FuncEval = false,
+			};
+			var format = new StackFrameFormat(
+				ModuleNames: false,
+				ParameterTypes: parameterTypes,
+				ParameterNames: false,
+				ParameterValues: false,
+				InstructionPointer: instructionPointer,
+				ReturnTypes: false,
+				Namespaces: true,
+				IntrinsicTypeKeywords: true,
+				DeclaringTypes: true,
+				Tokens: false,
+				Hexadecimal: session.Options.UseHexadecimal,
+				DigitSeparators: session.Options.UseDigitSeparators);
+			var output = new ColorTextWriter();
+			await StackFrameFormatter.WriteAsync(output, new ValueFormatter(runtime, options, null), runtime, method, frameData, format, session.Options.Language).ConfigureAwait(false);
+			return output.ToString();
 		}
 
 		/// <summary>
@@ -333,5 +450,19 @@ internal sealed partial class CorDebugSession {
 		catch (EvaluationThrownException thrown) {
 			throw new BreakpointEvaluationException(ValueFormatter.DescribeThrown(thrown));
 		}
+	}
+
+	/// <summary>
+	/// Runs a breakpoint filter: the five values dnSpy's filter evaluator offers, read for this hit, and
+	/// the filter's C# compiled against them.
+	/// </summary>
+	internal async Task<bool> EvaluateFilterExpressionAsync(ICorDebugThread thread, string expression) {
+		var threadId = await Dispatcher.RunAsync(() => ThreadTable.TryGetId(thread)).ConfigureAwait(false);
+		return FilterExpression.Evaluate(expression,
+			Environment.MachineName,
+			TargetProcessId,
+			ProcessName ?? string.Empty,
+			threadId is { } id ? (ulong)id : ulong.MaxValue,
+			threadId is { } nameId ? ThreadTable.Describe(nameId) : null);
 	}
 }

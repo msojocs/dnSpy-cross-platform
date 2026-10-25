@@ -127,6 +127,9 @@ internal static class Program {
 		Blue = 4,
 	}
 
+	// A record, for the evaluator's `with` expression: the clone method and the initializer both have to run.
+	internal sealed record Point(int X, int Y);
+
 	[System.Diagnostics.DebuggerDisplay("Shape {Name} with {Sides} sides")]
 	sealed class Shape {
 		static int created;

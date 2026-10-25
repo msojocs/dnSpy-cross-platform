@@ -176,6 +176,13 @@ public sealed class DebugEvaluationTests {
 
 		await stopped.RequestAsync("setExpression", new { expression = "factor", value = "factor * 10", frameId = stopped.FrameId });
 		Assert.Equal("20", await stopped.ValueAsync("factor"));
+
+		// Object, collection and anonymous initializers, and a record's `with`, run like dnSpy's IL interpreter
+		// runs the code Roslyn emits for them.
+		Assert.Equal("4", await stopped.ValueAsync("new DebugTarget.Program.Shape(\"tri\", 3) { Sides = 4 }.Sides"));
+		Assert.Equal("3", await stopped.ValueAsync("new System.Collections.Generic.List<int> { 1, 2, 3 }.Count"));
+		Assert.Equal("5", await stopped.ValueAsync("new { X = 5 }.X"));
+		Assert.Equal("5", await stopped.ValueAsync("(new DebugTarget.Program.Point(1, 2) with { X = 5 }).X"));
 	}
 
 	[Fact(Timeout = 120_000)]

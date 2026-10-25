@@ -497,7 +497,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -736,7 +736,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -848,7 +848,7 @@ test.describe('the workspace shell', () => {
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -912,7 +912,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click({ button: 'right' })
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expect(getter).toHaveCount(1)
   })
@@ -963,7 +963,7 @@ test.describe('the workspace shell', () => {
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // Go to Token is dnSpy's FollowReference: with DecompileFullType on, the method's token opens the type it is
     // declared in — which the tree then selects, opening the chain above it — with the caret on the method.
-    await tokenDialog.getByLabel('Token').fill('0x06000AD8')
+    await tokenDialog.getByLabel('Token').fill('0x06000ADA')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
     await expect(page.getByRole('tab', { name: 'RpcException', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -1002,7 +1002,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -1202,11 +1202,11 @@ test.describe('the workspace shell', () => {
     await goto.getByRole('button', { name: 'OK' }).click()
     await expect(view).toHaveAttribute('data-caret', String(0x40))
     await page.keyboard.press('Control+I')
-    await page.keyboard.type('4D5A', { delay: 50 })
-    // The next "4D 5A" after the caret, its bytes as they were.
-    await expect.poll(async () => Number(await view.getAttribute('data-selection-end')) - Number(await view.getAttribute('data-selection-start'))).toBe(2)
+    await page.keyboard.type('50450000', { delay: 50 })
+    // The PE header after the caret, its bytes as they were.
+    await expect.poll(async () => Number(await view.getAttribute('data-selection-end')) - Number(await view.getAttribute('data-selection-start'))).toBe(4)
     expect(Number(await view.getAttribute('data-selection-start'))).toBeGreaterThan(0x40)
-    await expect(page.locator('.hex-byte[data-hex-column="values"][data-selected]')).toHaveText(['4D', '5A'])
+    await expect(page.locator('.hex-byte[data-hex-column="values"][data-selected]')).toHaveText(['50', '45', '00', '00'])
     await expect(page.getByRole('search')).toBeVisible()
     await page.keyboard.press('Escape')
 
@@ -1286,7 +1286,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -1407,7 +1407,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000AD8$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -2413,6 +2413,31 @@ test.describe('the in-process debug engine', () => {
     await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
   })
 
+  test('breaks a running program with Break All', async () => {
+    await openDebugTarget()
+
+    await page.getByRole('toolbar', { name: 'Main toolbar' }).getByRole('button', { name: 'Debug a Program' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Debug Program' })
+    // --wait prints READY and then sleeps, so the process is running when Break All is pressed.
+    await dialog.locator('#debug-program-args').fill('--wait')
+    await dialog.getByRole('button', { name: 'OK' }).click()
+
+    await showDebugWindow(/^Output/)
+    await page.getByRole('tab', { name: 'Output' }).click()
+    await expect(page.getByRole('log')).toContainText('READY')
+    const toolbar = page.getByRole('toolbar', { name: 'Main toolbar' })
+    await expect(toolbar.getByRole('button', { name: 'Pause' })).toBeEnabled()
+    await toolbar.getByRole('button', { name: 'Pause' }).click()
+
+    // A debugger-requested break is a stop like any other, with a thread the windows can read.
+    await expect(page.locator('.status-bar')).toContainText('Stopped: pause')
+    await showDebugWindow(/^Threads/)
+    await expect(page.getByRole('grid', { name: 'Threads' }).getByRole('row').first()).toBeVisible()
+
+    await toolbar.getByRole('button', { name: 'Stop' }).click()
+    await expect(toolbar.getByRole('button', { name: 'Debug a Program' })).toBeEnabled()
+  })
+
   test('shows live Memory structure Quick Info, follows a field and navigates with F12', async () => {
     test.setTimeout(60_000)
     page.on('pageerror', (error) => console.error('Memory e2e renderer:', error.message))
@@ -2469,7 +2494,9 @@ test.describe('the in-process debug engine', () => {
       await page.keyboard.press('F5')
       // Hex Refresh must remain inside Memory, never continue the paused debuggee.
       await expect(page.locator('.status-bar')).toContainText('Stopped: entry')
-      await expect(hex).toContainText('50 45 00 00')
+      // The caret is still on the PE header the refresh was asked at; the bytes may straddle a line because
+      // Fit to Width chooses the line length, so read the offset rather than the rendered text.
+      await expect.poll(async () => Number.parseInt((await view.getAttribute('data-caret-offset')) ?? '', 16)).toBe(base + peOffset)
 
       // The buffer is the whole address space: Alt+Down goes to the last byte of the readable run the module is in,
       // Alt+Up back to the run's start, from the regions the system maps.

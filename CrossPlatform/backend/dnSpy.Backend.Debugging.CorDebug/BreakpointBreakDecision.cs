@@ -28,6 +28,12 @@ public interface IBreakpointHitRuntime {
 
 	/// <summary>A tracepoint message whose <c>{expressions}</c> go through the expression evaluator.</summary>
 	Task<string>? RenderTraceAsync(TracepointMessage message) => null;
+
+	/// <summary>
+	/// The debugger's filter evaluator, when the runtime has one: a filter is then any C# expression over
+	/// the five values, not the subset <see cref="FilterScope"/> reads. Null means the subset is all there is.
+	/// </summary>
+	Task<bool>? EvaluateFilterAsync(string expression) => null;
 }
 
 /// <summary>A condition or a tracepoint expression the evaluator could not run.</summary>
@@ -130,10 +136,14 @@ public static class BreakpointBreakDecision {
 
 		if (settings.Filter is { Length: > 0 } filter) {
 			try {
-				if (!BreakpointExpression.ParseCached(filter).EvaluateAsBoolean(runtime.FilterScope))
+				var evaluation = runtime.EvaluateFilterAsync(filter);
+				var pass = evaluation is null
+					? BreakpointExpression.ParseCached(filter).EvaluateAsBoolean(runtime.FilterScope)
+					: await evaluation.ConfigureAwait(false);
+				if (!pass)
 					return new BreakpointDecision(false);
 			}
-			catch (BreakpointExpressionException ex) {
+			catch (Exception ex) when (ex is BreakpointExpressionException or BreakpointEvaluationException) {
 				return new BreakpointDecision(true, ErrorMessage: $"Breakpoint filter '{filter}': {ex.Message}");
 			}
 		}

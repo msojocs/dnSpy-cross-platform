@@ -242,18 +242,9 @@ internal sealed partial class CorDebugSession {
 			foreach (var line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
 				lines.Add([new TextPartDto(line.Length == 0 ? commentPrefix : commentPrefix + " " + line, "asmComment")]);
 		}
-		if (code.IsOptimized == false) {
-			Comment("********************************************");
-			Comment("The method is not optimized");
-			Comment("********************************************");
-			lines.Add([]);
-		}
-		if (!string.IsNullOrEmpty(code.ModulePath))
-			Comment(Path.GetFileName(code.ModulePath));
-		if (code.MethodName is not null)
-			Comment(code.MethodName);
-		Comment($"Size: {code.Bytes.Length} (0x{code.Bytes.Length:X})");
-		lines.Add([]);
+		// The module, method, size and "not optimized" banner are the tab's description, not part of its
+		// text: dnSpy's document viewer shows them in the tool tip and keeps the body to the instructions
+		// and block comments.
 
 		// Decode everything first: branch targets inside the method become labels.
 		var decoder = IcedDecoder.Create(IntPtr.Size * 8, new ByteArrayCodeReader(code.Bytes), code.Address);

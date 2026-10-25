@@ -219,7 +219,7 @@ const fillByteError = (text: string, t: (key: string, args?: Record<string, stri
  * dnSpy's caret, selection, keyboard, mouse, context menu, search control, Quick Info over the file's structures,
  * margins, zoom and options. The line layout is `hex-line.ts`, the operations `hex-view-model.ts`.
  */
-export const HexView = ({ moduleId = '', source, initialState, commands }: { moduleId?: string; source?: HexByteSource; initialState?: HexViewUiState; commands?: HexViewCommands }): React.JSX.Element => {
+export const HexView = ({ moduleId = '', source, initialState, commands, goto }: { moduleId?: string; source?: HexByteSource; initialState?: HexViewUiState; commands?: HexViewCommands; goto?: { start: number; length: number; nonce: number } }): React.JSX.Element => {
   const options = useAppOptions()
   const paneKey: HexEditorView = source?.optionsView ?? 'hexViewer'
   const pane = options.hexEditor[paneKey]
@@ -483,6 +483,18 @@ export const HexView = ({ moduleId = '', source, initialState, commands }: { mod
       model.ensureCaretVisible()
     }
   }
+
+  // A Show in Memory Window request from another window: select the span the module occupies.
+  useEffect(() => {
+    if (!goto || length === 0)
+      return
+    const end = Math.min(length, goto.start + Math.max(1, goto.length)) - 1
+    if (end > goto.start)
+      revealPosition(goto.start, { anchor: goto.start, active: end, moveCaret: false })
+    else
+      revealPosition(goto.start)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goto?.nonce, length])
 
   // ---- Structures: Quick Info, references and the caret's field ----------------------------------------
   const hasFile = !source && workspaceId !== undefined

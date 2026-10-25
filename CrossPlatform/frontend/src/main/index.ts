@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell, type WebContents, clipboard } from 'electron'
 import { spawn } from 'node:child_process'
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { BackendClient } from './backend-client'
@@ -514,6 +514,7 @@ const registerIpc = (): void => {
   ipcMain.handle('workspace:loadDependencies', (_event, workspaceId: string, nodeId: string, recursive: boolean) => requireBackend().invoke('workspace/loadDependencies', { workspaceId, nodeId, recursive }))
   ipcMain.handle('workspace:close', (_event, workspaceId: string) => requireBackend().invoke('workspace/close', { workspaceId }))
   ipcMain.handle('workspace:reload', (_event, workspaceId: string, autoLoadedPaths?: string[]) => requireBackend().invoke('workspace/reload', { workspaceId, autoLoadedPaths: autoLoadedPaths ?? null }))
+  ipcMain.handle('workspace:reloadModule', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('workspace/reloadModule', { workspaceId, nodeId }))
   ipcMain.handle('workspace:sortAssemblies', (_event, workspaceId: string) => requireBackend().invoke('workspace/sortAssemblies', { workspaceId }))
   ipcMain.handle('workspace:removeModule', (_event, workspaceId: string, nodeId: string) => requireBackend().invoke('workspace/removeModule', { workspaceId, nodeId }))
   ipcMain.handle('workspace:removeModules', (_event, workspaceId: string, nodeIds: string[]) => requireBackend().invoke('workspace/removeModules', { workspaceId, nodeIds }))
@@ -993,7 +994,29 @@ const registerIpc = (): void => {
     await writeFile(result.filePath, text, 'utf8')
     return result.filePath
   })
-  ipcMain.handle('dialog:openTextFile', async (_event, kind?: 'bookmarks' | 'breakpoints') => {
+  // The variables windows' Save: the value's raw bytes, so a binary value is written byte for byte.
+  ipcMain.handle('document:saveBinary', async (_event, suggestedName: string, base64: string) => {
+    if (typeof suggestedName !== 'string' || typeof base64 !== 'string')
+      throw new TypeError('Invalid save-binary request.')
+    const data = Buffer.from(base64, 'base64')
+    if (!app.isPackaged && process.env.DNSPY_E2E_SAVE_BINARY_PATH) {
+      await writeFile(process.env.DNSPY_E2E_SAVE_BINARY_PATH, data)
+      return process.env.DNSPY_E2E_SAVE_BINARY_PATH
+    }
+    const safeName = path.basename(suggestedName) || 'value.bin'
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: nativeText().saveCode,
+      defaultPath: safeName,
+      filters: [
+        { name: nativeText().allFiles, extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || !result.filePath)
+      return undefined
+    await writeFile(result.filePath, data)
+    return result.filePath
+  })
+  ipcMain.handle('dialog:openTextFile', async (_event, kind?: 'bookmarks' | 'breakpoints' | 'moduleBreakpoints') => {
     // A test cannot drive the native picker, so it names the file up front; a file that is not there
     // answers like a cancelled dialog rather than throwing through the IPC channel.
     if (!app.isPackaged && process.env.DNSPY_E2E_OPEN_TEXT_FILE) {
@@ -1008,7 +1031,7 @@ const registerIpc = (): void => {
       defaultPath: dialogPathHistory?.openDirectory,
       properties: ['openFile'],
       // dnSpy's bookmark files are its settings XML; the JSON an earlier build of this port wrote still reads.
-      filters: kind === 'bookmarks' || kind === 'breakpoints'
+      filters: kind === 'bookmarks' || kind === 'breakpoints' || kind === 'moduleBreakpoints'
         ? [{ name: nativeText().xmlFiles, extensions: ['xml'] }, { name: nativeText().allFiles, extensions: ['*'] }]
         : [{ name: nativeText().allFiles, extensions: ['*'] }],
     })
@@ -1252,6 +1275,28 @@ const registerIpc = (): void => {
       return statSync(candidate).isFile()
     } catch {
       return false
+    }
+  })
+  // DbgUI's PortableExecutableFileHelpers.IsExecutable: a PE image whose file header does not say DLL.
+  // The Debug Program page resets its fields for an executable and keeps the last options for a DLL.
+  ipcMain.handle('app:pathIsPeExecutable', (_event, candidate: string) => {
+    let descriptor: number | undefined
+    try {
+      descriptor = openSync(candidate, 'r')
+      // The DOS stub and PE headers live in the first page; no need to read a whole assembly for them.
+      const data = Buffer.alloc(4096)
+      const length = readSync(descriptor, data, 0, data.length, 0)
+      if (length < 0x40 || data.readUInt16LE(0) !== 0x5A4D)
+        return false
+      const pe = data.readUInt32LE(0x3C)
+      if (pe + 26 > length || data.readUInt32LE(pe) !== 0x4550)
+        return false
+      return (data.readUInt16LE(pe + 22) & 0x2000) === 0
+    } catch {
+      return false
+    } finally {
+      if (descriptor !== undefined)
+        closeSync(descriptor)
     }
   })
   ipcMain.handle('app:processId', () => process.pid)

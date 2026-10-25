@@ -217,6 +217,10 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 	public Task<OpenWorkspaceResponse> ReloadAsync(ReloadWorkspaceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ReloadAsync(request.AutoLoadedPaths, cancellationToken), cancellationToken);
 
+	/// <summary>Re-reads one module's file into the module already in the tree.</summary>
+	public Task<ReloadModuleResponse> ReloadModuleAsync(ReloadModuleRequest request, CancellationToken cancellationToken) =>
+		GetWorkspace(request.WorkspaceId).RunAsync(w => w.ReloadModule(request.NodeId), cancellationToken);
+
 	public Task<TreeNodesResponse> SortAssembliesAsync(WorkspaceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.SortAssemblies(), cancellationToken);
 
@@ -5003,7 +5007,9 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			/// has none yet: its path is a name of the workspace's own, and <see cref="InMemory"/> says so, until the
 			/// first save gives it a file and the entry takes that file's path.</summary>
 			public string Path { get; set; } = path;
-			public ModuleDefMD Module { get; } = module;
+			/// <summary>The module's dnlib model. A refresh replaces it with a model read from the file
+			/// again, which is how the debugger's in-place update gets the process's new types and bodies.</summary>
+			public ModuleDefMD Module { get; set; } = module;
 			public long FileLength { get; set; } = fileLength ?? new FileInfo(path).Length;
 
 			/// <summary>A module that exists only in the workspace — dnSpy's documents with an empty file name.</summary>

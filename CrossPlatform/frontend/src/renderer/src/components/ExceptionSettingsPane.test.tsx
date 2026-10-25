@@ -193,7 +193,7 @@ describe('ExceptionSettingsPane', () => {
 
     fireEvent.mouseDown(screen.getByText('System.InvalidOperationException'))
     fireEvent.click(screen.getByRole('button', { name: 'Edit conditions' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    // EditExceptionConditionsDlg opens with one ModuleNameNotEquals row already there.
     fireEvent.change(screen.getByRole('textbox', { name: 'Module name' }), { target: { value: 'MyApp*' } })
     fireEvent.click(screen.getByRole('button', { name: 'OK' }))
 
@@ -201,9 +201,9 @@ describe('ExceptionSettingsPane', () => {
     expect(useAppStore.getState().exceptionDiff.updated?.[0]).toMatchObject({
       name: 'System.InvalidOperationException',
       stopFirstChance: true,
-      conditions: [{ type: 'moduleNameEquals', value: 'MyApp*' }],
+      conditions: [{ type: 'moduleNameNotEquals', value: 'MyApp*' }],
     })
-    await waitFor(() => expect(screen.getByText('Module name equals "MyApp*"')).toBeVisible())
+    await waitFor(() => expect(screen.getByText('Module name not equals "MyApp*"')).toBeVisible())
   })
 
   it('restores the defaults and throws the diff away', async () => {

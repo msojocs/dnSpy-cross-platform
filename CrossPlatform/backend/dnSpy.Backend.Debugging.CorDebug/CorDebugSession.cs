@@ -95,6 +95,17 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 
 	// ---------------------------------------------------------------- lifecycle
 
+	/// <summary>How long to wait for the CoreCLR startup event when the launch names no timeout.</summary>
+	const int DefaultConnectionTimeoutSeconds = 5;
+
+	/// <summary>
+	/// The CoreCLR page's Timeout as a duration. WPF's DotNetStartDebuggingOptions defaults it to
+	/// five seconds; a hand-written request with no value gets the same, and a negative one is
+	/// clamped to zero rather than becoming an exception the dialog cannot explain.
+	/// </summary>
+	internal static TimeSpan GetConnectionTimeout(DebugLaunchRequest request) =>
+		TimeSpan.FromSeconds(Math.Max(0, request.ConnectionTimeout ?? DefaultConnectionTimeoutSeconds));
+
 	public static async Task<CorDebugSession> LaunchAsync(DebugLaunchRequest request, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, DebuggerEngineOptions options, CancellationToken cancellationToken) {
 		var program = Path.GetFullPath(request.Program);
 		if (!File.Exists(program))
@@ -157,9 +168,21 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 			session.unregisterToken = RuntimeStartup.Register((uint)child.Id, startup);
 			await ResumeRuntimeAsync(child.Id, cancellationToken).ConfigureAwait(false);
 
-			var (corDebug, hResult) = await startup.Completion.Task
-				.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
-				.ConfigureAwait(false);
+			// The CoreCLR page's Timeout, in seconds. WPF's DotNetStartDebuggingOptions defaults it to
+			// five seconds and waits that long for the runtime-startup event; the port waited a fixed
+			// thirty before the dialog had the field.
+			var timeout = GetConnectionTimeout(request);
+			ICorDebug? corDebug;
+			int hResult;
+			try {
+				(corDebug, hResult) = await startup.Completion.Task
+					.WaitAsync(timeout, cancellationToken)
+					.ConfigureAwait(false);
+			}
+			catch (TimeoutException) {
+				throw new RpcException(ErrorCodes.InternalError,
+					$"Waiting for CoreCLR timed out after {timeout.TotalSeconds:0.##} seconds. The program may not be a .NET application, or it needs more time to start; increase Timeout in the Debug Program dialog.");
+			}
 			if (corDebug is null || hResult < 0)
 				throw new RpcException(ErrorCodes.InternalError, $"The runtime did not start: 0x{hResult:X8}");
 

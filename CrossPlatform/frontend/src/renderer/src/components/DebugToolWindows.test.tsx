@@ -76,4 +76,41 @@ describe('the windows of several processes', () => {
     const modules = screen.getByRole('grid', { name: 'Modules' })
     expect(within(modules).getAllByRole('row').map((row) => row.textContent)).toEqual([expect.stringContaining('first.dll'), expect.stringContaining('second.dll')])
   })
+
+  it('filters the threads with the search box and sorts them from a column header', () => {
+    render(<ThreadsPane />)
+    const threads = screen.getByRole('grid', { name: 'Threads' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search' }), { target: { value: 'Worker' } })
+    expect(within(threads).getAllByRole('row').map((row) => row.textContent)).toEqual([expect.stringContaining('Worker')])
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search' }), { target: { value: '' } })
+    const nameHeader = within(threads).getByRole('columnheader', { name: 'Name' })
+    // GridViewColumnSorter: ascending, then descending, then the list's own order.
+    fireEvent.click(nameHeader)
+    expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+    fireEvent.click(nameHeader)
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending')
+    expect(within(threads).getAllByRole('row')[0].textContent).toContain('Worker')
+    fireEvent.click(nameHeader)
+    expect(nameHeader).toHaveAttribute('aria-sort', 'none')
+  })
+
+  it('selects every row with Ctrl+A, as the WPF lists do', () => {
+    render(<ThreadsPane />)
+    const threads = screen.getByRole('grid', { name: 'Threads' })
+    fireEvent.keyDown(threads, { key: 'a', ctrlKey: true })
+    expect(within(threads).getAllByRole('row').every((row) => row.getAttribute('aria-selected') === 'true')).toBe(true)
+
+    // A right click inside the selection keeps it, so a command reaches both threads.
+    fireEvent.contextMenu(within(threads).getAllByRole('row')[0])
+    expect(screen.getByRole('menuitem', { name: /Copy/ })).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('runs the selected processes from the Processes window toolbar', () => {
+    render(<ProcessesPane />)
+    const grid = screen.getByRole('grid', { name: 'Processes' })
+    fireEvent.mouseDown(rowOf(grid, 'second'))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Process' }))
+    expect(continueDebugProcess).toHaveBeenCalledWith('b')
+  })
 })

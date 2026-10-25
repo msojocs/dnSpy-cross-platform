@@ -15,6 +15,18 @@ namespace dnSpy.Backend.Tests;
 /// is a package reference), and without it there is no engine to test.
 /// </summary>
 public sealed class DebugSessionManagerTests {
+	/// <summary>
+	/// The CoreCLR page's Timeout: five seconds when the dialog left it alone, the number it shows
+	/// otherwise, and never a negative duration for a hand-written request.
+	/// </summary>
+	[Fact]
+	public void ConnectionTimeoutIsTheCoreClrPagesTimeout() {
+		Assert.Equal(TimeSpan.FromSeconds(5), CorDebugSession.GetConnectionTimeout(new DebugLaunchRequest("DebugTarget.dll")));
+		Assert.Equal(TimeSpan.FromSeconds(12), CorDebugSession.GetConnectionTimeout(new DebugLaunchRequest("DebugTarget.dll", ConnectionTimeout: 12)));
+		Assert.Equal(TimeSpan.Zero, CorDebugSession.GetConnectionTimeout(new DebugLaunchRequest("DebugTarget.dll", ConnectionTimeout: 0)));
+		Assert.Equal(TimeSpan.Zero, CorDebugSession.GetConnectionTimeout(new DebugLaunchRequest("DebugTarget.dll", ConnectionTimeout: -1)));
+	}
+
 	[Fact(Timeout = 60_000)]
 	public async Task LaunchesCoreClrAndProvidesThreadsStackAndVariables() {
 		using var workspaceManager = new WorkspaceManager();
@@ -340,6 +352,70 @@ public sealed class DebugSessionManagerTests {
 			await workspaceManager.AddModulesAsync(new AddModulesRequest(opened.WorkspaceId, [path]), TestContext.Current.CancellationToken);
 			var location = await workspaceManager.ResolveIlLocationAsync(opened.WorkspaceId, dynamic.GetProperty("path").GetString()!, unchecked((int)answer.MDToken.Raw), 0, TestContext.Current.CancellationToken);
 			Assert.NotNull(location?.NodeId);
+		}
+		finally {
+			await manager.DisconnectAsync(new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true), TestContext.Current.CancellationToken);
+			if (path is not null)
+				File.Delete(path);
+		}
+	}
+
+	/// <summary>
+	/// ClassLoader.LoadNewClasses and MemoryModuleDefDocument.UpdateMemory update the document the workspace
+	/// already holds: a type emitted after the copy was read appears under the same module, and the rows the
+	/// module already had keep their node ids, so their tabs stay open.
+	/// </summary>
+	[Fact(Timeout = 60_000)]
+	public async Task ReloadingADynamicModuleKeepsItsNodeIdsAndAddsNewTypes() {
+		using var workspaceManager = new WorkspaceManager();
+		var target = FindTarget();
+		var opened = await workspaceManager.OpenAsync(new OpenWorkspaceRequest([target]), TestContext.Current.CancellationToken);
+		await using var manager = CreateManager(workspaceManager);
+		var stopSignal = new SemaphoreSlim(0);
+		manager.EventReceived += (_, notification) => {
+			if (notification.Event == "stopped")
+				stopSignal.Release();
+		};
+		var started = await manager.LaunchAsync(new DebugLaunchRequest(target, ["--emit"], StopAtEntry: false, WorkspaceId: opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.RequestAsync(
+			new DebugAdapterRequest(started.SessionId, "setFunctionBreakpoints", JsonSerializer.SerializeToElement(new { breakpoints = new[] { new { name = "DebugTarget.DynamicFixture.Ready" } } })),
+			TestContext.Current.CancellationToken);
+		await manager.RequestAsync(new DebugAdapterRequest(started.SessionId, "configurationDone", JsonSerializer.SerializeToElement(new { })), TestContext.Current.CancellationToken);
+		await stopSignal.WaitAsync(TestContext.Current.CancellationToken);
+
+		var modules = await manager.RequestAsync(
+			new DebugAdapterRequest(started.SessionId, "modules", JsonSerializer.SerializeToElement(new { startModule = 0, moduleCount = 1000 })),
+			TestContext.Current.CancellationToken);
+		var dynamic = modules.Body!.Value.GetProperty("modules").EnumerateArray().Single(module => module.GetProperty("isDynamic").GetBoolean());
+		string? path = null;
+		try {
+			var saved = await manager.RequestAsync(
+				new DebugAdapterRequest(started.SessionId, "saveModule", JsonSerializer.SerializeToElement(new { moduleId = dynamic.GetProperty("id").GetInt32() })),
+				TestContext.Current.CancellationToken);
+			path = saved.Body!.Value.GetProperty("path").GetString()!;
+			var added = await workspaceManager.AddModulesAsync(new AddModulesRequest(opened.WorkspaceId, [path]), TestContext.Current.CancellationToken);
+			var moduleId = added.Modules.Single(module => module.Path == path).Id;
+			var greeter = await workspaceManager.FindByTokenAsync(new FindByTokenRequest(opened.WorkspaceId, moduleId, "0x02000002"), TestContext.Current.CancellationToken);
+			Assert.NotNull(greeter.NodeId);
+
+			// The program creates Dynamic.Late after the first stop and calls Ready again.
+			var threadId = await manager.RequestAsync(new DebugAdapterRequest(started.SessionId, "threads", JsonSerializer.SerializeToElement(new { })), TestContext.Current.CancellationToken);
+			var mainThread = threadId.Body!.Value.GetProperty("threads")[0].GetProperty("id").GetInt32();
+			await manager.RequestAsync(new DebugAdapterRequest(started.SessionId, "continue", JsonSerializer.SerializeToElement(new { threadId = mainThread })), TestContext.Current.CancellationToken);
+			await stopSignal.WaitAsync(TestContext.Current.CancellationToken);
+
+			// The same copy is written again, as the ClassLoader's stop-time refresh does, and the module is
+			// refreshed in place instead of being removed and opened afresh.
+			await manager.RequestAsync(
+				new DebugAdapterRequest(started.SessionId, "saveModule", JsonSerializer.SerializeToElement(new { moduleId = dynamic.GetProperty("id").GetInt32() })),
+				TestContext.Current.CancellationToken);
+			var reloaded = await workspaceManager.ReloadModuleAsync(new ReloadModuleRequest(opened.WorkspaceId, moduleId), TestContext.Current.CancellationToken);
+			Assert.DoesNotContain(greeter.NodeId, reloaded.RemovedNodeIds);
+			Assert.Contains(greeter.NodeId, reloaded.ChangedNodeIds);
+			var greeterAfter = await workspaceManager.FindByTokenAsync(new FindByTokenRequest(opened.WorkspaceId, moduleId, "0x02000002"), TestContext.Current.CancellationToken);
+			Assert.Equal(greeter.NodeId, greeterAfter.NodeId);
+			var late = await workspaceManager.FindByTokenAsync(new FindByTokenRequest(opened.WorkspaceId, moduleId, "0x02000003"), TestContext.Current.CancellationToken);
+			Assert.NotNull(late.NodeId);
 		}
 		finally {
 			await manager.DisconnectAsync(new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true), TestContext.Current.CancellationToken);

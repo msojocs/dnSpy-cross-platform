@@ -31,6 +31,11 @@ internal static class DynamicFixture {
 		il.Emit(OpCodes.Ret);
 		var created = type.CreateType();
 		Ready((int)created.GetMethod("Answer")!.Invoke(null, null)!);
+		// A type created after the first stop, for the workspace's in-place refresh: the second Ready call
+		// is another stop, at which the module's saved metadata names this type too.
+		var late = module.DefineType("Dynamic.Late", TypeAttributes.Public | TypeAttributes.Class);
+		late.CreateType();
+		Ready(-1);
 		Environment.Exit(0);
 	}
 

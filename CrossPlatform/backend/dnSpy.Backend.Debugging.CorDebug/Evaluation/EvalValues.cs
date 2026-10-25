@@ -66,6 +66,17 @@ internal abstract class EvalValue {
 }
 
 /// <summary>
+/// An anonymous object the evaluator built itself: the type exists only in the expression's compilation,
+/// so it has no image in the debuggee to func-eval a constructor from. Its properties are the values the
+/// initializer supplied.
+/// </summary>
+internal sealed class AnonymousValue(ITypeSymbol type, IReadOnlyDictionary<string, EvalValue> members) : EvalValue {
+	public override ITypeSymbol Type { get; } = type;
+
+	public IReadOnlyDictionary<string, EvalValue> Members { get; } = members;
+}
+
+/// <summary>
 /// A primitive, a string, a decimal, an enum or null: something the evaluator can hold as a .NET value and
 /// compute with on its own. An enum holds its underlying integer and is typed as the enum.
 /// </summary>

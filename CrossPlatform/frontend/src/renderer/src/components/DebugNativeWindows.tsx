@@ -24,15 +24,22 @@ const toBase64 = (bytes: Uint8Array): string => {
  * readable memory and in-place edits. A page the process does not map shows as `??`. Its context menu's Process
  * submenu picks which process's memory it shows; it is the current process's otherwise.
  */
-export const MemoryPane = (): React.JSX.Element => {
+export const MemoryPane = ({ windowId = 'memory' }: { windowId?: string }): React.JSX.Element => {
   const { t } = useLanguage()
   const currentSessionId = useAppStore((state) => state.debugSessionId)
   const debugState = useAppStore((state) => state.debugState)
   const sessions = useAppStore((state) => state.debugSessions)
   const generation = useAppStore((state) => state.debugGeneration)
   const appendOutput = useAppStore((state) => state.appendOutput)
+  const navigation = useAppStore((state) => state.memoryNavigation)
   const hex = useAppOptions().debugger.useHexadecimal
   const [chosenSession, setChosenSession] = useState<string>()
+  // A Show in Memory Window request names the process and the window it belongs to; this pane only
+  // switches when it is the one asked for.
+  useEffect(() => {
+    if (navigation?.window === windowId)
+      setChosenSession(navigation.sessionId)
+  }, [navigation?.nonce, navigation?.window, windowId])
   const sessionId = chosenSession && sessions.some((entry) => entry.sessionId === chosenSession) ? chosenSession : currentSessionId
   const stopped = sessionId === currentSessionId ? debugState === 'stopped' : sessions.find((entry) => entry.sessionId === sessionId)?.state === 'stopped'
   // The address space of the session's process: 2^32 for a 32-bit process, the user space of a 64-bit one.
@@ -105,7 +112,7 @@ export const MemoryPane = (): React.JSX.Element => {
     return <div className="pane-empty">{!sessionId ? t('Memory can only be read while debugging.') : stopped ? t('Loading...') : t('Memory can only be read while the process is paused.')}</div>
   return (
     <div className="debug-tool-pane memory-pane">
-      <HexView key={sessionId} source={source} />
+      <HexView key={sessionId} source={source} goto={navigation && navigation.window === windowId && navigation.sessionId === sessionId ? { start: navigation.address, length: navigation.length, nonce: navigation.nonce } : undefined} />
     </div>
   )
 }
@@ -120,7 +127,9 @@ export const DisassemblyDocumentView = ({ id, theme, transparentBackground }: { 
   const { t } = useLanguage()
   const document = useAppStore((state) => state.disassemblyDocuments[id])
   const font = useCategoryFont('textEditor')
-  const zoom = useAppOptions().documentViewer.zoomLevel
+  const options = useAppOptions()
+  const zoom = options.documentViewer.zoomLevel
+  const general = options.documentViewer.general
   const decorationsRef = useRef<MonacoEditor.IEditorDecorationsCollection | undefined>(undefined)
   const { text, decorations } = useMemo(() => {
     const lines: string[] = []
@@ -161,9 +170,12 @@ export const DisassemblyDocumentView = ({ id, theme, transparentBackground }: { 
             minimap: { enabled: false },
             glyphMargin: false,
             folding: false,
-            lineNumbers: 'off',
-            contextmenu: false,
-            renderLineHighlight: 'none',
+            // The Text Viewer page's General group, the same options every document viewer follows.
+            lineNumbers: general.showLineNumbers ? 'on' : 'off',
+            wordWrap: general.wordWrap ? 'on' : 'off',
+            renderLineHighlight: general.highlightCurrentLine ? 'all' : 'none',
+            // dnSpy's document viewer menu: Monaco's own has Copy, Select All and Find.
+            contextmenu: true,
             scrollBeyondLastLine: false,
             fontFamily: font.fontFamily,
             fontSize,

@@ -338,7 +338,7 @@ export const BreakpointsPane = (): React.JSX.Element => {
   }
 
   return (
-    <div className="breakpoints-pane" onKeyDown={onKeyDown} tabIndex={-1}>
+    <div className={`breakpoints-pane${options.debugger.syntaxHighlight ? '' : ' debug-plain'}`} onKeyDown={onKeyDown} tabIndex={-1}>
       {/* CodeBreakpointsControl.xaml's tool bar, each button with the image and the tool tip dnSpy gives it. */}
       <div className="bookmarks-toolbar breakpoints-toolbar">
         <button className="icon-button" title={t('Remove breakpoint')} aria-label={t('Remove breakpoint')} disabled={chosen.length === 0} onClick={() => void removeBreakpoints(chosen.map((row) => row.id))}><DsIcon name="Cancel" /></button>

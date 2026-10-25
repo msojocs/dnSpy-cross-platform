@@ -14,7 +14,12 @@ internal sealed partial class CorDebugSession {
 	/// <c>IsEnabled</c>. A null field matches anything; the names take <c>*</c> and <c>?</c>.
 	/// </summary>
 	internal sealed record ModuleBreakpoint(string? ModuleName, bool? IsDynamic, bool? IsInMemory, bool? IsLoaded, int? Order, string? AppDomainName, string? ProcessName) {
-		public bool Matches(ModuleTable.ModuleEntry module, string? processName) =>
+		/// <summary>
+		/// ModuleBreakpointHitChecker.IsMatch: an IsLoaded of null matches both events, true only a load and
+		/// false only an unload.
+		/// </summary>
+		public bool Matches(ModuleTable.ModuleEntry module, string? processName, bool isLoadedEvent) =>
+			(IsLoaded is not { } loaded || loaded == isLoadedEvent) &&
 			(IsDynamic is not { } dynamic || dynamic == module.IsDynamic) &&
 			(IsInMemory is not { } inMemory || inMemory == module.IsInMemory) &&
 			(Order is not { } order || order == module.Order) &&
@@ -49,17 +54,18 @@ internal sealed partial class CorDebugSession {
 		return EmptyJson();
 	}
 
-	partial void CheckModuleBreakpoints(ICorDebugModule module, ModuleTable.ModuleEntry? entry) {
+	partial void CheckModuleBreakpoints(ICorDebugModule module, ModuleTable.ModuleEntry? entry, bool isLoadedEvent) {
 		if (entry is null || IsStopped || moduleBreakpoints.Count == 0)
 			return;
 		var processName = ProcessName ?? LaunchProgram;
-		if (!moduleBreakpoints.Any(breakpoint => breakpoint.IsLoaded != false && breakpoint.Matches(entry, processName)))
+		if (!moduleBreakpoints.Any(breakpoint => breakpoint.Matches(entry, processName, isLoadedEvent)))
 			return;
 		// A module load has no thread of its own; the stop is on the process, and the client reads the threads.
 		var thread = Threads.Snapshot().Select(pair => pair.Thread).FirstOrDefault();
 		Stop(StopReasons.ModuleBreakpoint, thread, extra: new Dictionary<string, object?>(StringComparer.Ordinal) {
 			["module"] = entry.Name,
 			["modulePath"] = entry.Path,
+			["unloaded"] = !isLoadedEvent,
 		});
 	}
 }

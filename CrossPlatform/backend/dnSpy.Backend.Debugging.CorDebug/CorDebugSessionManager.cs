@@ -111,29 +111,7 @@ public sealed class CorDebugSessionManager : IAsyncDisposable, IDebugMemoryProvi
 	/// filter reads, or the reason it does not. It is tried against the five values a filter can name, so a name that is
 	/// none of them, or a comparison of a number with a string, is caught before the breakpoint is hit.
 	/// </summary>
-	public static string? VerifyFilterExpression(string filter) {
-		try {
-			BreakpointExpression.Parse(filter).EvaluateAsBoolean(FilterSampleScope.Instance);
-			return null;
-		}
-		catch (BreakpointExpressionException ex) {
-			return ex.Message;
-		}
-	}
-
-	/// <summary>The names a filter can read, each with a value of the kind the debugger fills it with.</summary>
-	sealed class FilterSampleScope : IBreakpointScope {
-		public static readonly FilterSampleScope Instance = new();
-
-		public bool TryRead(string name, out BreakpointValue value) {
-			value = name switch {
-				"MachineName" or "ProcessName" or "ThreadName" => BreakpointValue.FromString(string.Empty),
-				"ProcessId" or "ThreadId" => BreakpointValue.FromInteger(0),
-				_ => BreakpointValue.Null,
-			};
-			return name is "MachineName" or "ProcessName" or "ThreadName" or "ProcessId" or "ThreadId";
-		}
-	}
+	public static string? VerifyFilterExpression(string filter) => FilterExpression.Validate(filter);
 
 	/// <summary>
 	/// dnSpy's Attach to Process list: the processes with a runtime it has an engine for — here, those with CoreCLR

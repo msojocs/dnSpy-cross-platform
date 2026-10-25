@@ -39,6 +39,20 @@ export interface AddModulesResponse {
   stateId: string
 }
 
+/**
+ * The answer to re-reading one module's file into the module the tree already holds. `removedNodeIds`
+ * are the nodes the new metadata no longer has, `changedNodeIds` the ones whose contents were replaced
+ * and whose open documents have to be decompiled again.
+ */
+export interface ReloadModuleResponse {
+  modules: OpenedModule[]
+  removedNodeIds: string[]
+  changedNodeIds: string[]
+  canUndo: boolean
+  canRedo: boolean
+  stateId: string
+}
+
 export interface TreeNode {
   id: string
   label: string
@@ -1744,7 +1758,8 @@ export interface DebugThread {
   category?: string
   /** The thread's top frame, written the way the Call Stack window writes it. */
   location?: string | null
-  priority?: number | null
+  /** The thread's priority as Windows names it (Normal, Above Normal, ...), read from the nice value. */
+  priority?: string | null
   nice?: number | null
   affinityMask?: string | null
   suspendedCount?: number
@@ -2015,6 +2030,10 @@ export interface DebugVariable {
   objectId?: string | null
   /** The value as an expression that reads back to it, which an edit starts from. */
   editText?: string | null
+  /** The address of the value's raw bytes, hex, when the runtime gives one — Save and Show in Memory act on it. */
+  address?: string | null
+  /** How many bytes the value occupies, with `address`. */
+  size?: number | null
 }
 
 /** The rows under an expanded row, a page at a time. */
@@ -2123,6 +2142,11 @@ export interface DebugLaunchOptions {
   host?: string
   /** Arguments for the host itself, eg. `['exec']` for the `dotnet` CLI. */
   hostArguments?: string[]
+  /**
+   * The CoreCLR page's Timeout, in seconds: how long to wait for the runtime to report that it
+   * started. Omitted uses the upstream default of five seconds.
+   */
+  connectionTimeout?: number
   workspaceId?: string
 }
 
@@ -2267,6 +2291,9 @@ export interface DnSpyApi {
    * Assemblies. Of the files the workspace opened by itself only `autoLoadedPaths` come back, auto-loaded as they
    * were: the ones a tab still shows something of. The workspace keeps its id, but every node id is stale. */
   reloadWorkspace(workspaceId: string, autoLoadedPaths?: string[]): Promise<OpenWorkspaceResponse>
+  /** Re-reads one module's file into the module already in the tree, keeping the ids of the nodes the
+   * new metadata still has — the debugger's in-place refresh of a module read out of the process. */
+  reloadModule(workspaceId: string, nodeId: string): Promise<ReloadModuleResponse>
   /** Reorders the root nodes by name and answers with the tree in its new order — dnSpy's Sort Assemblies. */
   sortAssemblies(workspaceId: string): Promise<TreeNodesResponse>
   /** Removes one assembly from the tree — dnSpy's Remove Assembly — and answers with what is left. */
@@ -2554,11 +2581,13 @@ export interface DnSpyApi {
   /** Writes text the user picks a file for — a decompiled document's code, or the Output window's log.
    *  `title` names the save box; without one it is the port's "Save Code". */
   saveCode(suggestedName: string, text: string, title?: string): Promise<string | undefined>
+  /** Saves raw bytes — the variables windows' Save. */
+  saveBinary(suggestedName: string, base64: string): Promise<string | undefined>
   /**
    * Picks a text file and returns its contents, or undefined when the picker was dismissed. `kind`
    * only titles the dialog — the two importers that use this read the same kind of JSON file.
    */
-  readTextFile(kind?: 'bookmarks' | 'breakpoints'): Promise<string | undefined>
+  readTextFile(kind?: 'bookmarks' | 'breakpoints' | 'moduleBreakpoints'): Promise<string | undefined>
   /** Opens a directory chooser dialog for saving multiple resources. */
   selectDirectory(): Promise<string | undefined>
   /** Writes a file to the specified directory. Returns the full path if successful, undefined otherwise. */
@@ -2572,6 +2601,8 @@ export interface DnSpyApi {
   /** Whether a path names a file that is really on disk — the Debug Program dialog's live check on the
    * executable field, the port's `File.Exists`. */
   pathExists(path: string): Promise<boolean>
+  /** PortableExecutableFileHelpers.IsExecutable: a PE image whose file header does not say DLL. */
+  pathIsPeExecutable(path: string): Promise<boolean>
   listDebugProcesses(): Promise<DebugProcess[]>
   launchDebug(options: DebugLaunchOptions): Promise<DebugStartResponse>
   /** dnSpy's Start Without Debugging: the program runs on its own, and its process id comes back. */

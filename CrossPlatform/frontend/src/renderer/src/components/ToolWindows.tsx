@@ -183,7 +183,7 @@ export const OutputPane = (): React.JSX.Element => {
             {showLineNumbers && <span className="output-line-number tc-lineNumber" aria-hidden="true">{index + 1}</span>}
             <span className="output-line-text">
               {line.timestamp !== undefined && <span className="tc-debugLogTimestamp">{`${line.timestamp} `}</span>}
-              {line.text}
+              {line.color !== undefined ? <span className={`tc-${line.color}`}>{line.text}</span> : line.text}
             </span>
           </div>
         ))}

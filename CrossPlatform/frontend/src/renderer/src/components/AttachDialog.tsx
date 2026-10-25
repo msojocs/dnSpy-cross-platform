@@ -198,7 +198,14 @@ export const AttachDialog = ({ onClose }: { onClose(): void }): React.JSX.Elemen
             </div>
           ))}
         </div>
-        <div className="modal-actions"><span className="modal-action-spacer" /><button className="primary" disabled={selected.length === 0} onClick={() => void attach(selected)}>{t('Attach')}</button><button onClick={onClose}>{t('Cancel')}</button></div>
+        <div className="modal-actions">
+          {/* AttachToProcessVM.GetMessage on a 64-bit OS, and the info link the default options carry. */}
+          <span className="attach-message">{t('Use 32-bit dnSpy to attach to 32-bit processes')}</span>
+          <button className="icon-button" title={t('Making an Image Easier to Debug')} aria-label={t('Making an Image Easier to Debug')} onClick={() => window.open('https://github.com/dnSpyEx/dnSpy/wiki/Making-an-Image-Easier-to-Debug', '_blank')}><DsIcon name="StatusInformation" /></button>
+          <span className="modal-action-spacer" />
+          <button className="primary" disabled={selected.length === 0} onClick={() => void attach(selected)}>{t('Attach')}</button>
+          <button onClick={onClose}>{t('Cancel')}</button>
+        </div>
       </div>
     </div>
   )

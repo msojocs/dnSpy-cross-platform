@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 using ICorDebugSharp;
@@ -53,8 +54,16 @@ internal sealed class OperationInterpreter {
 				return await ReadPropertyAsync(property).ConfigureAwait(false);
 			case IInvocationOperation invocation:
 				return await InvokeAsync(invocation).ConfigureAwait(false);
+			case IAnonymousObjectCreationOperation anonymous:
+				return await CreateAnonymousObjectAsync(anonymous).ConfigureAwait(false);
 			case IObjectCreationOperation creation:
 				return await CreateObjectAsync(creation).ConfigureAwait(false);
+			case IWithOperation with:
+				return await CreateWithAsync(with).ConfigureAwait(false);
+			case ICollectionExpressionOperation collection:
+				return await CreateCollectionExpressionAsync(collection).ConfigureAwait(false);
+			case IUtf8StringOperation utf8:
+				return await CreateUtf8StringAsync(utf8).ConfigureAwait(false);
 			case IArrayCreationOperation array:
 				return await CreateArrayAsync(array).ConfigureAwait(false);
 			case IArrayElementReferenceOperation element: {
@@ -182,7 +191,7 @@ internal sealed class OperationInterpreter {
 			case IArgumentOperation argument:
 				return await EvalAsync(argument.Value).ConfigureAwait(false);
 			case IObjectOrCollectionInitializerOperation:
-				throw new EvaluationException("Object initializers are not supported by the evaluator.");
+				throw new EvaluationException("An initializer is only valid as part of an object creation.");
 			default:
 				throw new EvaluationException($"The expression contains a construct the debugger cannot evaluate ({operation.Kind}).");
 		}
@@ -261,9 +270,12 @@ internal sealed class OperationInterpreter {
 
 	// ---------------------------------------------------------------- members and calls
 
-	async Task<EvalValue> ReadPropertyAsync(IPropertyReferenceOperation property) {
-		var instance = property.Instance is null ? null : await EvalAsync(property.Instance).ConfigureAwait(false);
+	async Task<EvalValue> ReadPropertyAsync(IPropertyReferenceOperation property, EvalValue? instanceOverride = null) {
+		var instance = property.Instance is null ? instanceOverride : await EvalAsync(property.Instance).ConfigureAwait(false);
 		var symbol = property.Property;
+		// An anonymous object is held by the evaluator: its properties are values it already has.
+		if (instance is AnonymousValue anonymous && property.Arguments.Length == 0 && anonymous.Members.TryGetValue(symbol.Name, out var known))
+			return known;
 		// What the evaluator can answer without running code in the debuggee, it does: these are read by
 		// every variables window, and a func-eval each would be both slow and needlessly intrusive.
 		if (instance is not null && property.Arguments.Length == 0) {
@@ -319,13 +331,145 @@ internal sealed class OperationInterpreter {
 	}
 
 	async Task<EvalValue> CreateObjectAsync(IObjectCreationOperation creation) {
-		if (creation.Initializer is { Initializers.Length: > 0 })
-			throw new EvaluationException("Object initializers are not supported by the evaluator.");
 		var type = creation.Type ?? throw new EvaluationException("The type of the new object is unknown.");
+		EvalValue value;
 		if (creation.Constructor is null || (type.IsValueType && creation.Constructor.Parameters.Length == 0 && creation.Constructor.IsImplicitlyDeclared))
-			return await runtime.DefaultValueAsync(type).ConfigureAwait(false);
-		var arguments = await ArgumentsAsync(creation.Arguments).ConfigureAwait(false);
-		return await runtime.NewObjectAsync(creation.Constructor, arguments).ConfigureAwait(false);
+			value = await runtime.DefaultValueAsync(type).ConfigureAwait(false);
+		else {
+			var arguments = await ArgumentsAsync(creation.Arguments).ConfigureAwait(false);
+			value = await runtime.NewObjectAsync(creation.Constructor, arguments).ConfigureAwait(false);
+		}
+		// new Foo { X = 1 }, new List<int> { 1, 2 }: the constructor first, then the setters and Add calls.
+		if (creation.Initializer is { Initializers.Length: > 0 } initializer)
+			await ApplyInitializerAsync(value, initializer).ConfigureAwait(false);
+		return value;
+	}
+
+	/// <summary>
+	/// Runs an object or collection initializer over the object its constructor made. WPF's IL
+	/// interpreter executes the same setters and Add calls the compiler emitted for these initializers.
+	/// </summary>
+	async Task ApplyInitializerAsync(EvalValue instance, IObjectOrCollectionInitializerOperation initializer) {
+		foreach (var item in initializer.Initializers) {
+			switch (item) {
+				// Object initializer members are assignments whose target is the object under construction;
+				// their Instance is not the frame's this, so the setters are called on it directly.
+				case ISimpleAssignmentOperation assignment:
+					await ApplyInitializerAssignmentAsync(instance, assignment).ConfigureAwait(false);
+					break;
+				case IFieldInitializerOperation field:
+					if (field.InitializedFields.Length == 0)
+						throw new EvaluationException("The field initializer names no field.");
+					await runtime.WriteFieldAsync(instance, field.InitializedFields[0], await EvalAsync(field.Value).ConfigureAwait(false)).ConfigureAwait(false);
+					break;
+				case IPropertyInitializerOperation property: {
+					if (property.InitializedProperties.Length == 0)
+						throw new EvaluationException("The property initializer names no property.");
+					var setter = property.InitializedProperties[0].SetMethod
+						?? throw new EvaluationException($"Property '{property.InitializedProperties[0].Name}' is read only.");
+					await runtime.CallAsync(setter, instance, [await EvalAsync(property.Value).ConfigureAwait(false)], property.InitializedProperties[0].Name).ConfigureAwait(false);
+					break;
+				}
+				case IInvocationOperation add: {
+					// A collection initializer's Add call has no receiver of its own; the object is the one made above.
+					var arguments = await ArgumentsAsync(add.Arguments).ConfigureAwait(false);
+					await runtime.CallAsync(add.TargetMethod, instance, arguments, add.TargetMethod.Name).ConfigureAwait(false);
+					break;
+				}
+				case IObjectOrCollectionInitializerOperation nested: {
+					// { { 1, 2 } } adds an element built by its own initializer: the matching Add takes a
+					// collection whose element type we can instantiate, so build one and add it.
+					var add = instance.Type.GetMembers("Add").OfType<IMethodSymbol>().FirstOrDefault(method => method.Parameters.Length == 1)
+						?? throw new EvaluationException("The collection has no Add method.");
+					var elementType = add.Parameters[0].Type;
+					var element = elementType.IsValueType
+						? await runtime.DefaultValueAsync(elementType).ConfigureAwait(false)
+						: await runtime.NewObjectAsync((elementType as INamedTypeSymbol)?.InstanceConstructors.FirstOrDefault(candidate => candidate.Parameters.Length == 0) ?? throw new EvaluationException("The element type has no parameterless constructor."), []).ConfigureAwait(false);
+					await ApplyInitializerAsync(element, nested).ConfigureAwait(false);
+					await runtime.CallAsync(add, instance, [element], "Add").ConfigureAwait(false);
+					break;
+				}
+				default:
+					throw new EvaluationException($"The initializer contains an entry the debugger cannot evaluate ({item.Kind}).");
+			}
+		}
+	}
+
+	async Task ApplyInitializerAssignmentAsync(EvalValue instance, ISimpleAssignmentOperation assignment) {
+		var value = await EvalAsync(assignment.Value).ConfigureAwait(false);
+		switch (assignment.Target) {
+			case IFieldReferenceOperation field:
+				await runtime.WriteFieldAsync(instance, field.Field, value).ConfigureAwait(false);
+				return;
+			case IPropertyReferenceOperation property: {
+				var setter = property.Property.SetMethod ?? throw new EvaluationException($"Property '{property.Property.Name}' is read only.");
+				var arguments = await ArgumentsAsync(property.Arguments).ConfigureAwait(false);
+				arguments.Add(value);
+				await runtime.CallAsync(setter, instance, arguments, property.Property.Name).ConfigureAwait(false);
+				return;
+			}
+			default:
+				throw new EvaluationException($"The initializer assigns to a member the debugger cannot write ({assignment.Target.Kind}).");
+		}
+	}
+
+	/// <summary>new { X = 1 }: an object the evaluator holds itself, since its type is not in the debuggee.</summary>
+	async Task<EvalValue> CreateAnonymousObjectAsync(IAnonymousObjectCreationOperation anonymous) {
+		var type = anonymous.Type ?? throw new EvaluationException("The anonymous type is unknown.");
+		var members = new Dictionary<string, EvalValue>(StringComparer.Ordinal);
+		foreach (var initializer in anonymous.Initializers) {
+			var name = initializer switch {
+				ISimpleAssignmentOperation assignment when assignment.Target is IPropertyReferenceOperation property => property.Property.Name,
+				IPropertyReferenceOperation property => property.Property.Name,
+				_ => null,
+			};
+			if (name is null)
+				throw new EvaluationException("The anonymous type could not be created.");
+			members[name] = await EvalAsync(initializer is ISimpleAssignmentOperation assignment2 ? assignment2.Value : initializer).ConfigureAwait(false);
+		}
+		return new AnonymousValue(type, members);
+	}
+
+	/// <summary>record with { X = 1 }: the clone method, then the initializer over the copy.</summary>
+	async Task<EvalValue> CreateWithAsync(IWithOperation with) {
+		var operand = await EvalAsync(with.Operand).ConfigureAwait(false);
+		if (with.CloneMethod is null)
+			throw new EvaluationException("The record's clone method is not available.");
+		var clone = await runtime.CallAsync(with.CloneMethod, operand, [], "with").ConfigureAwait(false);
+		if (with.Initializer is { Initializers.Length: > 0 } initializer)
+			await ApplyInitializerAsync(clone, initializer).ConfigureAwait(false);
+		return clone;
+	}
+
+	/// <summary>"abc"u8: the UTF-8 bytes as a byte[] the evaluator builds itself.</summary>
+	async Task<EvalValue> CreateUtf8StringAsync(IUtf8StringOperation utf8) {
+		var bytes = Encoding.UTF8.GetBytes(utf8.Value ?? string.Empty);
+		var array = await runtime.NewArrayAsync(runtime.Special(SpecialType.System_Byte), [bytes.Length]).ConfigureAwait(false);
+		for (var index = 0; index < bytes.Length; index++)
+			await runtime.WriteElementAsync(array, [index], Scalar(runtime.Special(SpecialType.System_Byte), bytes[index])).ConfigureAwait(false);
+		return array;
+	}
+
+	/// <summary>[1, 2, 3]: an array target is filled in place, a collection target gets its elements through Add.</summary>
+	async Task<EvalValue> CreateCollectionExpressionAsync(ICollectionExpressionOperation collection) {
+		var type = collection.Type ?? throw new EvaluationException("The collection type is unknown.");
+		var values = new List<EvalValue>();
+		foreach (var element in collection.Elements)
+			values.Add(await EvalAsync(element).ConfigureAwait(false));
+		if (type is IArrayTypeSymbol arrayType) {
+			var array = await runtime.NewArrayAsync(arrayType.ElementType, [values.Count]).ConfigureAwait(false);
+			for (var index = 0; index < values.Count; index++)
+				await runtime.WriteElementAsync(array, [index], values[index]).ConfigureAwait(false);
+			return array;
+		}
+		var constructor = (type as INamedTypeSymbol)?.InstanceConstructors.FirstOrDefault(candidate => candidate.Parameters.Length == 0)
+			?? throw new EvaluationException("A collection expression needs a collection with a parameterless constructor.");
+		var instance = await runtime.NewObjectAsync(constructor, []).ConfigureAwait(false);
+		var add = type.GetMembers("Add").OfType<IMethodSymbol>().FirstOrDefault(method => method.Parameters.Length == 1)
+			?? throw new EvaluationException("The collection has no Add method.");
+		foreach (var value in values)
+			await runtime.CallAsync(add, instance, [value], "Add").ConfigureAwait(false);
+		return instance;
 	}
 
 	async Task<EvalValue> CreateArrayAsync(IArrayCreationOperation creation) {
@@ -748,9 +892,25 @@ internal sealed class OperationInterpreter {
 			case ITypePatternOperation typePattern:
 				return !IsNullValue(value) && IsInstanceOf(value, typePattern.MatchedType);
 			case IDeclarationPatternOperation declaration:
-				if (declaration.DeclaredSymbol is not null)
-					throw new EvaluationException("A pattern cannot declare a variable in an expression the debugger evaluates.");
+				// A declaration in an expression scopes its name to that expression; matching the type is
+				// all an evaluated expression can observe.
 				return !IsNullValue(value) && (declaration.MatchedType is null || IsInstanceOf(value, declaration.MatchedType));
+			case IRecursivePatternOperation recursive: {
+				if (recursive.MatchedType is { } matchedType && (IsNullValue(value) || !IsInstanceOf(value, matchedType)))
+					return false;
+				if (recursive.DeconstructionSubpatterns.Length > 0)
+					throw new EvaluationException("A positional pattern is not supported by the evaluator.");
+				foreach (var subpattern in recursive.PropertySubpatterns) {
+					var member = subpattern.Member switch {
+						IPropertyReferenceOperation property => await ReadPropertyAsync(property, property.Instance is null ? value : null).ConfigureAwait(false),
+						IFieldReferenceOperation field => await runtime.ReadFieldAsync(field.Instance is null ? value : await EvalAsync(field.Instance).ConfigureAwait(false), field.Field).ConfigureAwait(false),
+						_ => throw new EvaluationException("The property pattern names a member the debugger cannot read."),
+					};
+					if (!await MatchAsync(member, subpattern.Pattern).ConfigureAwait(false))
+						return false;
+				}
+				return true;
+			}
 			case INegatedPatternOperation negated:
 				return !await MatchAsync(value, negated.Pattern).ConfigureAwait(false);
 			case IBinaryPatternOperation binary:

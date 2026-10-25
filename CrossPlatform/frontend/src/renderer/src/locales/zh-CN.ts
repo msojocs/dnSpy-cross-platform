@@ -300,6 +300,8 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Use host executable': '使用宿主可执行文件',
   'Host': '宿主程序',
   'Host Arguments': '程序参数',
+  // The CoreCLR page's wait for the runtime to start, in seconds.
+  'Timeout': '超时',
   'Break at': '中断于',
   "Don't Break": '不要中断',
   'CreateProcess': 'CreateProcess',
@@ -407,6 +409,34 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Offset': '偏移',
   'Name': '名称',
   'Value': '值',
+  // The environment editor's columns and buttons (dnSpy's EditEnvironmentDlg).
+  'Key': '键',
+  'Add Many': '批量添加',
+  'Invalid Input String': '输入字符串无效',
+  'Edit Environment Variables': '编辑环境变量',
+  // Attach to Process's 64-bit hint and the wiki link (dnSpy.Debugger.Resources).
+  'Use 32-bit dnSpy to attach to 32-bit processes': '请改用 32 位的 dnSpy 来调试 32 位应用程序。',
+  'Making an Image Easier to Debug': '使映像更易于调试 (Wiki)',
+  // The Module Breakpoints window's commands and import/export (dnSpy.Debugger.Resources).
+  // The Threads window's category names (dnSpy.Debugger.Resources ThreadType_*).
+  'Main Thread': '主线程',
+  'Thread Pool': '线程池',
+  'Worker Thread': '工作线程',
+  'Unknown Thread': '未知线程',
+  'Terminated Thread': '终止的线程',
+  // VariablesWindowCommands' Save and Show in Memory Window, and the Modules window's two placeholders.
+  'Save...': '保存...',
+  'Show in Memory Window': '在内存窗口中显示',
+  '<Unknown>': '<未知>',
+  '<no address>': '<无地址>',
+  'Edit Module Name': '编辑模块名称',
+  'Edit Module Load Order': '编辑模块加载顺序',
+  'Edit Process Name': '编辑进程名称',
+  'Edit AppDomain Name': '编辑 AppDomain 名称',
+  'Export Selected': '导出选中项',
+  'Export All': '导出全部',
+  'Import': '导入',
+  'The file is not a valid module breakpoint file.': '该文件不是有效的模块断点文件。',
   'Type': '类型',
   'Path': '路径',
   'Runtime': '运行时',
@@ -1316,6 +1346,11 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Memory 4': '内存 4',
   'Start Without Debugging': '开始执行(不调试)',
   'Start Without Debugging...': '开始执行(不调试)...',
+  // dnSpy's RunWithInvalidExtension and DebugWithInvalidExtension.
+  "Are you sure you want to run this file which doesn't have a valid extension?": '是否要运行具有无效扩展名的文件？',
+  "Are you sure you want to debug this file which doesn't have a valid extension?": '是否要调试具有无效扩展名的文件？',
+  // The debugger's in-place module refresh could not read the file the process wrote.
+  'Could not refresh {name}: {message}': '无法刷新 {name}：{message}',
   'Started {target} without debugging (process {processId}).': '已启动 {target}（不调试，进程 {processId}）。',
   'Could not start {target}: {message}': '无法启动 {target}: {message}',
   'Go To Source Code': '转到源代码',

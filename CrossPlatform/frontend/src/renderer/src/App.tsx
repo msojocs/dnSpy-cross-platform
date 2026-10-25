@@ -430,8 +430,6 @@ export const App = (): React.JSX.Element => {
   const [editNode, setEditNode] = useState<{ kind: CreatedKind, nodeId?: string, ownerNodeId?: string, nested?: boolean }>()
   const [attachDialogOpen, setAttachDialogOpen] = useState(false)
   const [debugProgramDialogOpen, setDebugProgramDialogOpen] = useState(false)
-  // Start Without Debugging opens the same dialog, to run the program rather than debug it.
-  const [runProgramDialogOpen, setRunProgramDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [gacDialogOpen, setGacDialogOpen] = useState(false)
   // dnSpy's Export to Project, with the tree's selection it was started on.
@@ -1564,9 +1562,9 @@ export const App = (): React.JSX.Element => {
         event.preventDefault()
         void revealStoppedLocation()
       } else if (event.ctrlKey && !event.shiftKey && event.key === 'F5' && !debugKeysBlocked) {
-        // dnSpy's Start Without Debugging.
+        // dnSpy's Start Without Debugging: the current executable, started on its own.
         event.preventDefault()
-        setRunProgramDialogOpen(true)
+        void useAppStore.getState().startWithoutDebugging()
       } else if (event.key === 'F5' && !debugKeysBlocked) {
         event.preventDefault()
         if (debugState === 'stopped') void continueDebug()
@@ -2996,7 +2994,7 @@ export const App = (): React.JSX.Element => {
       case 'autos': return <AutosPane />
       case 'static-fields': return <StaticFieldsPane />
       case 'processes': return <ProcessesPane />
-      case 'memory': return <MemoryPane />
+      case 'memory': return <MemoryPane windowId={node.getId()} />
       case 'disassembly-document': return <div className="tab-zoom" style={tabZoomStyle}><DisassemblyDocumentView id={(node.getConfig() as { disassemblyId: string }).disassemblyId} theme={theme} transparentBackground={backgroundImageOn} /></div>
       case 'start': return (
         <div className="start-view">
@@ -3110,7 +3108,7 @@ export const App = (): React.JSX.Element => {
         onStepCurrentProcess={(kind) => void stepDebug(kind, true)}
         showCurrentProcessSteps={!options.debugger.breakAllProcesses}
         onStopDebug={() => void stopDebug()}
-        onStartWithoutDebugging={() => setRunProgramDialogOpen(true)}
+        onStartWithoutDebugging={() => void useAppStore.getState().startWithoutDebugging()}
         onDetachDebug={() => void useAppStore.getState().detachDebug()}
         onTerminateDebug={() => void useAppStore.getState().terminateDebug()}
         onRestartDebug={() => void useAppStore.getState().restartDebug()}
@@ -3222,7 +3220,7 @@ export const App = (): React.JSX.Element => {
         decompilerLanguage={defaultLanguage} onLanguageChange={(language) => { void changeLanguage(language, orderedDocumentKeys(model).order) }}
         debugAvailable={backendStatus.capabilities?.['debug.coreclr.launch'] === true} debugState={debugState}
         onStart={() => setDebugProgramDialogOpen(true)} onContinue={() => void continueDebug()} onPause={() => void pauseDebug()}
-        onRestart={() => { void stopDebug().then(() => setDebugProgramDialogOpen(true)) }}
+        onRestart={() => void useAppStore.getState().restartDebug()}
         onShowNextStatement={() => void revealStoppedLocation()} onStepInto={() => void stepDebug('stepIn')}
         onStepOver={() => void stepDebug('next')} onStepOut={() => void stepDebug('stepOut')} onStop={() => void stopDebug()}
       />
@@ -3427,7 +3425,6 @@ export const App = (): React.JSX.Element => {
       )}
       {attachDialogOpen && <AttachDialog onClose={() => setAttachDialogOpen(false)} />}
       {debugProgramDialogOpen && <DebugProgramDialog onClose={() => setDebugProgramDialogOpen(false)} />}
-      {runProgramDialogOpen && <DebugProgramDialog mode="run" onClose={() => setRunProgramDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
       {exportProjectNodeIds && workspaceId && (
         <ExportToProjectDialog

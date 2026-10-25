@@ -184,6 +184,7 @@ const api: DnSpyApi = {
   pathExists: (path) => ipcRenderer.invoke('app:pathExists', path),
   pathIsPeExecutable: (path) => ipcRenderer.invoke('app:pathIsPeExecutable', path),
   listDebugProcesses: () => ipcRenderer.invoke('debug:listProcesses'),
+  checkDebugProgram: (program) => ipcRenderer.invoke('debug:programInfo', program),
   launchDebug: (options) => ipcRenderer.invoke('debug:launch', options),
   startWithoutDebugging: (options) => ipcRenderer.invoke('debug:startWithoutDebugging', options),
   attachDebug: (processId, workspaceId) => ipcRenderer.invoke('debug:attach', processId, workspaceId),

@@ -4,6 +4,7 @@ import { showPopupMenu, type PopupMenuEntry } from 'flexlayout-react'
 import type { DebugVariable } from '../../../shared/protocol'
 import { useAppStore, watchList, watchValueList } from '../app-store'
 import { useLanguage } from '../localization'
+import { useColumnLayout } from '../use-column-layout'
 import { loadAppOptions, saveAppOptions, useAppOptions, type DebuggerOptions } from './app-options'
 import { ColoredText } from './ColoredText'
 import { DsIcon, MenuEntryIcon } from './DsIcon'
@@ -109,6 +110,14 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
   const [editing, setEditing] = useState<{ key: string; column: 'name' | 'value'; text: string }>()
   const [newWatch, setNewWatch] = useState<string>()
   const tableRef = useRef<HTMLDivElement>(null)
+  // WPF's Locals/Watch/Autos columns: drag a header to move it, its right edge to resize it.
+  const columns = useMemo(() => [
+    { key: 'name', width: 'minmax(120px, 28%)' },
+    { key: 'value', width: 'minmax(160px, 1fr)' },
+    { key: 'type', width: 'minmax(100px, 25%)' },
+  ], [])
+  const layout = useColumnLayout(columns, t('Resize column'))
+  const orderOf = (key: string): number => layout.columns.findIndex((column) => column.key === key)
   const stopped = debugState === 'stopped'
   // dnSpy's Highlight changed variables: a row whose value differs from what the same row showed at the last
   // stop is drawn in the changed colour. The values are remembered per stop, keyed like the expansion.
@@ -419,24 +428,30 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
       role="treegrid"
       aria-label={label}
       tabIndex={0}
+      style={{ gridTemplateColumns: layout.template }}
       onKeyDown={onKeyDown}
       onContextMenu={(event) => {
         event.preventDefault()
         openMenu(selectedRows, { x: event.clientX, y: event.clientY })
       }}
     >
-      <div className="debug-table-header">{t('Name')}</div><div className="debug-table-header">{t('Value')}</div><div className="debug-table-header">{t('Type')}</div>
+      {layout.columns.map((column) => (
+        <div className="debug-table-header" role="columnheader" key={column.key} style={{ order: orderOf(column.key) }} {...layout.headerProps(column.key)}>
+          {t(column.key === 'name' ? 'Name' : column.key === 'value' ? 'Value' : 'Type')}
+          <span className="debug-column-resizer" role="separator" aria-orientation="vertical" {...layout.resizeHandleProps(column.key)} />
+        </div>
+      ))}
       {flat.map((row) => {
         const { variable } = row
         if (row.more) {
           const more = row.more
           return (
             <div className="debug-table-row" role="row" key={row.key}>
-              <span className="debug-variable-name" style={{ paddingLeft: `${7 + row.depth * 15}px` }}>
+              <span className="debug-variable-name" style={{ paddingLeft: `${7 + row.depth * 15}px`, order: orderOf('name') }}>
                 <button className="link-button" onClick={() => void childrenFor(more.parentKey, more.reference, more.loaded)}>
                   {t('Show {count} more of {total}', { count: Math.min(CHILD_PAGE, more.total - more.loaded), total: more.total })}
                 </button>
-              </span><span /><span />
+              </span><span style={{ order: orderOf('value') }} /><span style={{ order: orderOf('type') }} />
             </div>
           )
         }
@@ -461,7 +476,7 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
               openMenu(rows, { x: event.clientX, y: event.clientY })
             }}
           >
-            <span className="debug-variable-name" style={{ paddingLeft: `${7 + row.depth * 15}px` }} onDoubleClick={() => startEdit(row, 'name')}>
+            <span className="debug-variable-name" style={{ paddingLeft: `${7 + row.depth * 15}px`, order: orderOf('name') }} onDoubleClick={() => startEdit(row, 'name')}>
               <button className="tree-expander" aria-label={t(isOpen ? 'Collapse {name}' : 'Expand {name}', { name: variable.name })} disabled={variable.variablesReference === 0} onClick={() => toggle(row)}>
                 {/* The variables windows expand a value with the tree's ExpandCollapseToggleStyle; while its children
                     load the port shows its spinner, which dnSpy has no counterpart of. */}
@@ -472,6 +487,7 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
             </span>
             <span
               title={valueText(variable)}
+              style={{ order: orderOf('value') }}
               className={`${variable.canEdit && stopped ? 'debug-value-editable' : ''}${isChanged(row.key, variable.value) ? ' debug-value-changed' : ''}`}
               onDoubleClick={() => startEdit(row, 'value')}
             >
@@ -482,13 +498,13 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
                 </>
               )}
             </span>
-            <span title={variable.type}>{typeOf(variable)}</span>
+            <span title={variable.type} style={{ order: orderOf('type') }}>{typeOf(variable)}</span>
           </div>
         )
       })}
       {newWatchRow && (
         <div className="debug-table-row" role="row">
-          <span className="debug-variable-name" style={{ paddingLeft: '22px' }}>
+          <span className="debug-variable-name" style={{ paddingLeft: '22px', order: orderOf('name') }}>
             {newWatch !== undefined ? (
               <input
                 className="debug-value-editor"
@@ -511,7 +527,7 @@ export const VariablesTree = ({ label, rows, watchWindow, newWatchRow = false, e
             ) : (
               <button className="debug-new-watch" aria-label={t('Add watch')} onClick={() => setNewWatch('')} onDoubleClick={() => setNewWatch('')} />
             )}
-          </span><span /><span />
+          </span><span style={{ order: orderOf('value') }} /><span style={{ order: orderOf('type') }} />
         </div>
       )}
       {flat.length === 0 && !newWatchRow && emptyText ? <div className="debug-table-empty">{emptyText}</div> : null}

@@ -2665,6 +2665,24 @@ select:focus-visible,
   background: var(--wpf-HeaderDefault);
   color: var(--wpf-HeaderDefaultText);
   font-weight: 600;
+  user-select: none;
+  touch-action: none;
+}
+
+/* The GridView column header's drag grip: WPF resizes a column by dragging its right edge. */
+.debug-column-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+
+.debug-column-resizer:hover {
+  background: color-mix(in srgb, var(--border) 75%, transparent);
 }
 
 .debug-table-row {
@@ -2894,7 +2912,7 @@ select:focus-visible,
 .exception-header,
 .exception-row {
   display: grid;
-  grid-template-columns: minmax(190px, 40%) minmax(120px, 20%) minmax(150px, 1fr);
+  grid-template-columns: var(--exception-columns, minmax(190px, 40%) minmax(120px, 20%) minmax(150px, 1fr));
   align-items: center;
 }
 
@@ -2902,6 +2920,12 @@ select:focus-visible,
   border-bottom: 1px solid var(--border);
   background: var(--wpf-HeaderDefault);
   color: var(--wpf-HeaderDefaultText);
+}
+
+.exception-header > span {
+  position: relative;
+  user-select: none;
+  touch-action: none;
 }
 
 .exception-header > span,
@@ -5046,7 +5070,7 @@ fieldset.options-group {
 .breakpoints-header,
 .breakpoint-row {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) minmax(60px, 0.6fr) minmax(90px, 1fr) minmax(90px, 1fr) minmax(60px, 0.7fr) minmax(70px, 0.8fr) minmax(80px, 0.8fr);
+  grid-template-columns: var(--breakpoints-columns, minmax(180px, 2fr) minmax(60px, 0.6fr) minmax(90px, 1fr) minmax(90px, 1fr) minmax(60px, 0.7fr) minmax(70px, 0.8fr) minmax(80px, 0.8fr));
   align-items: center;
 }
 
@@ -5057,8 +5081,10 @@ fieldset.options-group {
 }
 
 .breakpoints-header > span {
+  position: relative;
   cursor: pointer;
   user-select: none;
+  touch-action: none;
 }
 
 .breakpoints-header > span,

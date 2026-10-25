@@ -497,7 +497,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -736,7 +736,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -848,7 +848,7 @@ test.describe('the workspace shell', () => {
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -912,7 +912,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click({ button: 'right' })
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expect(getter).toHaveCount(1)
   })
@@ -963,7 +963,7 @@ test.describe('the workspace shell', () => {
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // Go to Token is dnSpy's FollowReference: with DecompileFullType on, the method's token opens the type it is
     // declared in — which the tree then selects, opening the chain above it — with the caret on the method.
-    await tokenDialog.getByLabel('Token').fill('0x06000ADA')
+    await tokenDialog.getByLabel('Token').fill('0x06000ADC')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
     await expect(page.getByRole('tab', { name: 'RpcException', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -1002,7 +1002,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -1286,7 +1286,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -1407,7 +1407,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADA$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -2889,11 +2889,23 @@ test.describe('the in-process debug engine', () => {
     // A watch runs a property getter in the debuggee.
     await page.getByRole('tab', { name: 'Watch 1' }).click()
     const watch = page.getByRole('treegrid', { name: 'Watch' })
-    await watch.getByRole('button', { name: 'Add watch' }).click()
-    const expression = watch.getByRole('textbox', { name: 'Watch expression' })
-    await expression.fill('shape.Area')
-    await expression.press('Enter')
+    const addWatch = async (text: string): Promise<void> => {
+      await watch.getByRole('button', { name: 'Add watch' }).click()
+      const box = watch.getByRole('textbox', { name: 'Watch expression' })
+      await box.fill(text)
+      await box.press('Enter')
+    }
+    await addWatch('shape.Area')
     await expect(watch.getByRole('row').filter({ hasText: /^shape\.Area/ })).toContainText('0x00000010')
+
+    // ref/out arguments, positional patterns and stackalloc go through the evaluator's reflection path,
+    // which is what WPF's IL interpreter does for them.
+    await addWatch('int.TryParse("42", out var parsed) && parsed == 42')
+    await expect(watch.getByRole('row').filter({ hasText: 'int.TryParse' })).toContainText('true')
+    await addWatch('pair is (2, "two")')
+    await expect(watch.getByRole('row').filter({ hasText: 'pair is' })).toContainText('true')
+    await addWatch('DebugTarget.EvalHelpers.SumSpan(stackalloc int[] { 1, 2, 3 })')
+    await expect(watch.getByRole('row').filter({ hasText: 'SumSpan' })).toContainText('0x00000006')
 
     // Autos lists what the statements around the break wrote.
     await showDebugWindow(/^Autos/)

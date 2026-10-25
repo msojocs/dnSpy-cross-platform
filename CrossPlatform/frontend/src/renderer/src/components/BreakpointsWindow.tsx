@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { showPopupMenu, type IPopupMenuItem, type PopupMenuEntry } from 'flexlayout-react'
 import type { BookmarkLocationText, TextPart } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
@@ -20,6 +20,7 @@ import {
   type BreakpointSort,
 } from '../breakpoints-model'
 import { useLanguage } from '../localization'
+import { useColumnLayout } from '../use-column-layout'
 import { SearchMatcher } from '../tool-window-search'
 import { saveAppOptions, useAppOptions, type BreakpointDisplaySettings } from './app-options'
 import { ColoredText } from './ColoredText'
@@ -29,6 +30,17 @@ import { AskTextDialog } from './EditDialogs'
 // dnSpy's Breakpoints window (CodeBreakpointsControl): a sortable list of every code breakpoint, its toolbar, its
 // search box with the tool windows' column options, and the context menu the WPF window carries. This port's
 // breakpoints by method name are rows of it too, with the box they are typed into under the list.
+
+// The GridView columns' starting tracks, from the stylesheet; a drag replaces one with pixels.
+const BREAKPOINT_COLUMN_WIDTHS: Record<BreakpointColumn, string> = {
+  name: 'minmax(180px, 2fr)',
+  labels: 'minmax(60px, 0.6fr)',
+  condition: 'minmax(90px, 1fr)',
+  hitCount: 'minmax(90px, 1fr)',
+  filter: 'minmax(60px, 0.7fr)',
+  whenHit: 'minmax(70px, 0.8fr)',
+  module: 'minmax(80px, 0.8fr)',
+}
 
 const menuItem = (key: string, label: string, onSelect: () => void, options: { disabled?: boolean; shortcut?: string; checked?: boolean; icon?: string } = {}): IPopupMenuItem => ({
   key,
@@ -139,6 +151,8 @@ export const BreakpointsPane = (): React.JSX.Element => {
   const allRows = useMemo(() => breakpointRows(lineBreakpoints, functionBreakpoints), [lineBreakpoints, functionBreakpoints])
   const nameTexts = useNameTexts(allRows, settings)
   const columns = useMemo(() => BREAKPOINT_COLUMNS.map((column) => ({ ...column, name: t(column.header) })), [t])
+  const layout = useColumnLayout(BREAKPOINT_COLUMNS.map((column) => ({ key: column.id, width: BREAKPOINT_COLUMN_WIDTHS[column.id] })), t('Resize column'))
+  const orderOf = (column: BreakpointColumn): number => layout.columns.findIndex((candidate) => candidate.key === column)
   const matcher = useMemo(() => new SearchMatcher(columns.map(({ id, shortOption, name }) => ({ id, shortOption, name }))).setSearchText(query), [columns, query])
 
   const nameOf = useMemo(() => {
@@ -373,17 +387,27 @@ export const BreakpointsPane = (): React.JSX.Element => {
           <button className="icon-button" title={t('Reset all search criteria so that all breakpoints are shown')} aria-label={t('Reset all search criteria so that all breakpoints are shown')} onClick={() => setQuery('')}><DsIcon name="ClearWindowContent" /></button>
         </div>
       ) : (
-        <div className="breakpoints-table" role="table" aria-label={t('Breakpoints')} ref={listRef} onContextMenu={(event) => showContextMenu(undefined, event)}>
+        <div
+          className="breakpoints-table"
+          role="table"
+          aria-label={t('Breakpoints')}
+          ref={listRef}
+          style={{ '--breakpoints-columns': layout.template } as CSSProperties}
+          onContextMenu={(event) => showContextMenu(undefined, event)}
+        >
           <div className="breakpoints-header" role="row">
             {columns.map((column) => (
               <span
                 key={column.id}
                 role="columnheader"
                 aria-sort={sort?.column === column.id ? (sort.descending ? 'descending' : 'ascending') : 'none'}
+                style={{ order: orderOf(column.id) }}
+                {...layout.headerProps(column.id)}
                 onClick={() => setSort((current) => nextBreakpointSort(current, column.id))}
               >
                 {column.name}
                 {sort?.column === column.id && <span className="bookmarks-sort-arrow" aria-hidden>{sort.descending ? '▼' : '▲'}</span>}
+                <span className="debug-column-resizer" role="separator" aria-orientation="vertical" {...layout.resizeHandleProps(column.id)} />
               </span>
             ))}
           </div>
@@ -403,7 +427,7 @@ export const BreakpointsPane = (): React.JSX.Element => {
                   onDoubleClick={(event) => { if (!editingLabels) goTo(row, event.shiftKey || event.ctrlKey) }}
                   onContextMenu={(event) => { event.stopPropagation(); showContextMenu(row, event) }}
                 >
-                  <span className="breakpoint-name-cell" title={message}>
+                  <span className="breakpoint-name-cell" title={message} style={{ order: orderOf('name') }}>
                     <input
                       type="checkbox"
                       checked={row.enabled}
@@ -416,7 +440,7 @@ export const BreakpointsPane = (): React.JSX.Element => {
                       {matcher.matchSpans('name', nameText).length > 0 ? <Highlighted text={nameText} spans={matcher.matchSpans('name', nameText)} /> : <ColoredText parts={nameOf(row)} />}
                     </span>
                   </span>
-                  <span className="breakpoint-labels-cell" onDoubleClick={(event) => { event.stopPropagation(); setEditingLabels(row.id) }}>
+                  <span className="breakpoint-labels-cell" style={{ order: orderOf('labels') }} onDoubleClick={(event) => { event.stopPropagation(); setEditingLabels(row.id) }}>
                     {editingLabels === row.id ? (
                       <LabelsInput
                         value={labelsText(rowSettings(row))}
@@ -426,11 +450,11 @@ export const BreakpointsPane = (): React.JSX.Element => {
                       />
                     ) : <span title={textOf(row).labels}>{cellText(row, 'labels')}</span>}
                   </span>
-                  <span title={textOf(row).condition}>{cellText(row, 'condition')}</span>
-                  <span title={textOf(row).hitCount}>{cellText(row, 'hitCount')}</span>
-                  <span title={textOf(row).filter}>{cellText(row, 'filter')}</span>
-                  <span title={textOf(row).whenHit}>{cellText(row, 'whenHit')}</span>
-                  <span title={row.kind === 'line' ? row.breakpoint.modulePath : undefined}>{cellText(row, 'module')}</span>
+                  <span title={textOf(row).condition} style={{ order: orderOf('condition') }}>{cellText(row, 'condition')}</span>
+                  <span title={textOf(row).hitCount} style={{ order: orderOf('hitCount') }}>{cellText(row, 'hitCount')}</span>
+                  <span title={textOf(row).filter} style={{ order: orderOf('filter') }}>{cellText(row, 'filter')}</span>
+                  <span title={textOf(row).whenHit} style={{ order: orderOf('whenHit') }}>{cellText(row, 'whenHit')}</span>
+                  <span title={row.kind === 'line' ? row.breakpoint.modulePath : undefined} style={{ order: orderOf('module') }}>{cellText(row, 'module')}</span>
                 </div>
               )
             })}

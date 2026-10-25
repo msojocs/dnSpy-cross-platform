@@ -97,7 +97,7 @@ describe('DebugProgramDialog', () => {
     expect(field('Timeout')).toHaveValue(String(DEFAULT_CONNECTION_TIMEOUT_SECONDS))
   })
 
-  it('launches with the values the dialog collected', () => {
+  it('launches with the values the dialog collected', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.change(field('Arguments'), { target: { value: '"a b" c' } })
@@ -113,9 +113,9 @@ describe('DebugProgramDialog', () => {
     fireEvent.change(field('Break at'), { target: { value: 'entry-point' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith({
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith({
       program: '/tmp/DebugTarget.dll',
-      arguments: ['a b', 'c'],
+      rawArguments: '"a b" c',
       workingDirectory: '/tmp',
       environment: { DNSPY_TEST: '1' },
       stopAtEntry: true,
@@ -123,7 +123,7 @@ describe('DebugProgramDialog', () => {
       host: undefined,
       hostArguments: ['exec'],
       connectionTimeout: 12,
-    })
+    }))
   })
 
   it('keeps OK disabled while the Timeout is not the uint the upstream field takes', () => {
@@ -142,32 +142,32 @@ describe('DebugProgramDialog', () => {
     expect(ok()).toBeEnabled()
   })
 
-  it('hosts the target through a chosen executable and its arguments', () => {
+  it('hosts the target through a chosen executable and its arguments', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.change(field('Host'), { target: { value: '/usr/bin/dotnet' } })
     fireEvent.change(field('Host Arguments'), { target: { value: 'exec' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
       useHost: true,
       host: '/usr/bin/dotnet',
       hostArguments: ['exec'],
-    }))
+    })))
   })
 
-  it('runs the target directly when the host is turned off, dropping the host fields', () => {
+  it('runs the target directly when the host is turned off, dropping the host fields', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.click(field('Use host executable'))
     expect(field('Host')).toBeDisabled()
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
       useHost: false,
       host: undefined,
       hostArguments: undefined,
-    }))
+    })))
   })
 
   it('flags a host path that is not a file, but leaves a blank one alone', async () => {
@@ -195,37 +195,37 @@ describe('DebugProgramDialog', () => {
     await waitFor(() => expect(field('Host')).toHaveValue('/usr/share/dotnet/dotnet'))
   })
 
-  it('launches with the module cctor startup break kind', () => {
+  it('launches with the module cctor startup break kind', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.change(field('Break at'), { target: { value: 'module-cctor-or-entry-point' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
       stopAtEntry: false,
       breakKind: 'ModuleCctorOrEntryPoint',
-    }))
+    })))
   })
 
-  it('launches with the CreateProcess startup break kind', () => {
+  it('launches with the CreateProcess startup break kind', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.change(field('Break at'), { target: { value: 'create-process' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({
       stopAtEntry: false,
       breakKind: 'CreateProcess',
-    }))
+    })))
   })
 
-  it('omits a working directory left blank rather than sending an empty string', () => {
+  it('omits a working directory left blank rather than sending an empty string', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
 
     fireEvent.change(field('Working Directory'), { target: { value: '' } })
     fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
 
-    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: undefined, stopAtEntry: false }))
+    await waitFor(() => expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({ workingDirectory: undefined, stopAtEntry: false })))
   })
 
   it('moves Working Directory with the executable, as the upstream Filename setter does', () => {
@@ -250,6 +250,22 @@ describe('DebugProgramDialog', () => {
     expect(askMessage.mock.calls[0][0]).toBe("Are you sure you want to debug this file which doesn't have a valid extension?")
     // A No keeps the dialog open and launches nothing, like StartDebuggingOptionsProvider.
     expect(launchDebug).not.toHaveBeenCalled()
+  })
+
+  it('asks before starting a target whose bitness does not match, as StartDebuggingOptionsProvider does', async () => {
+    const askMessage = vi.fn(async (_message: string, _buttons: string[]) => ({ button: 'Yes', dontShowAgain: false }))
+    Object.defineProperty(window, 'dnSpy', {
+      configurable: true,
+      value: { ...window.dnSpy, askMessage, checkDebugProgram: async () => ({ compatible: false }) },
+    })
+    render(<DebugProgramDialog onClose={vi.fn()} />)
+
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'OK' }))
+
+    await waitFor(() => expect(askMessage).toHaveBeenCalled())
+    expect(askMessage.mock.calls[0][0]).toContain('does not match with the current dnSpy version')
+    await waitFor(() => expect(launchDebug).toHaveBeenCalled())
+    expect(launchDebug).toHaveBeenCalledWith(expect.objectContaining({ program: '/tmp/DebugTarget.dll' }))
   })
 
   it('disables OK while the executable is empty', () => {
@@ -290,11 +306,12 @@ describe('DebugProgramDialog', () => {
 })
 
 describe('the launch memory', () => {
-  it('opens on the arguments a program was last started with', () => {
+  it('opens on the arguments a program was last started with', async () => {
     render(<DebugProgramDialog onClose={vi.fn()} />)
     fireEvent.change(screen.getByLabelText('Arguments'), { target: { value: '--evaluate --wait' } })
     fireEvent.change(screen.getByLabelText('Timeout'), { target: { value: '9' } })
     fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(launchDebug).toHaveBeenCalled())
     cleanup()
 
     render(<DebugProgramDialog onClose={vi.fn()} />)

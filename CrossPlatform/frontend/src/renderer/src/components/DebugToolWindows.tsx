@@ -6,6 +6,7 @@ import { debugProcessesOf, frameCodeLocation, lineBreakpointsAtLocation, useAppS
 import { moduleBreakpointsXml, parseModuleBreakpointsXml } from '../module-breakpoints-io'
 import { useLanguage } from '../localization'
 import { SearchMatcher } from '../tool-window-search'
+import { useColumnLayout } from '../use-column-layout'
 import { loadAppOptions, saveAppOptions, useAppOptions, type CallStackSettings, type DebuggerOptions } from './app-options'
 import { ColoredText } from './ColoredText'
 import { DsIcon, MenuEntryIcon } from './DsIcon'
@@ -115,6 +116,9 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
   const searchRef = useRef<HTMLInputElement>(null)
   const [anchor, setAnchor] = useState<string | undefined>(undefined)
   const [sort, setSort] = useState<{ key: string; descending: boolean } | undefined>(undefined)
+  // WPF's GridView columns: drag a header to move it, its right edge to resize it.
+  const layout = useColumnLayout(columns, t('Resize column'))
+  const displayColumns = layout.columns
   const searchColumns = useMemo(() => columns.filter((column) => column.search).map((column) => ({ id: column.key, shortOption: column.search!.shortOption, name: t(column.search!.name) })), [columns, t])
   const matcher = useMemo(() => new SearchMatcher(searchColumns).setSearchText(search?.value ?? ''), [searchColumns, search?.value])
   const visibleRows = useMemo(() => {
@@ -164,7 +168,7 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
   }
   const copySelected = (): void => {
     if (selectedRows.length === 0) return
-    copyText(selectedRows.map((row) => columns.map((column) => column.text(row)).join('\t')).join('\n'))
+    copyText(selectedRows.map((row) => displayColumns.map((column) => column.text(row)).join('\t')).join('\n'))
   }
   return (
     <div className="debug-grid-window">
@@ -182,7 +186,7 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
         aria-label={label}
         aria-multiselectable="true"
         tabIndex={0}
-        style={{ gridTemplateColumns: columns.map((column) => column.width).join(' ') }}
+        style={{ gridTemplateColumns: layout.template }}
         onKeyDown={(event) => {
           // A cell input has its own keys: Ctrl+A/Ctrl+C select and copy its text, not the list.
           if (event.target instanceof HTMLElement && event.target.closest('input, select, textarea'))
@@ -208,16 +212,18 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
           onMenu(selectedRows, { x: event.clientX, y: event.clientY })
         }}
       >
-        {columns.map((column) => (
+        {displayColumns.map((column) => (
           <div
             className="debug-table-header"
             role="columnheader"
             key={column.key}
             aria-sort={sort?.key === column.key ? (sort.descending ? 'descending' : 'ascending') : 'none'}
+            {...layout.headerProps(column.key)}
             onClick={() => setSort((current) => current?.key !== column.key ? { key: column.key, descending: false } : current.descending ? undefined : { key: column.key, descending: true })}
           >
             {column.header}
             {sort?.key === column.key && <span className="bookmarks-sort-arrow" aria-hidden>{sort.descending ? '▼' : '▲'}</span>}
+            <span className="debug-column-resizer" role="separator" aria-orientation="vertical" {...layout.resizeHandleProps(column.key)} />
           </div>
         ))}
         {visibleRows.map((row) => {
@@ -241,7 +247,7 @@ const DebugGrid = <T,>({ label, columns, rows, rowKey, selected, onSelect, onAct
                 onMenu(isSelected ? selectedRows : [row], { x: event.clientX, y: event.clientY })
               }}
             >
-              {columns.map((column) => <span key={column.key} title={column.text(row)}>{column.render ? column.render(row) : column.text(row)}</span>)}
+              {displayColumns.map((column) => <span key={column.key} title={column.text(row)}>{column.render ? column.render(row) : column.text(row)}</span>)}
             </div>
           )
         })}

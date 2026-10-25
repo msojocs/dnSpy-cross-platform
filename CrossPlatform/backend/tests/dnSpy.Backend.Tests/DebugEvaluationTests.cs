@@ -175,6 +175,14 @@ public sealed class DebugEvaluationTests {
 		Assert.Equal("25", await stopped.ValueAsync("shape.Area"));
 
 		await stopped.RequestAsync("setExpression", new { expression = "factor", value = "factor * 10", frameId = stopped.FrameId });
+		// An object-typed local boxes what is assigned to it.
+		await stopped.RequestAsync("setExpression", new { expression = "boxed", value = "43", frameId = stopped.FrameId });
+		Assert.Equal("43", await stopped.ValueAsync("boxed"));
+		// A Nullable<T> takes a value and null, which clears the struct.
+		await stopped.RequestAsync("setExpression", new { expression = "maybe", value = "9", frameId = stopped.FrameId });
+		Assert.Equal("9", await stopped.ValueAsync("maybe"));
+		await stopped.RequestAsync("setExpression", new { expression = "maybe", value = "null", frameId = stopped.FrameId });
+		Assert.Equal("null", await stopped.ValueAsync("maybe"));
 		Assert.Equal("20", await stopped.ValueAsync("factor"));
 
 		// Object, collection and anonymous initializers, and a record's `with`, run like dnSpy's IL interpreter
@@ -338,6 +346,75 @@ public sealed class DebugEvaluationTests {
 		Assert.Equal(stopped.ThreadId, stop.Body?.GetProperty("threadId").GetInt32());
 		var stack = await stopped.RequestAsync("stackTrace", new { threadId = stopped.ThreadId, startFrame = 0, levels = 1 });
 		Assert.Equal(line - 1, stack!.Value.GetProperty("stackFrames")[0].GetProperty("line").GetInt32());
+	}
+
+	[Fact(Timeout = 120_000)]
+	public async Task EvaluatesRefAndOutArguments() {
+		await using var stopped = await Stopped.StartAsync();
+
+		// ICorDebug's func-eval cannot pass a managed pointer; the evaluator makes the call through reflection.
+		Assert.Equal("true", await stopped.ValueAsync("int.TryParse(\"42\", out var parsed) && parsed == 42"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryHalve(10, out var half) && half == 5"));
+		Assert.Equal("false", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryHalve(7, out _)"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.Increment(ref numbers[0]) == 2 && numbers[0] == 2"));
+
+		// A frame variable can be the ref/out argument too: the new value is written back to the frame.
+		Assert.Equal("true", await stopped.ValueAsync("int.TryParse(\"7\", out factor) && factor == 7"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.Increment(ref factor) == 8 && factor == 8"));
+
+		// A static field and a constructor take the same path; an out parameter of type object writes the
+		// boxed value back into the frame's object-typed local.
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.Increment(ref DebugTarget.EvalHelpers.Counter) == 1 && DebugTarget.EvalHelpers.Counter == 1"));
+		Assert.Equal("true", await stopped.ValueAsync("new DebugTarget.EvalBox(out var constructed) != null && constructed == 3"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryMakeText(out boxed) && (string)boxed == \"made\""));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryMakeNumber(out boxed) && (int)boxed == 42"));
+
+		// A constructed generic type, a generic method's type argument, and a value-type receiver go
+		// through Module.ResolveMethod too.
+		Assert.Equal("true", await stopped.ValueAsync("new System.Collections.Generic.Dictionary<int, string> { [1] = \"one\" }.TryGetValue(1, out var found) && found == \"one\""));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryGetDefault<string>(out var text) && text == null"));
+
+		// Nullable<T> travels as the boxed T the runtime makes of it, and is written back into the two
+		// fields a Nullable has.
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryGetNullable(true, out var nullable) && nullable == 5"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryGetNullable(false, out var absent) && absent == null"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryIncrementNullable(ref maybe) && maybe == 8"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryEchoNullable(maybe, out var echoed) && echoed == 8"));
+		Assert.Equal("true", await stopped.ValueAsync("DebugTarget.EvalHelpers.TryEchoNullable(5, out var literal) && literal == 5"));
+
+		// The method's own exception is reported, not reflection's TargetInvocationException.
+		var thrown = await stopped.EvaluateAsync("DebugTarget.EvalHelpers.ThrowsOut(out _)");
+		Assert.Contains("InvalidOperationException", thrown.GetProperty("value").GetString());
+	}
+
+	[Fact(Timeout = 120_000)]
+	public async Task EvaluatesPositionalPatterns() {
+		await using var stopped = await Stopped.StartAsync();
+
+		Assert.Equal("true", await stopped.ValueAsync("pair is (2, \"two\")"));
+		Assert.Equal("true", await stopped.ValueAsync("new DebugTarget.Program.Point(1, 2) is (1, 2)"));
+		Assert.Equal("false", await stopped.ValueAsync("pair is (3, \"two\")"));
+		Assert.Equal("true", await stopped.ValueAsync("new DebugTarget.PairStruct(1, 2) is (1, 2)"));
+		// A pattern's own declaration binds the matched value (and `is var x` matches null).
+		Assert.Equal("true", await stopped.ValueAsync("pair is (var a, var b) && a == 2 && b == \"two\""));
+		Assert.Equal("true", await stopped.ValueAsync("shape is DebugTarget.Program.Shape s && s.Sides == 4"));
+		Assert.Equal("true", await stopped.ValueAsync("nothing is var n && n == null"));
+		Assert.Equal("true", await stopped.ValueAsync("maybe is int m && m == 7"));
+	}
+
+	[Fact(Timeout = 120_000)]
+	public async Task EvaluatesStackAllocations() {
+		await using var stopped = await Stopped.StartAsync();
+
+		Assert.Equal("6", await stopped.ValueAsync("DebugTarget.EvalHelpers.SumSpan(stackalloc int[] { 1, 2, 3 })"));
+		Assert.Equal("0", await stopped.ValueAsync("DebugTarget.EvalHelpers.SumSpan(stackalloc int[4])"));
+		Assert.Equal("3", await stopped.ValueAsync("((System.Span<int>)stackalloc int[] { 1, 2, 3 }).Length"));
+		// Struct (and Nullable) element types go through Array.CreateInstance, not NewParameterizedArray.
+		Assert.Equal("2", await stopped.ValueAsync("new System.DateTime[2].Length"));
+		Assert.Equal("true", await stopped.ValueAsync("new int?[] { 1, null }[1] == null"));
+		Assert.Equal("true", await stopped.ValueAsync("new int?[] { 1, null }[0] == 1"));
+		Assert.Equal("Monday", await stopped.ValueAsync("new System.DayOfWeek[] { System.DayOfWeek.Monday }[0]"));
+		Assert.Equal("2020", await stopped.ValueAsync("new System.DateTime[] { new System.DateTime(2020, 1, 2) }[0].Year"));
 	}
 }
 

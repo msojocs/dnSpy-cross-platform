@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e；同日再补表达式求值的 ref/out 参数、位置模式与 stackalloc，Debug Program 的原始命令行与目标位数检查，以及调试列表的列宽/列序拖动后复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -44,7 +44,7 @@
 | 搜索窗口 | 100% | 29 | 0 | 0 | 0 | 全部功能点对齐 WPF：结果文本与提示随工具栏语言（C#/VB/IL）重写而不重搜、提示为各语言的成员签名、「Search For」下拉项带图标、位置作用于整个选区、IL 视图跟随到指令、命令行 `--search*` |
 | 应用壳与通用 UI | 100% | 37 | 0 | 0 | 3 | 全部功能点对齐 WPF：读 `.dntheme` 的主题服务（界面与代码视图都按主题资源着色，支持用户主题）、15 种界面语言、按类别与主题的字体页、带 Debug 窗格的 Output 窗口、dnSpy 图标集覆盖菜单与工具窗口、`--settings-file` 与便携模式、`-p`/`-pn` 附加 |
 | 程序集树 | 100% | 30 | 0 | 0 | 1 | 全部功能点对齐 WPF：dnSpy 自己的图标集、完整键盘导航与输入查找、单文件最近列表、命令行打开与 `--select`、Reload All 恢复标签、移除程序集进撤销栈、GAC 解析 |
-| 调试器 | ~99% | 83 | 1 | 2 | 5 | 除 Mono/Unity 外对齐 WPF：断点按 IL 位置在 C#/VB/IL 视图都能下、WPF 的 Breakpoints 窗口与 XML 断点文件、跨 await 单步、多进程与「中断所有进程」、hex 编辑器式的 Memory 窗口与 Disassembly 标签、原地刷新的动态/内存模块、完整的 C# 过滤器与跟踪点关键字；Roslyn 表达式求值与 func-eval，只差 ref/out 参数、位置模式与 stackalloc |
+| 调试器 | 100% | 84 | 0 | 2 | 5 | 除 Mono/Unity 与 Windows 专属项外对齐 WPF：断点按 IL 位置在 C#/VB/IL 视图都能下、WPF 的 Breakpoints 窗口与 XML 断点文件、跨 await 单步、多进程与「中断所有进程」、hex 编辑器式的 Memory 窗口与 Disassembly 标签、原地刷新的动态/内存模块、完整的 C# 过滤器与跟踪点关键字；Roslyn 表达式求值与 func-eval（含 ref/out、位置模式与 stackalloc），Debug Program 的原始命令行与目标位数检查、调试列表的列宽/列序拖动也按 WPF |
 | 程序集编辑（AsmEditor） | 100% | 71 | 0 | 0 | 1 | 全部功能点对齐 WPF：C#/VB 源码编辑与编译器设置、方法体三页编辑器（含指令剪贴板与四个操作数窗口）、图像与 ImageListStreamer 资源、新建程序集与 NetModule、按保存点的修改标记、Save Module 五页写出选项与带进度/取消的 Save All、PE 头与元数据表字段编辑、MD 表命令、Copy IL Bytes |
 | C# 交互窗口 | 100% | 25 | 0 | 0 | 2 | 除 UI 线程与 VB（WPF 自身排除）外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API 与完整的 CachedWriter 打印接口、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页全部生效（行压缩、选择边距、缩放控制） |
 | 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 471 / 🟡 13 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-25 调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 472 / 🟡 12 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-25 调试器把表达式求值的最后一个 🟡 转 ✅（✅ +1、🟡 -1），除 Mono/Unity 与 Windows 专属项外 4.13 已达 100%；同日早些时候调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -412,7 +412,7 @@
 | Hex 标签跨会话恢复 | `AE/Hex/HexViewUIStateSerializer.cs`、`HexViewDocumentTabContentFactory` | `SavedSession.hexTabs`、`HexViewUIState` | ✅ | hex 标签按文件随会话恢复，带 WPF 的全部 UI 状态（列、起止与基准位置、相对位置、位数、值格式、每行字节数、光标两列位置、顶行、水平位置、选区），并回到保存时在文档标签之间的位置；文件没被加载也按路径开成只读的 hex 视图（WPF 的 hex 缓冲区按文件名建）；Reload All 同样带回 |
 | 键盘命令 | `Hex/Editor/DefaultHexEditorCommandInfoProvider.cs`、`Hex/Commands/CommandInfoProvider.cs` | `hex-commands.ts` | ✅ | Home/End/Ctrl+Home/End、Ctrl+PageUp/Down（视口顶/底）、Ctrl+Up/Down 滚动、Alt+Up/Down（有效区起止）、Ctrl+W 选值、Ctrl+E A 交换锚点、Esc 清选区、Ctrl+Insert/Shift+Insert 等；两段式的第二键凑不成组合时什么也不做（`RegisteredCommandElement`，也不超时）；视图处理的键不再落到全局（如 F5、Ctrl+K、Ctrl+B） |
 
-实现要点：文件结构 RPC 为 `hex/getToolTipInfo`、`hex/getPositionInfo`、`hex/search`，Memory 对应 `debug/memoryToolTipInfo`、`debug/memoryPositionInfo`、`debug/memoryResolvePosition`、`debug/memoryGoToMetadata`、`debug/memoryFileInfo`、`debug/memoryRefresh`、`debug/memorySpace`（地址空间上界）、`debug/memoryValidSpan`（`GetNextValidSpan`/`GetPreviousValidSpan`）与 `debug/memorySearch`（只搜可读区间）。新增记录均追加在 `Protocol.cs` 末尾，e2e 钉死的 `RpcException @0200008D`、`get_Code @06000ADA` 未动（06000ADA 是 2026-10-25 调试器给 `DebugLaunchRequest` 加 `ConnectionTimeout` 后的行号）；新增颜色为 `TextColors.HexTableName`。`hex/resolveTarget` 也回答资源元素；`tree/getNodePath` 为 PE 结构节点返回到 PE 节点的路径，F12 打开 PE 树节点要用它。前端的状态栏（WPF 没有）已去掉，测试改读视图根上的 `data-caret`、`data-selection-*` 与单元格的 `data-selected`。
+实现要点：文件结构 RPC 为 `hex/getToolTipInfo`、`hex/getPositionInfo`、`hex/search`，Memory 对应 `debug/memoryToolTipInfo`、`debug/memoryPositionInfo`、`debug/memoryResolvePosition`、`debug/memoryGoToMetadata`、`debug/memoryFileInfo`、`debug/memoryRefresh`、`debug/memorySpace`（地址空间上界）、`debug/memoryValidSpan`（`GetNextValidSpan`/`GetPreviousValidSpan`）与 `debug/memorySearch`（只搜可读区间）。新增记录均追加在 `Protocol.cs` 末尾，e2e 钉死的 `RpcException @0200008D`、`get_Code @06000ADC`（06000ADC 是 2026-10-25 调试器给 `DebugLaunchRequest` 加 `RawArguments` 后的行号）；新增颜色为 `TextColors.HexTableName`。`hex/resolveTarget` 也回答资源元素；`tree/getNodePath` 为 PE 结构节点返回到 PE 节点的路径，F12 打开 PE 树节点要用它。前端的状态栏（WPF 没有）已去掉，测试改读视图根上的 `data-caret`、`data-selection-*` 与单元格的 `data-selected`。
 
 Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory.cs` 与 `FE/memory-structures.ts` 复用同一个 `HexStructureModel`：按加载模块建立带文件/内存布局标签的结构文件，所有位置都是进程地址，与 WPF 的 `HexProcessSimpleBufferStream` 一样，缓冲区就是整个地址空间：`CDS/CorDebugSession.MemoryRegions.cs` 回答跨度（`GetDefaultSpan`：32 位进程 2^32，64 位 x64 2^47、ARM64 2^48）与某地址所在区间（`GetSpanInfo`：Windows 走 `VirtualQueryEx`，Linux 读 `/proc/<pid>/maps` 的读权限位，一次中断内缓存），后端 `HexBuffer` 据此移植了 `GetNextValidSpan`/`GetPreviousValidSpan`/`GetValidSpans`/`GetStartOfDataCore`，Alt+Up/Down 与增量查找的跳过、按可读区间搜索都建在它上面；不可读区间不参与搜索，跨空洞的匹配不算。结构跳转直接移动光标；模块基址非零时 Copy Absolute Offset 与 Select Current 不重复加减基址。模型随写内存、继续执行、模块列表变化、F5 与会话结束失效，迟到的异步响应不能覆盖新进程/视窗；不可读页保留 `??`，CoreCLR 对未映射地址返回的 `E_INVALIDARG` 作为不可读而非 RPC 错误处理。`HighlightActiveColumn` 与四种列线样式在 WPF 也没有界面，这里同样取默认值。
 
@@ -581,8 +581,6 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 - **PE 与元数据结构**（`BE/PeHexStructures.cs`、`BE/MetadataHexStructures.cs`、`BE/WorkspaceManager.MetadataStructures.cs`、`FE/components/HexStructureView.tsx`、`MetadataTableView.tsx`）：PE 头、节表头、Cor20、存储头/流头、表流头与元数据行按 WPF 各 `*VM.cs` 的字段与位域显示成表单，表是逐行按需读取的网格；改动都是 hex 补丁，经过撤销与保存。表的 Sort Table / Sort Selection（移植 `TableSorter`）、Go to RID、Show in Hex Editor、Copy as Text、Copy、Paste，以及 Go to MD Table Row（Ctrl+Shift+D 与按选中行标记的 Shift+Alt+R）。
 - **非 .NET 文件**：PE-only、ELF 与未知文件可以在 hex 视图里改写，hex 标签的 Save（Ctrl+S）按 hex 文档保存。
 
-2026-10-25 这一轮按 WPF 逐项补齐了会话控制与工具窗口的表面：Debug Program 页的 Timeout、Working Directory 随可执行文件、PE 可执行文件重置、环境变量编辑器与无效扩展名确认；Ctrl+F5 直接启动当前可执行文件；Restart 按 `DbgManagerImpl.Restart` 先停再按启动顺序重启每个本客户端启动的进程（附加的进程分离）；Processes/Threads/Modules/Call Stack 的搜索框与列过滤、列排序、多选、Ctrl+A/Ctrl+C/Ctrl+Insert、Ctrl+F/Ctrl+E 与工具栏；Modules 的 Show in Memory Window/Memory 1–4、Open Containing Folder、Copy Filename、Load Modules（含无文件模块）与 Ctrl/Shift+Enter 新标签；Threads 的类别名与图标、二进制 Affinity Mask、`name (id = N)` 进程列；Modules 的 N/A/`<Unknown>`/`<no address>` 与按位宽地址。断点侧，模块断点的 `Loaded` 在卸载事件上匹配、窗口补上搜索/排序/多选/编辑/XML 导入导出；过滤器改成与 WPF 相同的完整 C#（按五个值编译执行），跟踪点的 `$ADDRESS`/`$BPADDR` 用原生地址、`$CALLER*`/`$FUNCTION`/`$CALLSTACK` 用 `StackFrameFormatter` 的真实方法名、`$MID` 取托管线程 id；异常设置窗口补上列排序、Copy/Select All、Insert/Enter/Ctrl+F 与按 `n/cat/c` 的列搜索，条件对话框按 WPF 从一行 `ModuleNameNotEquals` 开始、空行在 OK 时丢弃。变量窗口补上 Save/Refresh/Show in Memory Window/Select All、多选、对象 id 的 `{ $N}`、WPF 的 Copy/Paste 行格式与 Watch 的持久化和重复表达式。求值器补上对象/集合/匿名初始化器、`with`、集合表达式、属性模式与 UTF-8 字面量；动态模块改为 `workspace/reloadModule` 的原地刷新，保留已存在节点的 id 与标签，新类型出现在已展开的命名空间下。Output 按 OutputLogger 的 DbgTextColor 着色，反汇编标签改用 Text Viewer 的选项、可用 Monaco 的 Copy/Select All/Find，并删掉正文里与方法说明重复的抬头。
-
 | 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
 |---|---|---|---|---|---|
 | Assembly | 100% | 4 | 0 | 0 | 1 |
@@ -709,7 +707,7 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 
 ### 4.13 调试器
 
-整体完成度约 99%（✅ 83 / 🟡 1 / ❌ 2 / ⛔ 5）。WPF 范围：`Extensions/dnSpy.Debugger/` 全部子项目、`dnSpy/Roslyn/Roslyn.ExpressionCompiler`。唯一的 🟡 是表达式求值还不支持 ref/out 参数、位置模式与 stackalloc（见下面的行）；动态模块在本轮改为原地刷新，已转 ✅。
+整体完成度 100%（✅ 84 / 🟡 0 / ❌ 2 / ⛔ 5）。WPF 范围：`Extensions/dnSpy.Debugger/` 全部子项目、`dnSpy/Roslyn/Roslyn.ExpressionCompiler`。剩下的两个 ❌ 都是 Mono/Unity（另一套调试引擎），⛔ 是 .NET Framework 与 Windows API 专属项；动态模块在本轮改为原地刷新，已转 ✅。
 
 2026-10-20 按 WPF 补齐后按实现与测试复核（2026-10-17 复核时约 83%：✅ 63 / 🟡 16 / ❌ 7 / ⛔ 4；更早约 47%）。跨平台版只有一个引擎：后端进程内直连 ICorDebug（`CDS/`），只支持 CoreCLR。没有 PDB 时，断点、单步落点和局部变量名都来自反编译语句到 IL 偏移的映射（`BE/StatementIlRanges.cs`）。
 
@@ -724,11 +722,13 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 - **Memory 窗口**改为 hex 编辑器本身（`HexView` 的字节源模式），**Disassembly** 改为文档标签，与 WPF 相同。
 - **动态模块**：Reflection.Emit 建的模块由运行时为调试器保存的元数据与进程内的方法体拼成 PE 映像（`CDS/CorDebugSession.DynamicModules.cs`），可以打开、反编译、下断点；从内存打开的模块有 Reload All Method Bodies，「使用内存模块」选项生效。
 
-2026-10-25 这一轮按 WPF 逐项补齐了会话控制与工具窗口的表面：Debug Program 页的 Timeout、Working Directory 随可执行文件、PE 可执行文件重置、环境变量编辑器与无效扩展名确认；Ctrl+F5 直接启动当前可执行文件；Restart 按 `DbgManagerImpl.Restart` 先停再按启动顺序重启每个本客户端启动的进程（附加的进程分离）；Processes/Threads/Modules/Call Stack 的搜索框与列过滤、列排序、多选、Ctrl+A/Ctrl+C/Ctrl+Insert、Ctrl+F/Ctrl+E 与工具栏；Modules 的 Show in Memory Window/Memory 1–4、Open Containing Folder、Copy Filename、Load Modules（含无文件模块）与 Ctrl/Shift+Enter 新标签；Threads 的类别名与图标、二进制 Affinity Mask、`name (id = N)` 进程列；Modules 的 N/A/`<Unknown>`/`<no address>` 与按位宽地址。断点侧，模块断点的 `Loaded` 在卸载事件上匹配、窗口补上搜索/排序/多选/编辑/XML 导入导出；过滤器改成与 WPF 相同的完整 C#（按五个值编译执行），跟踪点的 `$ADDRESS`/`$BPADDR` 用原生地址、`$CALLER*`/`$FUNCTION`/`$CALLSTACK` 用 `StackFrameFormatter` 的真实方法名、`$MID` 取托管线程 id；异常设置窗口补上列排序、Copy/Select All、Insert/Enter/Ctrl+F 与按 `n/cat/c` 的列搜索，条件对话框按 WPF 从一行 `ModuleNameNotEquals` 开始、空行在 OK 时丢弃。变量窗口补上 Save/Refresh/Show in Memory Window/Select All、多选、对象 id 的 `{ $N}`、WPF 的 Copy/Paste 行格式与 Watch 的持久化和重复表达式。求值器补上对象/集合/匿名初始化器、`with`、集合表达式、属性模式与 UTF-8 字面量；动态模块改为 `workspace/reloadModule` 的原地刷新，保留已存在节点的 id 与标签，新类型出现在已展开的命名空间下。Output 按 OutputLogger 的 DbgTextColor 着色，反汇编标签改用 Text Viewer 的选项、可用 Monaco 的 Copy/Select All/Find，并删掉正文里与方法说明重复的抬头。
+2026-10-25 早些时候的一轮按 WPF 逐项补齐了会话控制与工具窗口的表面：Debug Program 页的 Timeout、Working Directory 随可执行文件、PE 可执行文件重置、环境变量编辑器与无效扩展名确认；Ctrl+F5 直接启动当前可执行文件；Restart 按 `DbgManagerImpl.Restart` 先停再按启动顺序重启每个本客户端启动的进程（附加的进程分离）；Processes/Threads/Modules/Call Stack 的搜索框与列过滤、列排序、多选、Ctrl+A/Ctrl+C/Ctrl+Insert、Ctrl+F/Ctrl+E 与工具栏；Modules 的 Show in Memory Window/Memory 1–4、Open Containing Folder、Copy Filename、Load Modules（含无文件模块）与 Ctrl/Shift+Enter 新标签；Threads 的类别名与图标、二进制 Affinity Mask、`name (id = N)` 进程列；Modules 的 N/A/`<Unknown>`/`<no address>` 与按位宽地址。断点侧，模块断点的 `Loaded` 在卸载事件上匹配、窗口补上搜索/排序/多选/编辑/XML 导入导出；过滤器改成与 WPF 相同的完整 C#（按五个值编译执行），跟踪点的 `$ADDRESS`/`$BPADDR` 用原生地址、`$CALLER*`/`$FUNCTION`/`$CALLSTACK` 用 `StackFrameFormatter` 的真实方法名、`$MID` 取托管线程 id；异常设置窗口补上列排序、Copy/Select All、Insert/Enter/Ctrl+F 与按 `n/cat/c` 的列搜索，条件对话框按 WPF 从一行 `ModuleNameNotEquals` 开始、空行在 OK 时丢弃。变量窗口补上 Save/Refresh/Show in Memory Window/Select All、多选、对象 id 的 `{ $N}`、WPF 的 Copy/Paste 行格式与 Watch 的持久化和重复表达式。求值器补上对象/集合/匿名初始化器、`with`、集合表达式、属性模式与 UTF-8 字面量；动态模块改为 `workspace/reloadModule` 的原地刷新，保留已存在节点的 id 与标签，新类型出现在已展开的命名空间下。Output 按 OutputLogger 的 DbgTextColor 着色，反汇编标签改用 Text Viewer 的选项、可用 Monaco 的 Copy/Select All/Find，并删掉正文里与方法说明重复的抬头。
+
+2026-10-25 的收尾一轮把表达式求值的最后一项补齐：**ref/out 参数**不再被拒绝——ICorDebug 的 func-eval 不能传托管指针，所以带 ref/out 的调用改为在调试进程里经反射执行（`Module.ResolveMethod` 取 `MethodBase`/`ConstructorInfo`，实参放进 `object[]`，调用后把 out/ref 位置的新值读回来写回求值器的槽位；`TargetInvocationException` 拆开，按方法自己抛出的异常报告）。同一机制让**位置模式**可用（`Deconstruct` 的 out 参数；元组模式按 `ItemN` 字段；模式自己声明的变量——`is Shape s`、`is var x`、`(var a, var b)`——写进求值器的局部变量），构造泛型类型与泛型方法的 `MethodInfo` 经 `Type.GetMethod`/`GetMember`+`MakeGenericMethod` 得到，`Nullable<T>` 的写回按 `hasValue`/`value` 两个字段处理，`stackalloc` 按表达式类型创建 `T[]` 再构造 `Span<T>`/`ReadOnlySpan<T>`；枚举、Nullable 与其他结构体的数组经 `Array.CreateInstance` 创建，元素写入走 `Array.SetValue`（ICorDebug 给数组元素的结构体字段只是副本，`NewParameterizedArray` 又只接受引用类型与基元）。Debug Program 的**参数**改为把对话框里的整行交给运行时（`RawArguments` 与 `ProcessStartInfo.Arguments`，与 WPF 交给 CreateProcess 相同），主机与程序路径按 Windows 引号规则拼在前面；**目标位数**在启动前按 WPF 的 PE 规则检查（I386/Requires32Bit/AnyCPU/ILOnly 等），不匹配或无法读取时问 Yes/No。调试列表（Processes/Threads/Modules/Call Stack/Breakpoints/Exception Settings/Locals/Autos/Watch/Static Fields）的表头现在可以**拖动换位**、右缘可以**拖动改宽**，与 WPF 的 GridView 一致（WPF 也不跨会话保存列布局，本移植版同样只保留在打开的窗口里）。
 
 | 子模块 | 完成度 | ✅ | 🟡 | ❌ | ⛔ |
 |---|---|---|---|---|---|
-| 变量与表达式求值 | ~96% | 12 | 1 | 0 | 0 |
+| 变量与表达式求值 | 100% | 13 | 0 | 0 | 0 |
 | 异常设置 | 100% | 10 | 0 | 0 | 1 |
 | 调试器选项 | 100% | 9 | 0 | 0 | 1 |
 | 调试工具窗口 | 100% | 9 | 0 | 0 | 0 |
@@ -739,13 +739,13 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 
 剩下的两个 ❌ 是 Mono / Unity：那是另一套调试引擎（Mono 的软调试协议），不在 1.0 的范围内，这一轮也明确不做（2026-10-20 与需求方确认）。
 
-除上面记的 🟡 外，还有几处行为与 WPF 不同但没有单独计格：调试列表的列宽/列序不能拖动或持久化（WPF 的 ListView 可以）；动态模块重生成整份 PE 副本而不是在原 `ModuleDef` 上增量加类型，也没有 WPF 模块加载器的进度/取消对话框；Debug Program 的参数仍是前端拆成 argv，WPF 把原始命令行交给 CreateProcess；调试器进程的 64 位提示是固定的（应用只发布 64 位）；`ShowDecompilerGeneratedVariables` 没有可作用的对象（本引擎的 locals 都来自真实槽位）。
+与 WPF 的剩余差别只在动态模块的刷新方式：本移植版重新生成整份 PE 副本并把它换进原文档（节点 id 保留），WPF 在原 `ModuleDef` 上增量加类型；也没有 WPF 模块加载器的进度/取消对话框。`ShowDecompilerGeneratedVariables` 没有可作用的对象（本引擎的 locals 都来自真实槽位，名字由反编译器提供）。调试器与应用一样只发布 64 位，所以 WPF 的「32 位 dnSpy」提示不会出现，但目标程序的位数已按 WPF 检查。
 
 #### 会话控制
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
-| Debug Program 对话框（.NET 页） | `DBG/dnSpy.Debugger/Dialogs/DebugProgram/*`、`dnSpy.Debugger.DotNet.CorDebug/Dialogs/DebugProgram/DotNetStartDebuggingOptionsPage.cs` | `DebugProgramDialog.tsx`、`EnvironmentVariablesDialog.tsx`，RPC `debug/launch` | ✅ | 宿主可执行文件、Timeout（默认 5 秒，传给引擎作为 CoreCLR 启动等待）、Working Directory 随可执行文件变化、PE 可执行文件重置字段而 DLL 沿用上次选项、环境变量编辑器（Add/Add Many/Remove/Reset）、无效扩展名确认、MRU；参数仍是前端拆成 argv 后交给 `ProcessStartInfo.ArgumentList`，WPF 把整行交给 CreateProcess |
+| Debug Program 对话框（.NET 页） | `DBG/dnSpy.Debugger/Dialogs/DebugProgram/*`、`dnSpy.Debugger.DotNet.CorDebug/Dialogs/DebugProgram/DotNetStartDebuggingOptionsPage.cs` | `DebugProgramDialog.tsx`、`EnvironmentVariablesDialog.tsx`，RPC `debug/launch`、`debug/programInfo` | ✅ | 宿主可执行文件、Timeout（默认 5 秒，传给引擎作为 CoreCLR 启动等待）、Working Directory 随可执行文件变化、PE 可执行文件重置字段而 DLL 沿用上次选项、环境变量编辑器（Add/Add Many/Remove/Reset）、无效扩展名确认、MRU；参数与 WPF 一样把整行交给运行时（`ProcessStartInfo.Arguments`），启动前按 WPF 的 PE 规则检查目标位数 |
 | Break at（4 种） | `DotNetCommonStartDebuggingOptionsPage.cs` | `CDS/CorDebugSession.Entry.cs` | ✅ | `ModuleCctorOrEntryPoint` 的帧按 WPF 写成 `<Module>.<Module>()` |
 | .NET Framework 启动页 | `DotNetFrameworkStartDebuggingOptionsPage.cs` | 无 | ⛔ | Linux 上没有 .NET Framework |
 | Mono / Unity 启动与 connect | `dnSpy.Debugger.DotNet.Mono/Dialogs/DebugProgram/*` | 无 | ❌ | 另一套引擎，不在 1.0 范围，本轮明确不做 |
@@ -844,7 +844,7 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 | 十六进制显示 | 各窗口命令 | 各窗口右键的 Hexadecimal Display、Digit Separators | ✅ | 默认十六进制，与 WPF 相同 |
 | Make Object ID | `Evaluation/DbgObjectIdServiceImpl.cs` | `makeObjectId`、`deleteObjectId` | ✅ | 强句柄，`$N` 可在表达式里用 |
 | 显示返回值 | ShowReturnValues 设置 | `CDS/CorDebugSession.ReturnValues.cs` | ✅ | 单步越过的调用在 Locals 里显示「X returned」并可用 `$ReturnValue`（`GetReturnValueLiveOffset` + `GetReturnValueForILOffset`）。返回结构体的调用没有：运行时对它回 `CORDBG_E_UNSUPPORTED`，WPF 同样没有 |
-| ref/out 参数、位置模式与 stackalloc | `dnSpy.Debugger.DotNet.Interpreter` 的 IL 解释器 | `CDS/Evaluation/OperationInterpreter.cs` | 🟡 | 对象/集合/匿名初始化器、`with`、集合表达式、属性模式与 UTF-8 字面量已按 WPF 的 IL 解释器补齐；`int.TryParse(s, out var x)` 这类需要 byref 的调用仍被拒绝（ICorDebug 的 func-eval 不接受 ref/out 实参），位置模式与 `stackalloc` 也没有。WPF 的 IL 解释器直接执行编译出的 IL，所以支持它们 |
+| ref/out 参数、位置模式与 stackalloc | `dnSpy.Debugger.DotNet.Interpreter` 的 IL 解释器 | `CDS/Evaluation/OperationInterpreter.cs`、`CDS/Evaluation/EvalRuntime.cs` | ✅ | 与 WPF 一样支持：带 ref/out 的调用在调试进程里经反射执行（`Module.ResolveMethod` 取 `MethodBase`/`ConstructorInfo`，实参为 `object[]`，调用后回写 out/ref 槽位；异常拆开 `TargetInvocationException` 后按原异常报告），位置模式走 `Deconstruct` 的 out 参数（元组按 `ItemN` 字段），`stackalloc` 创建 `T[]` 后构造 `Span<T>`/`ReadOnlySpan<T>`；对象/集合/匿名初始化器、`with`、集合表达式、属性模式与 UTF-8 字面量照旧 |
 
 #### 调试器选项
 
@@ -878,7 +878,7 @@ Memory 通过 `BE/WorkspaceManager.DebugMemory.cs`、`CDS/CorDebugSession.Memory
 
 Linux 新增（不计入）：以 root 身份重启（pkexec）、随包提供 `libdbgshim.so` 并在缺失时按能力降级、按名称的函数断点。附加失败时没有 ptrace 权限诊断，只返回 HRESULT。
 
-测试：后端 `DebugEvaluationTests.cs`（求值局部变量、成员与运算符，func-eval 调属性与方法，装箱值，十六进制与格式说明符，对象展开与改值，对象/集合/匿名初始化器与 `with`，错误作为值，Locals、Autos、对象 ID、`$exception`，内存与反汇编，线程，Run to Cursor，Set Next Statement，模块断点，返回值）、`DebugSessionManagerTests.cs`（ConnectionTimeout 的默认值与钳制、启动、Break kind、附加与分离、进程列表的各列、单步、Step Out 回到调用语句、跨 await 单步与回到等待者、异常中断、多进程时中断其余进程、动态模块保存为可读的 PE 并对应到工作区副本、`classLoaded`、原地刷新保留节点 id 并加入 `Dynamic.Late`）、`FilterExpressionTests.cs`（完整 C# 过滤器、非 bool/抛出的错误、设置对话框校验）、`BreakpointCommandsTests.cs`（方法/类断点目标、Break When Thrown、XML 断点文件往返）、`WorkspaceManagerTests.cs`（VB 文档的语句表）、`BreakpointExpressionTests.cs`、`BreakpointBreakDecisionTests.cs`、`TracepointMessageTests.cs`、`ExceptionSettingsTests.cs`；前端 `DebugVariablesWindows.test.tsx`（对象 id、多选复制）、`app-store.test.ts`（debugger commands、断点种类与切换、方法/类断点、多进程的事件路由与 Continue/Stop、内存模块与原地 Reload All Method Bodies）、`BreakpointsPane.test.tsx`、`AttachDialog.test.tsx`、`MemoryPane.test.tsx`、`DebugToolWindows.test.tsx`（多进程的 Processes、Threads、Modules、搜索/排序/多选/工具栏）、`EnvironmentVariablesDialog.test.tsx`、`module-breakpoints-io.test.ts`（XML 往返）、`ToolWindows.test.tsx`（Output 的过滤开关与着色）、`DebugProgramDialog.test.tsx`（Timeout、工作目录、无效扩展名、MRU）、`ExceptionSettingsPane.test.tsx`、`CodeEditorContextMenu.test.tsx`、`MenuBar.test.tsx`、`MAIN/focus-process.test.ts`；e2e 覆盖断点（边距、Debug 菜单、方法/类断点与跟踪点、字形菜单、持久化）、单步、Pause（Break All）、帧切换与调用返回标记、Locals、异常中断，以及 `--evaluate` 夹具上的 DebuggerDisplay、展开、改值、Watch 调用属性、Autos、Disassembly 标签、Threads，以及真实 CoreCLR Memory 的结构 Quick Info、字段跟随、刷新与 F12（见 4.7）。多进程的界面、Attach 对话框、Output 的过滤开关、变量窗口的 Save/Show in Memory、模块断点的导入导出仍只有单测，没有 e2e；ref/out 参数与位置模式没有测试，因为引擎不支持。
+测试：后端 `DebugEvaluationTests.cs`（求值局部变量、成员与运算符，func-eval 调属性与方法，装箱值，十六进制与格式说明符，对象展开与改值，对象/集合/匿名初始化器与 `with`，错误作为值，Locals、Autos、对象 ID、`$exception`，内存与反汇编，线程，Run to Cursor，Set Next Statement，模块断点，返回值；`EvaluatesRefAndOutArguments` 覆盖 BCL 的 `int.TryParse`、夹具的 ref/out 方法、帧变量回写、构造泛型与泛型方法、Nullable 的读写与异常解包，`EvaluatesPositionalPatterns` 覆盖元组、record/结构体的 `Deconstruct` 与模式声明变量，`EvaluatesStackAllocations` 覆盖 Span 实参与 `Length`、结构体/Nullable 数组）、`DebugSessionManagerTests.cs`（ConnectionTimeout 的默认值与钳制、原始命令行的引号拼接与调试进程实际收到的 argv、目标位数检查、启动、Break kind、附加与分离、进程列表的各列、单步、Step Out 回到调用语句、跨 await 单步与回到等待者、异常中断、多进程时中断其余进程、动态模块保存为可读的 PE 并对应到工作区副本、`classLoaded`、原地刷新保留节点 id 并加入 `Dynamic.Late`）、`FilterExpressionTests.cs`（完整 C# 过滤器、非 bool/抛出的错误、设置对话框校验）、`BreakpointCommandsTests.cs`（方法/类断点目标、Break When Thrown、XML 断点文件往返）、`WorkspaceManagerTests.cs`（VB 文档的语句表）、`BreakpointExpressionTests.cs`、`BreakpointBreakDecisionTests.cs`、`TracepointMessageTests.cs`、`ExceptionSettingsTests.cs`；前端 `DebugVariablesWindows.test.tsx`（对象 id、多选复制）、`app-store.test.ts`（debugger commands、断点种类与切换、方法/类断点、多进程的事件路由与 Continue/Stop、内存模块与原地 Reload All Method Bodies）、`BreakpointsPane.test.tsx`、`AttachDialog.test.tsx`、`MemoryPane.test.tsx`、`DebugToolWindows.test.tsx`（多进程的 Processes、Threads、Modules、搜索/排序/多选/工具栏）、`EnvironmentVariablesDialog.test.tsx`、`module-breakpoints-io.test.ts`（XML 往返）、`ToolWindows.test.tsx`（Output 的过滤开关与着色）、`DebugProgramDialog.test.tsx`（Timeout、工作目录、无效扩展名、位数警告、MRU 与原始命令行）、`use-column-layout.test.tsx`（列宽拖动与列序拖动，jsdom 里按给定矩形模拟）、`ExceptionSettingsPane.test.tsx`、`CodeEditorContextMenu.test.tsx`、`MenuBar.test.tsx`、`MAIN/focus-process.test.ts`；e2e 覆盖断点（边距、Debug 菜单、方法/类断点与跟踪点、字形菜单、持久化）、单步、Pause（Break All）、帧切换与调用返回标记、Locals、异常中断，以及 `--evaluate` 夹具上的 DebuggerDisplay、展开、改值、Watch 调用属性与 ref/out、位置模式、stackalloc、Autos、Disassembly 标签、Threads，以及真实 CoreCLR Memory 的结构 Quick Info、字段跟随、刷新与 F12（见 4.7）。多进程的界面、Attach 对话框、Output 的过滤开关、变量窗口的 Save/Show in Memory、模块断点的导入导出仍只有单测，没有 e2e；调试列表的列宽/列序拖动同样只有单测（jsdom 不排版，只能模拟矩形），没有 e2e。
 
 ### 4.14 C# 交互窗口（Scripting）
 
@@ -1060,17 +1060,17 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-调试器 4.13 收尾后的最新完整验证（2026-10-25）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
+调试器 4.13 收尾后的最新完整验证（2026-10-25，ref/out、原始命令行、位数检查与列拖动这一轮）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
 
 | 套件 | 本轮结果 |
 |---|---|
 | 后端 `dotnet build` | 0 警告、0 错误 |
-| 后端 `dotnet test` | 675 通过、0 跳过、0 失败 |
+| 后端 `dotnet test` | 681 通过、0 跳过、0 失败 |
 | 前端 `pnpm build`（包含两个 tsconfig 的 typecheck） | 通过，TypeScript 0 错误 |
-| 前端 vitest | 138 个测试文件、1576 项全部通过 |
-| 完整 e2e（Playwright Electron） | 116 通过、3 跳过、0 失败（重跑后；调试器新增 1 条 Pause 场景，断点/反编译用例的标记随 `get_Code @06000ADA` 更新；Hex 的增量搜索改为找 PE 头，Memory 的刷新改为读光标偏移，避免 Fit to Width 的行长把 4 字节拆到两行） |
+| 前端 vitest | 139 个测试文件、1581 项全部通过 |
+| 完整 e2e（Playwright Electron） | 116 通过、3 跳过、0 失败（首轮 8 项因 `get_Code` 标记随 `Protocol.cs` 迁移而失败，改标后重跑这 8 项全过，随后完整重跑一遍仍为 116/3/0；`--evaluate` 的 Watch 新增 ref/out、位置模式与 stackalloc 三条断言） |
 
-3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。C# 交互窗口的新增回归见 4.14。调试器这一轮改了 `Protocol.cs`（`DebugLaunchRequest` 加 `ConnectionTimeout`，并在末尾追加 `ReloadModuleRequest/Response`），e2e 钉死的 `get_Code` 从 `@06000AD8` 变为 `@06000ADA`（Go to Token 的 `0x06000ADA` 同改），`RpcException @0200008D` 未动。
+3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。C# 交互窗口的新增回归见 4.14。调试器这一轮改了 `Protocol.cs`（`DebugLaunchRequest` 加 `RawArguments`，并追加 `DebugProgramInfoRequest/Response` 与 `debug/programInfo`），e2e 钉死的 `get_Code` 从 `@06000ADA` 变为 `@06000ADC`（Go to Token 的 `0x06000ADC` 同改），`RpcException @0200008D` 未动。
 
 以下保留此前各轮验证记录：
 

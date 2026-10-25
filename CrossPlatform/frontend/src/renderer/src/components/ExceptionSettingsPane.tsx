@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { DebugExceptionCategory, DebugExceptionCondition, DebugExceptionSettings } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { SearchMatcher } from '../tool-window-search'
 import { showPopupMenu } from 'flexlayout-react'
 import { useLanguage } from '../localization'
+import { useColumnLayout } from '../use-column-layout'
 import { trapTabKey, useModalLayer } from './modal-stack'
 import { DsIcon } from './DsIcon'
 import { CloseGlyph } from './DsGlyphs'
@@ -57,6 +58,13 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
   const [sort, setSort] = useState<{ column: 'name' | 'category' | 'conditions'; descending: boolean }>()
   const searchRef = useRef<HTMLInputElement>(null)
   const { t } = useLanguage()
+  // The three GridView columns, reorderable and resizable like WPF's.
+  const layout = useColumnLayout([
+    { key: 'name', width: 'minmax(190px, 40%)' },
+    { key: 'category', width: 'minmax(120px, 20%)' },
+    { key: 'conditions', width: 'minmax(150px, 1fr)' },
+  ], t('Resize column'))
+  const orderOf = (column: 'name' | 'category' | 'conditions'): number => layout.columns.findIndex((candidate) => candidate.key === column)
 
   // The engine is only asked when the window is opened, and it answers with the stored diff already
   // applied, so a list the user changed in an earlier run comes back the way they left it.
@@ -276,17 +284,26 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
           <span>{loaded ? t('No exception types match your search filter.') : t('Loading')}</span>
         </div>
       ) : (
-        <div className="exception-table" role="table" aria-label={t('Exception Settings')} onContextMenu={(event) => { event.preventDefault(); openContextMenu({ x: event.clientX, y: event.clientY }) }}>
+        <div
+          className="exception-table"
+          role="table"
+          aria-label={t('Exception Settings')}
+          style={{ '--exception-columns': layout.template } as CSSProperties}
+          onContextMenu={(event) => { event.preventDefault(); openContextMenu({ x: event.clientX, y: event.clientY }) }}
+        >
           <div className="exception-header" role="row">
             {(['name', 'category', 'conditions'] as const).map((column) => (
               <span
                 role="columnheader"
                 key={column}
                 aria-sort={sort?.column === column ? (sort.descending ? 'descending' : 'ascending') : 'none'}
+                style={{ order: orderOf(column) }}
+                {...layout.headerProps(column)}
                 onClick={() => setSort((current) => current?.column !== column ? { column, descending: false } : current.descending ? undefined : { column, descending: true })}
               >
                 {t(column === 'name' ? 'Break When Thrown' : column === 'category' ? 'Category' : 'Conditions')}
                 {sort?.column === column && <span className="bookmarks-sort-arrow" aria-hidden>{sort.descending ? '▼' : '▲'}</span>}
+                <span className="debug-column-resizer" role="separator" aria-orientation="vertical" {...layout.resizeHandleProps(column)} />
               </span>
             ))}
           </div>
@@ -302,7 +319,7 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
                   key={row.key}
                   onMouseDown={(event) => selectRow(row.key, event)}
                 >
-                  <span className="exception-name-cell">
+                  <span className="exception-name-cell" style={{ order: orderOf('name') }}>
                     <input
                       type="checkbox"
                       checked={row.stopFirstChance}
@@ -311,8 +328,8 @@ export const ExceptionSettingsPane = (): React.JSX.Element => {
                     />
                     <span title={label}>{label}</span>
                   </span>
-                  <span title={category?.displayName ?? row.category}>{category?.displayName ?? row.category}</span>
-                  <span title={conditions}>{conditions}</span>
+                  <span title={category?.displayName ?? row.category} style={{ order: orderOf('category') }}>{category?.displayName ?? row.category}</span>
+                  <span title={conditions} style={{ order: orderOf('conditions') }}>{conditions}</span>
                 </div>
               )
             })}

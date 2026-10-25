@@ -18,7 +18,30 @@ internal sealed class OperationInterpreter {
 	readonly EvalContextShape shape;
 	readonly bool isVisualBasic;
 	readonly Stack<EvalValue> conditionalAccess = new();
+	/// <summary>Locals the expression declared itself, <c>out var x</c> being the only way to make one.</summary>
+	readonly Dictionary<ILocalSymbol, EvalSlot> expressionLocals = new(SymbolEqualityComparer.Default);
 	EvalValue? cachedFrameThis;
+
+	/// <summary>An argument or member the evaluator can write to after a call with ref/out parameters.</summary>
+	sealed class EvalSlot(ITypeSymbol type, Func<Task<EvalValue>> read, Func<EvalValue, Task> write) {
+		public ITypeSymbol Type { get; } = type;
+
+		public Task<EvalValue> ReadAsync() => read();
+
+		public Task WriteAsync(EvalValue value) => write(value);
+
+		public static EvalSlot Discard(ITypeSymbol type) => new(type, () => throw new EvaluationException("The discard has no value."), _ => Task.CompletedTask);
+	}
+
+	/// <summary>A local the expression declared; its value exists only in the evaluator.</summary>
+	sealed class LocalHolder(ITypeSymbol type) {
+		public EvalValue? Value;
+
+		public EvalValue Read() => Value ?? throw new EvaluationException($"The name of the {type.ToDisplayString()} local has no value.");
+	}
+
+	/// <summary>An argument as it is passed: its value, the parameter's kind, and where a ref/out result goes.</summary>
+	sealed record CallArgument(EvalValue Value, EvalSlot? Slot, RefKind RefKind, ITypeSymbol Type);
 
 	public OperationInterpreter(EvalRuntime runtime, CompiledExpression compiled, EvalContextShape shape, EvalLanguage language) {
 		this.runtime = runtime;
@@ -39,6 +62,9 @@ internal sealed class OperationInterpreter {
 		// that boxes or changes type, which is handled by the conversion itself.
 		if (operation.ConstantValue.HasValue && operation is not IConversionOperation && operation.Type is not null)
 			return Scalar(operation.Type, EvalRuntime.ConvertConstant(operation.ConstantValue.Value, operation.Type));
+		// An untyped `null` has no type of its own; what it is written into decides how it is stored.
+		if (operation.ConstantValue is { HasValue: true, Value: null } && operation.Type is null)
+			return Scalar(runtime.Object, null);
 		switch (operation) {
 			case IConversionOperation conversion when conversion.ConstantValue.HasValue && conversion.Type is not null:
 				return Scalar(conversion.Type, EvalRuntime.ConvertConstant(conversion.ConstantValue.Value, conversion.Type));
@@ -46,6 +72,12 @@ internal sealed class OperationInterpreter {
 				return await EvalAsync(parenthesized.Operand).ConfigureAwait(false);
 			case IParameterReferenceOperation parameter:
 				return await ReadParameterAsync(parameter.Parameter).ConfigureAwait(false);
+			case ILocalReferenceOperation local:
+				return await ReadExpressionLocalAsync(local.Local).ConfigureAwait(false);
+			case IDeclarationExpressionOperation declaration:
+				return await EvalAsync(declaration.Expression).ConfigureAwait(false);
+			case IDiscardOperation:
+				return Scalar(operation.Type ?? runtime.Object, null);
 			case IInstanceReferenceOperation:
 				return await ReadThisAsync().ConfigureAwait(false);
 			case IFieldReferenceOperation field:
@@ -192,6 +224,8 @@ internal sealed class OperationInterpreter {
 				return await EvalAsync(argument.Value).ConfigureAwait(false);
 			case IObjectOrCollectionInitializerOperation:
 				throw new EvaluationException("An initializer is only valid as part of an object creation.");
+			case var _ when operation.Kind == OperationKind.None && operation.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.StackAllocArrayCreationExpressionSyntax:
+				return await CreateStackAllocAsync(operation).ConfigureAwait(false);
 			default:
 				throw new EvaluationException($"The expression contains a construct the debugger cannot evaluate ({operation.Kind}).");
 		}
@@ -232,10 +266,10 @@ internal sealed class OperationInterpreter {
 					throw new EvaluationException($"The name '{parameter.Parameter.Name}' does not exist in the current context.");
 				switch (variable.Source) {
 					case VariableSource.Local local:
-						await runtime.WriteLocalAsync(local.Index, value).ConfigureAwait(false);
+						await runtime.WriteLocalAsync(local.Index, value, variable.Type).ConfigureAwait(false);
 						return;
 					case VariableSource.Argument argument:
-						await runtime.WriteArgumentAsync(argument.Index, value).ConfigureAwait(false);
+						await runtime.WriteArgumentAsync(argument.Index, value, variable.Type).ConfigureAwait(false);
 						return;
 					case VariableSource.HoistedField hoisted:
 						await runtime.WriteFieldAsync(await FrameThisAsync().ConfigureAwait(false), hoisted.Field, value).ConfigureAwait(false);
@@ -304,30 +338,144 @@ internal sealed class OperationInterpreter {
 	async Task<EvalValue> InvokeAsync(IInvocationOperation invocation) {
 		var method = invocation.TargetMethod;
 		var instance = invocation.Instance is null ? null : await EvalAsync(invocation.Instance).ConfigureAwait(false);
-		var arguments = await ArgumentsAsync(invocation.Arguments).ConfigureAwait(false);
+		var callArguments = await CallArgumentsAsync(invocation.Arguments).ConfigureAwait(false);
 		// String.Concat and friends on values the evaluator already holds need no func-eval.
-		if (method.ContainingType.SpecialType == SpecialType.System_String && method.IsStatic && method.Name == "Concat" && arguments.All(argument => argument is ScalarValue)) {
+		if (method.ContainingType.SpecialType == SpecialType.System_String && method.IsStatic && method.Name == "Concat"
+			&& callArguments.All(argument => argument is { RefKind: RefKind.None, Value: ScalarValue })) {
 			var parts = new List<string>();
-			foreach (var argument in arguments)
-				parts.Add(await ToStringAsync(argument).ConfigureAwait(false));
+			foreach (var argument in callArguments)
+				parts.Add(await ToStringAsync(argument.Value).ConfigureAwait(false));
 			return Scalar(runtime.String, string.Concat(parts));
 		}
+		if (callArguments.Any(argument => argument.RefKind is RefKind.Ref or RefKind.Out)) {
+			var values = callArguments.Select(argument => argument.Value).ToList();
+			var refKinds = callArguments.Select(argument => argument.RefKind).ToList();
+			var (result, updated) = await runtime.CallByRefAsync(method, instance, values, refKinds, method.Name).ConfigureAwait(false);
+			for (var index = 0; index < callArguments.Count; index++) {
+				if (callArguments[index].Slot is { } slot && updated[index] is { } written)
+					await slot.WriteAsync(written).ConfigureAwait(false);
+			}
+			return result;
+		}
 		if (instance is not null && method.IsExtensionMethod && method.ReducedFrom is not null)
-			return await runtime.CallAsync(method, instance, arguments, method.Name).ConfigureAwait(false);
-		return await runtime.CallAsync(method, instance, arguments, method.Name).ConfigureAwait(false);
+			return await runtime.CallAsync(method, instance, callArguments.Select(argument => argument.Value).ToList(), method.Name).ConfigureAwait(false);
+		return await runtime.CallAsync(method, instance, callArguments.Select(argument => argument.Value).ToList(), method.Name).ConfigureAwait(false);
 	}
 
-	async Task<List<EvalValue>> ArgumentsAsync(IEnumerable<IArgumentOperation> arguments) {
-		var values = new List<EvalValue>();
+	async Task<List<CallArgument>> CallArgumentsAsync(IEnumerable<IArgumentOperation> arguments) {
+		var values = new List<CallArgument>();
 		// The bound arguments are in parameter order once named arguments are put in place.
 		foreach (var argument in arguments.OrderBy(argument => argument.Parameter?.Ordinal ?? 0)) {
 			if (argument.ArgumentKind == ArgumentKind.DefaultValue && argument.Value.ConstantValue.HasValue && argument.Value.Type is not null) {
-				values.Add(Scalar(argument.Value.Type, EvalRuntime.ConvertConstant(argument.Value.ConstantValue.Value, argument.Value.Type)));
+				values.Add(new CallArgument(
+					Scalar(argument.Value.Type, EvalRuntime.ConvertConstant(argument.Value.ConstantValue.Value, argument.Value.Type)),
+					null,
+					RefKind.None,
+					argument.Value.Type));
 				continue;
 			}
-			values.Add(await EvalAsync(argument.Value).ConfigureAwait(false));
+			var refKind = argument.Parameter?.RefKind ?? RefKind.None;
+			var type = argument.Parameter?.Type ?? argument.Value.Type ?? runtime.Object;
+			if (refKind == RefKind.Out) {
+				// An out argument is overwritten by the call; its value only has to exist in the call.
+				var slot = await CreateSlotAsync(argument.Value, type).ConfigureAwait(false);
+				values.Add(new CallArgument(new ScalarValue(type, null), slot, refKind, type));
+				continue;
+			}
+			var value = await EvalAsync(argument.Value).ConfigureAwait(false);
+			var refSlot = refKind == RefKind.Ref ? await CreateSlotAsync(argument.Value, type).ConfigureAwait(false) : null;
+			values.Add(new CallArgument(value, refSlot, refKind, type));
 		}
 		return values;
+	}
+
+	async Task<List<EvalValue>> ArgumentsAsync(IEnumerable<IArgumentOperation> arguments) =>
+		(await CallArgumentsAsync(arguments).ConfigureAwait(false)).Select(argument => argument.Value).ToList();
+
+	/// <summary>Where a ref/out argument lives, so the call's result can be written back to it.</summary>
+	async Task<EvalSlot> CreateSlotAsync(IOperation operation, ITypeSymbol type) {
+		switch (operation) {
+			case IConversionOperation conversion:
+				return await CreateSlotAsync(conversion.Operand, type).ConfigureAwait(false);
+			case IDeclarationExpressionOperation declaration:
+				return ExpressionLocalSlot(DeclaredLocal(declaration), type);
+			case ILocalReferenceOperation local:
+				return ExpressionLocalSlot(local.Local, type);
+			case IParameterReferenceOperation parameter:
+				return await FrameVariableSlotAsync(parameter.Parameter, type).ConfigureAwait(false);
+			case IFieldReferenceOperation field: {
+				var instance = field.Instance is null ? null : await EvalAsync(field.Instance).ConfigureAwait(false);
+				return new EvalSlot(
+					type,
+					() => runtime.ReadFieldAsync(instance, field.Field),
+					value => runtime.WriteFieldAsync(instance, field.Field, value));
+			}
+			case IArrayElementReferenceOperation element: {
+				var array = await EvalAsync(element.ArrayReference).ConfigureAwait(false);
+				var indices = await IndicesAsync(element.Indices).ConfigureAwait(false);
+				return new EvalSlot(
+					type,
+					() => runtime.ReadElementAsync(array, indices),
+					value => runtime.WriteElementAsync(array, indices, value));
+			}
+			case IDiscardOperation:
+				return EvalSlot.Discard(type);
+			default:
+				throw new EvaluationException("The argument cannot be passed by reference.");
+		}
+		static ILocalSymbol DeclaredLocal(IDeclarationExpressionOperation declaration) => declaration.Expression switch {
+			ILocalReferenceOperation local => local.Local,
+			_ => throw new EvaluationException("The declaration does not name a local variable."),
+		};
+	}
+
+	async Task<EvalValue> ReadExpressionLocalAsync(ILocalSymbol local) {
+		if (!expressionLocals.TryGetValue(local, out var slot))
+			throw new EvaluationException($"The name '{local.Name}' does not exist in the current context.");
+		return await slot.ReadAsync().ConfigureAwait(false);
+	}
+
+	EvalSlot ExpressionLocalSlot(ILocalSymbol local, ITypeSymbol type) {
+		if (!expressionLocals.TryGetValue(local, out var slot)) {
+			var holder = new LocalHolder(type);
+			slot = new EvalSlot(
+				type,
+				() => Task.FromResult(holder.Read()),
+				value => {
+					holder.Value = value;
+					return Task.CompletedTask;
+				});
+			expressionLocals[local] = slot;
+		}
+		return slot;
+	}
+
+	async Task<EvalSlot> FrameVariableSlotAsync(IParameterSymbol parameter, ITypeSymbol type) {
+		if (SymbolEqualityComparer.Default.Equals(parameter, compiled.ThisParameter))
+			throw new EvaluationException("Cannot pass 'this' by reference.");
+		if (!compiled.Parameters.TryGetValue(parameter, out var variable))
+			throw new EvaluationException($"The name '{parameter.Name}' does not exist in the current context.");
+		switch (variable.Source) {
+			case VariableSource.Local local:
+				return new EvalSlot(
+					type,
+					() => runtime.ReadLocalAsync(local.Index, type),
+					value => runtime.WriteLocalAsync(local.Index, value, type));
+			case VariableSource.Argument argument:
+				return new EvalSlot(
+					type,
+					() => runtime.ReadArgumentAsync(argument.Index, type),
+					value => runtime.WriteArgumentAsync(argument.Index, value, type));
+			case VariableSource.HoistedField hoisted: {
+				var frameThis = await FrameThisAsync().ConfigureAwait(false);
+				return new EvalSlot(
+					type,
+					() => runtime.ReadFieldAsync(frameThis, hoisted.Field),
+					value => runtime.WriteFieldAsync(frameThis, hoisted.Field, value));
+			}
+			default:
+				throw new EvaluationException($"'{variable.Name}' cannot be passed by reference.");
+		}
 	}
 
 	async Task<EvalValue> CreateObjectAsync(IObjectCreationOperation creation) {
@@ -336,8 +484,23 @@ internal sealed class OperationInterpreter {
 		if (creation.Constructor is null || (type.IsValueType && creation.Constructor.Parameters.Length == 0 && creation.Constructor.IsImplicitlyDeclared))
 			value = await runtime.DefaultValueAsync(type).ConfigureAwait(false);
 		else {
-			var arguments = await ArgumentsAsync(creation.Arguments).ConfigureAwait(false);
-			value = await runtime.NewObjectAsync(creation.Constructor, arguments).ConfigureAwait(false);
+			var callArguments = await CallArgumentsAsync(creation.Arguments).ConfigureAwait(false);
+			if (callArguments.Any(argument => argument.RefKind is RefKind.Ref or RefKind.Out)) {
+				var (created, updated) = await runtime.CallByRefAsync(
+					creation.Constructor,
+					null,
+					callArguments.Select(argument => argument.Value).ToList(),
+					callArguments.Select(argument => argument.RefKind).ToList(),
+					type.Name,
+					isConstructor: true).ConfigureAwait(false);
+				for (var index = 0; index < callArguments.Count; index++) {
+					if (callArguments[index].Slot is { } slot && updated[index] is { } written)
+						await slot.WriteAsync(written).ConfigureAwait(false);
+				}
+				value = created;
+			}
+			else
+				value = await runtime.NewObjectAsync(creation.Constructor, callArguments.Select(argument => argument.Value).ToList()).ConfigureAwait(false);
 		}
 		// new Foo { X = 1 }, new List<int> { 1, 2 }: the constructor first, then the setters and Add calls.
 		if (creation.Initializer is { Initializers.Length: > 0 } initializer)
@@ -485,7 +648,37 @@ internal sealed class OperationInterpreter {
 		return array;
 	}
 
+	/// <summary>
+	/// <c>stackalloc int[] { 1, 2, 3 }</c>. Roslyn hands the bound expression over as a Span (or
+	/// ReadOnlySpan) whose children are the length and then the initializer's elements, so the evaluator
+	/// creates a real array in the debuggee and wraps it in the span the expression has.
+	/// </summary>
+	async Task<EvalValue> CreateStackAllocAsync(IOperation operation) {
+		var spanType = operation.Type as INamedTypeSymbol ?? throw new EvaluationException("The stack allocation's type is unknown.");
+		if (spanType.OriginalDefinition.Name is not ("Span" or "ReadOnlySpan") || spanType.TypeArguments.Length != 1)
+			throw new EvaluationException("A stack allocation used as a pointer is not supported by the evaluator.");
+		var elementType = spanType.TypeArguments[0];
+		var children = operation.ChildOperations.ToArray();
+		var length = 0;
+		var firstElement = 0;
+		if (children.Length > 0) {
+			// stackalloc T[n] and stackalloc T[] { ... } both put the element count first.
+			var size = await EvalAsync(children[0]).ConfigureAwait(false);
+			length = (int)Arithmetic.Convert(((ScalarValue)size).Value ?? 0, SpecialType.System_Int32, true);
+			firstElement = 1;
+		}
+		var array = await runtime.NewArrayAsync(elementType, [length]).ConfigureAwait(false);
+		for (var index = firstElement; index < children.Length; index++)
+			await runtime.WriteElementAsync(array, [index - firstElement], await EvalAsync(children[index]).ConfigureAwait(false)).ConfigureAwait(false);
+		var constructor = spanType.InstanceConstructors.FirstOrDefault(candidate =>
+			candidate.Parameters.Length == 1 && candidate.Parameters[0].Type is IArrayTypeSymbol);
+		if (constructor is null)
+			throw new EvaluationException($"A value of type '{spanType.ToDisplayString()}' cannot be created from an array.");
+		return await runtime.NewObjectAsync(constructor, [array]).ConfigureAwait(false);
+	}
+
 	async Task FillArrayAsync(EvalValue array, IArrayInitializerOperation initializer, List<long> prefix) {
+
 		for (var index = 0; index < initializer.ElementValues.Length; index++) {
 			var indices = new List<long>(prefix) { index };
 			if (initializer.ElementValues[index] is IArrayInitializerOperation nested)
@@ -873,6 +1066,27 @@ internal sealed class OperationInterpreter {
 
 	// ---------------------------------------------------------------- patterns
 
+	/// <summary>The ItemN fields a tuple pattern's positions read, following the Rest field past seven.</summary>
+	static IReadOnlyList<IFieldSymbol> TupleItemFields(INamedTypeSymbol? tupleType, int count) {
+		if (tupleType?.IsTupleType != true)
+			throw new EvaluationException("The positional pattern has no Deconstruct method.");
+		var fields = new List<IFieldSymbol>(count);
+		for (var current = tupleType.TupleUnderlyingType ?? tupleType; current is not null && fields.Count < count;) {
+			for (var index = 1; index <= 7 && fields.Count < count; index++) {
+				var field = current.GetMembers("Item" + index).OfType<IFieldSymbol>().FirstOrDefault();
+				if (field is null)
+					break;
+				fields.Add(field);
+			}
+			if (fields.Count >= count)
+				break;
+			current = current.GetMembers("Rest").OfType<IFieldSymbol>().FirstOrDefault()?.Type as INamedTypeSymbol;
+		}
+		if (fields.Count != count)
+			throw new EvaluationException("The positional pattern does not match the tuple type.");
+		return fields;
+	}
+
 	async Task<bool> MatchAsync(EvalValue value, IPatternOperation pattern) {
 		switch (pattern) {
 			case IConstantPatternOperation constant: {
@@ -891,15 +1105,42 @@ internal sealed class OperationInterpreter {
 			}
 			case ITypePatternOperation typePattern:
 				return !IsNullValue(value) && IsInstanceOf(value, typePattern.MatchedType);
-			case IDeclarationPatternOperation declaration:
-				// A declaration in an expression scopes its name to that expression; matching the type is
-				// all an evaluated expression can observe.
-				return !IsNullValue(value) && (declaration.MatchedType is null || IsInstanceOf(value, declaration.MatchedType));
+			case IDeclarationPatternOperation declaration: {
+				var matches = (declaration.MatchesNull || !IsNullValue(value))
+					&& (declaration.MatchedType is null || IsInstanceOf(value, declaration.MatchedType));
+				if (matches && declaration.DeclaredSymbol is ILocalSymbol declared)
+					await ExpressionLocalSlot(declared, declaration.MatchedType ?? value.Type).WriteAsync(value).ConfigureAwait(false);
+				return matches;
+			}
 			case IRecursivePatternOperation recursive: {
 				if (recursive.MatchedType is { } matchedType && (IsNullValue(value) || !IsInstanceOf(value, matchedType)))
 					return false;
-				if (recursive.DeconstructionSubpatterns.Length > 0)
-					throw new EvaluationException("A positional pattern is not supported by the evaluator.");
+				if (recursive.DeconstructionSubpatterns.Length > 0) {
+					// A positional pattern is a call to the type's Deconstruct method with one out argument
+					// per position; the evaluator runs that call like any other ref/out call. A tuple has no
+					// Deconstruct method in Roslyn's bound tree: its positions are the ItemN fields.
+					if (recursive.DeconstructSymbol is IMethodSymbol deconstruct) {
+						var parameters = deconstruct.Parameters;
+						if (parameters.Length != recursive.DeconstructionSubpatterns.Length)
+							throw new EvaluationException("The positional pattern does not match the Deconstruct method.");
+						var arguments = parameters.Select(parameter => (EvalValue)new ScalarValue(parameter.Type, null)).ToList();
+						var refKinds = parameters.Select(_ => RefKind.Out).ToList();
+						var (_, updated) = await runtime.CallByRefAsync(deconstruct, value, arguments, refKinds, "Deconstruct").ConfigureAwait(false);
+						for (var index = 0; index < recursive.DeconstructionSubpatterns.Length; index++) {
+							var element = updated[index] ?? throw new EvaluationException("The Deconstruct method returned no value.");
+							if (!await MatchAsync(element, recursive.DeconstructionSubpatterns[index]).ConfigureAwait(false))
+								return false;
+						}
+					}
+					else {
+						var fields = TupleItemFields(recursive.MatchedType as INamedTypeSymbol, recursive.DeconstructionSubpatterns.Length);
+						for (var index = 0; index < recursive.DeconstructionSubpatterns.Length; index++) {
+							var element = await runtime.ReadFieldAsync(value, fields[index]).ConfigureAwait(false);
+							if (!await MatchAsync(element, recursive.DeconstructionSubpatterns[index]).ConfigureAwait(false))
+								return false;
+						}
+					}
+				}
 				foreach (var subpattern in recursive.PropertySubpatterns) {
 					var member = subpattern.Member switch {
 						IPropertyReferenceOperation property => await ReadPropertyAsync(property, property.Instance is null ? value : null).ConfigureAwait(false),
@@ -909,6 +1150,9 @@ internal sealed class OperationInterpreter {
 					if (!await MatchAsync(member, subpattern.Pattern).ConfigureAwait(false))
 						return false;
 				}
+				// `is Shape s` and `is { } x` bind the value itself once every subpattern matched.
+				if (recursive.DeclaredSymbol is ILocalSymbol declared)
+					await ExpressionLocalSlot(declared, recursive.MatchedType ?? value.Type).WriteAsync(value).ConfigureAwait(false);
 				return true;
 			}
 			case INegatedPatternOperation negated:

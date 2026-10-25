@@ -412,6 +412,8 @@ internal sealed class JsonRpcServer {
 				return await workspaces.ImportBookmarksAsync(DeserializeParams<ImportBookmarksRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugVerifyFilter:
 				return new { error = CorDebugSessionManager.VerifyFilterExpression(ReadParamsElement(request).TryGetProperty("filter", out var filter) && filter.ValueKind == JsonValueKind.String ? filter.GetString() ?? string.Empty : string.Empty) };
+			case RpcMethods.DebugProgramInfo:
+				return CorDebugSessionManager.GetProgramInfo(DeserializeParams<DebugProgramInfoRequest>(request));
 			case RpcMethods.DebugCodeTargets:
 				return await workspaces.GetDebugCodeTargetsAsync(DeserializeParams<DebugCodeTargetsRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.BreakpointsExport:

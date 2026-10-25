@@ -114,6 +114,88 @@ public sealed class CorDebugSessionManager : IAsyncDisposable, IDebugMemoryProvi
 	public static string? VerifyFilterExpression(string filter) => FilterExpression.Validate(filter);
 
 	/// <summary>
+	/// The bitness check WPF's <c>StartDebuggingOptionsProvider</c> makes before a launch: a 32-bit image
+	/// cannot be debugged by a 64-bit engine, and an image whose bitness cannot be read is worth a warning.
+	/// A native PE is compared by its machine; a native ELF apphost has no PE bitness to compare and is left
+	/// to the engine.
+	/// </summary>
+	public static DebugProgramInfoResponse GetProgramInfo(DebugProgramInfoRequest request) {
+		try {
+			using var stream = File.OpenRead(request.Program);
+			System.Reflection.PortableExecutable.PEReader reader;
+			try {
+				reader = new System.Reflection.PortableExecutable.PEReader(stream);
+			}
+			catch (BadImageFormatException) {
+				// A native apphost is an ELF file on Linux: there is no managed bitness to compare.
+				return new DebugProgramInfoResponse(true);
+			}
+			using (reader) {
+				bool hasMetadata;
+				try {
+					hasMetadata = reader.HasMetadata;
+				}
+				catch (BadImageFormatException) {
+					return new DebugProgramInfoResponse(true);
+				}
+				if (!hasMetadata)
+					return new DebugProgramInfoResponse(NativeImageCompatible(reader.PEHeaders.CoffHeader.Machine));
+				try {
+					var bitness = GetBitness(reader);
+					return new DebugProgramInfoResponse(bitness is null ? null : bitness == (Environment.Is64BitProcess ? 64 : 32));
+				}
+				catch (BadImageFormatException) {
+					return new DebugProgramInfoResponse(null);
+				}
+			}
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+			return new DebugProgramInfoResponse(null);
+		}
+	}
+
+	/// <summary>Whether a native image's machine matches the debugger's; WPF compares the PE machine too.</summary>
+	static bool? NativeImageCompatible(System.Reflection.PortableExecutable.Machine machine) => machine switch {
+		System.Reflection.PortableExecutable.Machine.I386 => Environment.Is64BitProcess ? false : true,
+		System.Reflection.PortableExecutable.Machine.Arm => Environment.Is64BitProcess ? false : true,
+		System.Reflection.PortableExecutable.Machine.Amd64 => Environment.Is64BitProcess,
+		System.Reflection.PortableExecutable.Machine.Arm64 => Environment.Is64BitProcess,
+		System.Reflection.PortableExecutable.Machine.IA64 => false,
+		_ => null,
+	};
+
+	/// <summary>The bitness a PE image runs as, as the WPF page computes it; null when it is AnyCPU.</summary>
+	static int? GetBitness(System.Reflection.PortableExecutable.PEReader reader) {
+		var headers = reader.PEHeaders;
+		switch (headers.CoffHeader.Machine) {
+			case System.Reflection.PortableExecutable.Machine.Amd64:
+			case System.Reflection.PortableExecutable.Machine.Arm64:
+			case System.Reflection.PortableExecutable.Machine.IA64:
+				return 64;
+			case System.Reflection.PortableExecutable.Machine.Arm:
+				return 32;
+			case System.Reflection.PortableExecutable.Machine.I386: {
+				var corHeader = headers.CorHeader;
+				// A native I386 image, or one whose runtime predates AnyCPU, always runs 32-bit.
+				if (corHeader is null)
+					return 32;
+				var version = ((uint)corHeader.MajorRuntimeVersion << 16) | corHeader.MinorRuntimeVersion;
+				if (version < 0x00020005)
+					return 32;
+				if ((corHeader.Flags & System.Reflection.PortableExecutable.CorFlags.Requires32Bit) != 0)
+					return 32;
+				if ((corHeader.Flags & System.Reflection.PortableExecutable.CorFlags.Prefers32Bit) != 0)
+					return null;
+				return (corHeader.Flags & System.Reflection.PortableExecutable.CorFlags.ILOnly) != 0
+					? (Environment.Is64BitOperatingSystem ? 64 : 32)
+					: 32;
+			}
+			default:
+				return null;
+		}
+	}
+
+	/// <summary>
 	/// dnSpy's Attach to Process list: the processes with a runtime it has an engine for — here, those with CoreCLR
 	/// loaded — other than its own.
 	/// </summary>

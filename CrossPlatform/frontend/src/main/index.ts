@@ -1123,6 +1123,8 @@ const registerIpc = (): void => {
     return result.filePaths[0]
   })
   ipcMain.handle('debug:listProcesses', () => requireBackend().invoke('debug/listProcesses', {}))
+  // WPF's StartDebuggingOptionsProvider checks the target's bitness before starting it.
+  ipcMain.handle('debug:programInfo', (_event, program: string) => requireBackend().invoke('debug/programInfo', { program }))
   // The workspace id is what lets the engine resolve decompiled-source breakpoints to IL offsets,
   // so it travels with launch/attach rather than being inferred later from the session.
   ipcMain.handle('debug:launch', (_event, options: DebugLaunchOptions) => requireBackend().invoke('debug/launch', options))

@@ -173,6 +173,8 @@ public static class RpcMethods {
 	/// <summary>Reads the bookmarks out of a WPF dnSpy bookmark (or settings) file.</summary>
 	public const string BookmarksImport = "bookmarks/import";
 	public const string DebugCodeTargets = "debug/codeTargets";
+	/// <summary>The Debug Program dialog's bitness check, what WPF's StartDebuggingOptionsProvider does.</summary>
+	public const string DebugProgramInfo = "debug/programInfo";
 	public const string DebugVerifyFilter = "debug/verifyFilter";
 	public const string BreakpointsExport = "breakpoints/export";
 	public const string BreakpointsImport = "breakpoints/import";
@@ -1307,7 +1309,7 @@ public sealed record SaveModuleResponse(string Path, long Length, string Sha256)
 /// is the CoreCLR page's Timeout in seconds — how long to wait for the runtime to report that it started —
 /// and null means the upstream default of five seconds.
 /// </summary>
-public sealed record DebugLaunchRequest(
+public sealed partial record DebugLaunchRequest(
 	string Program,
 	IReadOnlyList<string>? Arguments = null,
 	string? WorkingDirectory = null,
@@ -3456,3 +3458,21 @@ public sealed record ReloadModuleResponse(
 	bool CanUndo,
 	bool CanRedo,
 	string StateId);
+
+/// <summary>
+/// The command line as the user typed it. WPF hands the raw line to <c>CreateProcess</c> instead of
+/// splitting it; the port keeps the split form for callers that build arguments themselves and uses this
+/// one whenever the Debug Program dialog supplied the field.
+/// </summary>
+public sealed partial record DebugLaunchRequest {
+	public string? RawArguments { get; init; }
+}
+
+/// <summary>Asks whether a target's bitness matches the debugger's before a launch starts it.</summary>
+public sealed record DebugProgramInfoRequest(string Program);
+
+/// <summary>
+/// <paramref name="Compatible"/> is null when the file's bitness could not be determined — WPF's
+/// <c>UnknownBitness</c> warning — and otherwise whether it can run under this debugger's own bitness.
+/// </summary>
+public sealed record DebugProgramInfoResponse(bool? Compatible);

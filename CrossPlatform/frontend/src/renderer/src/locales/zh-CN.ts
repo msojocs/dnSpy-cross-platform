@@ -1349,6 +1349,13 @@ export const zhCN: Readonly<Record<string, string>> = {
   // dnSpy's RunWithInvalidExtension and DebugWithInvalidExtension.
   "Are you sure you want to run this file which doesn't have a valid extension?": '是否要运行具有无效扩展名的文件？',
   "Are you sure you want to debug this file which doesn't have a valid extension?": '是否要调试具有无效扩展名的文件？',
+  // The debugger lists' GridView column grip; WPF's gripper is not a named control.
+  'Resize column': '调整列宽',
+  // dnSpy's StartDebuggingWarning_UnknownBitness and StartDebuggingWarning_IncorrectBitness.
+  "The target file's bitness could not be determined. Debugging may cause unwanted/uncontrolled execution of the image.\n\nDo you wish to continue?":
+    '无法确定目标文件的位数。调试可能会导致非预期的或者不受控制的程序映像执行。\n\n是否继续？',
+  "The target file's bitness does not match with the current dnSpy version. Debugging may cause unwanted/uncontrolled execution of the image.\n\nIt is recommended to use 32-bit dnSpy to debug 32-bit images and 64-bit dnSpy to debug 64-bit images.\n\nDo you wish to continue?":
+    '目标文件的位数与当前版本的 dnSpy 不匹配。调试可能会导致非预期的或者不受控制的程序映像执行。\n\n建议使用 32 位 dnSpy 调试 32 位程序，使用 64 位 dnSpy 调试 64 位程序。\n\n是否继续？',
   // The debugger's in-place module refresh could not read the file the process wrote.
   'Could not refresh {name}: {message}': '无法刷新 {name}：{message}',
   'Started {target} without debugging (process {processId}).': '已启动 {target}（不调试，进程 {processId}）。',

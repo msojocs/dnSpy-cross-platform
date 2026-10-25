@@ -44,6 +44,9 @@ internal sealed class EvalRuntime {
 
 	public CancellationToken CancellationToken { get; }
 
+	/// <summary>Type objects created in the debuggee for ref/out calls, by the type they stand for.</summary>
+	readonly Dictionary<ITypeSymbol, EvalValue> typeValues = new(SymbolEqualityComparer.Default);
+
 	/// <summary>Runs <paramref name="action"/> on the session's COM thread.</summary>
 	public Task<T> OnDispatcher<T>(Func<T> action) => Session.Dispatcher.RunAsync(() => {
 		try {
@@ -198,9 +201,9 @@ internal sealed class EvalRuntime {
 	});
 
 	/// <summary>Writes into a frame slot.</summary>
-	public Task WriteArgumentAsync(int index, EvalValue value) => WriteToAsync(() => ILFrame?.GetArgument(index), value);
+	public Task WriteArgumentAsync(int index, EvalValue value, ITypeSymbol? targetType = null) => WriteToAsync(() => ILFrame?.GetArgument(index), value, targetType);
 
-	public Task WriteLocalAsync(int index, EvalValue value) => WriteToAsync(() => ILFrame?.GetLocalVariable(index), value);
+	public Task WriteLocalAsync(int index, EvalValue value, ITypeSymbol? targetType = null) => WriteToAsync(() => ILFrame?.GetLocalVariable(index), value, targetType);
 
 	// ---------------------------------------------------------------- fields
 
@@ -245,13 +248,13 @@ internal sealed class EvalRuntime {
 		if (field.IsStatic) {
 			var type = await OnDispatcher(() => Types.GetCorType(field.ContainingType, AppDomain)).ConfigureAwait(false)
 				?? throw new EvaluationException($"The type '{field.ContainingType.Name}' is not loaded.");
-			await WriteToAsync(() => type.GetStaticFieldValue(field.OriginalDefinition.MetadataToken, Frame!), value).ConfigureAwait(false);
+			await WriteToAsync(() => type.GetStaticFieldValue(field.OriginalDefinition.MetadataToken, Frame!), value, field.Type).ConfigureAwait(false);
 			return;
 		}
 		if (instance is not RemoteValue remote)
 			throw new EvaluationException($"'{field.Name}' cannot be written on this value.");
 		var cls = await OnDispatcher(() => Types.GetClass(field.ContainingType)).ConfigureAwait(false) ?? throw new EvaluationException($"The type of '{field.Name}' is not loaded.");
-		await WriteToAsync(() => remote.Object is ICorDebugObjectValue obj ? obj.GetFieldValue(cls, field.OriginalDefinition.MetadataToken) : null, value).ConfigureAwait(false);
+		await WriteToAsync(() => remote.Object is ICorDebugObjectValue obj ? obj.GetFieldValue(cls, field.OriginalDefinition.MetadataToken) : null, value, field.Type).ConfigureAwait(false);
 	}
 
 	// ---------------------------------------------------------------- arrays
@@ -286,9 +289,35 @@ internal sealed class EvalRuntime {
 		return array.GetElementAtPosition((int)position);
 	}
 
-	public Task WriteElementAsync(EvalValue array, IReadOnlyList<long> indices, EvalValue value) {
+	public Task WriteElementAsync(EvalValue array, IReadOnlyList<long> indices, EvalValue value, ITypeSymbol? targetType = null) {
 		var remote = array as RemoteValue ?? throw new EvaluationException("The value is not an array.");
-		return WriteToAsync(() => remote.Object is ICorDebugArrayValue arrayValue ? ReadElement(arrayValue, indices) : null, value);
+		var elementType = targetType ?? (array.Type as IArrayTypeSymbol)?.ElementType;
+		// ICorDebug does not hand out a writable field of a non-primitive value-type array element (the
+		// nullable's fields and a struct's bytes are copies), so those elements go through Array.SetValue,
+		// which takes the boxed value. Primitive elements keep the direct write.
+		if (elementType is { IsValueType: true, TypeKind: not (TypeKind.Pointer or TypeKind.TypeParameter) } && !CanCreateParameterizedArray(elementType))
+			return WriteValueTypeElementAsync(array, indices, elementType, value);
+		return WriteToAsync(() => remote.Object is ICorDebugArrayValue arrayValue ? ReadElement(arrayValue, indices) : null, value, elementType);
+	}
+
+	async Task WriteValueTypeElementAsync(EvalValue array, IReadOnlyList<long> indices, ITypeSymbol elementType, EvalValue value) {
+		// A value read from a nullable arrives as its T, but a converted constant keeps the nullable type.
+		var inner = value;
+		if (value is ScalarValue { Value: not null } scalar && scalar.Type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
+			inner = new ScalarValue(nullable.TypeArguments[0], scalar.Value);
+		if (indices.Count == 1) {
+			var setValue = ReflectionMethod("System.Array", "SetValue", candidate => !candidate.IsStatic && candidate.Parameters.Length == 2
+				&& candidate.Parameters[0].Type.SpecialType == SpecialType.System_Object && candidate.Parameters[1].Type.SpecialType == SpecialType.System_Int32);
+			await CallAsync(setValue, array, [inner, new ScalarValue(Special(SpecialType.System_Int32), (int)indices[0])], "SetValue").ConfigureAwait(false);
+			return;
+		}
+		var setValueAt = ReflectionMethod("System.Array", "SetValue", candidate => !candidate.IsStatic && candidate.Parameters.Length == 2
+			&& candidate.Parameters[0].Type.SpecialType == SpecialType.System_Object
+			&& candidate.Parameters[1].Type is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Int32 });
+		var indexArray = await NewArrayAsync(Special(SpecialType.System_Int32), [indices.Count]).ConfigureAwait(false);
+		for (var index = 0; index < indices.Count; index++)
+			await WriteElementAsync(indexArray, [index], new ScalarValue(Special(SpecialType.System_Int32), (int)indices[index])).ConfigureAwait(false);
+		await CallAsync(setValueAt, array, [inner, indexArray], "SetValue").ConfigureAwait(false);
 	}
 
 	/// <summary>The length of each dimension of an array.</summary>
@@ -303,13 +332,52 @@ internal sealed class EvalRuntime {
 
 	// ---------------------------------------------------------------- writing
 
+	/// <summary>Writes a value (or null) into a Nullable&lt;T&gt; location by its hasValue/value fields.</summary>
+	async Task WriteNullableAsync(Func<ICorDebugValue?> location, INamedTypeSymbol nullable, EvalValue value) {
+		var innerType = nullable.TypeArguments[0];
+		var prepared = value.IsNull ? null : await PrepareAsync(value, innerType).ConfigureAwait(false);
+		var definition = nullable.OriginalDefinition;
+		var hasValueField = definition.GetMembers("hasValue").OfType<IFieldSymbol>().FirstOrDefault()
+			?? throw new EvaluationException("The nullable's hasValue field is not available.");
+		var innerField = definition.GetMembers("value").OfType<IFieldSymbol>().FirstOrDefault()
+			?? throw new EvaluationException("The nullable's value field is not available.");
+		var cls = await OnDispatcher(() => Types.GetClass(nullable)).ConfigureAwait(false)
+			?? throw new EvaluationException($"The type '{nullable.ToDisplayString()}' is not loaded.");
+		await OnDispatcher(() => {
+			var target = location() ?? throw new EvaluationException("The location cannot be written.");
+			if ((ValueReader.Unwrap(target) ?? target) is not ICorDebugObjectValue objectValue)
+				throw new EvaluationException("The nullable value cannot be written.");
+			ValueReader.WriteBytes(objectValue.GetFieldValue(cls, hasValueField.MetadataToken), new[] { value.IsNull ? (byte)0 : (byte)1 });
+			if (prepared is not null) {
+				var inner = objectValue.GetFieldValue(cls, innerField.MetadataToken);
+				switch (prepared) {
+					case PreparedValue.Primitive primitive:
+						ValueReader.WriteBytes(ValueReader.Unwrap(inner) ?? inner, primitive.Bytes);
+						break;
+					case PreparedValue.Struct structure:
+						ValueReader.WriteBytes(ValueReader.Unwrap(inner) ?? inner, ValueReader.ReadBytes(structure.Value.Object));
+						break;
+					default:
+						throw new EvaluationException("The nullable's value cannot be written.");
+				}
+			}
+			return true;
+		}).ConfigureAwait(false);
+	}
+
 	/// <summary>
 	/// Writes a value into a location the runtime hands out: a primitive or a struct by its bytes, a reference
 	/// by the address of the object it now points at.
 	/// </summary>
-	async Task WriteToAsync(Func<ICorDebugValue?> location, EvalValue value) {
+	async Task WriteToAsync(Func<ICorDebugValue?> location, EvalValue value, ITypeSymbol? targetType = null) {
+		// A Nullable<T> is written through its two fields: null clears hasValue, a value writes T beside it.
+		// A boxed Nullable is a boxed T, so there are no nullable bytes to copy; the fields are the model.
+		if (targetType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable) {
+			await WriteNullableAsync(location, nullable, value).ConfigureAwait(false);
+			return;
+		}
 		// A string written into a variable has to exist in the debuggee first.
-		var prepared = await PrepareAsync(value, null).ConfigureAwait(false);
+		var prepared = await PrepareAsync(value, targetType).ConfigureAwait(false);
 		await OnDispatcher(() => {
 			var target = location() ?? throw new EvaluationException("The location cannot be written.");
 			switch (prepared) {
@@ -357,20 +425,26 @@ internal sealed class EvalRuntime {
 				if (scalar.Origin?.Ref.Handle is { } existing)
 					return new PreparedValue.Reference(existing);
 				return new PreparedValue.Reference(await NewStringHandleAsync(text).ConfigureAwait(false));
-			case ScalarValue scalar:
+			case ScalarValue scalar: {
+				// A non-null Nullable<T> value is the T inside it; boxing a Nullable boxes its T, and a
+				// by-value parameter of type T? takes that box.
+				var type = scalar.Type;
+				if (type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable && scalar.Value is not null)
+					type = nullable.TypeArguments[0];
 				if (wantsReference) {
-					if (scalar.Origin?.Ref.Handle is { } boxedAlready && SymbolEqualityComparer.Default.Equals(scalar.Origin.Type, scalar.Type))
+					if (scalar.Origin?.Ref.Handle is { } boxedAlready && SymbolEqualityComparer.Default.Equals(scalar.Origin.Type, type))
 						return new PreparedValue.Reference(boxedAlready);
-					return new PreparedValue.Reference(await BoxAsync(scalar.Type, ValueReader.EncodePrimitive(scalar.Value!)).ConfigureAwait(false));
+					return new PreparedValue.Reference(await BoxAsync(type, ValueReader.EncodePrimitive(scalar.Value!)).ConfigureAwait(false));
 				}
 				if (scalar.Value is decimal decimalValue)
-					return new PreparedValue.Struct((RemoteValue)await CreateStructAsync(scalar.Type, ValueReader.EncodePrimitive(decimalValue)).ConfigureAwait(false));
-				var element = scalar.Type.TypeKind == TypeKind.Enum && scalar.Type is INamedTypeSymbol { EnumUnderlyingType: { } underlying }
+					return new PreparedValue.Struct((RemoteValue)await CreateStructAsync(type, ValueReader.EncodePrimitive(decimalValue)).ConfigureAwait(false));
+				var element = type.TypeKind == TypeKind.Enum && type is INamedTypeSymbol { EnumUnderlyingType: { } underlying }
 					? ValueReader.ElementTypeOf(underlying.SpecialType)
-					: ValueReader.ElementTypeOf(scalar.Type.SpecialType);
-				if (scalar.Type.TypeKind == TypeKind.Enum)
-					return new PreparedValue.Struct((RemoteValue)await CreateStructAsync(scalar.Type, ValueReader.EncodePrimitive(scalar.Value!)).ConfigureAwait(false));
+					: ValueReader.ElementTypeOf(type.SpecialType);
+				if (type.TypeKind == TypeKind.Enum)
+					return new PreparedValue.Struct((RemoteValue)await CreateStructAsync(type, ValueReader.EncodePrimitive(scalar.Value!)).ConfigureAwait(false));
 				return new PreparedValue.Primitive(element, ValueReader.EncodePrimitive(scalar.Value!));
+			}
 			case RemoteValue remote when remote.Ref.Handle is { } handle && !remote.Type.IsValueType:
 				return new PreparedValue.Reference(handle);
 			case RemoteValue remote when remote.Ref.Handle is { } boxHandle:
@@ -447,6 +521,249 @@ internal sealed class EvalRuntime {
 		}, CancellationToken).ConfigureAwait(false);
 		return await WrapResultAsync(result, method.ReturnsVoid ? Special(SpecialType.System_Void) : method.ReturnType, displayName ?? method.Name).ConfigureAwait(false);
 	}
+
+	/// <summary>
+	/// Calls a method that has ref or out parameters. ICorDebug's func-eval cannot pass a managed pointer,
+	/// so the call is made through the debuggee's reflection instead: the arguments become an
+	/// <c>object[]</c>, <c>MethodBase.Invoke</c> fills in the byref parameters, and their new values are read
+	/// back from the array. This is the same call dnSpy's IL interpreter makes; only the way the byref values
+	/// get there differs.
+	/// </summary>
+	/// <param name="arguments">The arguments without the receiver, one per parameter after it.</param>
+	/// <param name="refKinds">The parameter kinds, parallel to <paramref name="arguments"/>.</param>
+	/// <returns>The call's value, and for each argument that is ref/out, the value the call left in it.</returns>
+	public async Task<(EvalValue Result, IReadOnlyList<EvalValue?> Updated)> CallByRefAsync(
+		IMethodSymbol method,
+		EvalValue? instance,
+		IReadOnlyList<EvalValue> arguments,
+		IReadOnlyList<RefKind> refKinds,
+		string? displayName = null,
+		bool isConstructor = false) {
+		RequireFuncEval(displayName ?? method.Name);
+		if (arguments.Count != refKinds.Count)
+			throw new InvalidOperationException("Every argument needs a parameter kind.");
+		var definition = method.ReducedFrom ?? method;
+		var reduced = !isConstructor && method.ReducedFrom is not null;
+		// The values in parameter order: an instance's receiver is passed to Invoke, not in the array.
+		var values = new List<EvalValue>(arguments);
+		var kinds = new List<RefKind>(refKinds);
+		var parameterOffset = 0;
+		if (!isConstructor && definition.IsStatic && reduced) {
+			if (instance is null)
+				throw new EvaluationException($"An object reference is required for the non-static member '{method.Name}'.");
+			if (definition.Parameters[0].RefKind is RefKind.Ref or RefKind.Out)
+				throw new EvaluationException("Extension methods with a ref or out receiver cannot be called by the evaluator.");
+			values.Insert(0, instance);
+			kinds.Insert(0, RefKind.None);
+			parameterOffset = 1;
+		}
+		else if (!isConstructor && !definition.IsStatic) {
+			if (instance is null)
+				throw new EvaluationException($"An object reference is required for the non-static member '{method.Name}'.");
+			if (instance.IsNull)
+				throw new EvaluationException("Object reference not set to an instance of an object.");
+		}
+		var parameters = definition.Parameters;
+		if (values.Count != parameters.Length)
+			throw new EvaluationException($"The method '{method.Name}' takes {parameters.Length} argument(s).");
+		for (var index = 0; index < values.Count; index++) {
+			var type = parameters[index].Type;
+			if (type.TypeKind == TypeKind.Pointer || type.IsRefLikeType)
+				throw new EvaluationException($"A value of type '{type.ToDisplayString()}' cannot be passed to a method with ref or out parameters.");
+		}
+
+		var methodBase = await ResolveMethodBaseAsync(definition).ConfigureAwait(false);
+		var argumentsArray = await NewArrayAsync(Object, [values.Count]).ConfigureAwait(false);
+		for (var index = 0; index < values.Count; index++)
+			await WriteElementAsync(argumentsArray, [index], values[index], Object).ConfigureAwait(false);
+
+		EvalValue result;
+		try {
+			if (isConstructor) {
+				var invoke = ReflectionMethod("System.Reflection.ConstructorInfo", "Invoke", candidate => !candidate.IsStatic && candidate.Parameters.Length == 1);
+				result = await CallAsync(invoke, methodBase, [argumentsArray], method.ContainingType.Name).ConfigureAwait(false);
+			}
+			else {
+				var invoke = ReflectionMethod("System.Reflection.MethodBase", "Invoke", candidate => !candidate.IsStatic && candidate.Parameters.Length == 2);
+				EvalValue target = definition.IsStatic ? new ScalarValue(Object, null) : instance!;
+				result = await CallAsync(invoke, methodBase, [target, argumentsArray], displayName ?? method.Name).ConfigureAwait(false);
+			}
+		}
+		catch (EvaluationThrownException thrown) {
+			// Reflection wraps what the method threw; the evaluator reports the original exception.
+			var inner = await TryGetInnerExceptionAsync(thrown.ExceptionValue).ConfigureAwait(false);
+			if (inner is not null)
+				throw new EvaluationThrownException(inner, displayName ?? method.Name);
+			throw;
+		}
+
+		var updated = new EvalValue?[arguments.Count];
+		for (var index = 0; index < arguments.Count; index++) {
+			if (kinds[index + parameterOffset] is RefKind.Ref or RefKind.Out)
+				updated[index] = await ReadElementAsync(argumentsArray, [index + parameterOffset]).ConfigureAwait(false);
+		}
+		var declared = isConstructor ? method.ContainingType
+			: method.ReturnsVoid ? Special(SpecialType.System_Void) : method.ReturnType;
+		if (result is ScalarValue { Value: null })
+			result = new ScalarValue(declared, null);
+		return (result, updated);
+	}
+
+	/// <summary>The <c>MethodInfo</c>/<c>ConstructorInfo</c> for a method, resolved by metadata token.</summary>
+	async Task<EvalValue> ResolveMethodBaseAsync(IMethodSymbol method) {
+		ITypeSymbol containing = method.ContainingType;
+		if (containing.TypeKind is TypeKind.TypeParameter or TypeKind.Error or TypeKind.Dynamic)
+			containing = ConstraintTypeOf(method) ?? method.OriginalDefinition.ContainingType;
+		var typeValue = await GetTypeValueAsync(containing).ConfigureAwait(false);
+		var moduleGetter = ReflectionMethod("System.Type", "get_Module", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+		var module = await CallAsync(moduleGetter, typeValue, [], "Module").ConfigureAwait(false);
+		var containingNamed = containing as INamedTypeSymbol ?? method.OriginalDefinition.ContainingType as INamedTypeSymbol;
+		var typeArguments = await TypeArrayAsync(containingNamed is null ? [] : DebuggeeTypeSystem.AllTypeArguments(containingNamed)).ConfigureAwait(false);
+		var methodArguments = await TypeArrayAsync(method.TypeArguments).ConfigureAwait(false);
+		// A constructed method's symbol has no token of its own; its definition does.
+		var token = method.OriginalDefinition.MetadataToken;
+		if (token == 0)
+			throw new EvaluationException($"The method '{method.Name}' has no metadata token in the debuggee.");
+		var resolve = ReflectionMethod("System.Reflection.Module", "ResolveMethod", candidate => candidate.Parameters.Length == 3 && candidate.Parameters[0].Type.SpecialType == SpecialType.System_Int32);
+		var resolved = await CallAsync(resolve, module, [new ScalarValue(Special(SpecialType.System_Int32), token), typeArguments, methodArguments], "ResolveMethod").ConfigureAwait(false);
+		// ResolveMethod resolves a MethodDef token as it is written: on a generic type (or for a generic
+		// method) that is the open definition, which Invoke refuses. WPF's engine gets its MethodInfo from
+		// the constructed type, and so does the fallback here.
+		return await IsOpenGenericAsync(resolved).ConfigureAwait(false)
+			? await ResolveConstructedMethodAsync(method, typeValue).ConfigureAwait(false)
+			: resolved;
+	}
+
+	/// <summary>Whether reflection would refuse to invoke <paramref name="methodBase"/> as open generic.</summary>
+	async Task<bool> IsOpenGenericAsync(EvalValue methodBase) {
+		try {
+			var getter = ReflectionMethod("System.Reflection.MethodBase", "get_ContainsGenericParameters", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+			return await CallAsync(getter, methodBase, [], "ContainsGenericParameters").ConfigureAwait(false) is ScalarValue { Value: true };
+		}
+		catch (EvaluationException) {
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// The MethodInfo of a method on a constructed generic type: <c>Type.GetMethod</c> with the parameter
+	/// types, and for a generic method the definition from <c>Type.GetMember</c> followed by
+	/// <c>MakeGenericMethod</c>.
+	/// </summary>
+	async Task<EvalValue> ResolveConstructedMethodAsync(IMethodSymbol method, EvalValue typeValue) {
+		const System.Reflection.BindingFlags flags =
+			System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static |
+			System.Reflection.BindingFlags.DeclaredOnly;
+		var name = new ScalarValue(String, method.Name);
+		var bindingFlags = new ScalarValue(Special(SpecialType.System_Int32), (int)flags);
+		var nullValue = new ScalarValue(Object, null);
+		if (!method.IsGenericMethod) {
+			var parameterTypes = await ParameterTypeArrayAsync(method).ConfigureAwait(false);
+			var getMethod = ReflectionMethod("System.Type", "GetMethod", candidate => candidate.Parameters.Length == 5 && candidate.Parameters[0].Type.SpecialType == SpecialType.System_String);
+			var bySignature = await CallAsync(getMethod, typeValue, [name, bindingFlags, nullValue, parameterTypes, nullValue], "GetMethod").ConfigureAwait(false);
+			if (bySignature is not ScalarValue { Value: null })
+				return bySignature;
+		}
+
+		var getMember = ReflectionMethod("System.Type", "GetMember", candidate => candidate.Parameters.Length == 3 && candidate.Parameters[0].Type.SpecialType == SpecialType.System_String);
+		var members = await CallAsync(getMember, typeValue, [name, new ScalarValue(Special(SpecialType.System_Int32), (int)System.Reflection.MemberTypes.Method), bindingFlags], "GetMember").ConfigureAwait(false);
+		if (members is not RemoteValue membersArray)
+			throw new EvaluationException($"The method '{method.Name}' could not be resolved in the debuggee.");
+		var parametersGetter = ReflectionMethod("System.Reflection.MethodBase", "GetParameters", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+		// IsGenericMethodDefinition and GetGenericArguments are declared on MethodBase; MethodInfo only
+		// adds MakeGenericMethod.
+		var genericArgumentsGetter = ReflectionMethod("System.Reflection.MethodBase", "GetGenericArguments", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+		var isGenericDefinitionGetter = ReflectionMethod("System.Reflection.MethodBase", "get_IsGenericMethodDefinition", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+		var (dimensions, _) = await ReadArrayShapeAsync(membersArray).ConfigureAwait(false);
+		for (var index = 0; index < dimensions[0]; index++) {
+			var member = await ReadElementAsync(membersArray, [index]).ConfigureAwait(false);
+			if (await CallAsync(isGenericDefinitionGetter, member, [], "IsGenericMethodDefinition").ConfigureAwait(false) is not ScalarValue { Value: true })
+				continue;
+			var parameters = await CallAsync(parametersGetter, member, [], "GetParameters").ConfigureAwait(false);
+			if (!await HasLengthAsync(parameters, method.Parameters.Length).ConfigureAwait(false))
+				continue;
+			var genericArguments = await CallAsync(genericArgumentsGetter, member, [], "GetGenericArguments").ConfigureAwait(false);
+			if (!await HasLengthAsync(genericArguments, method.TypeArguments.Length).ConfigureAwait(false))
+				continue;
+			var makeGeneric = ReflectionMethod("System.Reflection.MethodInfo", "MakeGenericMethod", candidate => !candidate.IsStatic && candidate.Parameters.Length == 1);
+			return await CallAsync(makeGeneric, member, [await TypeArrayAsync(method.TypeArguments).ConfigureAwait(false)], "MakeGenericMethod").ConfigureAwait(false);
+		}
+		throw new EvaluationException($"The method '{method.Name}' could not be resolved on the constructed type in the debuggee.");
+	}
+
+	/// <summary>The parameter types of a method as the debuggee's reflection wants them, byref types included.</summary>
+	async Task<EvalValue> ParameterTypeArrayAsync(IMethodSymbol method) {
+		var typeType = SpecialTypeSymbol("System.Type");
+		var array = await NewArrayAsync(typeType, [method.Parameters.Length]).ConfigureAwait(false);
+		var makeByRef = ReflectionMethod("System.Type", "MakeByRefType", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+		for (var index = 0; index < method.Parameters.Length; index++) {
+			var parameter = method.Parameters[index];
+			var value = await GetTypeValueAsync(parameter.Type).ConfigureAwait(false);
+			if (parameter.RefKind != RefKind.None)
+				value = await CallAsync(makeByRef, value, [], "MakeByRefType").ConfigureAwait(false);
+			await WriteElementAsync(array, [index], value, typeType).ConfigureAwait(false);
+		}
+		return array;
+	}
+
+	/// <summary>The constraint type that declares a method reached through a type parameter, if any.</summary>
+	static ITypeSymbol? ConstraintTypeOf(IMethodSymbol method) {
+		if (method.ContainingType is not ITypeParameterSymbol parameter)
+			return null;
+		var definition = method.OriginalDefinition.ContainingType;
+		return parameter.ConstraintTypes.FirstOrDefault(type => SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, definition)
+			|| (type as INamedTypeSymbol)?.AllInterfaces.Any(candidate => SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, definition)) == true);
+	}
+
+	/// <summary>A <c>Type[]</c> the debuggee can hand to <c>Module.ResolveMethod</c>; null when there are none.</summary>
+	async Task<EvalValue> TypeArrayAsync(IReadOnlyList<ITypeSymbol> types) {
+		var typeType = SpecialTypeSymbol("System.Type");
+		if (types.Count == 0)
+			return new ScalarValue(Object, null);
+		var array = await NewArrayAsync(typeType, [types.Count]).ConfigureAwait(false);
+		for (var index = 0; index < types.Count; index++)
+			await WriteElementAsync(array, [index], await GetTypeValueAsync(types[index]).ConfigureAwait(false), typeType).ConfigureAwait(false);
+		return array;
+	}
+
+	/// <summary>Whether an array in the debuggee has <paramref name="length"/> elements.</summary>
+	async Task<bool> HasLengthAsync(EvalValue array, int length) =>
+		array is RemoteValue remote && (await ReadArrayShapeAsync(remote).ConfigureAwait(false)).Dimensions is [var actual] && actual == length;
+
+	/// <summary>The <c>System.Type</c> object for a type in the debuggee.</summary>
+	async Task<EvalValue> GetTypeValueAsync(ITypeSymbol type) {
+		if (typeValues.TryGetValue(type, out var cached))
+			return cached;
+		if (type.TypeKind is TypeKind.TypeParameter or TypeKind.Error)
+			throw new EvaluationException($"The type '{type.ToDisplayString()}' is not available in the debuggee.");
+		var getType = ReflectionMethod("System.Type", "GetType", candidate => candidate.IsStatic && candidate.Parameters.Length == 1 && candidate.Parameters[0].Type.SpecialType == SpecialType.System_String);
+		var name = OperationInterpreter.ReflectionName(type, includeAssembly: true);
+		var value = await CallAsync(getType, null, [new ScalarValue(String, name)], "typeof").ConfigureAwait(false);
+		if (value is ScalarValue { Value: null })
+			throw new EvaluationException($"The type '{type.ToDisplayString()}' is not loaded in the debuggee.");
+		typeValues[type] = value;
+		return value;
+	}
+
+	/// <summary>The exception <c>MethodBase.Invoke</c> wrapped, so the evaluator reports what the method threw.</summary>
+	async Task<EvalValue?> TryGetInnerExceptionAsync(EvalValue exception) {
+		try {
+			var getter = ReflectionMethod("System.Exception", "get_InnerException", candidate => !candidate.IsStatic && candidate.Parameters.Length == 0);
+			var inner = await CallAsync(getter, exception, [], "InnerException").ConfigureAwait(false);
+			return inner.IsNull ? null : inner;
+		}
+		catch (EvaluationException) {
+			return null;
+		}
+	}
+
+	ITypeSymbol SpecialTypeSymbol(string metadataName) =>
+		Compilation.GetTypeByMetadataName(metadataName) ?? throw new EvaluationException($"'{metadataName}' is not available in the debuggee.");
+
+	IMethodSymbol ReflectionMethod(string metadataName, string name, Func<IMethodSymbol, bool> predicate) =>
+		SpecialTypeSymbol(metadataName).GetMembers(name).OfType<IMethodSymbol>().FirstOrDefault(predicate)
+			?? throw new EvaluationException($"'{metadataName}.{name}' is not available in the debuggee.");
 
 	(ICorDebugFunction Function, ICorDebugType[] TypeArguments) ResolveCall(IMethodSymbol method) {
 		var definition = method.ReducedFrom is { } reduced ? (method.ReducedFrom.IsGenericMethod ? reduced.Construct(ReducedTypeArguments(method)) : reduced) : method;
@@ -560,13 +877,44 @@ internal sealed class EvalRuntime {
 	/// <summary>Creates an array of <paramref name="elementType"/> with the given lengths.</summary>
 	public async Task<EvalValue> NewArrayAsync(ITypeSymbol elementType, IReadOnlyList<int> lengths) {
 		RequireFuncEval(null);
+		var arrayType = lengths.Count == 1 ? Compilation.CreateArrayTypeSymbol(elementType) : Compilation.CreateArrayTypeSymbol(elementType, lengths.Count);
+		// NewParameterizedArray takes reference types and the primitives only; an enum, Nullable<T> or
+		// other struct goes through Array.CreateInstance, which is what WPF's CreateSZArrayCore does.
+		if (!CanCreateParameterizedArray(elementType)) {
+			var typeValue = await GetTypeValueAsync(elementType).ConfigureAwait(false);
+			var create = ReflectionMethod("System.Array", "CreateInstance", candidate => candidate.IsStatic && candidate.Parameters.Length == 2
+				&& candidate.Parameters[0].Type.ToDisplayString() == "System.Type"
+				&& candidate.Parameters[1].Type is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Int32 });
+			var lengthsArray = await NewArrayAsync(Special(SpecialType.System_Int32), [lengths.Count]).ConfigureAwait(false);
+			for (var index = 0; index < lengths.Count; index++)
+				await WriteElementAsync(lengthsArray, [index], new ScalarValue(Special(SpecialType.System_Int32), lengths[index])).ConfigureAwait(false);
+			var created = await CallAsync(create, null, [typeValue, lengthsArray], "CreateInstance").ConfigureAwait(false);
+			// CallAsync types the result from the method's return type (System.Array); the array type is what
+			// the element reads and writes need.
+			return created is RemoteValue remote ? new RemoteValue(arrayType, remote.CorType, remote.Ref) : created;
+		}
 		var corElement = await OnDispatcher(() => Types.GetCorType(elementType, AppDomain)).ConfigureAwait(false)
 			?? throw new EvaluationException($"The type '{elementType.ToDisplayString()}' is not loaded in the debuggee.");
 		var dimensions = lengths.Select(length => (uint)length).ToArray();
 		var result = await Session.FuncEvalAsync(ThreadId, eval =>
 			((ICorDebugEval2)eval).NewParameterizedArray(corElement, dimensions.Length, dimensions, new uint[dimensions.Length]), CancellationToken).ConfigureAwait(false);
-		var arrayType = lengths.Count == 1 ? Compilation.CreateArrayTypeSymbol(elementType) : Compilation.CreateArrayTypeSymbol(elementType, lengths.Count);
 		return await WrapResultAsync(result, arrayType, null).ConfigureAwait(false);
+	}
+
+	/// <summary>Whether <c>NewParameterizedArray</c> accepts the element type.</summary>
+	static bool CanCreateParameterizedArray(ITypeSymbol elementType) {
+		if (elementType is IArrayTypeSymbol)
+			return true;
+		if (elementType.TypeKind is TypeKind.Pointer or TypeKind.FunctionPointer or TypeKind.TypeParameter)
+			return false;
+		if (!elementType.IsValueType)
+			return true;
+		if (elementType.TypeKind == TypeKind.Enum)
+			return false;
+		return elementType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Char
+			or SpecialType.System_SByte or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
+			or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64 or SpecialType.System_UInt64
+			or SpecialType.System_Single or SpecialType.System_Double;
 	}
 
 	async Task<EvalValue> WrapResultAsync(FuncEvalResult result, ITypeSymbol staticType, string? displayName) {

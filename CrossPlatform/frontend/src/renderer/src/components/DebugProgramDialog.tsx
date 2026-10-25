@@ -235,12 +235,24 @@ export const DebugProgramDialog = ({ onClose }: { onClose(): void }): React.JSX.
       const answer = await window.dnSpy.askMessage(question, [t('Yes'), t('No')])
       if (answer.button !== t('Yes')) return
     }
+    // StartDebuggingOptionsProvider then compares the image's bitness with the debugger's own: a 32-bit
+    // image cannot be debugged by this 64-bit build, and an unreadable one is still worth a warning.
+    const info = await window.dnSpy.checkDebugProgram(program.trim()).catch(() => ({ compatible: true }))
+    if (info.compatible !== true) {
+      const warning = info.compatible === null
+        ? t("The target file's bitness could not be determined. Debugging may cause unwanted/uncontrolled execution of the image.\n\nDo you wish to continue?")
+        : t("The target file's bitness does not match with the current dnSpy version. Debugging may cause unwanted/uncontrolled execution of the image.\n\nIt is recommended to use 32-bit dnSpy to debug 32-bit images and 64-bit dnSpy to debug 64-bit images.\n\nDo you wish to continue?")
+      const answer = await window.dnSpy.askMessage(warning, [t('Yes'), t('No')])
+      if (answer.button !== t('Yes')) return
+    }
     // The dialog closes before the launch, like upstream: the stop lands in the debugger, not in a modal.
     onClose()
     rememberLaunch(program.trim(), { argumentsText, workingDirectory, environmentText: formatEnvironmentRows(environmentRows), useHost, host, hostArgumentsText, breakAt, connectionTimeoutText })
     const options = {
       program: program.trim(),
-      arguments: splitArguments(argumentsText),
+      // WPF passes the raw line to CreateProcess; the backend parses it the same way, so quotes and
+      // spacing stay exactly what the user typed.
+      rawArguments: argumentsText,
       workingDirectory: workingDirectory.trim() || undefined,
       environment,
       stopAtEntry: breakAt === 'entry-point',

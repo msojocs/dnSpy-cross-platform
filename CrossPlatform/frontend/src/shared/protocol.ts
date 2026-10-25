@@ -2125,6 +2125,8 @@ export interface DebugEvent {
 export interface DebugLaunchOptions {
   program: string
   arguments?: string[]
+  /** The command line exactly as the Debug Program dialog holds it, as WPF hands it to CreateProcess. */
+  rawArguments?: string
   workingDirectory?: string
   environment?: Record<string, string>
   /** `true` arms a breakpoint on the entry point, matching `PredefinedBreakKinds.EntryPoint`. */
@@ -2604,6 +2606,8 @@ export interface DnSpyApi {
   /** PortableExecutableFileHelpers.IsExecutable: a PE image whose file header does not say DLL. */
   pathIsPeExecutable(path: string): Promise<boolean>
   listDebugProcesses(): Promise<DebugProcess[]>
+  /** The Debug Program dialog's bitness check: null when the image's bitness cannot be read. */
+  checkDebugProgram(program: string): Promise<{ compatible: boolean | null }>
   launchDebug(options: DebugLaunchOptions): Promise<DebugStartResponse>
   /** dnSpy's Start Without Debugging: the program runs on its own, and its process id comes back. */
   startWithoutDebugging(options: DebugLaunchOptions): Promise<number>

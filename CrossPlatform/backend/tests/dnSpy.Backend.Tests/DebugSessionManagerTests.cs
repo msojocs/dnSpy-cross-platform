@@ -27,6 +27,32 @@ public sealed class DebugSessionManagerTests {
 		Assert.Equal(TimeSpan.Zero, CorDebugSession.GetConnectionTimeout(new DebugLaunchRequest("DebugTarget.dll", ConnectionTimeout: -1)));
 	}
 
+	/// <summary>
+	/// The Debug Program dialog's raw line goes to the runtime untouched, after the host and program the
+	/// launch chose; those are quoted the way <see cref="ProcessStartInfo.Arguments"/> reads them.
+	/// </summary>
+	[Fact]
+	public void BuildsTheRawCommandLineForTheRuntime() {
+		Assert.Equal("exec \"/tmp/a b.dll\" --name \"a b\"",
+			CorDebugSession.BuildCommandLine(["exec", "/tmp/a b.dll"], " --name \"a b\" "));
+		Assert.Equal("--evaluate", CorDebugSession.BuildCommandLine([], "--evaluate"));
+		Assert.Equal("", CorDebugSession.BuildCommandLine([], "   "));
+		Assert.Equal("\"say \\\"hi\\\"\"", CorDebugSession.BuildCommandLine(["say \"hi\""], ""));
+		Assert.Equal(@"a\", CorDebugSession.BuildCommandLine([@"a\"], ""));
+		Assert.Equal("\"a b\\\\\"", CorDebugSession.BuildCommandLine([@"a b\"], ""));
+	}
+
+	/// <summary>
+	/// The Debug Program dialog's bitness check: the fixture is AnyCPU and matches a 64-bit debugger, and a
+	/// file whose bitness cannot be read asks the "unknown" question.
+	/// </summary>
+	[Fact]
+	public void ChecksTheTargetsBitnessLikeTheWpfPage() {
+		Assert.True(CorDebugSessionManager.GetProgramInfo(new DebugProgramInfoRequest(FindTarget())).Compatible);
+		Assert.Null(CorDebugSessionManager.GetProgramInfo(new DebugProgramInfoRequest("/no/such/file.dll")).Compatible);
+		Assert.True(CorDebugSessionManager.GetProgramInfo(new DebugProgramInfoRequest("/bin/sh")).Compatible);
+	}
+
 	[Fact(Timeout = 60_000)]
 	public async Task LaunchesCoreClrAndProvidesThreadsStackAndVariables() {
 		using var workspaceManager = new WorkspaceManager();
@@ -237,6 +263,38 @@ public sealed class DebugSessionManagerTests {
 		await manager.RequestAsync(
 			new DebugAdapterRequest(started.SessionId, "configurationDone", JsonSerializer.SerializeToElement(new { })),
 			TestContext.Current.CancellationToken);
+		await manager.DisconnectAsync(
+			new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true),
+			TestContext.Current.CancellationToken);
+	}
+
+	/// <summary>
+	/// The Debug Program dialog's arguments are passed as the raw line WPF gives CreateProcess: the
+	/// process sees the quoting the user typed, not an argv list the client split.
+	/// </summary>
+	[Fact(Timeout = 60_000)]
+	public async Task RawArgumentsReachTheDebuggeeAsTheUserTypedThem() {
+		using var workspaceManager = new WorkspaceManager();
+		await using var manager = CreateManager(workspaceManager);
+		var target = FindTarget();
+		var opened = await workspaceManager.OpenAsync(new OpenWorkspaceRequest([target]), TestContext.Current.CancellationToken);
+		var echoed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+		manager.EventReceived += (_, notification) => {
+			if (notification.Event != "output")
+				return;
+			var text = notification.Body?.GetProperty("output").GetString();
+			if (text?.Contains("ARGS:", StringComparison.Ordinal) == true)
+				echoed.TrySetResult(text);
+		};
+
+		var started = await manager.LaunchAsync(
+			new DebugLaunchRequest(target, StopAtEntry: true, WorkspaceId: opened.WorkspaceId) {
+				RawArguments = "--echo-args --name \"a b\" \"\" --wait",
+			},
+			TestContext.Current.CancellationToken);
+		var output = await echoed.Task.WaitAsync(TestContext.Current.CancellationToken);
+		// The runtime saw four arguments: the empty quoted one survives, and the quoted space stays in one.
+		Assert.Contains("ARGS:--echo-args|--name|a b||--wait", output);
 		await manager.DisconnectAsync(
 			new DebugDisconnectRequest(started.SessionId, TerminateDebuggee: true),
 			TestContext.Current.CancellationToken);

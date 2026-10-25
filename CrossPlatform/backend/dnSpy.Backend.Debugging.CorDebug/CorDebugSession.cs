@@ -139,10 +139,17 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
 			};
-			foreach (var argument in launchCommand.Arguments)
-				startInfo.ArgumentList.Add(argument);
-			foreach (var argument in request.Arguments ?? [])
-				startInfo.ArgumentList.Add(argument);
+			if (request.RawArguments is not null) {
+				// WPF hands the whole line to CreateProcess; ProcessStartInfo.Arguments is the closest the
+				// runtime offers, and the dialog's text is kept exactly as the user typed it.
+				startInfo.Arguments = BuildCommandLine(launchCommand.Arguments, request.RawArguments);
+			}
+			else {
+				foreach (var argument in launchCommand.Arguments)
+					startInfo.ArgumentList.Add(argument);
+				foreach (var argument in request.Arguments ?? [])
+					startInfo.ArgumentList.Add(argument);
+			}
 			// Suspends the runtime at startup so the debugger can attach before any user code runs.
 			startInfo.Environment["DOTNET_DefaultDiagnosticPortSuspend"] = "1";
 			// WPF's launch: with JIT optimization suppressed for system modules, precompiled framework code is
@@ -235,6 +242,49 @@ internal sealed partial class CorDebugSession : IAsyncDisposable {
 		var arguments = new List<string>(request.HostArguments ?? []);
 		arguments.Add(program);
 		return (host, arguments);
+	}
+
+	/// <summary>
+	/// The command line for the runtime's own parser: the host and program the launch built, quoted the way
+	/// <see cref="ProcessStartInfo.Arguments"/> reads them, followed by the user's line untouched.
+	/// </summary>
+	internal static string BuildCommandLine(IReadOnlyList<string> arguments, string rawArguments) {
+		var builder = new System.Text.StringBuilder();
+		foreach (var argument in arguments) {
+			if (builder.Length > 0)
+				builder.Append(' ');
+			AppendQuoted(builder, argument);
+		}
+		var raw = rawArguments.Trim();
+		if (raw.Length > 0) {
+			if (builder.Length > 0)
+				builder.Append(' ');
+			builder.Append(raw);
+		}
+		return builder.ToString();
+	}
+
+	static void AppendQuoted(System.Text.StringBuilder builder, string argument) {
+		if (argument.Length > 0 && argument.IndexOfAny([' ', '\t', '"']) < 0) {
+			builder.Append(argument);
+			return;
+		}
+		builder.Append('"');
+		var backslashes = 0;
+		foreach (var c in argument) {
+			if (c == '\\') {
+				backslashes++;
+				continue;
+			}
+			if (c == '"') {
+				builder.Append('\\', backslashes * 2 + 1).Append('"');
+				backslashes = 0;
+				continue;
+			}
+			builder.Append('\\', backslashes).Append(c);
+			backslashes = 0;
+		}
+		builder.Append('\\', backslashes * 2).Append('"');
 	}
 
 	public static async Task<CorDebugSession> AttachAsync(int processId, string? workspaceId, IDebugSymbolResolver? symbols, ExceptionSettingsService? exceptionSettings, DebuggerEngineOptions options, CancellationToken cancellationToken) {

@@ -32,12 +32,82 @@ sealed class DnSpyDecompilerSettings : DecompilerSettings {
 	public bool HexadecimalNumbers { get; set; }
 	public bool SortSystemUsingStatementsFirst { get; set; } = true;
 	public bool FullyQualifyAllTypes { get; set; }
+	/// <summary>
+	/// FullyQualifyAmbiguousTypeNames: whether a name that would be ambiguous in the using scope keeps its
+	/// namespace. The package always qualifies such a name (its IntroduceUsingDeclarations' last pass); when this is
+	/// off, <see cref="DnSpyCSharpTransform"/> puts the simple name back, as the fork's transform does by not
+	/// running that pass.
+	/// </summary>
+	public bool FullyQualifyAmbiguousTypeNames { get; set; } = true;
+	/// <summary>
+	/// AllowFieldInitializers: whether a leading assignment of a constructor is written as the field's (or
+	/// auto-property's) initializer. The package always moves such an assignment; when this is off,
+	/// <see cref="DnSpyCSharpTransform"/> moves it back into the constructors.
+	/// </summary>
+	public bool AllowFieldInitializers { get; set; } = true;
+	/// <summary>
+	/// EmitCalliAsInvocationExpression: whether calli is a function pointer call or, off, the fork's inline
+	/// listing <c>calli(signature, pointer, args…)</c>. The package only writes the former.
+	/// </summary>
+	public bool EmitCalliAsInvocationExpression { get; set; }
+	/// <summary>
+	/// ForceShowAllMembers: whether compiler-generated types, methods and fields the decompiler would fold away
+	/// are written too. The decompiler hides them through the feature settings (AnonymousMethods, AsyncAwait, …),
+	/// which also drive its transforms, so the hidden members come from a second decompilation of the same nodes
+	/// with those settings off; see WorkspaceManager's MergeHiddenMembers.
+	/// </summary>
+	public bool ForceShowAllMembers { get; set; }
 	public bool RemoveEmptyDefaultConstructors { get; set; } = true;
 	public bool InsertParenthesesForReadability { get; set; } = true;
 	/// <summary>DecompilerSettings.DecompilationObjects: the order a type's members are written in, by kind.</summary>
 	public IReadOnlyList<string> DecompilationOrder { get; set; } = DefaultDecompilationOrder;
 
 	public static readonly IReadOnlyList<string> DefaultDecompilationOrder = ["nestedTypes", "fields", "events", "properties", "methods"];
+
+	/// <summary>
+	/// The settings a second decompilation runs with when ForceShowAllMembers is on: every feature whose switch
+	/// also hides the compiler-generated types and members behind it is turned off, so the decompiler writes them.
+	/// Only the members the first decompilation left out are taken from that tree, which is why turning the
+	/// transforms off does not change the rest of the document.
+	/// </summary>
+	public DnSpyDecompilerSettings ForShowAllMembers() {
+		var settings = (DnSpyDecompilerSettings)Clone();
+		settings.AnonymousMethods = false;
+		settings.YieldReturn = false;
+		settings.AsyncAwait = false;
+		settings.AsyncEnumerator = false;
+		settings.LocalFunctions = false;
+		settings.AnonymousTypes = false;
+		settings.Dynamic = false;
+		settings.FixedBuffers = false;
+		settings.InlineArrays = false;
+		settings.ExtensionMembers = false;
+		settings.ArrayInitializers = false;
+		settings.AutomaticProperties = false;
+		settings.AutomaticEvents = false;
+		settings.GetterOnlyAutomaticProperties = false;
+		settings.SwitchStatementOnString = false;
+		settings.FieldKeyword = false;
+		settings.UsePrimaryConstructorSyntaxForNonRecordTypes = false;
+		return settings;
+	}
+}
+
+/// <summary>
+/// The types written as simple names before ICSharpCode.Decompiler's <c>IntroduceUsingDeclarations</c> runs. Its
+/// last pass replaces the names it finds ambiguous with namespace-qualified names; this is what tells that pass's
+/// replacements from names the decompiler itself wrote qualified, so
+/// <see cref="DnSpyCSharpTransform"/> can put the simple names back when FullyQualifyAmbiguousTypeNames is off.
+/// </summary>
+sealed class SimpleTypeCollector : IAstTransform {
+	public HashSet<ICSharpCode.Decompiler.TypeSystem.IType> Types { get; } = [];
+
+	public void Run(DecompilerAstNode rootNode, TransformContext context) {
+		foreach (var simpleType in rootNode.DescendantsAndSelf.OfType<SimpleType>()) {
+			if (simpleType.Annotation<TypeResolveResult>()?.Type is { } type)
+				Types.Add(type);
+		}
+	}
 }
 
 /// <summary>
@@ -49,7 +119,7 @@ sealed class DnSpyDecompilerSettings : DecompilerSettings {
 /// hexadecimal numbers (TextTokenWriter.WritePrimitiveValue). Does nothing unless the settings are
 /// <see cref="DnSpyDecompilerSettings"/>.
 /// </summary>
-sealed partial class DnSpyCSharpTransform(ModuleDef module) : IAstTransform {
+sealed partial class DnSpyCSharpTransform(ModuleDef module, SimpleTypeCollector? simpleTypes = null) : IAstTransform {
 	// The module being decompiled, in ILSpy's type system: only its entities are rows of `module`.
 	ICSharpCode.Decompiler.TypeSystem.IModule? mainModule;
 
@@ -57,11 +127,23 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module) : IAstTransform {
 		if (context.Settings is not DnSpyDecompilerSettings settings)
 			return;
 		mainModule = context.TypeSystem.MainModule;
+		// The package always removes an empty parameterless constructor; putting it back first lets the
+		// field-initializer pass below put its assignments into that one rather than making a second.
+		if (!settings.RemoveEmptyDefaultConstructors) {
+			foreach (var type in rootNode.DescendantsAndSelf.OfType<TypeDeclaration>().ToArray()) {
+				if (Resolve(type) is TypeDef typeDef)
+					AddRemovedConstructors(type, typeDef, context);
+			}
+		}
+		if (!settings.AllowFieldInitializers) {
+			foreach (var type in rootNode.DescendantsAndSelf.OfType<TypeDeclaration>().ToArray()) {
+				if (Resolve(type) is TypeDef typeDef)
+					MoveFieldInitializersBack(type, typeDef, context);
+			}
+		}
 		foreach (var type in rootNode.DescendantsAndSelf.OfType<TypeDeclaration>().ToArray()) {
 			if (Resolve(type) is not TypeDef typeDef)
 				continue;
-			if (!settings.RemoveEmptyDefaultConstructors)
-				AddRemovedConstructors(type, typeDef, context);
 			if (type.ClassType != ClassType.Enum)
 				SortMembers(type, typeDef, settings);
 		}
@@ -73,6 +155,10 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module) : IAstTransform {
 			if (settings.ShowTokenAndRvaComments)
 				AddTokenComments(entity);
 		}
+		if (!settings.EmitCalliAsInvocationExpression)
+			WriteCalliAsInlineAssembly(rootNode);
+		if (!settings.FullyQualifyAmbiguousTypeNames && !settings.FullyQualifyAllTypes && simpleTypes is not null)
+			RemoveAmbiguousTypeQualifications(rootNode, simpleTypes);
 		if (settings.HexadecimalNumbers)
 			WriteNumbersInHex(rootNode);
 		if (settings.FullyQualifyAllTypes)
@@ -314,8 +400,269 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module) : IAstTransform {
 		}
 	}
 
-	// ---------------------------------------------------------------- Numbers and usings
+	/// <summary>
+	/// ConvertConstructorCallIntoInitializer without AllowFieldInitializers: the package has already moved a
+	/// constructor's leading assignments to the field (or automatic property, or event) declarations. They are
+	/// moved back to the start of the constructors that ran them — every instance constructor that does not chain
+	/// to another with <c>this(...)</c>, the static constructor (made where the package removed an empty one). A
+	/// constant's initializer is not a constructor assignment and stays.
+	/// </summary>
+	void MoveFieldInitializersBack(TypeDeclaration type, TypeDef typeDef, TransformContext context) {
+		if (type.ClassType is ClassType.Interface or ClassType.Enum)
+			return;
+		var instanceAssignments = new List<Statement>();
+		var staticAssignments = new List<Statement>();
+		foreach (var member in type.Members.ToArray()) {
+			switch (member) {
+			case FieldDeclaration field:
+				if (field.HasModifier(Modifiers.Const))
+					break;
+				foreach (var variable in field.Variables) {
+					if (variable.Initializer is not { } initializer)
+						continue;
+					var isStatic = field.HasModifier(Modifiers.Static);
+					(isStatic ? staticAssignments : instanceAssignments).Add(Assignment(type, variable.Name, initializer.Detach(), isStatic));
+				}
+				break;
+			case PropertyDeclaration property when property.Initializer is not null && property.IsAutomaticProperty:
+				var isStaticProperty = property.HasModifier(Modifiers.Static);
+				(isStaticProperty ? staticAssignments : instanceAssignments).Add(Assignment(type, property.Name, property.Initializer.Detach(), isStaticProperty));
+				break;
+			case EventDeclaration @event:
+				foreach (var variable in @event.Variables) {
+					if (variable.Initializer is not { } initializer)
+						continue;
+					var isStaticEvent = @event.HasModifier(Modifiers.Static);
+					(isStaticEvent ? staticAssignments : instanceAssignments).Add(Assignment(type, variable.Name, initializer.Detach(), isStaticEvent));
+				}
+				break;
+			}
+		}
+		if (instanceAssignments.Count > 0) {
+			var constructors = type.Members.OfType<ConstructorDeclaration>()
+				.Where(constructor => !constructor.HasModifier(Modifiers.Static) && constructor.Initializer?.ConstructorInitializerType != ConstructorInitializerType.This)
+				.ToList();
+			if (constructors.Count == 0 && FindConstructor(typeDef, isStatic: false) is { } definition
+				&& AddConstructor(type, definition, context) is { } added)
+				constructors.Add(added);
+			foreach (var constructor in constructors)
+				Prepend(constructor, instanceAssignments);
+		}
+		if (staticAssignments.Count > 0) {
+			var constructor = type.Members.OfType<ConstructorDeclaration>().FirstOrDefault(candidate => candidate.HasModifier(Modifiers.Static));
+			if (constructor is null && FindConstructor(typeDef, isStatic: true) is { } definition)
+				constructor = AddConstructor(type, definition, context);
+			if (constructor is not null)
+				Prepend(constructor, staticAssignments);
+		}
+	}
 
+	/// <summary>The metadata constructor the package removed: the parameterless instance one or the static one.</summary>
+	static MethodDef? FindConstructor(TypeDef type, bool isStatic) =>
+		type.Methods.FirstOrDefault(method => isStatic
+			? method.IsStaticConstructor
+			: method.IsConstructor && !method.IsStatic && method.Parameters.Count(parameter => parameter.IsNormalMethodParameter) == 0);
+
+	/// <summary>An empty declaration of a metadata constructor, as <see cref="AddRemovedConstructors"/> writes one.</summary>
+	ConstructorDeclaration? AddConstructor(TypeDeclaration type, MethodDef definition, TransformContext context) {
+		if (context.TypeSystem.MainModule is not ICSharpCode.Decompiler.TypeSystem.MetadataModule metadataModule)
+			return null;
+		ICSharpCode.Decompiler.TypeSystem.IMethod method;
+		try {
+			method = definition.IsStaticConstructor
+				? metadataModule.GetDefinition(MetadataTokens.MethodDefinitionHandle((int)definition.Rid))
+				: metadataModule.GetDefinition(MetadataTokens.MethodDefinitionHandle((int)definition.Rid));
+		}
+		catch (Exception) {
+			return null;
+		}
+		if (context.TypeSystemAstBuilder.ConvertEntity(method) is not ConstructorDeclaration declaration)
+			return null;
+		declaration.Body = new BlockStatement();
+		type.Members.Add(declaration);
+		return declaration;
+	}
+
+	/// <summary>The assignments at the start of a constructor body, in the order the declarations had them.</summary>
+	static void Prepend(ConstructorDeclaration constructor, IReadOnlyList<Statement> assignments) {
+		constructor.Body ??= new BlockStatement();
+		for (var i = assignments.Count - 1; i >= 0; i--)
+			constructor.Body.Statements.InsertAfter(null, assignments[i]);
+	}
+
+	/// <summary>The assignment the initialization would have been: this.field = value, Type.field = value.</summary>
+	static Statement Assignment(TypeDeclaration type, string name, Expression value, bool isStatic) {
+		Expression target = isStatic
+			? new MemberReferenceExpression(new TypeReferenceExpression { Type = TypeReference(type) }, name)
+			: new MemberReferenceExpression(new ThisReferenceExpression(), name);
+		return new ExpressionStatement(new AssignmentExpression(target, value));
+	}
+
+	/// <summary>The type's own name as it is written inside itself: Sample, Sample&lt;T&gt;.</summary>
+	static AstType TypeReference(TypeDeclaration type) {
+		if (type.TypeParameters.Count == 0)
+			return new SimpleType(Identifier.Create(type.Name));
+		var reference = new SimpleType(Identifier.Create(type.Name));
+		foreach (var parameter in type.TypeParameters)
+			reference.TypeArguments.Add(new SimpleType(Identifier.Create(parameter.Name)));
+		return reference;
+	}
+
+	// ---------------------------------------------------------------- calli
+
+	/// <summary>
+	/// InlineAssembly for calli: without EmitCalliAsInvocationExpression the fork writes the signature as the first
+	/// argument of an identifier named <c>calli</c> — <c>calli(System.Void(System.IntPtr), ptr, args…)</c> — instead
+	/// of the function pointer invocation the package writes.
+	/// </summary>
+	static void WriteCalliAsInlineAssembly(DecompilerAstNode root) {
+		foreach (var invocation in root.DescendantsAndSelf.OfType<InvocationExpression>().ToArray()) {
+			if (invocation.Annotation<ICSharpCode.Decompiler.IL.CallIndirect>() is not { } calli)
+				continue;
+			var inline = new InvocationExpression(new IdentifierExpression("calli"));
+			inline.Arguments.Add(new IdentifierExpression(CalliSignature(calli.FunctionPointerType)));
+			// The fork's InlineAssembly: the arguments in IL stack order, the function pointer on top last.
+			foreach (var argument in invocation.Arguments.ToArray())
+				inline.Arguments.Add(argument.Detach());
+			inline.Arguments.Add(invocation.Target.Detach());
+			invocation.ReplaceWith(inline);
+		}
+	}
+
+	/// <summary>
+	/// Dnlib's GetMethodSigFullName: the return type and parameters with their full names —
+	/// <c>System.Void(System.IntPtr)</c>.
+	/// </summary>
+	static string CalliSignature(ICSharpCode.Decompiler.TypeSystem.FunctionPointerType type) {
+		var text = new System.Text.StringBuilder();
+		text.Append(FullName(type.ReturnType)).Append('(');
+		for (var i = 0; i < type.ParameterTypes.Length; i++) {
+			if (i > 0)
+				text.Append(',');
+			text.Append(FullName(type.ParameterTypes[i]));
+		}
+		return text.Append(')').ToString();
+	}
+
+	/// <summary>The full name dnlib's FullNameFactory writes for a type: System.Int32, System.Int32[], …</summary>
+	static string FullName(ICSharpCode.Decompiler.TypeSystem.IType type) {
+		switch (type) {
+		case ICSharpCode.Decompiler.TypeSystem.ByReferenceType byReference:
+			return FullName(byReference.ElementType) + "&";
+		case ICSharpCode.Decompiler.TypeSystem.PointerType pointer:
+			return FullName(pointer.ElementType) + "*";
+		case ICSharpCode.Decompiler.TypeSystem.ArrayType array:
+			return FullName(array.ElementType) + "[" + new string(',', Math.Max(0, array.Dimensions - 1)) + "]";
+		case ICSharpCode.Decompiler.TypeSystem.ParameterizedType parameterized:
+			return FullName(parameterized.GenericType) + "<" + string.Join(",", parameterized.TypeArguments.Select(FullName)) + ">";
+		case ICSharpCode.Decompiler.TypeSystem.ITypeParameter parameter:
+			return parameter.OwnerType == ICSharpCode.Decompiler.TypeSystem.SymbolKind.Method ? "!!" + parameter.Index : "!" + parameter.Index;
+		case ICSharpCode.Decompiler.TypeSystem.FunctionPointerType functionPointer:
+			return CalliSignature(functionPointer);
+		case ICSharpCode.Decompiler.TypeSystem.ITypeDefinition definition:
+			return DefinitionName(definition);
+		default:
+			return type.FullName;
+		}
+	}
+
+	static string DefinitionName(ICSharpCode.Decompiler.TypeSystem.ITypeDefinition definition) {
+		var declaringType = definition.DeclaringTypeDefinition;
+		if (declaringType is not null)
+			return DefinitionName(declaringType) + "." + definition.Name;
+		return string.IsNullOrEmpty(definition.Namespace) ? definition.Name : definition.Namespace + "." + definition.Name;
+	}
+
+	// ---------------------------------------------------------------- Ambiguous type names
+
+	/// <summary>
+	/// FullyQualifyAmbiguousTypeNames off: the package's IntroduceUsingDeclarations qualifies every simple type name
+	/// that its pass finds ambiguous. It runs after <see cref="SimpleTypeCollector"/>, so the names that were simple
+	/// before it are known; their qualified replacements are written simple again, the way the fork's transform
+	/// writes them when the option is off. The namespace is already one of the using declarations.
+	/// </summary>
+	static void RemoveAmbiguousTypeQualifications(DecompilerAstNode root, SimpleTypeCollector simpleTypes) {
+		if (simpleTypes.Types.Count == 0)
+			return;
+		foreach (var type in root.DescendantsAndSelf.OfType<AstType>().Where(node => node.Parent is not AstType).ToArray()) {
+			if (type.Annotation<TypeResolveResult>()?.Type is not { } resolved || !simpleTypes.Types.Contains(resolved))
+				continue;
+			if (StripNamespace(type, resolved.Namespace) is { } replacement)
+				type.ReplaceWith(replacement);
+		}
+	}
+
+	/// <summary>
+	/// The type with its namespace segments removed, or null when the node is not written namespace-qualified.
+	/// The type-name segments themselves (nested types included) and their type arguments and annotations stay.
+	/// </summary>
+	static AstType? StripNamespace(AstType type, string? @namespace) {
+		if (string.IsNullOrEmpty(@namespace))
+			return null;
+		var names = new List<string>();
+		for (var node = type; ;) {
+			switch (node) {
+			case MemberType memberNode:
+				names.Add(memberNode.MemberName);
+				node = memberNode.Target;
+				break;
+			case SimpleType simpleNode when simpleNode.Identifier is { } identifier:
+				names.Add(identifier);
+				node = null;
+				break;
+			default:
+				return null;
+			}
+			if (node is null)
+				break;
+		}
+		var parts = @namespace.Split('.');
+		if (names.Count <= parts.Length)
+			return null;
+		for (var i = 0; i < parts.Length; i++) {
+			if (names[names.Count - 1 - i] != parts[i])
+				return null;
+		}
+		// Rebuild the type-name segments, innermost first: the namespace-qualified chain is
+		// Ns.Outer.Inner, so the last `parts.Length` names are the namespace.
+		var segments = new List<AstType>();
+		for (var node = type; segments.Count < names.Count - parts.Length; node = ((MemberType)node).Target)
+			segments.Add(node);
+		AstType rebuilt;
+		var innermost = segments[^1];
+		rebuilt = innermost is MemberType innermostMember
+			? new SimpleType(Identifier.Create(innermostMember.MemberName))
+			: new SimpleType(Identifier.Create(((SimpleType)innermost).Identifier!));
+		Copy(innermost, rebuilt);
+		for (var i = segments.Count - 2; i >= 0; i--) {
+			var segment = (MemberType)segments[i];
+			var memberType = new MemberType { Target = rebuilt, MemberName = segment.MemberName, IsDoubleColon = segment.IsDoubleColon };
+			Copy(segment, memberType);
+			rebuilt = memberType;
+		}
+		return rebuilt;
+	}
+
+	/// <summary>The annotations and type arguments of a type-name segment, which carry its references and colors.</summary>
+	static void Copy(AstType from, AstType to) {
+		to.CopyAnnotationsFrom(from);
+		var arguments = from switch {
+			SimpleType simple => simple.TypeArguments,
+			MemberType member => member.TypeArguments,
+			_ => null,
+		};
+		var target = to switch {
+			SimpleType simple => simple.TypeArguments,
+			MemberType member => member.TypeArguments,
+			_ => null,
+		};
+		if (arguments is null || target is null)
+			return;
+		foreach (var argument in arguments.ToArray())
+			target.Add(argument.Detach());
+	}
+
+	// ---------------------------------------------------------------- Numbers and usings
 	/// <summary>
 	/// HexadecimalNumbers: every integer written the way dnSpy's C# NumberFormatter writes it — up to nine in
 	/// decimal, anything larger in upper case hexadecimal, a negative one as a minus in front of that.
@@ -378,10 +725,31 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module) : IAstTransform {
 	}
 
 	/// <summary>
+	/// The pipeline this transform belongs to: the simple-name collector ahead of ICSharpCode.Decompiler's
+	/// IntroduceUsingDeclarations when FullyQualifyAmbiguousTypeNames is off, and the transform itself last.
+	/// </summary>
+	public static void AddTo(CSharpDecompiler decompiler, ModuleDef module, DecompilerSettings settings) {
+		SimpleTypeCollector? collector = null;
+		if (settings is DnSpyDecompilerSettings { FullyQualifyAmbiguousTypeNames: false }) {
+			collector = new SimpleTypeCollector();
+			var transforms = decompiler.AstTransforms;
+			var index = -1;
+			for (var i = 0; i < transforms.Count; i++) {
+				if (transforms[i] is ICSharpCode.Decompiler.CSharp.Transforms.IntroduceUsingDeclarations) {
+					index = i;
+					break;
+				}
+			}
+			transforms.Insert(index < 0 ? transforms.Count : index, collector);
+		}
+		decompiler.AstTransforms.Add(new DnSpyCSharpTransform(module, collector));
+	}
+
+	/// <summary>
 	/// IntroduceUsingDeclarations' order: with SortSystemUsingStatementsFirst, the System namespaces first and each
 	/// half alphabetically; without it, all of them alphabetically — both ignoring case.
 	/// </summary>
-	static void SortUsings(DecompilerAstNode root, bool systemFirst) {
+	internal static void SortUsings(DecompilerAstNode root, bool systemFirst) {
 		foreach (var container in root.DescendantsAndSelf.Where(node => node is SyntaxTree or NamespaceDeclaration)) {
 			var usings = container.Children.OfType<UsingDeclaration>().ToList();
 			if (usings.Count < 2)

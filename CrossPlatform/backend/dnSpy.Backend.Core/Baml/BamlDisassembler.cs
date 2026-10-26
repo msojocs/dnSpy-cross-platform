@@ -182,7 +182,7 @@ namespace dnSpy.Backend.Core.Baml {
 			if (typeReferences.TryGetValue(id, out var reference))
 				return reference;
 			if (id > 0x7fff) {
-				return typeReferences[id] = BamlTypeReference.Create(TryResolve(ctx.KnownThings.Types((KnownTypes)(-id))));
+				return typeReferences[id] = BamlTypeReference.Create(TryResolve(ctx, ctx.KnownThings.Types((KnownTypes)(-id))));
 			}
 			if (ctx.TypeIdMap.TryGetValue(id, out var typeRecord)) {
 				var type = TryParseType(ctx, typeRecord);
@@ -194,12 +194,24 @@ namespace dnSpy.Backend.Core.Baml {
 
 		// Port: dnSpy resolves the known WPF types and assemblies with the GAC behind it, where WPF always is, and
 		// would fail the whole listing if one did not resolve. Without WPF to resolve against, the record is still
-		// written the same; only the reference behind the id is missing.
-		static TypeDef TryResolve(KnownType type) {
+		// written the same; the reference keeps the name the record gave it, so its tooltip and its tie to the
+		// other records that use the id survive even though there is no definition to follow.
+		static ITypeDefOrRef TryResolve(BamlContext ctx, KnownType type) {
 			try {
 				return type.TypeDef;
 			}
 			catch (ResolveException) {
+				return KnownTypeRef(ctx, type);
+			}
+		}
+
+		/// <summary>A reference to a known WPF type by the name its assembly gives it, without resolving it.</summary>
+		static TypeRefUser KnownTypeRef(BamlContext ctx, KnownType type) {
+			try {
+				var assembly = new AssemblyRefUser(new AssemblyNameInfo(type.Assembly.FullName));
+				return new TypeRefUser(ctx.Module, type.Namespace ?? string.Empty, type.Name, assembly);
+			}
+			catch (Exception ex) when (ex is not OutOfMemoryException) {
 				return null;
 			}
 		}
@@ -224,11 +236,11 @@ namespace dnSpy.Backend.Core.Baml {
 
 			if (id > 0x7fff) {
 				var knownMember = ctx.KnownThings.Members((KnownMembers)(-id));
-				return attributeReferences[id] = BamlAttributeReference.Create(TryResolve(knownMember.DeclaringType), knownMember.Name);
+				return attributeReferences[id] = BamlAttributeReference.Create(TryResolve(ctx, knownMember.DeclaringType), knownMember.Name);
 			}
 			if (ctx.AttributeIdMap.TryGetValue(id, out var attrInfo)) {
 				if (attrInfo.OwnerTypeId > 0x7fff) {
-					return attributeReferences[id] = BamlAttributeReference.Create(TryResolve(ctx.KnownThings.Types((KnownTypes)(-attrInfo.OwnerTypeId))), attrInfo.Name);
+					return attributeReferences[id] = BamlAttributeReference.Create(TryResolve(ctx, ctx.KnownThings.Types((KnownTypes)(-attrInfo.OwnerTypeId))), attrInfo.Name);
 				}
 				if (ctx.TypeIdMap.TryGetValue(attrInfo.OwnerTypeId, out var typeRecord)) {
 					var type = TryParseType(ctx, typeRecord);

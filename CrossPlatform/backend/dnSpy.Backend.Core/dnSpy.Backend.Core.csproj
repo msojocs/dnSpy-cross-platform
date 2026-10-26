@@ -23,6 +23,8 @@
     <PackageReference Include="ICSharpCode.CodeConverter" Version="10.0.1.923" />
     <PackageReference Include="ICSharpCode.BamlDecompiler" Version="11.1.0.9782" />
     <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.12" />
+    <!-- TIFF is one of the formats WPF's Image decodes and Chromium does not; the resource viewer converts it. -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.11" />
     
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.14.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />

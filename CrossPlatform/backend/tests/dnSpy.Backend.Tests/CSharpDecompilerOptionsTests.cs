@@ -15,10 +15,64 @@ namespace dnSpy.Backend.Tests;
 public sealed class CSharpDecompilerOptionsTests : IDisposable {
 	const string Source = """
 		using System;
+		using System.Collections.Generic;
 		using System.Diagnostics;
+		using System.Threading.Tasks;
+		using Ambiguous.One;
+		using Ambiguous.Two;
+
+		namespace Ambiguous.One {
+			public class Thing { }
+		}
+
+		namespace Ambiguous.Two {
+			public class Thing { }
+		}
 
 		namespace OptionsTarget {
 			public class Empty {
+			}
+
+			internal class Ambiguity {
+				public Ambiguous.One.Thing One() => new Ambiguous.One.Thing();
+				public Ambiguous.Two.Thing Two() => new Ambiguous.Two.Thing();
+			}
+
+			internal class Fields {
+				private int value = Compute();
+				private static int other = Compute() + 1;
+
+				static Fields() {
+					Console.WriteLine("static");
+				}
+
+				public Fields() {
+					Console.WriteLine("instance");
+				}
+
+				private static int Compute() => 1;
+			}
+
+			internal class StaticFields {
+				private static int other = Compute() + 1;
+				private static int Compute() => 1;
+			}
+
+			internal static unsafe class Calls {
+				public static int Invoke(delegate*<int, int> function) => function(42);
+			}
+
+			internal class Hidden {
+				public Func<int, int> Make() => x => x + 1;
+
+				public async Task<int> Later() {
+					await Task.Yield();
+					return 1;
+				}
+
+				public IEnumerable<int> Items() {
+					yield return 1;
+				}
 			}
 
 			internal class Sample {
@@ -47,7 +101,7 @@ public sealed class CSharpDecompilerOptionsTests : IDisposable {
 			.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
 			.Select(reference => MetadataReference.CreateFromFile(reference));
 		var compilation = CSharpCompilation.Create("OptionsTarget", [CSharpSyntaxTree.ParseText(Source)], references,
-			new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+			new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
 		var result = compilation.Emit(path);
 		Assert.True(result.Success, string.Join("\n", result.Diagnostics));
 	}
@@ -170,6 +224,69 @@ public sealed class CSharpDecompilerOptionsTests : IDisposable {
 		var comment = Assert.Single(lines, line => line.StartsWith("' Token: ", StringComparison.Ordinal) && line.Contains("RVA:", StringComparison.Ordinal) && lines[Array.IndexOf(lines, line) + 1].Contains("Mixed(", StringComparison.Ordinal));
 		var start = document.Text.IndexOf(comment, StringComparison.Ordinal);
 		Assert.Contains(document.Spans, span => span.Start > start && span.Start < start + comment.Length && span.TargetNodeId is not null);
+	}
+
+	[Fact]
+	public async Task WritesAmbiguousTypeNamesWithoutTheirNamespaceWhenAsked() {
+		// Both usings are imported and both types are used, so the package qualifies each reference; the fork
+		// writes the simple name unless FullyQualifyAmbiguousTypeNames is on.
+		var qualified = Lines(await DecompileAsync("Ambiguity"));
+		Assert.Contains(qualified, line => line.Contains("Ambiguous.One.Thing", StringComparison.Ordinal));
+		Assert.Contains(qualified, line => line.Contains("Ambiguous.Two.Thing", StringComparison.Ordinal));
+
+		var simple = Lines(await DecompileAsync("Ambiguity", new CSharpDecompilerSettingsDto(FullyQualifyAmbiguousTypeNames: false)));
+		Assert.Contains(simple, line => line.Contains("public Thing One()", StringComparison.Ordinal));
+		Assert.Contains(simple, line => line.Contains("public Thing Two()", StringComparison.Ordinal));
+		Assert.DoesNotContain(simple, line => line.Contains("Ambiguous.One.Thing", StringComparison.Ordinal));
+		Assert.Contains("using Ambiguous.One;", simple);
+		Assert.Contains("using Ambiguous.Two;", simple);
+	}
+
+	[Fact]
+	public async Task MovesFieldInitializersBackIntoConstructorsWhenTheyAreNotAllowed() {
+		var moved = Lines(await DecompileAsync("Fields"));
+		Assert.Contains("private int value = Compute();", moved);
+		// The explicit static constructor keeps its assignment where it is: the package only moves a static
+		// field initializer out of a type that has no explicit one.
+		Assert.Contains("other = Compute() + 1;", moved);
+		Assert.DoesNotContain(moved, line => line.Contains("private static int other =", StringComparison.Ordinal));
+
+		var inConstructors = Lines(await DecompileAsync("Fields", new CSharpDecompilerSettingsDto(AllowFieldInitializers: false)));
+		Assert.DoesNotContain(inConstructors, line => line.Contains("int value =", StringComparison.Ordinal));
+		Assert.True(IndexOf(inConstructors, "this.value = Compute();") < IndexOf(inConstructors, "Console.WriteLine(\"instance\")"));
+		Assert.True(IndexOf(inConstructors, "other = Compute() + 1;") < IndexOf(inConstructors, "Console.WriteLine(\"static\")"));
+
+		// Without an explicit static constructor, the package moves the initializer and removes the .cctor; the
+		// fork's option keeps both the field and the constructor.
+		var staticMoved = Lines(await DecompileAsync("StaticFields"));
+		Assert.Contains("private static int other = Compute() + 1;", staticMoved);
+		var staticBack = Lines(await DecompileAsync("StaticFields", new CSharpDecompilerSettingsDto(AllowFieldInitializers: false)));
+		Assert.Contains(staticBack, line => line.Contains("private static int other;", StringComparison.Ordinal));
+		Assert.Contains(staticBack, line => line.Contains("static StaticFields()", StringComparison.Ordinal));
+		Assert.Contains("StaticFields.other = Compute() + 1;", staticBack);
+	}
+
+	[Fact]
+	public async Task WritesCalliAsInlineAssemblyUnlessInvocationExpressionsAreAsked() {
+		var inline = Lines(await DecompileAsync("Calls"));
+		Assert.Contains(inline, line => line.Contains("calli(System.Int32(System.Int32), 42, function)", StringComparison.Ordinal));
+
+		var invocation = Lines(await DecompileAsync("Calls", new CSharpDecompilerSettingsDto(EmitCalliAsInvocationExpression: true)));
+		Assert.DoesNotContain(invocation, line => line.Contains("calli(", StringComparison.Ordinal));
+		Assert.Contains(invocation, line => line.Contains("function(42)", StringComparison.Ordinal));
+	}
+
+	[Fact]
+	public async Task ShowsTheMembersTheDecompilerFoldsAwayWhenForced() {
+		var hidden = Lines(await DecompileAsync("Hidden"));
+		Assert.DoesNotContain(hidden, line => line.Contains("<Make>b__", StringComparison.Ordinal));
+		Assert.DoesNotContain(hidden, line => line.Contains("MoveNext", StringComparison.Ordinal));
+
+		var shown = Lines(await DecompileAsync("Hidden", new CSharpDecompilerSettingsDto(ForceShowAllMembers: true)));
+		Assert.Contains(shown, line => line.Contains("<Make>b__", StringComparison.Ordinal));
+		// The state machines the async and iterator methods compile to, as dnSpy's ForceShowAllMembers writes them.
+		Assert.Contains(shown, line => line.Contains("MoveNext", StringComparison.Ordinal));
+		Assert.Contains(shown, line => line.Contains("<Items>d__", StringComparison.Ordinal));
 	}
 
 	public void Dispose() {

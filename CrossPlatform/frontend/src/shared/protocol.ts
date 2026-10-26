@@ -342,6 +342,12 @@ export interface TextSpan {
   localId?: string | null
   /** A local's or parameter's Quick Info — "(local variable) int num" — carried by the first span of the local. */
   toolTip?: TextPart[] | null
+  /**
+   * The image the Quick Info draws before its text, carried beside `toolTip` on the same first span. dnSpy's
+   * tooltip providers give one to what the text cannot say by itself (a string, an assembly, a property); an
+   * empty name means the provider draws none (a BAML record), rather than leaving it to the local's icon.
+   */
+  toolTipImage?: string | null
   /** Whether the reference writes what it names, which the reference highlighter marks in a color of its own. */
   isWrite?: boolean
   /** An IL opcode: following it opens the opcode's documentation, and its Quick Info describes it. */

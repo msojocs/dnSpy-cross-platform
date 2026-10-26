@@ -2213,7 +2213,12 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				if (prepared is null)
 					return await RunAsync(w => w.DecompileAsync(request, cancellationToken), cancellationToken).ConfigureAwait(false);
 				using var session = prepared.Session;
-				var syntaxTree = await Task.Run(() => session.Decompiler.Decompile(prepared.Handles), cancellationToken).ConfigureAwait(false);
+				var syntaxTree = await Task.Run(() => {
+					var tree = session.Decompiler.Decompile(prepared.Handles);
+					return prepared.Settings is DnSpyDecompilerSettings { ForceShowAllMembers: true } showAll
+						? MergeHiddenMembers(tree, prepared, showAll, cancellationToken)
+						: tree;
+				}, cancellationToken).ConfigureAwait(false);
 				var csharp = await RunAsync(w => {
 					// An edit, reload or close while ILSpy worked must not publish spans or a statement map
 					// against different metadata. Shared dnlib objects and node dictionaries remain protected.
@@ -2244,7 +2249,32 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			if (node.AsModuleEntry is not { } module || node.Kind is not (NodeKind.Type or NodeKind.Method or NodeKind.Field or NodeKind.Property or NodeKind.Event))
 				return null;
 			var settings = visualBasic ? settingsDto.ToVisualBasicSettings() : settingsDto.ToDecompilerSettings();
-			return new CSharpDecompilation(stateId, node.Kind is not NodeKind.Type, [ToEntityHandle((IMDTokenProvider)node.Value)], settings, CreateCSharpDecompilerSession(module, settings, cancellationToken));
+			return new CSharpDecompilation(stateId, node.Kind is not NodeKind.Type, [ToEntityHandle((IMDTokenProvider)node.Value)], settings, CreateCSharpDecompilerSession(module, settings, cancellationToken), module.Module);
+		}
+
+		/// <summary>
+		/// ForceShowAllMembers: the compiler-generated declarations the first decompilation hid, decompiled with the
+		/// hiding switches off and merged into the document. Only a document of types can gain members this way —
+		/// a single member's document has no siblings — so the work is skipped for the others.
+		/// </summary>
+		static SyntaxTree MergeHiddenMembers(SyntaxTree syntaxTree, CSharpDecompilation prepared, DnSpyDecompilerSettings settings, CancellationToken cancellationToken) {
+			if (!prepared.Handles.Any(handle => handle.Kind == System.Reflection.Metadata.HandleKind.TypeDefinition))
+				return syntaxTree;
+			try {
+				var showAll = settings.ForShowAllMembers();
+				var decompiler = new CSharpDecompiler(prepared.Session.Decompiler.TypeSystem, showAll) { CancellationToken = cancellationToken };
+				DnSpyCSharpTransform.AddTo(decompiler, prepared.Module, showAll);
+				var source = decompiler.Decompile(prepared.Handles);
+				HiddenMemberMerger.Merge(syntaxTree, source, showAll.SortSystemUsingStatementsFirst);
+			}
+			catch (OperationCanceledException) {
+				throw;
+			}
+			catch (Exception) {
+				// A second pass that cannot decompile leaves the document as the first one wrote it; the option
+				// only ever adds members.
+			}
+			return syntaxTree;
 		}
 
 		DecompileResponse FinishCSharpDecompilation(NodeEntry node, CSharpDecompiler decompiler, SyntaxTree syntaxTree, DecompilerSettings settings, CancellationToken cancellationToken) {
@@ -2278,7 +2308,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 			return document with { Spans = document.Spans.Concat(added).OrderBy(span => span.Start).ToArray() };
 		}
 
-		sealed record CSharpDecompilation(string StateId, bool MemberOnly, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session);
+		sealed record CSharpDecompilation(string StateId, bool MemberOnly, System.Reflection.Metadata.EntityHandle[] Handles, DecompilerSettings Settings, CSharpDecompilerSession Session, ModuleDef Module);
 
 		public async Task<DecompileResponse> DecompileAsync(DecompileRequest request, CancellationToken cancellationToken) {
 			var node = GetNode(request.NodeId);
@@ -2581,7 +2611,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 					PEStreamOptions.PrefetchMetadata,
 					settings.ApplyWindowsRuntimeProjections ? System.Reflection.Metadata.MetadataReaderOptions.Default : System.Reflection.Metadata.MetadataReaderOptions.None);
 				var decompiler = new CSharpDecompiler(file, fileResolver, settings) { CancellationToken = cancellationToken };
-				decompiler.AstTransforms.Add(new DnSpyCSharpTransform(module.Module));
+				DnSpyCSharpTransform.AddTo(decompiler, module.Module, settings);
 				return new CSharpDecompilerSession(decompiler);
 			}
 
@@ -2610,7 +2640,7 @@ public sealed partial class WorkspaceManager : IDisposable, IDebugSymbolResolver
 				try {
 					var resolver = GacFallbackAssemblyResolver.Create(module.Path, snapshotFile, throwOnError: false);
 					var decompiler = new CSharpDecompiler(snapshotFile, resolver, settings) { CancellationToken = cancellationToken };
-					decompiler.AstTransforms.Add(new DnSpyCSharpTransform(module.Module));
+					DnSpyCSharpTransform.AddTo(decompiler, module.Module, settings);
 					return new CSharpDecompilerSession(decompiler, snapshotFile, snapshotStream);
 				}
 				catch {

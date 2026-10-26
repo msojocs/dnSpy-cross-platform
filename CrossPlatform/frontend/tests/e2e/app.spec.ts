@@ -497,7 +497,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ })
     await getCode.dblclick()
 
     await expect(page.locator('.document-view')).toHaveAttribute('data-reference-count', /^[1-9]\d*$/)
@@ -736,7 +736,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ })
     await getCode.click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Edit Method Body...' }).click()
@@ -848,7 +848,7 @@ test.describe('the workspace shell', () => {
     // A method adds the IL edits and the breakpoint, and its delete is named after it.
     await page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ }).locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ })
     await getCode.click({ button: 'right' })
     await expect(menu.locator('.document-tab-menu-label').first()).toBeVisible()
     const methodLabels = await menu.locator('.document-tab-menu-label').allTextContents()
@@ -912,7 +912,7 @@ test.describe('the workspace shell', () => {
     await code.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click({ button: 'right' })
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ }).click({ button: 'right' })
     await menu.getByRole('menuitem', { name: 'Add Method Breakpoint' }).click()
     await expect(getter).toHaveCount(1)
   })
@@ -963,7 +963,7 @@ test.describe('the workspace shell', () => {
     await expect(tokenDialog.locator('.modal-error')).toBeVisible()
     // Go to Token is dnSpy's FollowReference: with DecompileFullType on, the method's token opens the type it is
     // declared in — which the tree then selects, opening the chain above it — with the caret on the method.
-    await tokenDialog.getByLabel('Token').fill('0x06000ADC')
+    await tokenDialog.getByLabel('Token').fill('0x06000ADE')
     await tokenDialog.getByRole('button', { name: 'OK' }).click()
     await expect(tokenDialog).toBeHidden()
     await expect(page.getByRole('tab', { name: 'RpcException', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -1002,7 +1002,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ })
+    const getCode = page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ })
     await getCode.click()
 
     // The hex group is listed in dnSpy's order, and only the entries that have something to point at are
@@ -1286,7 +1286,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ }).click()
     await page.getByRole('menuitem', { name: 'Edit' }).click()
     await page.getByRole('menuitem', { name: 'Replace Method Body with stub...' }).click()
     await expect(page.getByText('Modified', { exact: true })).toBeVisible()
@@ -1407,7 +1407,7 @@ test.describe('the workspace shell', () => {
     const rpcException = page.locator('.tree-row[data-kind="type"]').filter({ hasText: /^RpcException @0200008D$/ })
     await rpcException.locator('.tree-expander').click()
     await expandPropertyRow(/^Code : int @[0-9A-F]{8}$/)
-    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADC$/ }).click()
+    await page.locator('.tree-row[data-kind="method"]').filter({ hasText: /^get_Code\(\) : int @06000ADE$/ }).click()
     await page.keyboard.press('Alt+Enter')
     const method = page.getByRole('dialog', { name: 'Edit Method' })
     await expect(method).toBeVisible()
@@ -3544,6 +3544,45 @@ test.describe('saving a resource', () => {
     await expect(save).toHaveText('Save')
     await save.click()
     await expect.poll(() => existsSync(saveResourcePath) ? readFileSync(saveResourcePath, 'utf8') : '').toContain('UserControl')
+  })
+})
+
+// Disassemble BAML writes a .baml entry as its records. Each id is a reference beside the text; hovering one
+// shows what it names the way dnSpy's BamlDocumentViewerToolTipProvider does.
+test.describe('BAML disassembly', () => {
+  test.beforeEach(async () => { await launchApp(bamlTargetPath) })
+  test.afterEach(async () => { await closeApp() })
+
+  test('writes the records and describes the record under the mouse', async () => {
+    await page.getByRole('button', { name: 'Open Assembly' }).first().click()
+    await expect(page.getByRole('treeitem').first()).toContainText('BamlTarget')
+    await expandModule()
+    await expandRow(page.locator('.tree-row[data-kind="resourcesgroup"]').first())
+    const generated = page.locator('.tree-row[data-kind="resource"]').filter({ hasText: /\.g\.resources$/ })
+    await expandRow(generated)
+    const baml = page.locator('.tree-row[data-kind="resourceentry"]').filter({ hasText: /\.baml$/ })
+    await expect(baml).toBeVisible()
+    await baml.dblclick()
+
+    const editor = page.locator('.monaco-editor')
+    const text = async (): Promise<string> => (await editor.locator('.view-lines').innerText()).replaceAll('\u00a0', ' ')
+    // The BAML entry opens as the XAML it decompiles to.
+    await expect.poll(text).toMatch(/UserControl/)
+
+    // The editor's context menu switches the tab (and the BAML page) to the records.
+    await clickEditorToken(editor.locator('.view-line').first(), { button: 'right' })
+    const menu = page.getByRole('menu', { name: 'Code editor' })
+    await menu.getByRole('menuitem', { name: /Disassemble BAML/ }).click()
+    await expect.poll(text).toMatch(/DocumentStart/)
+
+    // The record name at the start of its line carries the record's type and position.
+    const record = editor.locator('.view-line').filter({ hasText: /DocumentStart/ }).first()
+    const box = (await record.boundingBox())!
+    await page.mouse.move(box.x + 3, box.y + box.height / 2)
+    const hover = page.locator('.monaco-hover:visible')
+    await expect(hover).toBeVisible()
+    await expect(hover).toContainText('DocumentStart')
+    await expect(hover).toContainText(/Position: 0x[0-9a-f]+/)
   })
 })
 

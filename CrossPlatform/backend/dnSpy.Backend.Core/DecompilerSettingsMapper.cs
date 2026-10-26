@@ -27,8 +27,9 @@ internal static class DecompilerSettingsMapper {
 			// them only without usings, which the transform then puts back.
 			UsingDeclarations = !cs.FullyQualifyAllTypes,
 			// ForceShowAllMembers shows what the decompiler would fold away. The package hides compiler-generated
-			// types and members unconditionally; what it can still show are the backing fields and accessors of
-			// automatic properties and events.
+			// types and members through the feature settings; the automatic-property and -event backing fields are
+			// the two it can show by itself, the rest are added from a second decompilation (WorkspaceManager's
+			// MergeHiddenMembers).
 			AutomaticProperties = !cs.ForceShowAllMembers,
 			AutomaticEvents = !cs.ForceShowAllMembers,
 			ShowTokenAndRvaComments = cs.ShowTokenAndRvaComments,
@@ -40,26 +41,64 @@ internal static class DecompilerSettingsMapper {
 			HexadecimalNumbers = cs.HexadecimalNumbers,
 			SortSystemUsingStatementsFirst = cs.SortSystemUsingStatementsFirst,
 			FullyQualifyAllTypes = cs.FullyQualifyAllTypes,
+			FullyQualifyAmbiguousTypeNames = cs.FullyQualifyAmbiguousTypeNames,
+			AllowFieldInitializers = cs.AllowFieldInitializers,
+			EmitCalliAsInvocationExpression = cs.EmitCalliAsInvocationExpression,
+			ForceShowAllMembers = cs.ForceShowAllMembers,
 			RemoveEmptyDefaultConstructors = cs.RemoveEmptyDefaultConstructors && !cs.ForceShowAllMembers,
 			InsertParenthesesForReadability = cs.InsertParenthesesForReadability,
 			DecompilationOrder = cs.DecompilationOrder is { Count: > 0 } order ? order : DnSpyDecompilerSettings.DefaultDecompilationOrder,
-			// Left as the package writes them, which it does not let change:
-			// - FullyQualifyAmbiguousTypeNames: a name that would be ambiguous is always qualified.
-			// - AllowFieldInitializers: a field's initializer is always moved out of the constructors.
-			// - EmitCalliAsInvocationExpression: calli is always a function pointer call, never inline IL.
 		};
 	}
 
 	/// <summary>
 	/// The settings for the Visual Basic view, which is the C# one converted: dnSpy's VBDecompiler writes every
-	/// access modifier whatever the page says, since VB's defaults differ from C#'s.
+	/// access modifier whatever the page says, since VB's defaults differ from C#'s, and turns off the C# spellings
+	/// its own converter (NRefactory.VB) never had to handle. The same switches keep the modern C# syntax the
+	/// converter has no VB form for out of the text: records, primary constructors, switch expressions, patterns,
+	/// required/init members and file-scoped namespaces are written the way dnSpy's older C# view wrote them.
 	/// </summary>
-	public static DecompilerSettings ToVisualBasicSettings(this DecompilerSettingsDto? dto) {
-		var settings = dto.ToDecompilerSettings();
+	public static DecompilerSettings ToVisualBasicSettings(this DecompilerSettingsDto? dto) =>
+		dto.ToDecompilerSettings().ToVisualBasicSettings();
+
+	/// <summary>
+	/// The settings a Visual Basic view decompiles its C# with: dnSpy's VBDecompiler writes every access modifier
+	/// whatever the page says, since VB's defaults differ from C#'s, and turns off the C# spellings its own
+	/// converter (NRefactory.VB) never had to handle. The same switches keep the modern C# syntax the converter has
+	/// no VB form for out of the text: records, primary constructors, switch expressions, patterns, required/init
+	/// members and file-scoped namespaces are written the way dnSpy's older C# view wrote them.
+	/// </summary>
+	public static T ToVisualBasicSettings<T>(this T settings) where T : DecompilerSettings {
 		if (settings is DnSpyDecompilerSettings dnSpy) {
 			dnSpy.TypeAddInternalModifier = true;
 			dnSpy.MemberAddPrivateModifier = true;
 		}
+		// dnSpy's VBDecompiler.CreateAstBuilder.
+		settings.IntroduceIncrementAndDecrement = false;
+		settings.MakeAssignmentExpressions = false;
+		settings.QueryExpressions = false;
+		// The C# the VB view is converted from stays in the syntax dnSpy's Visual Basic decompiler knew.
+		settings.NullableReferenceTypes = false;
+		settings.RecordClasses = false;
+		settings.RecordStructs = false;
+		settings.UsePrimaryConstructorSyntax = false;
+		settings.UsePrimaryConstructorSyntaxForNonRecordTypes = false;
+		settings.RequiredMembers = false;
+		settings.InitAccessors = false;
+		settings.FileScopedNamespaces = false;
+		settings.SwitchExpressions = false;
+		settings.Ranges = false;
+		settings.PatternMatching = false;
+		settings.RecursivePatternMatching = false;
+		settings.PatternCombinators = false;
+		settings.RelationalPatterns = false;
+		settings.WithExpressions = false;
+		settings.UseEnhancedUsing = false;
+		settings.Utf8StringLiterals = false;
+		settings.ParamsCollections = false;
+		settings.StackAllocInitializers = false;
+		settings.StructDefaultConstructorsAndFieldInitializers = false;
+		settings.FunctionPointers = false;
 		return settings;
 	}
 }

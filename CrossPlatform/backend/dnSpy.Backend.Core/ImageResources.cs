@@ -3,6 +3,7 @@ using System.Runtime.Serialization;
 using System.Text;
 using dnlib.DotNet;
 using dnlib.DotNet.Resources;
+using SixLabors.ImageSharp;
 
 namespace dnSpy.Backend.Core;
 
@@ -223,6 +224,23 @@ internal static class ImageResources {
 		WriteByteArray(writer, data);
 		writer.Write(MessageEnd);
 		return stream.ToArray();
+	}
+
+	/// <summary>
+	/// A TIFF file as PNG. WPF's Image decodes TIFF through WIC; a browser does not, so the viewer gets the
+	/// picture converted. Null when the file is not one ImageSharp can read.
+	/// </summary>
+	public static byte[]? TryConvertToPng(byte[] data) {
+		try {
+			using var input = new MemoryStream(data, writable: false);
+			using var image = SixLabors.ImageSharp.Image.Load(input);
+			using var output = new MemoryStream();
+			image.SaveAsPng(output);
+			return output.ToArray();
+		}
+		catch (Exception ex) when (ex is not OutOfMemoryException) {
+			return null;
+		}
 	}
 
 	static void WriteHeader(BinaryWriter writer, string assemblyName) {

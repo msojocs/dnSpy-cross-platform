@@ -4,6 +4,9 @@ using dnlib.DotNet;
 using dnlib.DotNet.Resources;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Tiff;
+using SixLabors.ImageSharp.PixelFormats;
 using Xunit;
 
 namespace dnSpy.Backend.Tests;
@@ -199,6 +202,32 @@ public sealed class WorkspaceResourceDocumentTests : IDisposable {
 		Assert.Equal(listData, Convert.FromBase64String(savedList.Base64Data));
 		var savedImage = await manager.GetResourceDataAsync(new ResourceDataRequest(opened.WorkspaceId, entries.Single(entry => entry.Label == "dot.png").Id), TestContext.Current.CancellationToken);
 		Assert.Equal(png, Convert.FromBase64String(savedImage.Base64Data));
+	}
+
+	[Fact]
+	public async Task ShowsATiffImageSerializedInAResourceAsPng() {
+		// A serialized Bitmap keeps whatever format its file had; WPF's Image reads TIFF through WIC, a browser
+		// does not, so the document carries the picture converted to PNG.
+		using var tiff = new Image<L8>(2, 2);
+		using var tiffStream = new MemoryStream();
+		tiff.Save(tiffStream, new TiffEncoder());
+		var opened = await OpenAsync();
+		var resources = await FindResourcesFolderAsync(opened.WorkspaceId);
+		var created = await CreateResourcesFileAsync(opened.WorkspaceId, resources.Id, "tiff.resources");
+		var transaction = await manager.BeginEditAsync(new BeginEditRequest(opened.WorkspaceId), TestContext.Current.CancellationToken);
+		await manager.QueueCreateResourceElementAsync(
+			new CreateResourceElementRequest(opened.WorkspaceId, transaction.TransactionId, created.NodeId, ResourceElementKinds.ImageFiles, string.Empty,
+				Images: [new ResourceImageFileDto("photo.tif", Convert.ToBase64String(tiffStream.ToArray()))]),
+			TestContext.Current.CancellationToken);
+		await manager.CommitEditAsync(new EditTransactionRequest(opened.WorkspaceId, transaction.TransactionId), TestContext.Current.CancellationToken);
+		var entry = Assert.Single(await ChildrenAsync(opened.WorkspaceId, created.NodeId));
+
+		var document = await DecompileAsync(opened.WorkspaceId, entry.Id, DecompilerLanguage.CSharp);
+
+		var image = Assert.Single(document.Attachments!, attachment => attachment.Kind == DocumentAttachmentKinds.Image);
+		Assert.Equal("image/png", image.MimeType);
+		var bytes = Convert.FromBase64String(image.Base64Data!);
+		Assert.Equal([0x89, 0x50, 0x4E, 0x47], bytes[..4]);
 	}
 
 	[Fact]

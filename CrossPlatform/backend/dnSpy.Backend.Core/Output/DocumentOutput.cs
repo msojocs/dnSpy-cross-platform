@@ -11,13 +11,19 @@ namespace dnSpy.Backend.Core.Output;
 delegate TextSpanDto? ReferenceResolver(object reference, DecompilerReferenceFlags flags, string color, int start, int length);
 
 /// <summary>
+/// The Quick Info a local reference carries — dnSpy's <c>DocumentViewerToolTipProvider</c>: the text parts its
+/// provider writes, and the image it draws before them.
+/// </summary>
+readonly record struct DocumentToolTip(IReadOnlyList<TextPartDto> Parts, string? Image);
+
+/// <summary>
 /// The document an <see cref="IDecompilerOutput"/> writer produces — dnSpy's <c>DocumentViewerOutput</c>: the text,
 /// and what was recorded beside it. A reference becomes a span the viewer follows and highlights (a local one ties
 /// its uses together inside the document; an opcode opens its documentation; an address opens the hex editor);
 /// a brace pair that opens a block becomes a block structure line; a debug info becomes the statements a
 /// breakpoint, a bookmark or a search hit resolves to.
 /// </summary>
-sealed class DocumentOutput(ReferenceResolver? resolveReference = null, Func<object, IReadOnlyList<TextPartDto>?>? localToolTip = null) : IDecompilerOutput {
+sealed class DocumentOutput(ReferenceResolver? resolveReference = null, Func<object, DocumentToolTip?>? localToolTip = null) : IDecompilerOutput {
 	readonly StringBuilder builder = new();
 	readonly List<TextSpanDto> spans = [];
 	readonly List<BlockStructureDto> blockStructures = [];
@@ -117,10 +123,12 @@ sealed class DocumentOutput(ReferenceResolver? resolveReference = null, Func<obj
 				localId = $"L{localIds.Count}";
 				localIds.Add(reference, localId);
 			}
+			var toolTip = first ? localToolTip?.Invoke(reference) : null;
 			return new TextSpanDto(start, length, kind) {
 				Color = color,
 				LocalId = localId,
-				ToolTip = first ? localToolTip?.Invoke(reference) : null,
+				ToolTip = toolTip?.Parts,
+				ToolTipImage = toolTip?.Image,
 				IsWrite = (flags & DecompilerReferenceFlags.IsWrite) != 0 && kind == "reference",
 			};
 		}

@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api'
 import type { DecompilerLanguage, TextPart, TextSpan } from '../../shared/protocol'
-import { escapeHtml, integerLiteralValue, localToolTip, numberToolTip, spanAtClick } from './document-viewer'
+import { escapeHtml, integerLiteralValue, numberToolTip, spanAtClick } from './document-viewer'
 import { dsImageUrl, parseCssColor } from './ds-image'
 
 /**
@@ -56,7 +56,8 @@ export const textColorValue = (color: string): string | undefined => {
 const partsMarkdown = (parts: readonly TextPart[]): string =>
   `<code>${parts.map((part) => {
     const color = textColorValue(part.color)
-    const text = escapeHtml(part.text)
+    // A tooltip's own newline — the BAML record tooltip puts its position on a second line.
+    const text = escapeHtml(part.text).replace(/\r?\n/g, '<br/>')
     return color ? `<span style="color:${color};">${text}</span>` : text
   }).join('')}</code>`
 
@@ -113,9 +114,22 @@ export const registerDocumentEditorProviders = (monaco: typeof Monaco, provider:
       const end = model.getPositionAt(span.start + span.length)
       const range = new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column)
       if (span.localId) {
-        const parts = localToolTip(data.spans, span.localId)
-        const image = span.color?.toLowerCase() === 'parameter' ? PARAMETER_IMAGE : LOCAL_IMAGE
-        return parts ? { range, contents: [markdown(imageMarkup(image) + partsMarkdown(parts))] } : undefined
+        const toolTipSpan = data.spans.find((candidate) => candidate.localId === span.localId && candidate.toolTip)
+        const parts = toolTipSpan?.toolTip
+        if (parts) {
+          // The provider's own image wins: a BAML string is not a local, and says so with its icon. An empty
+          // name is a tooltip its provider draws without an image (a BAML record, a resource).
+          const image = toolTipSpan.toolTipImage === ''
+            ? null
+            : toolTipSpan.toolTipImage ?? (span.color?.toLowerCase() === 'parameter' ? PARAMETER_IMAGE : LOCAL_IMAGE)
+          return { range, contents: [markdown(imageMarkup(image) + partsMarkdown(parts))] }
+        }
+        // A local reference the provider has nothing to say about — a BAML id, a record's numbers — still gets
+        // the number tooltip dnSpy gives every integer literal, in its four bases.
+        const value = integerLiteralValue(model.getValueInRange(range))
+        return value === undefined
+          ? undefined
+          : { range, contents: [markdown(imageMarkup(NUMBER_IMAGE) + numberToolTip(value).map(escapeHtml).join('<br/>'))] }
       }
       if (!data.workspaceId)
         return undefined

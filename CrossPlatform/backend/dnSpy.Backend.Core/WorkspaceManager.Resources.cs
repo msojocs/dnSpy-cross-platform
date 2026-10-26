@@ -261,9 +261,10 @@ public sealed partial class WorkspaceManager {
 		/// <summary>An entry's line without the comment syntax and the offset — ResourceElementNode.WriteShort.</summary>
 		static string DescribeResourceEntry(ResourceEntryValue value) => $"{IdentifierEscaper.Escape(value.Name)} = {IdentifierEscaper.Truncate(EntryValueString(value.Element), 50000)}";
 
-		// An image attachment travels base64 inside one JSON-RPC message, so one that would make the message
-		// too large is not sent; the line under it still says what the resource is.
-		const int MaxAttachedImageLength = 8 * 1024 * 1024;
+		// An image attachment travels base64 inside one JSON-RPC message, which the host bounds at 32 MB; a 16 MB
+		// picture and the document it rides with still fit. WPF itself has no limit — it reads the picture from
+		// memory — so this is the transport's bound, not the viewer's.
+		const int MaxAttachedImageLength = 16 * 1024 * 1024;
 
 		/// <summary>
 		/// The document a resource row shows — NodeDecompiler for a resource node. A row that can show itself
@@ -280,7 +281,7 @@ public sealed partial class WorkspaceManager {
 			if (node.Value is ResourceEntryValue value) {
 				var shape = ShapeOf(value.Element);
 				if (!writeShort && shape == ResourceShape.Baml)
-					return DecompileBaml(node, value, settings?.Baml, cancellationToken);
+					return DecompileBaml(node, value, settings?.Baml, language, cancellationToken);
 				if (!writeShort && shape == ResourceShape.BuiltIn && value.Element.ResourceData is BuiltInResourceData builtIn) {
 					if (builtIn.Code == ResourceTypeCode.String)
 						return new DecompileResponse(title, "plaintext", (string)builtIn.Data, [], []);
@@ -346,12 +347,12 @@ public sealed partial class WorkspaceManager {
 		/// type, language <c>baml</c>); otherwise the XAML it decompiles to, written the way the BAML page asks
 		/// (XamlOutputCreator; dnSpy's Xaml content type, language <c>xaml</c>).
 		/// </summary>
-		DecompileResponse DecompileBaml(NodeEntry node, ResourceEntryValue value, BamlDecompilerSettingsDto? settings, CancellationToken cancellationToken) {
+		DecompileResponse DecompileBaml(NodeEntry node, ResourceEntryValue value, BamlDecompilerSettingsDto? settings, DecompilerLanguage language, CancellationToken cancellationToken) {
 			var title = GetLabel(node);
 			var baml = (byte[])((BuiltInResourceData)value.Element.ResourceData).Data;
 			if (settings?.DisassembleBaml == true) {
 				try {
-					var output = DisassembleBaml(node.AsModuleEntry!, baml, cancellationToken);
+					var output = DisassembleBaml(node.AsModuleEntry!, baml, language, cancellationToken);
 					return output.ToResponse(title, "baml", null);
 				}
 				catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -368,12 +369,13 @@ public sealed partial class WorkspaceManager {
 
 		/// <summary>
 		/// dnSpy's BamlDisassembler over the BAML's records, every write in the color it was written in. An id a record
-		/// defines and the records that use it are tied together inside the document; a type or member the BAML names
-		/// is followed the way the IL view follows it.
+		/// defines and the records that use it are tied together inside the document, and hovering one shows what it
+		/// names (dnSpy's BamlDocumentViewerToolTipProvider, in the document's language).
 		/// </summary>
-		DocumentOutput DisassembleBaml(ModuleEntry module, byte[] baml, CancellationToken cancellationToken) {
+		DocumentOutput DisassembleBaml(ModuleEntry module, byte[] baml, DecompilerLanguage language, CancellationToken cancellationToken) {
 			var host = new AnalyzerHost(this, null, loadOnDemand: false);
-			var output = new DocumentOutput((reference, flags, color, start, length) => ILSpanOf(module, host, reference, flags, color, start, length)) { ColorsEveryWrite = true };
+			var toolTips = new Baml.BamlToolTipProvider(language, TypeColor);
+			var output = new DocumentOutput((reference, flags, color, start, length) => ILSpanOf(module, host, reference, flags, color, start, length), toolTips.Create) { ColorsEveryWrite = true };
 			Baml.BamlDisassemblerEntry.Disassemble(module.Module, baml, output, cancellationToken);
 			return output;
 		}
@@ -491,7 +493,7 @@ public sealed partial class WorkspaceManager {
 					var disassemble = baml?.DisassembleBaml == true;
 					try {
 						var text = disassemble
-							? DisassembleBaml(node.AsModuleEntry!, bamlData, cancellationToken).ToString()
+							? DisassembleBaml(node.AsModuleEntry!, bamlData, DecompilerLanguage.CSharp, cancellationToken).ToString()
 							: DecompileBamlToXaml(node.AsModuleEntry!, bamlData, baml, cancellationToken);
 						return (BamlFileName(entry.Name, disassemble), Utf8WithBom(text));
 					}

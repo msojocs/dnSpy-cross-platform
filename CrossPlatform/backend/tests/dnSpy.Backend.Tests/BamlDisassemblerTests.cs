@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using dnlib.DotNet;
 using dnlib.DotNet.Resources;
 using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Core;
 using dnSpy.Backend.Core.Baml;
 using dnSpy.Backend.Core.Output;
 using Xunit;
@@ -207,9 +208,85 @@ public sealed class BamlDisassemblerTests {
 		Assert.All([assemblyDefinition, typeDefinition], span => Assert.Equal((6, BoxedTextColor.Number), (span.Length, span.Color)));
 	}
 
-	[Fact]
-	public void ACanceledTokenStopsTheListing() {
+	/// <summary>The listing with dnSpy's BAML tooltip provider behind it — the one a tab shows.</summary>
+	static (DocumentOutput Output, string Text) DisassembleWithToolTips(DecompilerLanguage language = DecompilerLanguage.CSharp) {
 		using var module = LoadBamlTarget();
+		var output = new DocumentOutput(localToolTip: new BamlToolTipProvider(language, _ => TextColors.Type).Create);
+		BamlDisassemblerEntry.Disassemble(module, ReadBaml(module), output, Token);
+		return (output, output.ToString());
+	}
+
+	static string SpanText(string text, TextSpanDto span) => text.Substring(span.Start, span.Length);
+
+	static string ToolTipText(TextSpanDto span) => string.Concat(span.ToolTip?.Select(part => part.Text) ?? []);
+
+	static TextSpanDto ToolTipSpan(DocumentOutput output, Func<TextSpanDto, bool> predicate) {
+		var matches = output.Spans.Where(span => span.ToolTip is not null && predicate(span)).ToList();
+		Assert.True(matches.Count > 0, "No tooltip: " + string.Join(" | ", output.Spans.Where(span => span.ToolTip is not null)
+			.Select(span => $"{span.ToolTipImage}:{string.Concat(span.ToolTip!.Select(part => part.Text))}")));
+		return matches[0];
+	}
+
+	[Fact]
+	public void ToolTipsNameWhatEachReferenceStandsFor() {
+		var (output, text) = DisassembleWithToolTips();
+
+		// An assembly id shows the assembly's full name.
+		var assembly = ToolTipSpan(output, span => span.ToolTipImage == DotNetImages.Assembly && ToolTipText(span).StartsWith("BamlTarget", StringComparison.Ordinal));
+		Assert.Equal("0x0000", SpanText(text, assembly));
+
+		// A type id shows the type in the document's language — with its namespace, as dnSpy writes a type.
+		var type = ToolTipSpan(output, span => span.ToolTipImage == DotNetImages.ClassPublic && ToolTipText(span).Contains("SampleView", StringComparison.Ordinal));
+		Assert.Equal("BamlTarget.SampleView", ToolTipText(type));
+		Assert.Equal(BoxedTextColor.Number, type.Color);
+
+		// A string id shows the string literal, in the string color, with the string image. The fixture holds no
+		// string ids — its strings are written inline — so that half of the provider is checked directly below.
+		var stringReference = new BamlToolTipProvider(DecompilerLanguage.CSharp, _ => TextColors.Type)
+			.Create(BamlStringReference.Create("\"Sample\""));
+		Assert.NotNull(stringReference);
+		Assert.Equal("String", stringReference.Value.Image);
+		Assert.StartsWith("\"", Assert.Single(stringReference.Value.Parts).Text, StringComparison.Ordinal);
+		Assert.Equal(TextColors.String, Assert.Single(stringReference.Value.Parts).Color);
+
+		// A member id shows its declaring type and name, with the property image.
+		var member = ToolTipSpan(output, span => span.ToolTipImage == DotNetImages.Property && span.ToolTip![^1].Color == TextColors.InstanceProperty);
+		Assert.True(member.ToolTip!.Count >= 3);
+		Assert.Equal((TextColors.Punctuation, "."), (member.ToolTip![^2].Color, member.ToolTip![^2].Text));
+		Assert.Equal(TextColors.InstanceProperty, member.ToolTip![^1].Color);
+
+		// A record name shows the record's type and, on a second line, its position.
+		var record = ToolTipSpan(output, span => span.Color == BoxedTextColor.Keyword && span.ToolTipImage is "");
+		Assert.Equal(SpanText(text, record), record.ToolTip![0].Text);
+		Assert.Contains("Position: 0x", ToolTipText(record), StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void KnownTypesAreNamedEvenWithoutTheWpfAssembliesInstalled() {
+		var (output, text) = DisassembleWithToolTips();
+
+		// A known WPF type's id has no TypeInfo record: its name comes from the BAML tables, and it is still a
+		// reference, so its tooltip and its tie to the other records keep working here, where WPF is not installed.
+		var known = ToolTipSpan(output, span => span.Color == BoxedTextColor.Number
+			&& span.ToolTipImage == DotNetImages.ClassPublic
+			&& Convert.ToInt32(SpanText(text, span)[2..], 16) > 0x7fff);
+		Assert.Contains(".", ToolTipText(known), StringComparison.Ordinal);
+		Assert.NotNull(known.LocalId);
+	}
+
+	[Fact]
+	public void ToolTipsUseTheLanguageOfTheDocument() {
+		string TypeNameOf(DecompilerLanguage language) =>
+			ToolTipText(ToolTipSpan(DisassembleWithToolTips(language).Output,
+				span => span.ToolTipImage == DotNetImages.ClassPublic && ToolTipText(span).Contains("SampleView", StringComparison.Ordinal)));
+
+		Assert.Equal("BamlTarget.SampleView", TypeNameOf(DecompilerLanguage.CSharp));
+		Assert.Equal("BamlTarget.SampleView", TypeNameOf(DecompilerLanguage.VisualBasic));
+		Assert.StartsWith("class ", TypeNameOf(DecompilerLanguage.IL), StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void ACanceledTokenStopsTheListing() {		using var module = LoadBamlTarget();
 		var baml = ReadBaml(module);
 		using var canceled = new CancellationTokenSource();
 		canceled.Cancel();

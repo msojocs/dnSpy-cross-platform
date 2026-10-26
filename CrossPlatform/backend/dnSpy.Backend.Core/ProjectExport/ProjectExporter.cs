@@ -42,7 +42,7 @@ public sealed class ProjectExporter(ProjectExportOptions options, IReadOnlyList<
 	public static DecompilerSettings SettingsForLanguage(DecompilerSettings source, bool visualBasic) {
 		var settings = source.Clone();
 		if (visualBasic)
-			settings.NullableReferenceTypes = false;
+			settings.ToVisualBasicSettings();
 		return settings;
 	}
 
@@ -365,7 +365,7 @@ public sealed class ProjectExporter(ProjectExportOptions options, IReadOnlyList<
 				decompiler.AstTransforms.Add(new RemoveXamlGeneratedMembers(xamlTypes));
 			// The C# page's options dnSpy's fork has and the package does not, which its project files are written with too.
 			if (Settings is DnSpyDecompilerSettings && DnlibModule(ts.MainModule.MetadataFile) is { } dnlibModule)
-				decompiler.AstTransforms.Add(new DnSpyCSharpTransform(dnlibModule));
+				DnSpyCSharpTransform.AddTo(decompiler, dnlibModule, Settings);
 			return decompiler;
 		}
 

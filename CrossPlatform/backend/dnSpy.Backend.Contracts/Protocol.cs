@@ -515,6 +515,13 @@ public sealed record TextSpanDto(
 	public IReadOnlyList<TextPartDto>? ToolTip { get; init; }
 
 	/// <summary>
+	/// The image the Quick Info of a local draws before its text — dnSpy's <c>DocumentViewerToolTipProvider</c>
+	/// sets one for what the text cannot say by itself (a string, an assembly, a property). Only the first
+	/// span of a local carries it, beside <see cref="ToolTip"/>; an empty name means the provider draws none.
+	/// </summary>
+	public string? ToolTipImage { get; init; }
+
+	/// <summary>
 	/// Whether the reference writes what it names — an assignment's target, an increment, an <c>out</c> or
 	/// <c>ref</c> argument — which dnSpy's reference highlighter marks in a color of its own.
 	/// </summary>

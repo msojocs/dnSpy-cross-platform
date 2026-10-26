@@ -79,11 +79,16 @@ public sealed partial class WorkspaceManager {
 
 			/// <summary>AddUIElement with a WPF Image of the picture: the viewer shows it at its own size.</summary>
 			public void AddImage(byte[]? data, string name) {
-				if (data is null || data.Length > MaxAttachedImageLength)
+				if (data is null)
 					return;
-				// dnSpy hands the bytes to WPF, which reads any format it knows; a browser has to be told which one it gets.
+				// dnSpy hands the bytes to WPF, which reads any format WIC knows; a browser reads the formats the
+				// MIME type names. A picture in another format WPF decodes — TIFF, mostly — is converted to PNG.
 				var mime = ImageMimeType(data) ?? (HasJpegExtension(name) ? "image/jpeg" : null);
-				if (mime is not null)
+				if (mime is null && ImageResources.TryConvertToPng(data) is { } png) {
+					data = png;
+					mime = "image/png";
+				}
+				if (mime is not null && data.Length <= MaxAttachedImageLength)
 					attachments.Add(new DocumentAttachmentDto(line - 1, DocumentAttachmentKinds.Image, Convert.ToBase64String(data), mime));
 			}
 

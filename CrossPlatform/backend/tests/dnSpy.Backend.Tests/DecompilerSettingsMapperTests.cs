@@ -66,23 +66,14 @@ public sealed class DecompilerSettingsMapperTests {
 
 	/// <summary>
 	/// Every option on the C# page reaches the decompiler: on the package's settings where it has the option, on
-	/// <see cref="DnSpyDecompilerSettings"/> where only dnSpy's fork has it — except the three the package does not
-	/// let change, which are named here so a package upgrade that brings one in fails this.
+	/// <see cref="DnSpyDecompilerSettings"/> where only dnSpy's fork has it.
 	/// </summary>
 	[Fact]
 	public void EveryOptionOfThePageReachesTheDecompiler() {
 		var package = typeof(ICSharpCode.Decompiler.DecompilerSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
 		var fork = typeof(DnSpyDecompilerSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
-		string[] unsupported = ["FullyQualifyAmbiguousTypeNames", "AllowFieldInitializers", "EmitCalliAsInvocationExpression"];
-		// ForceShowAllMembers is carried by the package's AutomaticProperties/AutomaticEvents and the kept constructors.
-		string[] approximated = ["ForceShowAllMembers"];
-		foreach (var name in typeof(CSharpDecompilerSettingsDto).GetProperties().Select(property => property.Name)) {
-			if (unsupported.Contains(name)) {
-				Assert.DoesNotContain(name, package);
-				continue;
-			}
-			Assert.True(package.Contains(name) || fork.Contains(name) || approximated.Contains(name), $"{name} reaches nothing.");
-		}
+		foreach (var name in typeof(CSharpDecompilerSettingsDto).GetProperties().Select(property => property.Name))
+			Assert.True(package.Contains(name) || fork.Contains(name), $"{name} reaches nothing.");
 	}
 
 	[Fact]
@@ -110,6 +101,24 @@ public sealed class DecompilerSettingsMapperTests {
 		Assert.False(set.AutomaticProperties);
 		Assert.False(set.RemoveEmptyDefaultConstructors);
 		Assert.Equal("methods", set.DecompilationOrder[0]);
+
+		var forkOnly = Assert.IsType<DnSpyDecompilerSettings>(new DecompilerSettingsDto(CSharp: new CSharpDecompilerSettingsDto(
+			FullyQualifyAmbiguousTypeNames: false, AllowFieldInitializers: false, EmitCalliAsInvocationExpression: true, ForceShowAllMembers: true)).ToDecompilerSettings());
+		Assert.False(forkOnly.FullyQualifyAmbiguousTypeNames);
+		Assert.False(forkOnly.AllowFieldInitializers);
+		Assert.True(forkOnly.EmitCalliAsInvocationExpression);
+		Assert.True(forkOnly.ForceShowAllMembers);
+		// The second pass ForceShowAllMembers runs: every hiding switch off, the page's own options unchanged.
+		var showAll = forkOnly.ForShowAllMembers();
+		Assert.False(showAll.AnonymousMethods);
+		Assert.False(showAll.AsyncAwait);
+		Assert.False(showAll.YieldReturn);
+		Assert.False(showAll.LocalFunctions);
+		Assert.False(showAll.AutomaticProperties);
+		Assert.False(showAll.AutomaticEvents);
+		Assert.True(showAll.ForceShowAllMembers);
+		Assert.False(showAll.FullyQualifyAmbiguousTypeNames);
+
 		// A clone keeps them: the package clones its settings before it uses them.
 		Assert.IsType<DnSpyDecompilerSettings>(set.Clone());
 		Assert.True(((DnSpyDecompilerSettings)set.Clone()).SortMembers);

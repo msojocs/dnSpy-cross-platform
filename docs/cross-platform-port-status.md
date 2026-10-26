@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e；同日再补表达式求值的 ref/out 参数、位置模式与 stackalloc，Debug Program 的原始命令行与目标位数检查，以及调试列表的列宽/列序拖动后复核
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核，2026-10-25 再按 WPF 补齐 Visual Basic 的转换（记录/主构造函数/switch 表达式/集合表达式/模式/解构/using 声明/local function/大小写冲突）、C# 页最后四项选项、TIFF 资源预览与 BAML 悬停提示后第三次复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e；同日再补表达式求值的 ref/out 参数、位置模式与 stackalloc，Debug Program 的原始命令行与目标位数检查，以及调试列表的列宽/列序拖动后复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -48,7 +48,7 @@
 | 程序集编辑（AsmEditor） | 100% | 71 | 0 | 0 | 1 | 全部功能点对齐 WPF：C#/VB 源码编辑与编译器设置、方法体三页编辑器（含指令剪贴板与四个操作数窗口）、图像与 ImageListStreamer 资源、新建程序集与 NetModule、按保存点的修改标记、Save Module 五页写出选项与带进度/取消的 Save All、PE 头与元数据表字段编辑、MD 表命令、Copy IL Bytes |
 | C# 交互窗口 | 100% | 25 | 0 | 0 | 2 | 除 UI 线程与 VB（WPF 自身排除）外完整对齐 WPF：完整性提交、两段 Ctrl+A、前缀历史、实时输出、彩色输出 API 与完整的 CachedWriter 打印接口、PrintOptions、Resolve、消息框/输入框、保存与右键菜单、REPL 选项页全部生效（行压缩、选择边距、缩放控制） |
 | 元数据/PE 视图与本机反汇编 | 100% | 21 | 0 | 0 | 0 | PE 头、表流、元数据表与表行按 WPF 显示为可编辑的表单与表格，排序、Go to RID、Go to MD Table Row 齐备；本机反汇编是调试器的 Disassembly 文档标签（Iced，按 Disassembler 与 Code Style 选项） |
-| 反编译与语言 | ~92% | 22 | 4 | 0 | 1 | C#、IL、IL with C# 对齐 WPF：IL 为分支反汇编器的移植，C# 页的分支独有选项（token 注释、成员顺序、修饰符等）写在包的输出上，程序集/模块/命名空间节点照 WPF 只写头部与特性；BAML 选项与 Disassemble BAML、GUI 导出项目齐备；VB 仍是 C# 的转换，三个 C# 选项包不支持 |
+| 反编译与语言 | 100% | 26 | 0 | 0 | 1 | C#、IL、IL with C# 对齐 WPF：IL 为分支反汇编器的移植，C# 页的分支独有选项（token 注释、成员顺序、修饰符等）写在包的输出上，23 项全部生效（含 ForceShowAllMembers 的第二遍反编译）；程序集/模块/命名空间节点照 WPF 只写头部与特性；BAML 选项、Disassemble BAML（含悬停提示）与 GUI 导出项目齐备；VB 仍是 C# 的转换，但现代 C# 构造都转成可编译 VB，转换不了的整段注释而不漏原始 C# |
 | 代码编辑器与文档标签 | 100% | 31 | 0 | 0 | 1 | 标签模型、单击/Ctrl+单击跟随、每标签历史、引用与关键字高亮、Quick Info（含图标）、块结构线、分隔线、缩放、带格式复制都照 WPF；VB 经 Roslyn 重新绑定得到引用；2026-10-20 补上选择边距、行压缩与虚拟空格，Text Viewer 页全部生效 |
 | Hex 编辑器（浏览） | 100% | 33 | 0 | 0 | 0 | 全部功能点对齐 WPF：行布局、光标选区与全部快捷键、右键菜单与对话框、查找/替换/增量查找、文件与 Memory 共用的结构 Quick Info/F12/Ctrl+F12/Edit Field、完整 .NET 编码与选项三页、纯文本与 HTML 复制、标签随会话恢复 |
 | Roslyn 语言服务 | ~69% | 3 | 5 | 0 | 0 | C# Interactive 有 WPF 同款语义着色；补全、Quick Info、签名帮助、诊断、智能缩进、选区已做成后端服务与可复用绑定，宿主 Edit Method (C#) 已在 4.12 移植 |
@@ -58,7 +58,7 @@
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 472 / 🟡 12 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-25 调试器把表达式求值的最后一个 🟡 转 ✅（✅ +1、🟡 -1），除 Mono/Unity 与 Windows 专属项外 4.13 已达 100%；同日早些时候调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 476 / 🟡 8 / ❌ 4 / ⛔ 31，完成度约 **98%**（2026-10-25 反编译与语言把最后四个 🟡 转 ✅（✅ +4、🟡 -4）；同日调试器把表达式求值的最后一个 🟡 转 ✅（✅ +1、🟡 -1），除 Mono/Unity 与 Windows 专属项外 4.13 已达 100%；同日早些时候调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -245,23 +245,24 @@
 
 ### 4.4 反编译与语言
 
-完成度约 92%（✅ 22 / 🟡 4 / ❌ 0 / ⛔ 1），2026-10-20 补齐后按实现与测试复核。WPF 范围：`WPF/Decompiler/`、`WPF/Documents/Tabs/`（反编译相关）、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
+完成度 100%（✅ 26 / 🟡 0 / ❌ 0 / ⛔ 1），2026-10-25 按 WPF 补齐后第三次按实现与测试复核。WPF 范围：`WPF/Decompiler/`、`WPF/Documents/Tabs/`（反编译相关）、`Extensions/ILSpy.Decompiler/`、`Extensions/dnSpy.BamlDecompiler/`、资源查看与导出项目。
 
 后端没有沿用仓库里的 ILSpy 分支（子模块未检出，且基于旧版 NRefactory），而是用 NuGet 上的 `ICSharpCode.Decompiler 11.1`、`ICSharpCode.BamlDecompiler`。分支独有的部分逐一补在它上面：
 
 - **IL**：分支的 `ReflectionDisassembler`、`MethodBodyDisassembler`、`ILStructure` 等与 dnSpy 的 `ILDecompiler`/`ILWithCSharpDecompiler` 移植到 `BE/IL/`（源码取自 dnSpyEx/ILSpy 与 dnSpy 本体），输出 `.try`/`.custom`/`.override`/`.data`、PDB 信息、IL 字节、token/RVA 注释与 XML 文档，IL 页 7 个选项全部生效，`MaxStringLength` 与 WPF 一样只在设置里不在页面上（DTO 有、默认 20000）。
 - **C# 页的分支独有选项**：`BE/DnSpyCSharpOptions.cs` 的 `DnSpyDecompilerSettings` 随包的 `DecompilerSettings` 一起克隆传递，`DnSpyCSharpTransform` 作为最后一个 AST 变换照分支的 `AstBuilder` 写出：token/RVA 注释（属性、事件按访问器各一行，注释里的 token 与地址可点击）、成员顺序（UseSourceCodeOrder、SortMembers 与五级反编译顺序）、省略隐含的 `internal`/`private`、一行一个特性、十六进制数字、保留空的默认构造函数、System 命名空间在前的 using 顺序、全限定类型名仍写 using；InsertParenthesesForReadability 关闭时在渲染前去掉可读性括号。前端默认值改为分支的默认值（token 注释开、源码顺序、每行一个特性、写出 internal/private、十进制）。
-- **VB**：仍由 `ICSharpCode.CodeConverter` 从 C# 文本转换。转换时套用与工程导出、命令行相同的修正（`VisualBasicConverterFixes`：nullable 特性、`MyBase._002Ector()`、ParamArray 与 Optional），访问修饰符照 WPF 的 `VBDecompiler` 一律写出，token 注释随之转换并保留 span。
+- **VB**：仍由 `ICSharpCode.CodeConverter` 从 C# 文本转换。WPF 的 VB 反编译依赖分支的 NRefactory.VB（旧 ILSpy AST，约 15k 行），无法直接挂到 `ICSharpCode.Decompiler 11.1` 上，因此用户可见行为靠转换前后各一轮 Roslyn 改写来对齐：VB 视图先套 WPF `VBDecompiler.CreateAstBuilder` 的强制设置（不生成 increment/assignment/query 表达式），再把现代 C# 写法压回旧 ILSpy 能产出的子集（record 写成 class、关主构造函数/switch 表达式/模式/required/init/file-scoped/NRT/using 声明/ranges/UTF-8 字符串/params 集合/函数指针）；C# 侧去掉 VB 不接受的东西（`readonly` 字段修饰符、`<...>` 编译器生成名、`base..ctor()`、RequiredMember/CompilerFeatureRequired/Nullable 特性），把 local function 写成委托局部、解构写成 tuple `Item`/`Deconstruct` 调用、与类型仅大小写不同的局部变量改名。转换失败的节点整段注释（包括 `Input:` 里的原始 C#），整篇失败也全部注释，VB 文档里不再混入 C#；转换后用 Roslyn 重新绑定 span，语句表经标记注释取回。unsafe/指针与泛型/ref local function 没有对应的 VB 表达式，整段注释（WPF 的 VB 转换器对指针写出未定义的 `__Pointer`/`__Dereference` 辅助类型，这类代码在 WPF 里也不能编译）。
+- **C# 页最后四项选项**：`FullyQualifyAmbiguousTypeNames`、`AllowFieldInitializers`、`EmitCalliAsInvocationExpression` 在 `DnSpyCSharpTransform` 上照分支语义后处理——在包 `IntroduceUsingDeclarations` 之前收集简单类型名（`SimpleTypeCollector`），关掉时把被该 pass 加上命名空间的引用写回简单名；把包搬进字段声明的初始化器搬回每个不链 `this(...)` 的构造函数（并补回被移除的静态构造函数）；calli 写成 fork 的内联汇编 `calli(签名, 参数…, 函数指针)`。`ForceShowAllMembers` 用第二遍关闭隐藏开关的反编译补上第一遍没有的成员（自动属性/事件、lambda、匿名类型、async 与迭代器状态机的 MoveNext 等），两棵树按元数据 token 合并（`HiddenMemberMerger`）。
 
 | 功能点 | WPF 来源 | 跨平台实现 | 状态 | 备注 |
 |---|---|---|---|---|
 | C# 反编译 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core/CSharp/CSharpDecompiler.cs` | `BE/WorkspaceManager.cs` 的 `DecompileDocumentAsync`，RPC `document/decompile` | ✅ | 有引用 span 和语句表；分支独有选项见上 |
-| Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `BE/VisualBasicConversion.cs`、`BE/WorkspaceManager.VisualBasic.cs` | 🟡 | 是 C# 的转换而不是 VB 反编译器（WPF 的 VB 依赖分支的 NRefactory.VB）；经 Roslyn 重新绑定有引用 span，转换时用标记注释取回语句表；C# 页选项、转换修正与 token 注释都生效；转换失败时整篇只剩错误注释 |
+| Visual Basic | `.../VisualBasic/VBDecompiler.cs` | `BE/VisualBasicConversion.cs`、`BE/WorkspaceManager.VisualBasic.cs`、`BE/ProjectExport/VisualBasicConverterFixes.cs` | ✅ | 仍是 C# 的转换而不是 VB 反编译器（WPF 的 VB 依赖分支的 NRefactory.VB）；记录写成 class、主构造函数/switch 表达式/集合表达式/模式/解构/using 声明/local function 都转成可编译的 VB（Roslyn 编译验证），与类型仅大小写冲突的局部变量自动改名；经 Roslyn 重新绑定有引用 span，转换时用标记注释取回语句表；C# 页选项、转换修正与 token 注释都生效；转换失败的节点整段注释，原始 C# 不会混进文档；unsafe/指针与泛型/ref local function 只能注释（无 VB 表达式可表达） |
 | IL | `.../IL/ILDecompiler.cs` | `BE/IL/ILDecompiler.cs`、`ReflectionDisassembler*.cs` | ✅ | 分支反汇编器的移植；定义/引用/标签 span、逐指令语句表；工作区没有的类型与成员不能跟随，但仍按反汇编器给的颜色着色 |
 | IL with C# | `.../Mixed/ILWithCSharpDecompiler.cs` | `BE/IL/ILWithCSharp.cs` | ✅ | 每条 C# 语句写在它的第一条指令之上，状态机的 MoveNext 按原方法显示 |
 | ILAst | `.../ILAst/ILAstDecompiler.cs` | 无 | ⛔ | WPF 只在 DEBUG 构建注册 |
 | 语言下拉与持久化 | `MainApp/ToolBarCommands.cs`、`Decompiler/DecompilerServiceSettings.cs` | `ToolBar.tsx`、`app-store.ts` 的 `changeLanguage` | ✅ | 全局语言：切换时重反编译所有已开标签（含正在加载的），新标签用它，记在 `localStorage`，`-l` 也写入；分析器、字符串引用窗口跟随 |
-| C#/VB 反编译选项 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy/Settings/CSharpDecompilerSettingsPage.cs` | `options-pages.ts` → `decompiler-settings.ts` → `BE/DecompilerSettingsMapper.cs`、`BE/DnSpyCSharpOptions.cs` | 🟡 | 23 项中 19 项与五级反编译顺序按分支语义生效；ForceShowAllMembers 只能展开自动属性/事件并保留空构造函数（包里编译器生成的类型与成员一律隐藏）；FullyQualifyAmbiguousTypeNames 关、AllowFieldInitializers 关、EmitCalliAsInvocationExpression 关这三种写法包不提供，仍按包的方式输出。Edit Code 窗口的源码也带上这些设置 |
+| C#/VB 反编译选项 | `ILSpy.Decompiler/dnSpy.Decompiler.ILSpy/Settings/CSharpDecompilerSettingsPage.cs` | `options-pages.ts` → `decompiler-settings.ts` → `BE/DecompilerSettingsMapper.cs`、`BE/DnSpyCSharpOptions.cs`、`BE/HiddenMemberMerger.cs` | ✅ | 23 项全部按分支语义生效；ForceShowAllMembers 由第二遍反编译合并第一遍隐藏的成员（自动属性/事件、lambda、匿名类型、async/迭代器状态机等），其余三项在 DnSpyCSharpTransform 上后处理（歧义类型名去限定、字段初始化器搬回构造函数、calli 内联汇编）；Edit Code 窗口的源码也带上这些设置 |
 | IL 选项 | `.../Settings/ILDecompilerSettingsPage.cs` | `options-pages.ts` → `ToILSettings` | ✅ | 7 项全部生效 |
 | DecompileFullType | `Documents/Tabs/DocumentTabServiceSettings.cs` | RPC `document/resolveNode` | ✅ | 跟随成员时打开最外层类型；状态机的 MoveNext 跟到原方法 |
 | 源码与 IL 的语句映射 | `Decompiler/MethodDebugService.cs` | `BuildCodeStatements`、`BE/StatementIlRanges.cs`、IL 的调试信息、VB 的标记注释 | ✅ | C#、IL、IL with C#、VB 都有；调试器的帧行号按带默认选项（含 token 注释）的方法文档计算 |
@@ -275,15 +276,15 @@
 | Save Code | `Documents/Tabs/NodeTabSaver.cs`、`BamlTabSaver.cs` | `saveCode` | ✅ | BAML 标签的命令名为 Save XAML.../Save BAML...，文件名照 `GetFilename` 换扩展名 |
 | Export to Project | `Documents/Tabs/Dialogs/ExportToProjectDlg.xaml` | `ExportToProjectDialog.tsx`、RPC `project/export`、`BE/ProjectExport/` | ✅ | 与 WPF 对话框字段一致；导出实现从 `dnSpy.Console` 移到后端与命令行共用，C# 页的分支独有选项与 BAML 页的排版同样作用于导出 |
 | `.resources` 条目显示 | `Documents/TreeView/Resources/BuiltInResourceElementNodeImpl.cs` | `DecompileResourceEntry` | ✅ | 字符串显示文本，图片显示图片，文本数据按扩展名着色，其他写 `名称 = N bytes` 行 |
-| 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 后端附件 + `FE/document-attachments.ts` | 🟡 | BMP/GIF/PNG/ICO/JPEG 与序列化 Bitmap/Icon、ImageListStreamer 可预览并保存；超过 8 MB 或 TIFF 等 WIC 能解而 Chromium 不能解的格式不显示，也没有提示 |
+| 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 后端附件 + `FE/document-attachments.ts` | ✅ | BMP/GIF/PNG/ICO/JPEG 与序列化 Bitmap/Icon、ImageListStreamer 可预览并保存；TIFF 等 Chromium 不解而 ImageSharp 能解的格式在后端转成 PNG；附件受 RPC 单条消息 32 MB 的约束（图片上限 16 MB，WPF 从内存读取没有上限），WMP/HEIF/EMF 这类只有 Windows 编解码器的格式在 Linux 上没有解码器（与 WPF 的 WIC 不同），行文本与 Save 按钮仍在 |
 | 嵌入资源文本识别 | `ResourceUtilities.cs` | `TextDocument`、`Search/ResourceTexts.cs` | ✅ | |
 | 保存资源 | `AE/Resources/ResourceCommands.cs` | RPC `resource/getItems` | ✅ | 与 4.3 重复计入；BAML 条目按 BAML 页存为 `.xaml` 或反汇编的 `.baml` |
 | Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 树右键、代码视图右键 | ✅ | 与 4.3 重复计入 |
 | BAML → XAML | `BamlDecompiler/XamlDecompiler.cs`、`XamlOutputCreator.cs` | `DecompileBamlToXaml`、`BE/XamlOutputCreator.cs` | ✅ | 照 `XamlOutputCreator` 写出（无 XML 声明、制表符或四空格、每行一个特性、标记扩展不转义），工程导出同样如此 |
-| Disassemble BAML | `BamlDecompiler/BamlDisassembler.cs`、`MenuCommands.cs` | `BE/Baml/`、代码视图右键「Disassemble BAML」 | 🟡 | 记录逐条写出、按颜色着色，记录间的 id 互相关联，类型与成员可跟随；没有悬停提示（WPF 的 BamlToolTipProvider），Linux 上没有 WPF 程序集，内置类型的 id 只是文字 |
+| Disassemble BAML | `BamlDecompiler/BamlDisassembler.cs`、`MenuCommands.cs`、`BamlToolTipProvider.cs` | `BE/Baml/`、代码视图右键「Disassemble BAML」 | ✅ | 记录逐条写出、按颜色着色，记录间的 id 互相关联；六类引用的悬停提示（字符串、程序集、记录与位置、资源、类型、成员）照 WPF 的 BamlToolTipProvider 移植，类型名随工具栏语言书写；Linux 上已知 WPF 类型的 id 解析不到 TypeDef 时仍按 BAML 表里的名字建立引用，提示与 id 联动不丢（图标退化为 ClassPublic）；十六进制数字悬停给二/八/十/十六进制。dnSpy 对 BAML 类型/成员本来就没有 F12 跟随器，跨平台同样不跟随 |
 | BAML 选项页 | `BamlDecompiler/BamlSettings.cs` | `options-pages.ts` → `BamlDecompilerSettingsDto` | ✅ | 三项全部生效，改动后刷新 BAML 文档 |
 
-测试：后端 `CSharpDecompilerOptionsTests.cs`（分支独有选项的默认与各开关、token 注释的 span、VB 的 token 注释）、`DecompilerSettingsMapperTests.cs`、`ILDisassemblerTests.cs`、`NodeDocumentTests.cs`（程序集/模块/命名空间文档、多节点文档）、`BamlDisassemblerTests.cs`、`WorkspaceManagerTests.cs`（XAML 排版、反汇编、BAML 存盘名）、`WorkspaceResourceDocumentTests.cs`、`DecompilationConcurrencyTests.cs`；前端 `decompilation-cache.test.ts`、`CodeEditorContextMenu.test.tsx`（Disassemble BAML）、`DocumentTabContextMenu.test.tsx`（Save XAML/BAML）、`app-store.test.ts`（BAML 文件名）；e2e `app.spec.ts`（切换 IL、Save Code、保存资源）、`export-project.spec.ts`。
+测试：后端 `CSharpDecompilerOptionsTests.cs`（分支独有选项的默认与各开关、token 注释的 span、VB 的 token 注释，以及歧义类型名、字段初始化器、calli 与 ForceShowAllMembers 的 lambda/async/迭代器成员）、`DecompilerSettingsMapperTests.cs`、`VisualBasicConversionTests.cs`（记录的 class 形态、现代 C# 构造转出的 VB 用 Roslyn 编译通过、泛型 local function 的原始 C# 被整段注释）、`ILDisassemblerTests.cs`、`NodeDocumentTests.cs`（程序集/模块/命名空间文档、多节点文档）、`BamlDisassemblerTests.cs`（六类悬停提示、已知类型 id 的引用与语言差异）、`WorkspaceManagerTests.cs`（XAML 排版、反汇编、BAML 存盘名）、`WorkspaceResourceDocumentTests.cs`（序列化 TIFF 转 PNG）、`DecompilationConcurrencyTests.cs`；前端 `document-editor.test.ts`（toolTipImage、工具提示换行、数字回退）、`decompilation-cache.test.ts`、`CodeEditorContextMenu.test.tsx`（Disassemble BAML）、`DocumentTabContextMenu.test.tsx`（Save XAML/BAML）、`app-store.test.ts`（BAML 文件名）；e2e `app.spec.ts`（切换 IL、Save Code、保存资源、BAML 反汇编与记录悬停）、`export-project.spec.ts`。
 
 ### 4.5 代码编辑器与文档标签
 
@@ -1060,17 +1061,21 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-调试器 4.13 收尾后的最新完整验证（2026-10-25，ref/out、原始命令行、位数检查与列拖动这一轮）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
+反编译与语言 4.4 收尾后的最新完整验证（2026-10-25，VB 转换、C# 选项、TIFF 预览与 BAML 悬停这一轮）：后端真实构建整个 `CrossPlatform/dnSpy.CrossPlatform.slnx`（含 Host 与 DebugTarget 夹具），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`；未使用旧 DLL 或旧前端产物。
 
 | 套件 | 本轮结果 |
 |---|---|
 | 后端 `dotnet build` | 0 警告、0 错误 |
-| 后端 `dotnet test` | 681 通过、0 跳过、0 失败 |
+| 后端 `dotnet test` | 695 通过、0 跳过、0 失败 |
 | 前端 `pnpm build`（包含两个 tsconfig 的 typecheck） | 通过，TypeScript 0 错误 |
-| 前端 vitest | 139 个测试文件、1581 项全部通过 |
-| 完整 e2e（Playwright Electron） | 116 通过、3 跳过、0 失败（首轮 8 项因 `get_Code` 标记随 `Protocol.cs` 迁移而失败，改标后重跑这 8 项全过，随后完整重跑一遍仍为 116/3/0；`--evaluate` 的 Watch 新增 ref/out、位置模式与 stackalloc 三条断言） |
+| 前端 vitest | 140 个测试文件、1587 项全部通过 |
+| 完整 e2e（Playwright Electron） | 117 通过、3 跳过、0 失败（新增 BAML 反汇编与记录悬停 1 项） |
 
-3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。C# 交互窗口的新增回归见 4.14。调试器这一轮改了 `Protocol.cs`（`DebugLaunchRequest` 加 `RawArguments`，并追加 `DebugProgramInfoRequest/Response` 与 `debug/programInfo`），e2e 钉死的 `get_Code` 从 `@06000ADA` 变为 `@06000ADC`（Go to Token 的 `0x06000ADC` 同改），`RpcException @0200008D` 未动。
+3 项跳过仍是已有的程序集树性能用例与两个打包应用用例；本轮未验证打包安装后的运行行为。这一轮给 `Protocol.cs` 的 `TextSpanDto` 加了 `ToolTipImage`，e2e 钉死的 `get_Code` 从 `@06000ADC` 变为 `@06000ADE`（Go to Token 的 `0x06000ADE` 同改），`RpcException @0200008D` 未动。VB 的转换前后改写会删除整行元数据特性（空行会让 VB 的特性说明符失去归属），语句标记随文本移动，语句表用例仍通过；BAML 的已知类型 id 现在也是文档内引用，`data-reference-count` 会随之变化。新增依赖 `SixLabors.ImageSharp 2.1.11` 用于把 WIC 能解而 Chromium 不能解的图片（TIFF）转成 PNG。
+
+以下保留此前各轮验证记录：
+
+调试器 4.13 收尾后的验证（2026-10-25，ref/out、原始命令行、位数检查与列拖动这一轮）：后端 681 通过，前端 139 个测试文件、1581 项通过，e2e 116 通过、3 跳过、0 失败。调试器这一轮改了 `Protocol.cs`（`DebugLaunchRequest` 加 `RawArguments`，并追加 `DebugProgramInfoRequest/Response` 与 `debug/programInfo`），e2e 钉死的 `get_Code` 从 `@06000ADA` 变为 `@06000ADC`（Go to Token 的 `0x06000ADC` 同改），`RpcException @0200008D` 未动。
 
 以下保留此前各轮验证记录：
 

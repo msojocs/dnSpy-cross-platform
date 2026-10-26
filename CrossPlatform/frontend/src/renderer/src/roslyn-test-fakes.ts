@@ -33,6 +33,12 @@ export class FakeModel {
 
   getLineContent(lineNumber: number): string { return this.text.split('\n')[lineNumber - 1] }
 
+  getValueInRange(range: FakeRange): string {
+    const start = this.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn })
+    const end = this.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn })
+    return this.text.slice(start, end)
+  }
+
   onDidChangeContent(listener: () => void): Monaco.IDisposable {
     this.listeners.push(listener)
     return { dispose: () => this.listeners.splice(this.listeners.indexOf(listener), 1) }

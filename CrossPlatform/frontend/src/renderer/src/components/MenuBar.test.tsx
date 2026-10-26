@@ -1415,10 +1415,27 @@ describe('MenuBar', () => {
     renderMenu()
 
     fireEvent.keyDown(document.body, { key: 'Alt' })
+    // WPF opens the menu when Alt is let go.
+    expect(screen.queryByRole('menuitem', { name: /^Open\.\.\./ })).not.toBeInTheDocument()
+    fireEvent.keyUp(document.body, { key: 'Alt' })
     // The first menu's entries are up: the File menu is the one the bar opens on.
     expect(await screen.findByRole('menuitem', { name: /^Open\.\.\./ })).toBeInTheDocument()
 
     fireEvent.keyDown(document.body, { key: 'Alt' })
+    fireEvent.keyUp(document.body, { key: 'Alt' })
+    expect(screen.queryByRole('menuitem', { name: /^Open\.\.\./ })).not.toBeInTheDocument()
+  })
+
+  it('opens no menu for Alt held with a key a view took for itself', () => {
+    renderMenu()
+
+    fireEvent.keyDown(document.body, { key: 'Alt' })
+    const key = new KeyboardEvent('keydown', { key: 'e', code: 'KeyE', altKey: true, bubbles: true, cancelable: true })
+    key.preventDefault()
+    document.body.dispatchEvent(key)
+    fireEvent.keyUp(document.body, { key: 'Alt' })
+
+    expect(screen.queryByRole('menuitem', { name: /^Undo/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /^Open\.\.\./ })).not.toBeInTheDocument()
   })
 
@@ -1434,6 +1451,7 @@ describe('MenuBar', () => {
     renderMenu()
 
     fireEvent.keyDown(document.body, { key: 'Alt' })
+    fireEvent.keyUp(document.body, { key: 'Alt' })
     expect(await screen.findByRole('menuitem', { name: /^Open\.\.\./ })).toBeInTheDocument()
 
     // The next menu along is Edit, so the File menu's entries go and its own take their place.

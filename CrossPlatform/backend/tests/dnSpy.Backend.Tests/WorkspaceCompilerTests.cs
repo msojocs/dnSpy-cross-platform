@@ -188,6 +188,26 @@ public sealed class WorkspaceCompilerTests : IDisposable {
 		Assert.DoesNotContain("Placeholder", source.Source, StringComparison.Ordinal);
 	}
 
+	[Fact]
+	public async Task TheEditorsLanguageServiceSeesWhatTheCompilerSees() {
+		var opened = await OpenAsync();
+		var type = await FindTypeAsync(opened.WorkspaceId, nameof(CompilerFixture));
+		var settings = new CompilerSettingsDto();
+
+		var csharp = await manager.GetCompilerReferencesAsync(opened.WorkspaceId, type.Id, CompilerLanguages.CSharp, settings, TestContext.Current.CancellationToken);
+		var visualBasic = await manager.GetCompilerReferencesAsync(opened.WorkspaceId, type.Id, CompilerLanguages.VisualBasic, settings, TestContext.Current.CancellationToken);
+
+		Assert.Contains(typeof(CompilerFixture).Assembly.Location, csharp.Paths);
+		Assert.False(csharp.EmbedVisualBasicRuntime);
+		// A .NET module has no Microsoft.VisualBasic of the version dnSpy references, so the runtime is embedded.
+		Assert.True(visualBasic.EmbedVisualBasicRuntime);
+
+		using var languageService = new Core.LanguageService.RoslynLanguageService();
+		var document = languageService.Open(new CodeDocumentOpenRequest("class Edited { int M(dnSpy.Backend.Tests.CompilerFixture f) => f.Value(); }"), csharp);
+		var diagnostics = await languageService.GetDiagnosticsAsync(new CodeDocumentRequest(document.DocumentId), TestContext.Current.CancellationToken);
+		Assert.DoesNotContain(diagnostics.Diagnostics, diagnostic => diagnostic.Severity == "error");
+	}
+
 	static string Source(string body) => $$"""
 		namespace dnSpy.Backend.Tests;
 

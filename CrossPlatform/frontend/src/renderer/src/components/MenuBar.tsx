@@ -758,7 +758,20 @@ export const MenuBar = ({
   const menuNamesRef = useRef<string[]>([])
   menuNamesRef.current = Object.keys(menus)
   useEffect(() => {
+    // WPF drops the menu bar down when Alt is let go, and only when no other key went down while it was held:
+    // Alt and a letter that a view handles itself (the completion list's filter buttons) opens no menu.
+    let altAlone = false
+    // Seen before any view can stop the key on its way: a key a view takes still counts as one held with Alt.
+    const onAnyKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Alt')
+        altAlone = false
+      else if (!event.repeat)
+        altAlone = !event.ctrlKey && !event.shiftKey && !((event.target as HTMLElement | null)?.matches('input, textarea, [contenteditable="true"]') ?? false)
+    }
     const onKeyDown = (event: KeyboardEvent): void => {
+      // A key the focused view took for itself is not the menu bar's.
+      if (event.defaultPrevented)
+        return
       const editingText = (event.target as HTMLElement | null)?.matches('input, textarea, [contenteditable="true"]') ?? false
       if (editingText)
         return
@@ -777,10 +790,9 @@ export const MenuBar = ({
           return
         }
       }
-      // A bare Alt drops the menu bar down; pressing it again puts it away, as the same key does in WPF.
+      // A bare Alt drops the menu bar down once it is let go; pressing it again puts it away, as in WPF.
       if (event.key === 'Alt' && !event.ctrlKey && !event.shiftKey) {
         event.preventDefault()
-        setOpenMenu((current) => (current ? undefined : names[0]))
         return
       }
       // Alt and a letter — the mnemonics dnSpy's menu headers carry — opens the menu it names.
@@ -793,8 +805,26 @@ export const MenuBar = ({
       event.preventDefault()
       setOpenMenu(target)
     }
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.key !== 'Alt' || !altAlone)
+        return
+      altAlone = false
+      event.preventDefault()
+      setOpenMenu((current) => (current ? undefined : menuNamesRef.current[0]))
+    }
+    const forget = (): void => { altAlone = false }
+    window.addEventListener('keydown', onAnyKeyDown, true)
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', forget)
+    window.addEventListener('pointerdown', forget)
+    return () => {
+      window.removeEventListener('keydown', onAnyKeyDown, true)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', forget)
+      window.removeEventListener('pointerdown', forget)
+    }
   }, [openMenu])
 
   const closeMenu = (): void => setOpenMenu(undefined)

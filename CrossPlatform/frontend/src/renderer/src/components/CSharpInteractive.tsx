@@ -13,6 +13,7 @@ import { LINE_COMPRESSION_SCALE, SELECTION_MARGIN_WIDTH, isCompressedLine, selec
 import { normalizeZoom, zoomIn, zoomLevels, zoomOut } from '../zoom'
 import { useAppOptions, saveAppOptions, type AppOptions } from './app-options'
 import { setReplCSharpZoom } from './repl-options'
+import { editorCommands } from '../editor-commands'
 import { ClassifiedText } from './ColoredText'
 import { DsIcon, MenuEntryIcon } from './DsIcon'
 
@@ -823,34 +824,38 @@ export const CSharpInteractive = ({ theme, transparentBackground }: { theme: str
           defaultValue=""
           theme={monacoThemeName(theme, transparentBackground)}
           onMount={(editor, monaco) => {
+            // The editor's keys are its own; Monaco would bind them in every editor (editor-commands.ts).
+            const addCommand = editorCommands(editor)
             editorRef.current = editor
             monacoRef.current = monaco
             compressionRef.current = editor.createDecorationsCollection()
             setEditorReady(true)
             // Enter and Ctrl+Enter submit; Shift+Enter falls through to Monaco's newline. Alt+Up/Down and
             // Ctrl+Alt+Up/Down are claimed from Monaco's own word-move bindings, which the REPL overrides too.
-            editor.addCommand(monaco.KeyCode.Enter, () => { void actionsRef.current.submit(false) })
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { void actionsRef.current.submit(true) })
-            editor.addCommand(monaco.KeyCode.Escape, () => actionsRef.current.clearInput())
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyA, () => actionsRef.current.selectAll())
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL, () => actionsRef.current.clearScreen())
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copyInput)
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => actionsRef.current.recall(-1, true))
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => actionsRef.current.recall(1, true))
-            editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => actionsRef.current.recall(-1, false))
-            editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => actionsRef.current.recall(1, false))
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => actionsRef.current.saveText())
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyS, () => actionsRef.current.saveCode())
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyC, () => actionsRef.current.copyCode())
-            editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), () => actionsRef.current.toggleWordWrap())
+            addCommand(monaco.KeyCode.Enter, () => { void actionsRef.current.submit(false) })
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { void actionsRef.current.submit(true) })
+            addCommand(monaco.KeyCode.Escape, () => actionsRef.current.clearInput())
+            // The REPL buffer is no Roslyn document, and dnSpy's REPL completes nothing: Ctrl+Space opens no list.
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => undefined)
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyA, () => actionsRef.current.selectAll())
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL, () => actionsRef.current.clearScreen())
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copyInput)
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => actionsRef.current.recall(-1, true))
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => actionsRef.current.recall(1, true))
+            addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => actionsRef.current.recall(-1, false))
+            addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => actionsRef.current.recall(1, false))
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => actionsRef.current.saveText())
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyS, () => actionsRef.current.saveCode())
+            addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyC, () => actionsRef.current.copyCode())
+            addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), () => actionsRef.current.toggleWordWrap())
             // dnSpy's text editor zoom keys: Ctrl+Shift+. Ctrl+= and Ctrl+NumPad+ in, their opposites out,
             // Ctrl+0 back to 100%.
             for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Period, monaco.KeyCode.Equal, monaco.KeyCode.NumpadAdd])
-              editor.addCommand(monaco.KeyMod.CtrlCmd | key, () => zoomBy(zoomIn))
+              addCommand(monaco.KeyMod.CtrlCmd | key, () => zoomBy(zoomIn))
             for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Comma, monaco.KeyCode.Minus, monaco.KeyCode.NumpadSubtract])
-              editor.addCommand(monaco.KeyMod.CtrlCmd | key, () => zoomBy(zoomOut))
+              addCommand(monaco.KeyMod.CtrlCmd | key, () => zoomBy(zoomOut))
             for (const key of [monaco.KeyCode.Digit0, monaco.KeyCode.Numpad0])
-              editor.addCommand(monaco.KeyMod.CtrlCmd | key, () => setReplCSharpZoom(() => 100))
+              addCommand(monaco.KeyMod.CtrlCmd | key, () => setReplCSharpZoom(() => 100))
             // A user edit invalidates the text a same-text history search was looking for.
             editor.onDidChangeModelContent(() => {
               if (!applyingHistory.current)

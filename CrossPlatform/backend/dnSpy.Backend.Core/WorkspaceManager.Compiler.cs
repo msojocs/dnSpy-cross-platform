@@ -30,6 +30,10 @@ public sealed partial class WorkspaceManager {
 	public Task<CompileSourceResponse> CompileSourceAsync(CompileSourceRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.CompileSource(request), cancellationToken);
 
+	/// <summary>What code edited in a node's module compiles against: the Edit Code window's references.</summary>
+	public Task<CompilerReferences> GetCompilerReferencesAsync(string workspaceId, string nodeId, string language, CompilerSettingsDto settings, CancellationToken cancellationToken) =>
+		GetWorkspace(workspaceId).RunAsync(w => w.GetCompilerReferences(nodeId, language, settings), cancellationToken);
+
 	public Task<CompilerSourceResponse> GetAssemblyAttributesSourceAsync(CompilerAssemblyAttributesRequest request, CancellationToken cancellationToken) =>
 		GetWorkspace(request.WorkspaceId).RunAsync(w => w.GetAssemblyAttributesSourceAsync(request.NodeId, request.Language, cancellationToken), cancellationToken);
 
@@ -322,77 +326,54 @@ public sealed partial class WorkspaceManager {
 			var assemblyName = Guid.NewGuid().ToString("N");
 			var syntaxTree = CSharpSyntaxTree.ParseText(
 				SourceText.From(source, System.Text.Encoding.UTF8),
-				new CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest, preprocessorSymbols: PreprocessorSymbols(settings.PreprocessorSymbols)),
+				RoslynCompilerOptions.CSharpParseOptions(settings),
 				path: "main.cs");
-			var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-				.WithOptimizationLevel(settings.Optimize ? OptimizationLevel.Release : OptimizationLevel.Debug)
-				.WithOverflowChecks(settings.CheckOverflow)
-				.WithAllowUnsafe(settings.AllowUnsafe)
-				.WithNullableContextOptions(NullableContextOptions.Enable)
-				.WithDeterministic(true);
-			var compilation = CSharpCompilation.Create(assemblyName, [syntaxTree], CreateCompilerReferences(moduleEntry), options);
+			var references = GetCompilerReferences(moduleEntry, CompilerLanguages.CSharp, settings);
+			var compilation = CSharpCompilation.Create(assemblyName, [syntaxTree], ReferenceAssemblies.Create(references.Paths), RoslynCompilerOptions.CSharpCompilationOptions(settings));
 			return Emit(compilation);
 		}
 
-		/// <summary>
-		/// dnSpy.Roslyn's Visual Basic compiler with the Compiler page's options. The runtime is embedded when the page
-		/// says so, or when the module is the core library or targets a framework with no Microsoft.VisualBasic of the
-		/// version dnSpy references — dnSpy's GetRequiredAssemblyReferences, which on .NET Core leaves only embedding.
-		/// </summary>
+		/// <summary>dnSpy.Roslyn's Visual Basic compiler with the Compiler page's options.</summary>
 		CSharpCompilationResult CompileVisualBasic(ModuleEntry moduleEntry, string source, CompilerSettingsDto settings) {
 			var assemblyName = Guid.NewGuid().ToString("N");
 			var syntaxTree = VisualBasicSyntaxTree.ParseText(
 				SourceText.From(source, System.Text.Encoding.UTF8),
-				new VisualBasicParseOptions(Microsoft.CodeAnalysis.VisualBasic.LanguageVersion.Latest, preprocessorSymbols: VisualBasicPreprocessorSymbols(settings.PreprocessorSymbols)),
+				RoslynCompilerOptions.VisualBasicParseOptions(settings),
 				path: "main.vb");
-			var references = CreateCompilerReferences(moduleEntry).ToList();
+			var references = GetCompilerReferences(moduleEntry, CompilerLanguages.VisualBasic, settings);
+			var options = RoslynCompilerOptions.VisualBasicCompilationOptions(settings, references.EmbedVisualBasicRuntime);
+			var compilation = VisualBasicCompilation.Create(assemblyName, [syntaxTree], ReferenceAssemblies.Create(references.Paths), options);
+			return Emit(compilation);
+		}
+
+		/// <summary>The references code edited in a node's module compiles against — the Edit Code window's compile and
+		/// the language service of its editor alike.</summary>
+		public CompilerReferences GetCompilerReferences(string nodeId, string language, CompilerSettingsDto settings) {
+			var moduleEntry = GetNode(nodeId).AsModuleEntry
+				?? throw new RpcException(ErrorCodes.EditValidationFailed, "PE-only modules do not support editing code.");
+			return GetCompilerReferences(moduleEntry, language, settings);
+		}
+
+		/// <summary>
+		/// What dnSpy's <c>GetRequiredAssemblyReferences</c> adds to the module's references. C# adds nothing. Visual
+		/// Basic embeds its runtime when the page says so, or when the module is the core library or targets a
+		/// framework with no Microsoft.VisualBasic of the version dnSpy references — which on .NET Core leaves only
+		/// embedding — and references the framework's runtime otherwise.
+		/// </summary>
+		static CompilerReferences GetCompilerReferences(ModuleEntry moduleEntry, string language, CompilerSettingsDto settings) {
+			var paths = CompilerReferencePaths(moduleEntry);
+			if (language != CompilerLanguages.VisualBasic)
+				return new CompilerReferences(paths, false);
 			var embed = settings.EmbedVisualBasicRuntime || moduleEntry.Module.IsCoreLibraryModule == true || !HasVisualBasicRuntime(moduleEntry.Module);
 			if (!embed && ReferenceAssemblies.Framework.FirstOrDefault(path => Path.GetFileNameWithoutExtension(path).Equals("Microsoft.VisualBasic.Core", StringComparison.OrdinalIgnoreCase)) is { } runtime)
-				references.AddRange(ReferenceAssemblies.Create([runtime]));
-			var options = new VisualBasicCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-				.WithOptimizationLevel(settings.Optimize ? OptimizationLevel.Release : OptimizationLevel.Debug)
-				.WithOverflowChecks(settings.CheckOverflow)
-				.WithOptionExplicit(settings.OptionExplicit)
-				.WithOptionInfer(settings.OptionInfer)
-				.WithOptionStrict(settings.OptionStrict ? OptionStrict.On : OptionStrict.Off)
-				.WithOptionCompareText(!settings.OptionCompareBinary)
-				.WithEmbedVbCoreRuntime(embed)
-				.WithDeterministic(true);
-			var compilation = VisualBasicCompilation.Create(assemblyName, [syntaxTree], references, options);
-			return Emit(compilation);
+				paths = [.. paths, runtime];
+			return new CompilerReferences(paths, embed);
 		}
 
 		/// <summary>Whether the module can reference a Microsoft.VisualBasic rather than embed the runtime: one built
 		/// against the full framework has it, the way dnSpy references version 8 or 10 of it there.</summary>
 		static bool HasVisualBasicRuntime(ModuleDef module) =>
 			module.GetAssemblyRefs().Any(reference => reference.Name == "Microsoft.VisualBasic" || reference.Name == "Microsoft.VisualBasic.Core");
-
-		/// <summary>The C# symbols: dnSpy splits the page's text on ';' and ',' and drops what is empty.</summary>
-		static string[] PreprocessorSymbols(string text) =>
-			text.Split([';', ','], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-		/// <summary>
-		/// The Visual Basic symbols, which carry values: "K=V" gives V as a boolean, an integer, a number or a string —
-		/// tried in that order, the quotes taken off a string — and a bare K is True.
-		/// </summary>
-		static IEnumerable<KeyValuePair<string, object>> VisualBasicPreprocessorSymbols(string text) {
-			foreach (var entry in PreprocessorSymbols(text)) {
-				var separator = entry.IndexOf('=', StringComparison.Ordinal);
-				if (separator < 0) {
-					yield return new KeyValuePair<string, object>(entry, true);
-					continue;
-				}
-				var name = entry[..separator].Trim();
-				var value = entry[(separator + 1)..].Trim();
-				object parsed = bool.TryParse(value, out var flag) ? flag
-					: int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number
-					: double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var real) ? real
-					: value.Length >= 2 && value[0] == '"' && value[^1] == '"' ? value[1..^1]
-					: value;
-				if (name.Length > 0)
-					yield return new KeyValuePair<string, object>(name, parsed);
-			}
-		}
 
 		static CSharpCompilationResult Emit(Compilation compilation) {
 			using var peStream = new MemoryStream();
@@ -407,12 +388,12 @@ public sealed partial class WorkspaceManager {
 		}
 
 		/// <summary>
-		/// The references the edited source compiles against: the target module itself (its types are
+		/// The assemblies the edited source compiles against: the target module itself (its types are
 		/// visible, which is what the source's own definition shadows), every assembly its row references,
 		/// and the framework's reference pack. The pack wins when a reference resolves to a runtime copy of
 		/// the same assembly, so the compiler does not see two System.Runtime assemblies.
 		/// </summary>
-		static IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference> CreateCompilerReferences(ModuleEntry moduleEntry) {
+		static IReadOnlyList<string> CompilerReferencePaths(ModuleEntry moduleEntry) {
 			var paths = new List<string>();
 			var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			void Add(string? path, string? name = null) {
@@ -437,7 +418,7 @@ public sealed partial class WorkspaceManager {
 				}
 				Add((resolved as AssemblyDef)?.ManifestModule?.Location, reference.Name);
 			}
-			return ReferenceAssemblies.Create(paths);
+			return paths;
 		}
 
 		static CompilerDiagnosticDto ToDiagnosticDto(Diagnostic diagnostic) {

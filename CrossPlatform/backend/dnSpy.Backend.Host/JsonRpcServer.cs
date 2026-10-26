@@ -448,8 +448,14 @@ internal sealed class JsonRpcServer {
 				return new { acknowledged = true };
 			case RpcMethods.ScriptClassify:
 				return await scripts.ClassifyAsync(DeserializeParams<ScriptClassifyRequest>(request).Code, cancellationToken).ConfigureAwait(false);
-			case RpcMethods.LanguageServiceOpen:
-				return languageService.Open(DeserializeParams<CodeDocumentOpenRequest>(request));
+			case RpcMethods.LanguageServiceOpen: {
+				var open = DeserializeParams<CodeDocumentOpenRequest>(request);
+				// The Edit Code window's document compiles against what its Compile button compiles against.
+				var references = open.WorkspaceId is { Length: > 0 } && open.NodeId is { Length: > 0 }
+					? await workspaces.GetCompilerReferencesAsync(open.WorkspaceId, open.NodeId, open.Language, open.Settings ?? new CompilerSettingsDto(), cancellationToken).ConfigureAwait(false)
+					: null;
+				return languageService.Open(open, references);
+			}
 			case RpcMethods.LanguageServiceUpdate:
 				languageService.Update(DeserializeParams<CodeDocumentUpdateRequest>(request));
 				return new { updated = true };
@@ -470,8 +476,8 @@ internal sealed class JsonRpcServer {
 				return await languageService.GetDiagnosticsAsync(DeserializeParams<CodeDocumentRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.LanguageServiceIndentation:
 				return await languageService.GetIndentationAsync(DeserializeParams<CodeIndentationRequest>(request), cancellationToken).ConfigureAwait(false);
-			case RpcMethods.LanguageServiceSelectionRanges:
-				return await languageService.GetSelectionRangesAsync(DeserializeParams<CodeSelectionRangesRequest>(request), cancellationToken).ConfigureAwait(false);
+			case RpcMethods.LanguageServiceWordNavigation:
+				return await languageService.GetWordNavigationAsync(DeserializeParams<CodeWordNavigationRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugLaunch:
 				return await GetDebugSessions().LaunchAsync(DeserializeParams<DebugLaunchRequest>(request), cancellationToken).ConfigureAwait(false);
 			case RpcMethods.DebugListProcesses:

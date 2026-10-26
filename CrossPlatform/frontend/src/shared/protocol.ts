@@ -2744,18 +2744,18 @@ export interface DnSpyApi {
 
   /** The semantic colors of the C# Interactive window's input, compiled as the session's next submission. */
   classifyScript(code: string): Promise<ClassifyResponse>
-  /** Opens a C# code document in a Roslyn workspace of its own; the other `codeDocument*` calls take its id. */
+  /** Opens a C# or Visual Basic code document in a Roslyn workspace of its own; the other `codeDocument*` calls take its id. */
   openCodeDocument(request: CodeDocumentOpenRequest): Promise<CodeDocumentOpenResponse>
   updateCodeDocument(documentId: string, text: string): Promise<void>
   closeCodeDocument(documentId: string): Promise<void>
   classifyCodeDocument(documentId: string): Promise<ClassifyResponse>
-  getCodeCompletion(documentId: string, position: number, triggerCharacter?: string | null): Promise<CodeCompletionResponse>
+  getCodeCompletion(documentId: string, position: number, triggerCharacter?: string | null, triggerKind?: CodeCompletionTriggerKind | null): Promise<CodeCompletionResponse>
   getCodeCompletionDescription(documentId: string, resultId: number, index: number): Promise<CodeCompletionDescriptionResponse>
   getCodeQuickInfo(documentId: string, position: number): Promise<CodeQuickInfoResponse>
-  getCodeSignatureHelp(documentId: string, position: number, triggerCharacter?: string | null): Promise<CodeSignatureHelpResponse>
+  getCodeSignatureHelp(documentId: string, position: number, triggerCharacter?: string | null, triggerReason?: CodeSignatureHelpTriggerReason | null): Promise<CodeSignatureHelpResponse>
   getCodeDiagnostics(documentId: string): Promise<CodeDiagnosticsResponse>
   getCodeIndentation(request: CodeIndentationRequest): Promise<CodeIndentationResponse>
-  getCodeSelectionRanges(documentId: string, positions: number[]): Promise<CodeSelectionRangesResponse>
+  getCodeWordNavigation(request: CodeWordNavigationRequest): Promise<CodeWordNavigationResponse>
 }
 
 /** A stretch of code and the color class (one of the backend's TextColors) it is written in. */
@@ -2770,23 +2770,24 @@ export interface ClassifyResponse {
   spans: ClassifiedSpan[]
 }
 
-/** What a code document compiles with — dnSpy's C# compiler settings, whose defaults the backend applies. */
-export interface CodeCompilerOptions {
-  optimize?: boolean
-  checkOverflow?: boolean
-  allowUnsafe?: boolean
-  preprocessorSymbols?: string
-}
-
 export interface CodeDocumentOpenRequest {
   text: string
   /** The assemblies the code compiles against; absent means the framework the backend runs on. */
   references?: string[]
-  options?: CodeCompilerOptions
+  /** The Compiler page's settings; absent means their defaults. */
+  settings?: CompilerSettings
+  language?: CompilerLanguage
+  /** With `nodeId`, the module the code is edited in: it compiles against what the Edit Code window compiles against. */
+  workspaceId?: string
+  nodeId?: string
 }
 
 export interface CodeDocumentOpenResponse {
   documentId: string
+  /** The characters the language's signature help providers start a session on as they are typed. */
+  signatureHelpTriggerCharacters: string
+  /** The characters that update an open session as they are typed. */
+  signatureHelpRetriggerCharacters: string
 }
 
 export interface CodeSpan {
@@ -2799,6 +2800,12 @@ export interface CodeTextEdit {
   length: number
   newText: string
 }
+
+/** How a completion list was asked for: Ctrl+Space, a typed character or a deleted one. */
+export type CodeCompletionTriggerKind = 'invoke' | 'insertion' | 'deletion'
+
+/** Roslyn's EnterKeyRule: whether Enter also starts a new line after it commits an item. */
+export type CodeEnterKeyRule = 'default' | 'never' | 'always' | 'afterFullyTypedWord'
 
 export interface CodeCompletionItem {
   index: number
@@ -2813,8 +2820,13 @@ export interface CodeCompletionItem {
   tags: string[]
   matchPriority: number
   preselect: boolean
-  /** The characters that commit the item as they are typed. */
-  commitCharacters: string
+  /** The dnSpy image the list shows for the item, or null. */
+  glyph: string | null
+  /** The item's text in the colors dnSpy's completion list gives it. */
+  displayParts: TextPart[]
+  /** The item gets dnSpy's warning icon beside it. */
+  warning: boolean
+  enterKeyRule: CodeEnterKeyRule
   /** What committing does when it is more than putting `insertText` over the list's span. */
   edit?: CodeTextEdit | null
 }
@@ -2825,6 +2837,12 @@ export interface CodeCompletionList {
   /** Roslyn's builder mode: typing never commits an item. */
   suggestionMode: boolean
   items: CodeCompletionItem[]
+  /** The characters that commit the selected item as they are typed. */
+  commitCharacters: string
+  /** The rule an item whose own rule is "default" follows. */
+  defaultEnterKeyRule: CodeEnterKeyRule
+  /** dnSpy's filter buttons some item matches, in the order they are shown. */
+  filters: string[]
 }
 
 export interface CodeCompletionResponse {
@@ -2853,11 +2871,19 @@ export interface CodeQuickInfoResponse {
   quickInfo: CodeQuickInfo | null
 }
 
+/** Roslyn's SignatureHelpTriggerReason: Ctrl+Shift+Space, a typed character, or a change while a session is open. */
+export type CodeSignatureHelpTriggerReason = 'invoke' | 'typeChar' | 'retrigger'
+
 export interface CodeSignatureParameter {
   name: string
   display: TextPart[]
   documentation: TextPart[]
   isOptional: boolean
+  /** What stands before and after `display` in the signature. */
+  prefix?: TextPart[] | null
+  suffix?: TextPart[] | null
+  /** What the signature adds after itself while this is the current parameter. */
+  selectedDisplay?: TextPart[] | null
 }
 
 /** A signature laid out the way Roslyn's SignatureHelpItem is: prefix, parameters joined by separator, suffix. */
@@ -2868,6 +2894,8 @@ export interface CodeSignature {
   parameters: CodeSignatureParameter[]
   documentation: TextPart[]
   isVariadic: boolean
+  /** What follows the signature on its line. */
+  description?: TextPart[] | null
 }
 
 export interface CodeSignatureHelp {
@@ -2877,6 +2905,8 @@ export interface CodeSignatureHelp {
   argumentName: string | null
   selectedItem: number
   items: CodeSignature[]
+  /** The parameter of the selected item the caret is in, as Roslyn picks it; null for none. */
+  selectedParameter?: number | null
 }
 
 export interface CodeSignatureHelpResponse {
@@ -2915,9 +2945,22 @@ export interface CodeIndentationResponse {
   indentation: number | null
 }
 
-export interface CodeSelectionRangesResponse {
-  /** For each position asked about, the spans around it, innermost first. */
-  ranges: CodeSpan[][]
+/**
+ * A word command of dnSpy's editor: the word right of the caret (Ctrl+Right), the one left of it (Ctrl+Left), or
+ * the current one (Ctrl+W, a double click), by the words dnSpy's Roslyn text structure navigator finds.
+ */
+export interface CodeWordNavigationRequest {
+  documentId: string
+  command: 'nextWord' | 'previousWord' | 'currentWord'
+  position: number
+  selectionStart: number
+  selectionEnd: number
+}
+
+/** The word to select, or — `start` equal to `end` — where the caret goes. */
+export interface CodeWordNavigationResponse {
+  start: number
+  end: number
 }
 
 /** dnSpy's ProjectVersion, in its order — the names its Version combo box lists. */

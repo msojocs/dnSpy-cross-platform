@@ -322,13 +322,13 @@ const api: DnSpyApi = {
   updateCodeDocument: (documentId, text) => ipcRenderer.invoke('languageService:update', documentId, text),
   closeCodeDocument: (documentId) => ipcRenderer.invoke('languageService:close', documentId),
   classifyCodeDocument: (documentId) => ipcRenderer.invoke('languageService:classify', documentId),
-  getCodeCompletion: (documentId, position, triggerCharacter) => ipcRenderer.invoke('languageService:completion', documentId, position, triggerCharacter ?? null),
+  getCodeCompletion: (documentId, position, triggerCharacter, triggerKind) => ipcRenderer.invoke('languageService:completion', documentId, position, triggerCharacter ?? null, triggerKind ?? null),
   getCodeCompletionDescription: (documentId, resultId, index) => ipcRenderer.invoke('languageService:completionDescription', documentId, resultId, index),
   getCodeQuickInfo: (documentId, position) => ipcRenderer.invoke('languageService:quickInfo', documentId, position),
-  getCodeSignatureHelp: (documentId, position, triggerCharacter) => ipcRenderer.invoke('languageService:signatureHelp', documentId, position, triggerCharacter ?? null),
+  getCodeSignatureHelp: (documentId, position, triggerCharacter, triggerReason) => ipcRenderer.invoke('languageService:signatureHelp', documentId, position, triggerCharacter ?? null, triggerReason ?? null),
   getCodeDiagnostics: (documentId) => ipcRenderer.invoke('languageService:diagnostics', documentId),
   getCodeIndentation: (request) => ipcRenderer.invoke('languageService:indentation', request),
-  getCodeSelectionRanges: (documentId, positions) => ipcRenderer.invoke('languageService:selectionRanges', documentId, positions),
+  getCodeWordNavigation: (request) => ipcRenderer.invoke('languageService:wordNavigation', request),
 }
 
 contextBridge.exposeInMainWorld('dnSpy', api)

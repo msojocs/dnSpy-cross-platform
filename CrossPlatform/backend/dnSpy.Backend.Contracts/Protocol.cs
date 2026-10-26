@@ -240,8 +240,9 @@ public static class RpcMethods {
 	public const string LanguageServiceDiagnostics = "languageService/diagnostics";
 	/// <summary>The indentation a line should get — dnSpy's Roslyn smart indent.</summary>
 	public const string LanguageServiceIndentation = "languageService/indentation";
-	/// <summary>The spans of the syntax around positions, innermost first — dnSpy's Roslyn text structure navigator.</summary>
-	public const string LanguageServiceSelectionRanges = "languageService/selectionRanges";
+	/// <summary>Where a word command (next or previous word, select the current word) takes the caret, by the words
+	/// dnSpy's Roslyn text structure navigator finds (<c>GetExtentOfWord</c>).</summary>
+	public const string LanguageServiceWordNavigation = "languageService/wordNavigation";
 	/// <summary>The documents with unsaved changes — dnSpy's IUndoCommandService.GetModifiedDocuments.</summary>
 	public const string WorkspaceGetModifiedDocuments = "workspace/getModifiedDocuments";
 	/// <summary>The writer options a document's Save Module window opens with, dnlib's own for the module.</summary>
@@ -2085,23 +2086,27 @@ public sealed record ClassifiedSpanDto(int Start, int Length, string Color);
 public sealed record ClassifyResponse(IReadOnlyList<ClassifiedSpanDto> Spans);
 
 /// <summary>
-/// What a code document compiles with — dnSpy's C# compiler settings page, whose defaults these are.
-/// <paramref name="PreprocessorSymbols"/> is a list separated by ';' or ','.
+/// Opens a code document in <paramref name="Language"/>, one of <see cref="CompilerLanguages"/>, compiled with the
+/// Compiler page's <paramref name="Settings"/> (their defaults when null). With <paramref name="WorkspaceId"/> and
+/// <paramref name="NodeId"/> it compiles against what the Edit Code window compiles against — the node's module
+/// and the assemblies it references — the way dnSpy's RoslynLanguageCompiler gets its project's references from
+/// the edited module. Otherwise <paramref name="References"/> are the assemblies; null means the framework the
+/// host runs on, read from its reference pack when one is installed so that symbols have their XML documentation.
 /// </summary>
-public sealed record CodeCompilerOptionsDto(
-	bool Optimize = true,
-	bool CheckOverflow = false,
-	bool AllowUnsafe = true,
-	string PreprocessorSymbols = "TRACE");
+public sealed record CodeDocumentOpenRequest(
+	string Text,
+	IReadOnlyList<string>? References = null,
+	CompilerSettingsDto? Settings = null,
+	string Language = "csharp",
+	string? WorkspaceId = null,
+	string? NodeId = null);
 
 /// <summary>
-/// Opens a C# code document. <paramref name="References"/> are the assemblies it compiles against; null means
-/// the framework the host runs on, read from its reference pack when one is installed so that symbols have
-/// their XML documentation.
+/// The id the other languageService/* methods take, and the characters the language's signature help providers
+/// start (<paramref name="SignatureHelpTriggerCharacters"/>) or update (<paramref name="SignatureHelpRetriggerCharacters"/>)
+/// a session on as they are typed.
 /// </summary>
-public sealed record CodeDocumentOpenRequest(string Text, IReadOnlyList<string>? References = null, CodeCompilerOptionsDto? Options = null);
-
-public sealed record CodeDocumentOpenResponse(string DocumentId);
+public sealed record CodeDocumentOpenResponse(string DocumentId, string SignatureHelpTriggerCharacters = "", string SignatureHelpRetriggerCharacters = "");
 
 public sealed record CodeDocumentUpdateRequest(string DocumentId, string Text);
 
@@ -2117,17 +2122,22 @@ public sealed record CodeSpanDto(int Start, int Length);
 public sealed record CodeTextEditDto(int Start, int Length, string NewText);
 
 /// <summary>
-/// Asks for the completion list at <paramref name="Position"/>. <paramref name="TriggerCharacter"/> is the
-/// character just typed; null means the list was asked for (Ctrl+Space). A typed character that Roslyn would
-/// not open a list for gets an empty one.
+/// Asks for the completion list at <paramref name="Position"/>. <paramref name="TriggerKind"/> is how the list
+/// was asked for: "invoke" (Ctrl+Space, Ctrl+J), "insertion" (<paramref name="TriggerCharacter"/> was just typed)
+/// or "deletion" (it was just deleted); null means "insertion" with a character and "invoke" without one. A
+/// typed or deleted character that Roslyn would not open a list for gets none, the way dnSpy asks
+/// <c>ShouldTriggerCompletion</c> before it starts a session.
 /// </summary>
-public sealed record CodeCompletionRequest(string DocumentId, int Position, string? TriggerCharacter = null);
+public sealed record CodeCompletionRequest(string DocumentId, int Position, string? TriggerCharacter = null, string? TriggerKind = null);
 
 /// <summary>
 /// One completion item. <paramref name="Index"/> names it to <see cref="RpcMethods.LanguageServiceCompletionDescription"/>.
 /// <paramref name="Edit"/> is what committing it does when that is more than putting <paramref name="InsertText"/>
-/// over the list's span (an override, a member that needs a using); <paramref name="CommitCharacters"/> are the
-/// characters that commit it as they are typed. <paramref name="Tags"/> are Roslyn's WellKnownTags.
+/// over the list's span (an override, a member that needs a using). <paramref name="Tags"/> are Roslyn's
+/// WellKnownTags; <paramref name="Glyph"/> is the dnSpy image the list shows for them, <paramref name="DisplayParts"/>
+/// the item's text in the colors dnSpy's CompletionClassifier gives it, and <paramref name="Warning"/> asks for
+/// the warning icon beside it. <paramref name="EnterKeyRule"/> is Roslyn's rule for whether Enter also starts a
+/// new line after committing: "default", "never", "always" or "afterFullyTypedWord".
 /// </summary>
 public sealed record CodeCompletionItemDto(
 	int Index,
@@ -2141,15 +2151,29 @@ public sealed record CodeCompletionItemDto(
 	IReadOnlyList<string> Tags,
 	int MatchPriority,
 	bool Preselect,
-	string CommitCharacters,
+	string? Glyph,
+	IReadOnlyList<TextPartDto> DisplayParts,
+	bool Warning,
+	string EnterKeyRule,
 	CodeTextEditDto? Edit = null);
 
 /// <summary>
 /// The completion list: <paramref name="Span"/> is the text the items replace and filter on.
 /// <paramref name="SuggestionMode"/> is Roslyn's builder mode (a lambda parameter, a name being declared), where
 /// typing never commits an item. <paramref name="ResultId"/> names the list to the description request.
+/// <paramref name="CommitCharacters"/> are the service's default commit characters — the ones dnSpy commits the
+/// selected item on — and <paramref name="DefaultEnterKeyRule"/> the rule an item with the "default" one follows.
+/// <paramref name="Filters"/> are the ids of dnSpy's filter buttons (RoslynIntellisenseFilters) that some item of
+/// the list matches, in the order the buttons are shown.
 /// </summary>
-public sealed record CodeCompletionListDto(int ResultId, CodeSpanDto Span, bool SuggestionMode, IReadOnlyList<CodeCompletionItemDto> Items);
+public sealed record CodeCompletionListDto(
+	int ResultId,
+	CodeSpanDto Span,
+	bool SuggestionMode,
+	IReadOnlyList<CodeCompletionItemDto> Items,
+	string CommitCharacters,
+	string DefaultEnterKeyRule,
+	IReadOnlyList<string> Filters);
 
 public sealed record CodeCompletionResponse(CodeCompletionListDto? List);
 
@@ -2172,14 +2196,32 @@ public sealed record CodeQuickInfoDto(CodeSpanDto Span, string? Glyph, bool Warn
 
 public sealed record CodeQuickInfoResponse(CodeQuickInfoDto? QuickInfo);
 
-/// <summary>Asks for signature help; <paramref name="TriggerCharacter"/> is the character just typed, if any.</summary>
-public sealed record CodeSignatureHelpRequest(string DocumentId, int Position, string? TriggerCharacter = null);
+/// <summary>
+/// Asks for signature help. <paramref name="TriggerReason"/> is Roslyn's SignatureHelpTriggerReason, the way
+/// dnSpy's command filter passes it: "invoke" (Ctrl+Shift+Space), "typeChar" (<paramref name="TriggerCharacter"/>
+/// was just typed) or "retrigger" (the caret moved or the text changed while a session is open); null means
+/// "typeChar" with a character and "invoke" without one.
+/// </summary>
+public sealed record CodeSignatureHelpRequest(string DocumentId, int Position, string? TriggerCharacter = null, string? TriggerReason = null);
 
-public sealed record CodeSignatureParameterDto(string Name, IReadOnlyList<TextPartDto> Display, IReadOnlyList<TextPartDto> Documentation, bool IsOptional);
+/// <summary>
+/// One parameter of a signature: <paramref name="Display"/> is what the signature shows for it, between
+/// <paramref name="Prefix"/> and <paramref name="Suffix"/>; <paramref name="SelectedDisplay"/> is what the
+/// signature adds after itself while this parameter is the current one.
+/// </summary>
+public sealed record CodeSignatureParameterDto(
+	string Name,
+	IReadOnlyList<TextPartDto> Display,
+	IReadOnlyList<TextPartDto> Documentation,
+	bool IsOptional,
+	IReadOnlyList<TextPartDto>? Prefix = null,
+	IReadOnlyList<TextPartDto>? Suffix = null,
+	IReadOnlyList<TextPartDto>? SelectedDisplay = null);
 
 /// <summary>
 /// One signature, laid out the way Roslyn's SignatureHelpItem is: <paramref name="Prefix"/>, the parameters
-/// joined by <paramref name="Separator"/>, then <paramref name="Suffix"/>.
+/// joined by <paramref name="Separator"/>, then <paramref name="Suffix"/>. <paramref name="Description"/> follows
+/// the signature on its line, and <paramref name="Documentation"/> on a line of its own.
 /// </summary>
 public sealed record CodeSignatureDto(
 	IReadOnlyList<TextPartDto> Prefix,
@@ -2187,12 +2229,15 @@ public sealed record CodeSignatureDto(
 	IReadOnlyList<TextPartDto> Suffix,
 	IReadOnlyList<CodeSignatureParameterDto> Parameters,
 	IReadOnlyList<TextPartDto> Documentation,
-	bool IsVariadic);
+	bool IsVariadic,
+	IReadOnlyList<TextPartDto>? Description = null);
 
 /// <summary>
 /// The signatures around a position. <paramref name="ApplicableSpan"/> is the argument list the session lasts
 /// for; <paramref name="ArgumentIndex"/> is the argument the caret is in, <paramref name="ArgumentName"/> its
-/// name when it is a named argument, and <paramref name="SelectedItem"/> the overload the arguments pick.
+/// name when it is a named argument, <paramref name="SelectedItem"/> the overload the arguments pick and
+/// <paramref name="SelectedParameter"/> its parameter the caret is in — Roslyn's own choice of both, which dnSpy
+/// takes over (<c>DefaultSignatureHelpSelector</c>).
 /// </summary>
 public sealed record CodeSignatureHelpDto(
 	CodeSpanDto ApplicableSpan,
@@ -2200,7 +2245,8 @@ public sealed record CodeSignatureHelpDto(
 	int ArgumentCount,
 	string? ArgumentName,
 	int SelectedItem,
-	IReadOnlyList<CodeSignatureDto> Items);
+	IReadOnlyList<CodeSignatureDto> Items,
+	int? SelectedParameter = null);
 
 public sealed record CodeSignatureHelpResponse(CodeSignatureHelpDto? Help);
 
@@ -2228,10 +2274,16 @@ public sealed record CodeIndentationRequest(string DocumentId, int Line, int Ind
 /// <summary>The column the line's text should start at, or null to keep the editor's own indentation.</summary>
 public sealed record CodeIndentationResponse(int? Indentation);
 
-public sealed record CodeSelectionRangesRequest(string DocumentId, IReadOnlyList<int> Positions);
+/// <summary>
+/// A word command of dnSpy's editor (<c>EditorOperations</c>) over a code document: <paramref name="Command"/> is
+/// "nextWord" (Ctrl+Right, and Ctrl+Delete from the selection's end), "previousWord" (Ctrl+Left, and
+/// Ctrl+Backspace from the selection's start) or "currentWord" (Ctrl+W, a double click). <paramref name="Position"/>
+/// is the caret, and the selection is what "currentWord" keeps when it already is the word left of the caret.
+/// </summary>
+public sealed record CodeWordNavigationRequest(string DocumentId, string Command, int Position, int SelectionStart = 0, int SelectionEnd = 0);
 
-/// <summary>For each position, the spans of the token and of every node around it, innermost first.</summary>
-public sealed record CodeSelectionRangesResponse(IReadOnlyList<IReadOnlyList<CodeSpanDto>> Ranges);
+/// <summary>Where the command goes: the word to select, or — <paramref name="Start"/> equal to <paramref name="End"/> — the caret's new place.</summary>
+public sealed record CodeWordNavigationResponse(int Start, int End);
 
 /// <summary>One statement of a method body as the decompiler writes it, with the IL it covers.</summary>
 public sealed record SourceStatementDto(int IlOffset, int IlEndOffset, int MetadataToken, string Text, bool IsHidden);

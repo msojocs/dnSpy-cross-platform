@@ -2565,6 +2565,110 @@ select:focus-visible,
   overflow: hidden;
 }
 
+/* dnSpy's Roslyn code editor: the text, and under it the zoom box dnSpy puts in the view's bottom margin. */
+.roslyn-code-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.roslyn-code-editor-text {
+  flex: 1;
+  min-height: 0;
+}
+
+.code-editor-zoom-control {
+  flex: none;
+  padding: 1px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.code-editor-zoom-control input {
+  width: 60px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+
+/* dnSpy's completion list: the item's image instead of Monaco's codicon, its warning icon, and the filter buttons
+   under the list, in the status bar Monaco sizes the list around; Monaco's own Insert/Replace hints stay hidden. */
+.roslyn-editor .suggest-widget .monaco-list .monaco-list-row .ds-completion-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+}
+
+.roslyn-editor .suggest-widget .monaco-list .monaco-list-row .ds-completion-icon::before {
+  content: none;
+}
+
+.roslyn-editor .suggest-widget .ds-completion-warning {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  background-position: center;
+  background-repeat: no-repeat;
+  vertical-align: middle;
+}
+
+.roslyn-editor .suggest-widget .suggest-status-bar .monaco-action-bar {
+  display: none;
+}
+
+.roslyn-editor .suggest-widget .ds-completion-filters {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 100%;
+}
+
+.roslyn-editor .suggest-widget .ds-completion-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: default;
+}
+
+.roslyn-editor .suggest-widget .ds-completion-filter:hover {
+  border-color: var(--vscode-editorSuggestWidget-border, var(--border));
+}
+
+.roslyn-editor .suggest-widget .ds-completion-filter[aria-pressed="true"] {
+  border-color: var(--vscode-editorSuggestWidget-selectedForeground, var(--accent));
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--surface-2));
+}
+
+/* dnSpy's signature help: the signature and what follows it in the code's colors, the current parameter in bold,
+   the documentation on a line of its own, and the current parameter's name before its documentation. */
+.roslyn-editor .parameter-hints-widget .ds-signature .parameter.active {
+  font-weight: bold;
+}
+
+.roslyn-editor .parameter-hints-widget .ds-signature-documentation {
+  white-space: pre-wrap;
+}
+
+.roslyn-editor .parameter-hints-widget .ds-parameter-name {
+  font-weight: bold;
+}
+
 .edit-code-diagnostics {
   display: flex;
   flex-direction: column;

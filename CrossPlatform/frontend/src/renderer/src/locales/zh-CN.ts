@@ -1861,4 +1861,18 @@ export const zhCN: Readonly<Record<string, string>> = {
   'Decompiling...': '反编译中…',
   'The operation was canceled': '操作已取消',
   'An error occurred': '发生错误',
+  // dnSpy.Roslyn.Resources.zh-CN.resx: the completion list's filter buttons (RoslynIntellisenseFilters); the button's
+  // tool tip adds its key the way dnSpy's CompletionPresenter does (ShortCutKeyAltPlusAnyKey).
+  'Locals and parameters': '局部变量和参数',
+  'Constants': '常量',
+  'Extension methods': '扩展方法',
+  'Classes': '类',
+  'Structures': '结构',
+  'Enums': '枚举',
+  'Delegates': '委托',
+  'Namespaces': '命名空间',
+  'Keywords': '关键字',
+  'Snippets': '代码块',
+  '{toolTip} (Alt+{key})': '{toolTip} (Alt+{key})',
+  'Filters': '筛选器',
 }

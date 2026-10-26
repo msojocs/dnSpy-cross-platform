@@ -4,9 +4,9 @@ import { compilerLanguageFor, compilerSettingsFor, useAppStore } from '../app-st
 import { loadAppOptions } from './app-options'
 import { decompilerSettingsOf } from '../decompiler-settings'
 import { useLanguage } from '../localization'
-import CodeEditor from './CodeEditor'
 import { CloseGlyph } from './DsGlyphs'
 import { useModalLayer } from './modal-stack'
+import { RoslynCodeEditor } from './RoslynCodeEditor'
 
 /** dnSpy's headers for the compiler commands, each naming the language — EditCodeVMCreator.GetHeader. */
 const TITLES: Record<CompilerMode, string> = {
@@ -30,9 +30,9 @@ interface EditCodeDialogProps {
 }
 
 /**
- * dnSpy's Edit Code window: one Monaco document in the language the decompiler is in when it has a compiler — C#
- * or Visual Basic, C# otherwise — a Compile button and the diagnostics it reports. Add Class starts from an empty
- * document, as dnSpy's AddClassVM does.
+ * dnSpy's Edit Code window: one document in the language the decompiler is in when it has a compiler — C# or
+ * Visual Basic, C# otherwise — in dnSpy's Roslyn code editor, a Compile button and the diagnostics it reports. Add
+ * Class starts from an empty document, as dnSpy's AddClassVM does.
  * The source is compiled against the module and its references; accepting it imports the generated
  * assembly through dnSpy's ModuleImporter as one undoable edit.
  */
@@ -125,13 +125,14 @@ export const EditCodeDialog = ({ node, mode, sourceNodeId, theme, onClose }: Edi
           {source === undefined
             ? <div className="il-loading">{failure ?? t('Loading...')}</div>
             : (
-              <CodeEditor
-                language={language === 'visualBasic' ? 'vb' : 'csharp'}
+              <RoslynCodeEditor
+                language={language}
                 theme={theme}
                 value={source}
-                onChange={(value) => setSource(value ?? '')}
+                onChange={setSource}
+                workspaceId={workspaceId}
+                nodeId={node.id}
                 onMount={(mounted) => { editor.current = mounted }}
-                options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }}
               />
             )}
         </div>

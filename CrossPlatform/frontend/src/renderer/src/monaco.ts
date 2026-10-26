@@ -9,6 +9,11 @@ import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 import 'monaco-editor/editor/contrib/find/browser/findController'
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution'
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching'
+// The Roslyn code editor's contributions (the suggest widget, parameter hints, on-type formatting): the suggest
+// widget's services are registered when its module loads, and Monaco takes no services after its first editor,
+// so they come here too. The other editors keep what they had: their models are no Roslyn documents, so the
+// providers answer nothing for them, and the decompiled documents are read-only, where nothing suggests.
+import './roslyn-editor-contribs'
 import 'monaco-editor/languages/definitions/csharp/register'
 import 'monaco-editor/languages/definitions/vb/register'
 import 'monaco-editor/languages/definitions/xml/register'

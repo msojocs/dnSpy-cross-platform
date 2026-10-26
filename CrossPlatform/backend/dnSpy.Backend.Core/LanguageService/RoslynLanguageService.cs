@@ -1,20 +1,22 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reflection;
 using dnSpy.Backend.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Completion;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.QuickInfo;
 using Microsoft.CodeAnalysis.Text;
+using CS = Microsoft.CodeAnalysis.CSharp;
+using VB = Microsoft.CodeAnalysis.VisualBasic;
 
 namespace dnSpy.Backend.Core.LanguageService;
 
 /// <summary>
-/// The Roslyn language service of dnSpy's C# code editor (<c>dnSpy/Roslyn/dnSpy.Roslyn*</c>): each open document
-/// lives in a workspace of its own, the way <c>RoslynLanguageCompiler</c> gives each Edit Code session one, and
-/// gets the editor's colors, completion, Quick Info, signature help, compiler messages, smart indentation and
-/// syntax-tree navigation from it.
+/// The Roslyn language service of dnSpy's code editor (<c>dnSpy/Roslyn/dnSpy.Roslyn*</c>), in C# and in Visual
+/// Basic: each open document lives in a workspace of its own, the way <c>RoslynLanguageCompiler</c> gives each Edit
+/// Code session one, and gets the editor's colors, completion, Quick Info, signature help, compiler messages,
+/// smart indentation and the words of its text structure navigator from it.
 /// </summary>
 public sealed class RoslynLanguageService : IDisposable {
 	readonly ConcurrentDictionary<string, CodeDocument> documents = new(StringComparer.Ordinal);
@@ -22,10 +24,14 @@ public sealed class RoslynLanguageService : IDisposable {
 	bool disposed;
 
 	sealed class CodeDocument : IDisposable {
-		public CodeDocument(AdhocWorkspace workspace, DocumentId id) {
+		public CodeDocument(AdhocWorkspace workspace, DocumentId id, SourceText text) {
 			Workspace = workspace;
 			Id = id;
+			Text = text;
 		}
+
+		/// <summary>The text the document was last given, which the next one is an edit of.</summary>
+		public SourceText Text { get; set; }
 
 		public AdhocWorkspace Workspace { get; }
 		public DocumentId Id { get; }
@@ -40,38 +46,74 @@ public sealed class RoslynLanguageService : IDisposable {
 		public void Dispose() => Workspace.Dispose();
 	}
 
-	public CodeDocumentOpenResponse Open(CodeDocumentOpenRequest request) {
+	/// <summary>
+	/// Opens a document. <paramref name="references"/> are what the Edit Code window compiles against when the
+	/// request names a module; without them, the request's own references or the host's framework.
+	/// </summary>
+	public CodeDocumentOpenResponse Open(CodeDocumentOpenRequest request, CompilerReferences? references = null) {
 		ObjectDisposedException.ThrowIf(disposed, this);
 		ArgumentNullException.ThrowIfNull(request);
-		var options = request.Options ?? new CodeCompilerOptionsDto();
+		var settings = request.Settings ?? new CompilerSettingsDto();
+		var visualBasic = request.Language == CompilerLanguages.VisualBasic;
+		var language = visualBasic ? LanguageNames.VisualBasic : LanguageNames.CSharp;
+		var paths = references?.Paths ?? request.References ?? ReferenceAssemblies.Framework;
+		CompilationOptions compilationOptions = visualBasic
+			? RoslynCompilerOptions.VisualBasicCompilationOptions(settings, references?.EmbedVisualBasicRuntime ?? settings.EmbedVisualBasicRuntime)
+			: RoslynCompilerOptions.CSharpCompilationOptions(settings);
+		ParseOptions parseOptions = visualBasic
+			? RoslynCompilerOptions.VisualBasicParseOptions(settings)
+			: RoslynCompilerOptions.CSharpParseOptions(settings);
 		var workspace = new AdhocWorkspace(LanguageServiceHost.Services);
-		var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
-			optimizationLevel: options.Optimize ? OptimizationLevel.Release : OptimizationLevel.Debug,
-			checkOverflow: options.CheckOverflow,
-			allowUnsafe: options.AllowUnsafe);
-		var parseOptions = new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: SplitSymbols(options.PreprocessorSymbols));
-		var project = workspace.AddProject(ProjectInfo.Create(ProjectId.CreateNewId(), VersionStamp.Create(), "compilecodeproj", "compilecodeproj", LanguageNames.CSharp,
+		var project = workspace.AddProject(ProjectInfo.Create(ProjectId.CreateNewId(), VersionStamp.Create(), "compilecodeproj", "compilecodeproj", language,
 			compilationOptions: compilationOptions,
 			parseOptions: parseOptions,
-			metadataReferences: ReferenceAssemblies.Create(request.References ?? ReferenceAssemblies.Framework)));
-		var document = workspace.AddDocument(DocumentInfo.Create(DocumentId.CreateNewId(project.Id), "main.cs",
-			loader: TextLoader.From(TextAndVersion.Create(SourceText.From(request.Text, System.Text.Encoding.UTF8), VersionStamp.Create()))));
+			metadataReferences: ReferenceAssemblies.Create(paths)));
+		var text = SourceText.From(request.Text + EndOfText, System.Text.Encoding.UTF8);
+		var document = workspace.AddDocument(DocumentInfo.Create(DocumentId.CreateNewId(project.Id), visualBasic ? "main.vb" : "main.cs",
+			loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create()))));
 		var id = $"code-{Interlocked.Increment(ref nextDocumentId)}";
-		documents[id] = new CodeDocument(workspace, document.Id);
-		return new CodeDocumentOpenResponse(id);
+		documents[id] = new CodeDocument(workspace, document.Id, text);
+		var (trigger, retrigger) = RoslynSignatureHelp.GetTriggerCharacters(language);
+		return new CodeDocumentOpenResponse(id, trigger, retrigger);
 	}
-
-	static IEnumerable<string> SplitSymbols(string symbols) =>
-		symbols.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
 	public void Update(CodeDocumentUpdateRequest request) {
 		var document = Get(request.DocumentId);
 		lock (document.Gate) {
-			var solution = document.Workspace.CurrentSolution.WithDocumentText(document.Id, SourceText.From(request.Text, System.Text.Encoding.UTF8));
+			var text = ChangedText(document.Text, request.Text + EndOfText);
+			var solution = document.Workspace.CurrentSolution.WithDocumentText(document.Id, text);
 			if (!document.Workspace.TryApplyChanges(solution))
 				throw new InvalidOperationException("The document's text could not be replaced.");
+			document.Text = text;
 			document.Completion = null;
 		}
+	}
+
+	/// <summary>
+	/// What the workspace's text has after the editor's. Roslyn reuses a method body's semantic model across edits of
+	/// the body, and a body left open at the very end of the text — typing a new member at the end of the file — ends
+	/// where the text does, so a position at the end lies outside it and the reused model throws: completion and
+	/// signature help then have nothing to give. A line break past the end keeps every position of the editor's text
+	/// inside the body.
+	/// </summary>
+	const string EndOfText = "\n";
+
+	/// <summary>
+	/// The new text as an edit of the old one — what the editor's buffer gives Roslyn as it is typed into. Roslyn
+	/// reuses what it knows of the members an edit leaves alone (a method body's speculative semantic model), and
+	/// does that from the text's changes: a text that is all new would be taken for the old one moved about.
+	/// </summary>
+	static SourceText ChangedText(SourceText old, string text) {
+		var oldText = old.ToString();
+		var prefix = 0;
+		var max = Math.Min(oldText.Length, text.Length);
+		while (prefix < max && oldText[prefix] == text[prefix])
+			prefix++;
+		var suffix = 0;
+		while (suffix < max - prefix && oldText[oldText.Length - 1 - suffix] == text[text.Length - 1 - suffix])
+			suffix++;
+		var span = TextSpan.FromBounds(prefix, oldText.Length - suffix);
+		return old.WithChanges(new TextChange(span, text[prefix..(text.Length - suffix)]));
 	}
 
 	public void Close(CodeDocumentRequest request) {
@@ -85,6 +127,8 @@ public sealed class RoslynLanguageService : IDisposable {
 			? document
 			: throw new RpcException(ErrorCodes.InvalidParams, $"No code document is open with the id '{id}'.");
 	}
+
+	static bool IsVisualBasic(Document document) => document.Project.Language == LanguageNames.VisualBasic;
 
 	public async Task<ClassifyResponse> ClassifyAsync(CodeDocumentRequest request, CancellationToken cancellationToken) {
 		var document = Get(request.DocumentId).Document;
@@ -104,28 +148,34 @@ public sealed class RoslynLanguageService : IDisposable {
 			return new CodeCompletionResponse(null);
 		var text = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
 		var position = Math.Clamp(request.Position, 0, text.Length);
-		var trigger = request.TriggerCharacter is { Length: > 0 } typed
-			? CompletionTrigger.CreateInsertionTrigger(typed[0])
-			: CompletionTrigger.Invoke;
-		// dnSpy's command filter asks the service whether a typed character opens a list before it asks for one.
-		if (trigger.Kind == CompletionTriggerKind.Insertion && !service.ShouldTriggerCompletion(text, position, trigger))
+		var character = request.TriggerCharacter is { Length: > 0 } typed ? typed[0] : (char?)null;
+		var trigger = (request.TriggerKind ?? (character is null ? "invoke" : "insertion"), character) switch {
+			("insertion", { } ch) => CompletionTrigger.CreateInsertionTrigger(ch),
+			("deletion", { } ch) => CompletionTrigger.CreateDeletionTrigger(ch),
+			_ => CompletionTrigger.Invoke,
+		};
+		// dnSpy's command filter asks the service whether a typed or deleted character opens a list before it asks for one.
+		if (trigger.Kind != CompletionTriggerKind.Invoke && !service.ShouldTriggerCompletion(text, position, trigger))
 			return new CodeCompletionResponse(null);
 		var list = await service.GetCompletionsAsync(document, position, trigger, cancellationToken: cancellationToken).ConfigureAwait(false);
 		if (list.ItemsList.Count == 0)
 			return new CodeCompletionResponse(null);
 
-		// The rules a service is created with are internal; C#'s keep the default commit characters.
-		var defaultCommitCharacters = CompletionRules.Default.DefaultCommitCharacters;
+		var rules = GetRules(service);
 		var items = new List<CodeCompletionItemDto>(list.ItemsList.Count);
 		var complexEdits = 0;
 		for (var index = 0; index < list.ItemsList.Count; index++) {
 			var item = list.ItemsList[index];
+			// dnSpy's completion set leaves out what has no text to show.
+			if (string.IsNullOrEmpty(item.DisplayText))
+				continue;
 			CodeTextEditDto? edit = null;
 			// What a complex item commits (an override's body, a using it needs) only its provider knows.
 			if (item.IsComplexTextEdit && complexEdits++ < MaxComplexEdits) {
 				var change = await service.GetChangeAsync(document, item, commitCharacter: null, cancellationToken).ConfigureAwait(false);
 				edit = new CodeTextEditDto(change.TextChange.Span.Start, change.TextChange.Span.Length, change.TextChange.NewText ?? string.Empty);
 			}
+			var displayText = item.DisplayTextPrefix + item.DisplayText + item.DisplayTextSuffix;
 			items.Add(new CodeCompletionItemDto(
 				index,
 				item.DisplayText,
@@ -138,37 +188,47 @@ public sealed class RoslynLanguageService : IDisposable {
 				item.Tags,
 				item.Rules.MatchPriority,
 				item.Rules.MatchPriority == MatchPriority.Preselect,
-				GetCommitCharacters(defaultCommitCharacters, item.Rules.CommitCharacterRules),
+				CompletionKinds.GetImage(item.Tags),
+				CompletionKinds.GetDisplayParts(displayText, item.Tags, () => service.GetDescriptionAsync(document, item, cancellationToken).GetAwaiter().GetResult()),
+				item.Tags.Contains(Microsoft.CodeAnalysis.Tags.WellKnownTags.Warning),
+				ToString(item.Rules.EnterKeyRule),
 				edit));
 		}
+		if (items.Count == 0)
+			return new CodeCompletionResponse(null);
 
 		int resultId;
 		lock (codeDocument.Gate) {
 			resultId = ++codeDocument.NextResultId;
 			codeDocument.Completion = (resultId, document, [.. list.ItemsList]);
 		}
-		return new CodeCompletionResponse(new CodeCompletionListDto(resultId, new CodeSpanDto(list.Span.Start, list.Span.Length), list.SuggestionModeItem is not null, items));
+		return new CodeCompletionResponse(new CodeCompletionListDto(
+			resultId,
+			new CodeSpanDto(list.Span.Start, list.Span.Length),
+			list.SuggestionModeItem is not null,
+			items,
+			new string([.. rules.DefaultCommitCharacters]),
+			ToString(rules.DefaultEnterKeyRule),
+			CompletionKinds.GetFilters(list.ItemsList)));
 	}
 
 	const int MaxComplexEdits = 200;
 
-	static string GetCommitCharacters(ImmutableArray<char> defaults, ImmutableArray<CharacterSetModificationRule> rules) {
-		var characters = new HashSet<char>(defaults);
-		foreach (var rule in rules) {
-			switch (rule.Kind) {
-			case CharacterSetModificationKind.Add:
-				characters.UnionWith(rule.Characters);
-				break;
-			case CharacterSetModificationKind.Remove:
-				characters.ExceptWith(rule.Characters);
-				break;
-			case CharacterSetModificationKind.Replace:
-				characters = [.. rule.Characters];
-				break;
-			}
-		}
-		return new string([.. characters.Order()]);
+	/// <summary>
+	/// The service's rules — what dnSpy's command filter reads its commit characters and Enter rule from. The overload
+	/// that takes completion options is internal; the one without them is obsolete, so it is asked for by name.
+	/// </summary>
+	static CompletionRules GetRules(CompletionService service) {
+		var getRules = typeof(CompletionService).GetMethod(nameof(CompletionService.GetRules), BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes);
+		return getRules?.Invoke(service, null) as CompletionRules ?? CompletionRules.Default;
 	}
+
+	static string ToString(EnterKeyRule rule) => rule switch {
+		EnterKeyRule.Never => "never",
+		EnterKeyRule.Always => "always",
+		EnterKeyRule.AfterFullyTypedWord => "afterFullyTypedWord",
+		_ => "default",
+	};
 
 	public async Task<CodeCompletionDescriptionResponse> GetCompletionDescriptionAsync(CodeCompletionDescriptionRequest request, CancellationToken cancellationToken) {
 		var codeDocument = Get(request.DocumentId);
@@ -224,7 +284,8 @@ public sealed class RoslynLanguageService : IDisposable {
 	public async Task<CodeSignatureHelpResponse> GetSignatureHelpAsync(CodeSignatureHelpRequest request, CancellationToken cancellationToken) {
 		var document = Get(request.DocumentId).Document;
 		var text = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
-		return new CodeSignatureHelpResponse(await SignatureHelpProvider.GetAsync(document, Math.Clamp(request.Position, 0, text.Length), request.TriggerCharacter, cancellationToken).ConfigureAwait(false));
+		var position = Math.Clamp(request.Position, 0, text.Length);
+		return new CodeSignatureHelpResponse(await RoslynSignatureHelp.GetAsync(document, position, request.TriggerCharacter, request.TriggerReason, cancellationToken).ConfigureAwait(false));
 	}
 
 	/// <summary>
@@ -237,17 +298,18 @@ public sealed class RoslynLanguageService : IDisposable {
 		if (compilation is null)
 			return new CodeDiagnosticsResponse([]);
 		var result = Emit(compilation, cancellationToken);
-		if (!result.Success) {
-			var noUnsafe = ((CSharpCompilationOptions)compilation.Options).WithAllowUnsafe(false);
+		if (!result.Success && compilation.Options is CS.CSharpCompilationOptions csharpOptions) {
+			var noUnsafe = csharpOptions.WithAllowUnsafe(false);
 			if (noUnsafe != compilation.Options) {
 				var second = Emit(compilation.WithOptions(noUnsafe), cancellationToken);
 				if (second.Success)
 					result = second;
 			}
 		}
+		var visualBasic = IsVisualBasic(document);
 		var diagnostics = result.Diagnostics
 			.Where(d => d.Severity != DiagnosticSeverity.Hidden)
-			.Select(ToDto)
+			.Select(d => ToDto(d, visualBasic))
 			.ToArray();
 		return new CodeDiagnosticsResponse(diagnostics);
 	}
@@ -259,7 +321,7 @@ public sealed class RoslynLanguageService : IDisposable {
 		return compilation.Emit(peStream, pdbStream, options: options, cancellationToken: cancellationToken);
 	}
 
-	static CodeDiagnosticDto ToDto(Diagnostic diagnostic) {
+	static CodeDiagnosticDto ToDto(Diagnostic diagnostic, bool visualBasic) {
 		var severity = diagnostic.Severity switch {
 			DiagnosticSeverity.Error => "error",
 			DiagnosticSeverity.Warning => "warning",
@@ -267,7 +329,7 @@ public sealed class RoslynLanguageService : IDisposable {
 		};
 		var span = diagnostic.Location.IsInSource ? diagnostic.Location.SourceSpan : default;
 		var lines = diagnostic.Location.IsInSource ? diagnostic.Location.GetLineSpan() : default;
-		return new CodeDiagnosticDto(diagnostic.Id, severity, diagnostic.GetMessage(), GetHelpUri(diagnostic.Id), span.Start, span.Length,
+		return new CodeDiagnosticDto(diagnostic.Id, severity, diagnostic.GetMessage(), visualBasic ? GetVisualBasicHelpUri(diagnostic.Id) : GetHelpUri(diagnostic.Id), span.Start, span.Length,
 			lines.StartLinePosition.Line, lines.StartLinePosition.Character, lines.EndLinePosition.Line, lines.EndLinePosition.Character);
 	}
 
@@ -304,6 +366,10 @@ public sealed class RoslynLanguageService : IDisposable {
 		return miscUrl + id;
 	}
 
+	/// <summary>dnSpy's <c>VisualBasicLanguageCompiler.GetHelpUri</c>.</summary>
+	public static string GetVisualBasicHelpUri(string diagnosticId) =>
+		"https://docs.microsoft.com/dotnet/visual-basic/misc/" + diagnosticId.ToLowerInvariant();
+
 	/// <summary>
 	/// The indentation a line should start at — dnSpy's Roslyn smart indent. Roslyn's indentation service is not
 	/// public, so this asks its formatter instead: the line's first token (or, on an empty line, a placeholder
@@ -331,13 +397,14 @@ public sealed class RoslynLanguageService : IDisposable {
 		var token = root.FindToken(line.Start + firstNonWhiteSpace);
 		// Inside a multi-line string or comment no token starts where the text does, and the whitespace there is
 		// content rather than indentation.
-		if (token.SpanStart != line.Start + firstNonWhiteSpace || token.IsKind(SyntaxKind.EndOfFileToken) || token.IsKind(SyntaxKind.InterpolatedStringTextToken))
+		if (token.SpanStart != line.Start + firstNonWhiteSpace || IsEndOfFileOrStringText(token))
 			return new CodeIndentationResponse(null);
 
+		var language = probe.Project.Language;
 		var options = probe.Project.Solution.Options
-			.WithChangedOption(FormattingOptions.UseTabs, LanguageNames.CSharp, request.UseTabs)
-			.WithChangedOption(FormattingOptions.TabSize, LanguageNames.CSharp, request.TabSize)
-			.WithChangedOption(FormattingOptions.IndentationSize, LanguageNames.CSharp, request.IndentSize);
+			.WithChangedOption(FormattingOptions.UseTabs, language, request.UseTabs)
+			.WithChangedOption(FormattingOptions.TabSize, language, request.TabSize)
+			.WithChangedOption(FormattingOptions.IndentationSize, language, request.IndentSize);
 #pragma warning disable CS0618 // The SyntaxFormattingOptions overloads are internal; the OptionSet one is what is public.
 		// The formatter only moves a token whose pair with the token before it lies in the span.
 		var previous = token.GetPreviousToken();
@@ -361,39 +428,38 @@ public sealed class RoslynLanguageService : IDisposable {
 		return new CodeIndentationResponse(column);
 	}
 
-	/// <summary>
-	/// For each position, the token and every node around it, innermost first — the spans dnSpy's text structure
-	/// navigator walks out through (<c>GetSpanOfEnclosing</c>).
-	/// </summary>
-	public async Task<CodeSelectionRangesResponse> GetSelectionRangesAsync(CodeSelectionRangesRequest request, CancellationToken cancellationToken) {
+	static bool IsEndOfFileOrStringText(SyntaxToken token) => token.Language == LanguageNames.VisualBasic
+		? VB.VisualBasicExtensions.Kind(token) is VB.SyntaxKind.EndOfFileToken or VB.SyntaxKind.InterpolatedStringTextToken
+		: CS.CSharpExtensions.Kind(token) is CS.SyntaxKind.EndOfFileToken or CS.SyntaxKind.InterpolatedStringTextToken;
+
+	/// <summary>A word command's result, from the words dnSpy's Roslyn text structure navigator finds.</summary>
+	public async Task<CodeWordNavigationResponse> GetWordNavigationAsync(CodeWordNavigationRequest request, CancellationToken cancellationToken) {
 		var document = Get(request.DocumentId).Document;
 		var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+		var text = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
+		var position = Math.Clamp(request.Position, 0, text.Length);
 		if (root is null)
-			return new CodeSelectionRangesResponse([]);
-		var result = new List<IReadOnlyList<CodeSpanDto>>();
-		foreach (var position in request.Positions) {
-			var spans = new List<CodeSpanDto>();
-			var clamped = Math.Clamp(position, 0, root.FullSpan.End);
-			var token = root.FindToken(clamped, findInsideTrivia: true);
-			// A caret right after a word belongs to the word, not to the space or punctuation that follows it.
-			if (clamped > 0 && token.SpanStart == clamped && root.FindToken(clamped - 1, findInsideTrivia: true) is var previous && previous.Span.End == clamped && IsWord(previous))
-				token = previous;
-			var last = default(TextSpan?);
-			void Add(TextSpan span) {
-				if (span.Length == 0 || last == span || clamped < span.Start || clamped > span.End)
-					return;
-				spans.Add(new CodeSpanDto(span.Start, span.Length));
-				last = span;
-			}
-			Add(token.Span);
-			for (var node = token.Parent; node is not null; node = node.Parent)
-				Add(node.Span);
-			result.Add(spans);
+			return new CodeWordNavigationResponse(position, position);
+		var navigator = new TextStructureNavigator(root, text);
+		switch (request.Command) {
+		case "nextWord": {
+			var point = navigator.GetPointOfRightWord(position);
+			return new CodeWordNavigationResponse(point, point);
 		}
-		return new CodeSelectionRangesResponse(result);
+		case "previousWord": {
+			var start = navigator.GetSpanOfLeftWord(position).Start;
+			return new CodeWordNavigationResponse(start, start);
+		}
+		case "currentWord": {
+			var selectionStart = Math.Clamp(Math.Min(request.SelectionStart, request.SelectionEnd), 0, text.Length);
+			var selectionEnd = Math.Clamp(Math.Max(request.SelectionStart, request.SelectionEnd), 0, text.Length);
+			var word = navigator.GetCurrentWord(position, TextSpan.FromBounds(selectionStart, selectionEnd));
+			return new CodeWordNavigationResponse(word.Start, word.End);
+		}
+		default:
+			throw new RpcException(ErrorCodes.InvalidParams, $"Unknown word command '{request.Command}'.");
+		}
 	}
-
-	static bool IsWord(SyntaxToken token) => SyntaxFacts.IsIdentifierStartCharacter(token.Text.FirstOrDefault()) || token.IsKind(SyntaxKind.NumericLiteralToken);
 
 	public void Dispose() {
 		if (disposed)

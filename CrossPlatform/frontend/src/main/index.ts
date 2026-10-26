@@ -1204,8 +1204,9 @@ const registerIpc = (): void => {
   })
 
   ipcMain.handle('script:classify', (_event, code: string) => requireBackend().invoke('script/classify', { code }))
-  // The Roslyn language service of a C# code editor: one backend workspace per open document.
-  ipcMain.handle('languageService:open', (_event, request: unknown) => requireBackend().invoke('languageService/open', request))
+  // The Roslyn language service of a C# or Visual Basic code editor: one backend workspace per open document.
+  // Opening one for an edited module resolves the module's references, which can take a while the first time.
+  ipcMain.handle('languageService:open', (_event, request: unknown) => requireBackend().invoke('languageService/open', request, 120_000))
   ipcMain.handle('languageService:update', async (_event, documentId: string, text: string) => {
     await requireBackend().invoke('languageService/update', { documentId, text })
   })
@@ -1214,20 +1215,19 @@ const registerIpc = (): void => {
   })
   ipcMain.handle('languageService:classify', (_event, documentId: string) =>
     requireBackend().invoke('languageService/classify', { documentId }))
-  ipcMain.handle('languageService:completion', (_event, documentId: string, position: number, triggerCharacter: string | null) =>
-    requireBackend().invoke('languageService/completion', { documentId, position, triggerCharacter }))
+  ipcMain.handle('languageService:completion', (_event, documentId: string, position: number, triggerCharacter: string | null, triggerKind: string | null) =>
+    requireBackend().invoke('languageService/completion', { documentId, position, triggerCharacter, triggerKind }))
   ipcMain.handle('languageService:completionDescription', (_event, documentId: string, resultId: number, index: number) =>
     requireBackend().invoke('languageService/completionDescription', { documentId, resultId, index }))
   ipcMain.handle('languageService:quickInfo', (_event, documentId: string, position: number) =>
     requireBackend().invoke('languageService/quickInfo', { documentId, position }))
-  ipcMain.handle('languageService:signatureHelp', (_event, documentId: string, position: number, triggerCharacter: string | null) =>
-    requireBackend().invoke('languageService/signatureHelp', { documentId, position, triggerCharacter }))
+  ipcMain.handle('languageService:signatureHelp', (_event, documentId: string, position: number, triggerCharacter: string | null, triggerReason: string | null) =>
+    requireBackend().invoke('languageService/signatureHelp', { documentId, position, triggerCharacter, triggerReason }))
   // Compiling is what produces the messages, so this one gets the time a compile can take.
   ipcMain.handle('languageService:diagnostics', (_event, documentId: string) =>
     requireBackend().invoke('languageService/diagnostics', { documentId }, 120_000))
   ipcMain.handle('languageService:indentation', (_event, request: unknown) => requireBackend().invoke('languageService/indentation', request))
-  ipcMain.handle('languageService:selectionRanges', (_event, documentId: string, positions: number[]) =>
-    requireBackend().invoke('languageService/selectionRanges', { documentId, positions }))
+  ipcMain.handle('languageService:wordNavigation', (_event, request: unknown) => requireBackend().invoke('languageService/wordNavigation', request))
   ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   // The debugger's "Bring dnSpy to the foreground when breaking": the window comes back up and takes the focus.
   ipcMain.handle('window:bringToFront', (event) => {

@@ -45,10 +45,13 @@ public static class RoslynTextParts {
 		_ => TextColors.Text,
 	};
 
-	public static IReadOnlyList<TextPartDto> ToParts(ImmutableArray<TaggedText> taggedText) {
-		if (taggedText.IsDefaultOrEmpty)
+	public static IReadOnlyList<TextPartDto> ToParts(ImmutableArray<TaggedText> taggedText) =>
+		taggedText.IsDefaultOrEmpty ? [] : ToParts((IEnumerable<TaggedText>)taggedText);
+
+	public static IReadOnlyList<TextPartDto> ToParts(IEnumerable<TaggedText>? taggedText) {
+		if (taggedText is null)
 			return [];
-		var parts = new List<TextPartDto>(taggedText.Length);
+		var parts = new List<TextPartDto>();
 		foreach (var part in taggedText) {
 			// Roslyn marks where a block of documentation starts and ends with empty parts.
 			if (part.Text.Length == 0)

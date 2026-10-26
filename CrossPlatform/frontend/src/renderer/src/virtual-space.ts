@@ -283,10 +283,66 @@ export const installVirtualSpace = (
     changed(false)
   }))
 
+  // dnSpy's EditorOperations in an editable view: text typed (or pasted) in virtual space first fills it with the
+  // white space of the editor's tab settings (GetWhitespaceForVirtualSpace), so it lands where the caret is drawn.
+  const fillVirtualSpace = (): void => {
+    const position = editor.getPosition()
+    if (!position || caretSpaces === 0)
+      return
+    const line = position.lineNumber
+    const end = maxColumn(line)
+    const from = visualColumnOf(lineText(line), end, tabSize())
+    const to = from + caretSpaces
+    let text = ''
+    if (editor.getModel()?.getOptions().insertSpaces ?? true)
+      text = ' '.repeat(caretSpaces)
+    else {
+      let visual = from
+      for (let next = (Math.floor(visual / tabSize()) + 1) * tabSize(); next <= to; next += tabSize()) {
+        text += '\t'
+        visual = next
+      }
+      text += ' '.repeat(to - visual)
+    }
+    applying = true
+    try {
+      editor.executeEdits('dnSpy.virtualSpace', [{ range: new monaco.Range(line, end, line, end), text, forceMoveMarkers: true }])
+      editor.setPosition({ lineNumber: line, column: end + text.length })
+    }
+    finally {
+      applying = false
+    }
+    lastSelection = editor.getSelection()
+    caretSpaces = 0
+    anchorSpaces = 0
+    preferredVisual = undefined
+    changed(false)
+  }
+
   disposables.push(editor.onKeyDown((event) => {
     if (!enabled())
       return
     const browserEvent = event.browserEvent
+    if (caretSpaces > 0 && !editor.getOption(EditorOption.readOnly) && editor.getSelection()?.isEmpty()) {
+      const command = browserEvent.ctrlKey || browserEvent.metaKey
+      const typing = !command && !browserEvent.altKey && browserEvent.key.length === 1
+      const pasting = (command && !browserEvent.altKey && event.keyCode === KeyCode.KeyV) || (browserEvent.shiftKey && event.keyCode === KeyCode.Insert)
+      if (typing || pasting || (!command && (event.keyCode === KeyCode.Tab || event.keyCode === KeyCode.Delete))) {
+        fillVirtualSpace()
+        return
+      }
+      if (!command && !browserEvent.altKey && event.keyCode === KeyCode.Backspace) {
+        // dnSpy's DeleteCharacterToLeft in virtual space takes one virtual space off and leaves the text.
+        event.preventDefault()
+        event.stopPropagation()
+        const position = editor.getPosition()!
+        const active = { lineNumber: position.lineNumber, column: position.column, virtualSpaces: caretSpaces - 1 }
+        setPoints(active, active)
+        preferredVisual = active.virtualSpaces > 0 ? caretVisual() : undefined
+        changed(true)
+        return
+      }
+    }
     if (browserEvent.ctrlKey || browserEvent.altKey || browserEvent.metaKey)
       return
     const shift = browserEvent.shiftKey

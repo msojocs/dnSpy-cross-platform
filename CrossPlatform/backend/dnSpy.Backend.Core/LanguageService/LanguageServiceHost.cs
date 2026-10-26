@@ -9,13 +9,27 @@ namespace dnSpy.Backend.Core.LanguageService;
 /// and feature assemblies composed once, because composing them is the slow part of the first request.
 /// </summary>
 public static class LanguageServiceHost {
-	static readonly Lazy<MefHostServices> services = new(() => MefHostServices.Create(MefHostServices.DefaultAssemblies));
+	static readonly Lazy<MefHostServices> services = new(Create);
 	static readonly Lazy<AdhocWorkspace> workspace = new(() => new AdhocWorkspace(services.Value));
 
 	public static MefHostServices Services => services.Value;
 
 	/// <summary>A workspace with no documents, for the APIs that only want its services (the classifier).</summary>
 	public static Workspace Workspace => workspace.Value;
+
+	/// <summary>
+	/// Roslyn's default parts, less the Pythia signature help provider: it imports an implementation only its host
+	/// supplies, which would fail the composition of every signature help provider. dnSpy exports an implementation
+	/// that has no signatures to give (<c>PythiaSignatureHelpProviderImplementation</c>); leaving the provider out
+	/// gives the same signatures.
+	/// </summary>
+	static MefHostServices Create() {
+		var parts = MefHostServices.DefaultAssemblies
+			.SelectMany(assembly => assembly.DefinedTypes)
+			.Where(type => type.FullName != "Microsoft.CodeAnalysis.ExternalAccess.Pythia.PythiaSignatureHelpProvider")
+			.Select(type => type.AsType());
+		return MefHostServices.Create(new System.Composition.Hosting.ContainerConfiguration().WithParts(parts).CreateContainer());
+	}
 }
 
 /// <summary>

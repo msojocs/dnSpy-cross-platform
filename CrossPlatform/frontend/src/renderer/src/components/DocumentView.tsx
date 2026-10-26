@@ -31,6 +31,7 @@ import { externalMemberTarget, isAnalyzableNode, showCodeEditorContextMenu } fro
 import { GoToLineDialog } from './EditDialogs'
 import { loadAppOptions, saveAppOptions, useAppOptions, type BlockStructureLineKind } from './app-options'
 import { setDocumentViewerZoom, toggleDocumentViewerOption } from './document-viewer-options'
+import { editorCommands } from '../editor-commands'
 import type { CreatedKind } from './edit-menu'
 import { runHexShortcut, type HexBodyTarget, type HexContextParts, type HexMenuContext } from './hex-menu'
 
@@ -1169,6 +1170,8 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
             language={editorLanguage}
             theme={editorTheme}
             onMount={(editor, monaco) => {
+              // The editor's keys are its own; Monaco would bind them in every editor (editor-commands.ts).
+              const addCommand = editorCommands(editor)
               editorRef.current = editor
               monacoRef.current = monaco
               registerDocumentEditor(viewId, editor, documentId)
@@ -1274,14 +1277,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 if (span)
                   goToRef.current(span, newTab, true)
               }
-              editor.addCommand(monaco.KeyCode.F12, () => followAtCaret(false))
-              editor.addCommand(monaco.KeyCode.Enter, () => followAtCaret(false), '!findWidgetVisible && !findInputFocussed')
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12, () => followAtCaret(true))
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => followAtCaret(true), '!findWidgetVisible && !findInputFocussed')
+              addCommand(monaco.KeyCode.F12, () => followAtCaret(false))
+              addCommand(monaco.KeyCode.Enter, () => followAtCaret(false), '!findWidgetVisible && !findInputFocussed')
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12, () => followAtCaret(true))
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => followAtCaret(true), '!findWidgetVisible && !findInputFocussed')
               // dnSpy's HexCommandTargetFilter, Ctrl+X: OpenHexEditorCommand.ExecuteCommand over the viewer's caret —
               // the address reference under it, else its statement's instructions, else the document's file. The
               // caret is read again first, so a key pressed straight after a move acts on where the caret went.
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX, () => {
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX, () => {
                 const position = editor.getPosition()
                 void (async () => {
                   if (position)
@@ -1307,14 +1310,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 if (target)
                   moveCaretToRef.current(target)
               }
-              editor.addCommand(monaco.KeyCode.Tab, () => moveReference(true), '!findWidgetVisible && !findInputFocussed')
-              editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Tab, () => moveReference(false), '!findWidgetVisible && !findInputFocussed')
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow, () => moveReference(true))
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow, () => moveReference(false))
-              editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => moveDefinition(true))
-              editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => moveDefinition(false))
+              addCommand(monaco.KeyCode.Tab, () => moveReference(true), '!findWidgetVisible && !findInputFocussed')
+              addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Tab, () => moveReference(false), '!findWidgetVisible && !findInputFocussed')
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow, () => moveReference(true))
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow, () => moveReference(false))
+              addCommand(monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => moveDefinition(true))
+              addCommand(monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => moveDefinition(false))
               // Esc clears the highlighted references and the selection — once the find box has had its Esc.
-              editor.addCommand(monaco.KeyCode.Escape, () => {
+              addCommand(monaco.KeyCode.Escape, () => {
                 highlightDecorationsRef.current?.clear()
                 const position = editor.getPosition()
                 if (position) {
@@ -1374,16 +1377,16 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
                 }
               })
               // dnSpy's Go to Line, Ctrl+G.
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG, () => {
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG, () => {
                 const position = editor.getPosition()
                 setGoToLine({ currentLine: position?.lineNumber ?? 1, lineCount: model.getLineCount() })
               })
               // Copy writes the HTML dnSpy's HtmlBuilderService makes beside the text, for a paste that keeps the colors.
               const copy = (): void => void copyWithFormatting(editor, spansRef.current, tRef.current)
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copy)
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Insert, copy)
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, copy)
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Insert, copy)
               // dnSpy's Copy IL Bytes, Ctrl+B, over the instructions an IL view's selection covers.
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
                 const instructions = ilSelectionOf(documentRef.current, editor.getSelection())
                 if (instructions.length > 0)
                   void useAppStore.getState().copyIlBytes(instructions)
@@ -1392,23 +1395,23 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               // Ctrl+0 back to 100%.
               const zoomBy = (step: (current: number) => number) => (): void => setDocumentViewerZoom(step)
               for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Period, monaco.KeyCode.Equal, monaco.KeyCode.NumpadAdd])
-                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomIn))
+                addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomIn))
               for (const key of [monaco.KeyMod.Shift | monaco.KeyCode.Comma, monaco.KeyCode.Minus, monaco.KeyCode.NumpadSubtract])
-                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomOut))
+                addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(zoomOut))
               for (const key of [monaco.KeyCode.Digit0, monaco.KeyCode.Numpad0])
-                editor.addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(() => 100))
+                addCommand(monaco.KeyMod.CtrlCmd | key, zoomBy(() => 100))
               // View White Space: Ctrl+Shift+8, Ctrl+R Ctrl+W, Ctrl+E S and Ctrl+E Ctrl+S. Word wrap: Ctrl+E Ctrl+W
               // and Ctrl+E W, which the window also answers when the focus is elsewhere.
               const toggleWhitespace = (): void => toggleDocumentViewerOption('useVisibleWhitespace')
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Digit8, toggleWhitespace)
-              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyR, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), toggleWhitespace)
-              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyS), toggleWhitespace)
-              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS), toggleWhitespace)
-              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
-              editor.addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Digit8, toggleWhitespace)
+              addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyR, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), toggleWhitespace)
+              addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyS), toggleWhitespace)
+              addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS), toggleWhitespace)
+              addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
+              addCommand(monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, monaco.KeyCode.KeyW), () => toggleDocumentViewerOption('wordWrap'))
               // dnSpy's Ctrl+Shift+R in the code viewer analyzes the reference under the caret — what the
               // context menu's Analyze would, a member of a module the workspace does not hold included.
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR, () => {
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR, () => {
                 const offset = referenceOffsetAtCaret()
                 const span = offset === undefined ? undefined : spanAtCaret(spansRef.current, offset)
                 if (!span || isLocalSpan(span) || span.opCode) return
@@ -1433,14 +1436,14 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               editor.onDidFocusEditorText(reportCaret)
               // F9 in the editor sets a line breakpoint at the cursor; the window-level handler in App.tsx only sees
               // F9 when the focus is outside the editor, so the two never both fire.
-              editor.addCommand(monaco.KeyCode.F9, () => {
+              addCommand(monaco.KeyCode.F9, () => {
                 const position = editor.getPosition()
                 if (position)
                   void toggleLineBreakpointRef.current(documentId, position.lineNumber, position.column)
               })
               // dnSpy's Ctrl+F9, ToggleEnableBreakpoint: the breakpoints on the caret's line are disabled when all of
               // them are enabled, and enabled otherwise.
-              editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F9, () => {
+              addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F9, () => {
                 const position = editor.getPosition()
                 const onLine = position ? lineBreakpointsAt(documentId, statementsRef.current, breakpointsRef.current, position.lineNumber) : []
                 if (onLine.length > 0)
@@ -1504,13 +1507,13 @@ export const DocumentView = ({ documentId, viewId, theme, transparentBackground,
               for (const chord of bookmarkChords) {
                 addBookmarkAction(chord.label, chord.run)
                 const prefix = monaco.KeyMod.CtrlCmd | letter(chord.prefix)
-                editor.addCommand(monaco.KeyMod.chord(prefix, monaco.KeyMod.CtrlCmd | letter(chord.key)), chord.run)
+                addCommand(monaco.KeyMod.chord(prefix, monaco.KeyMod.CtrlCmd | letter(chord.key)), chord.run)
                 if (chord.plain)
-                  editor.addCommand(monaco.KeyMod.chord(prefix, letter(chord.key)), chord.run)
+                  addCommand(monaco.KeyMod.chord(prefix, letter(chord.key)), chord.run)
               }
               for (const binding of bookmarkFunctionKeys) {
                 addBookmarkAction(binding.label, binding.run)
-                editor.addCommand((binding.ctrl ? monaco.KeyMod.CtrlCmd : 0) | (binding.shift ? monaco.KeyMod.Shift : 0) | monaco.KeyCode.F2, binding.run)
+                addCommand((binding.ctrl ? monaco.KeyMod.CtrlCmd : 0) | (binding.shift ? monaco.KeyMod.Shift : 0) | monaco.KeyCode.F2, binding.run)
               }
               // dnSpy's DocumentViewerMouseProcessor: the left button's press only notes the reference under it;
               // the release on the same character follows it — a plain click a member reference into this tab, a

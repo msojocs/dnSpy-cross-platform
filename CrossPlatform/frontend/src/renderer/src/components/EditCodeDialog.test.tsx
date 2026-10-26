@@ -4,10 +4,10 @@ import type { TreeNode } from '../../../shared/protocol'
 import { useAppStore } from '../app-store'
 import { EditCodeDialog } from './EditCodeDialog'
 
-// The real editor is Monaco, which jsdom cannot lay out; a textarea carries the same value and change
-// notifications, which is all this window passes to it.
-vi.mock('./CodeEditor', () => ({
-  default: ({ value, onChange }: { value?: string, onChange?(value: string | undefined): void }) =>
+// The real editor is Monaco with the Roslyn language service, which jsdom cannot lay out; a textarea carries the
+// same value and change notifications, which is all this window passes to it.
+vi.mock('./RoslynCodeEditor', () => ({
+  RoslynCodeEditor: ({ value, onChange }: { value?: string, onChange?(value: string): void }) =>
     <textarea aria-label="Source" value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />,
 }))
 

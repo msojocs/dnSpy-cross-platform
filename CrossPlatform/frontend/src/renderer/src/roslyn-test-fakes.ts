@@ -68,3 +68,61 @@ export const fakeEditor = (model: FakeModel) => {
   return { editor: editor as unknown as Monaco.editor.IStandaloneCodeEditor, decorations, container }
 }
 
+
+/** A selection as Monaco keeps it: an anchor and the caret, enough for the word commands. */
+export class FakeSelection {
+  constructor(
+    public selectionStartLineNumber: number,
+    public selectionStartColumn: number,
+    public positionLineNumber: number,
+    public positionColumn: number,
+  ) {}
+
+  getPosition(): { lineNumber: number; column: number } { return { lineNumber: this.positionLineNumber, column: this.positionColumn } }
+
+  isEmpty(): boolean { return this.selectionStartLineNumber === this.positionLineNumber && this.selectionStartColumn === this.positionColumn }
+}
+
+/**
+ * An editor that also takes keyboard commands and edits — the commands are kept by their keybinding so a test can
+ * press them — for the bindings' word commands.
+ */
+export const fakeCommandEditor = (model: FakeModel) => {
+  const { editor: base, decorations, container } = fakeEditor(model)
+  const commands = new Map<number, () => void>()
+  let selection = new FakeSelection(1, 1, 1, 1)
+  const editor = Object.assign(base as unknown as Record<string, unknown>, {
+    createContextKey: vi.fn(),
+    addCommand: vi.fn((keybinding: number, handler: () => void) => { commands.set(keybinding, handler) }),
+    trigger: vi.fn(),
+    getSelection: () => selection,
+    setSelection: vi.fn((next: FakeSelection) => { selection = next }),
+    getPosition: () => selection.getPosition(),
+    revealPosition: vi.fn(),
+    pushUndoStop: vi.fn(),
+    executeEdits: vi.fn((_source: string, edits: { range: FakeRange; text: string }[]) => {
+      for (const edit of edits) {
+        const start = model.getOffsetAt({ lineNumber: edit.range.startLineNumber, column: edit.range.startColumn })
+        const end = model.getOffsetAt({ lineNumber: edit.range.endLineNumber, column: edit.range.endColumn })
+        model.setValue(model.text.slice(0, start) + edit.text + model.text.slice(end))
+      }
+    }),
+    onKeyDown: () => ({ dispose: () => {} }),
+    onMouseDown: () => ({ dispose: () => {} }),
+    onMouseMove: () => ({ dispose: () => {} }),
+    onMouseUp: () => ({ dispose: () => {} }),
+  })
+  ;(model as unknown as { getVersionId(): number }).getVersionId = () => model.text.length
+  return {
+    editor: editor as unknown as Monaco.editor.IStandaloneCodeEditor,
+    decorations,
+    container,
+    commands,
+    select: (anchor: number, active: number) => {
+      const from = model.getPositionAt(anchor)
+      const to = model.getPositionAt(active)
+      selection = new FakeSelection(from.lineNumber, from.column, to.lineNumber, to.column)
+    },
+    selection: () => selection,
+  }
+}

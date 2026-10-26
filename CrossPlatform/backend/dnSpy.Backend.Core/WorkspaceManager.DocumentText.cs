@@ -275,14 +275,14 @@ public sealed partial class WorkspaceManager {
 		/// it emits: the symbol's kind decides it, so a static field and an instance field are different
 		/// colors even though both are written as a field.
 		/// </summary>
-		static string? SpanColorOf(object reference) => reference switch {
+		internal static string? SpanColorOf(object reference) => reference switch {
 			DecompilerILVariable variable => variable.Kind == DecompilerVariableKind.Parameter ? TextColors.Parameter : TextColors.Local,
 			DecompilerIMember member => MemberColorOf(member),
 			DecompilerIType type => TypeColorOf(type),
 			_ => null,
 		};
 
-		static string MemberColorOf(DecompilerIMember member) => member switch {
+		internal static string MemberColorOf(DecompilerIMember member) => member switch {
 			ICSharpCode.Decompiler.TypeSystem.IMethod { IsConstructor: true } constructor => TypeColorOf(constructor.DeclaringType),
 			ICSharpCode.Decompiler.TypeSystem.IMethod method =>
 				method.IsExtensionMethod ? TextColors.ExtensionMethod
@@ -296,7 +296,7 @@ public sealed partial class WorkspaceManager {
 			_ => TextColors.Text,
 		};
 
-		static string TypeColorOf(DecompilerIType type) {
+		internal static string TypeColorOf(DecompilerIType type) {
 			if (type is ICSharpCode.Decompiler.TypeSystem.ITypeParameter parameter)
 				return parameter.OwnerType == ICSharpCode.Decompiler.TypeSystem.SymbolKind.Method ? TextColors.MethodGenericParameter : TextColors.TypeGenericParameter;
 			var definition = type.GetDefinition();

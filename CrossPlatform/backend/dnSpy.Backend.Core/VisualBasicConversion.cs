@@ -36,9 +36,11 @@ static partial class VisualBasicConversion {
 	/// <summary>
 	/// Converts a C# document. <paramref name="memberOnly"/> is a document of one member — a method, a field, a
 	/// property, an event — which the converter is handed inside a type and given back without it, the way dnSpy's
-	/// Visual Basic decompiler writes a member's document.
+	/// Visual Basic decompiler writes a member's document. <paramref name="referencePaths"/> are the assemblies the
+	/// converter binds the C# against — the module and what it references, which the conversion of an event handler
+	/// or a member of a framework type needs — instead of its own small set of the core libraries.
 	/// </summary>
-	public static async Task<DecompileResponse> ConvertAsync(DecompileResponse csharp, bool memberOnly, CancellationToken cancellationToken) {
+	public static async Task<DecompileResponse> ConvertAsync(DecompileResponse csharp, bool memberOnly, CancellationToken cancellationToken, IReadOnlyList<string>? referencePaths = null) {
 		var statements = csharp.CodeStatements ?? [];
 		var marked = Mark(csharp.Text, statements);
 		// The same textual repairs the project export and the console apply: nullability attributes the converter
@@ -46,7 +48,7 @@ static partial class VisualBasicConversion {
 		marked = VisualBasicConverterFixes.PrepareCSharp(marked);
 		if (memberOnly)
 			marked = WrapMember(marked);
-		var conversion = await CodeConverter.ConvertAsync(new CodeWithOptions(marked).WithTypeReferences(), cancellationToken).ConfigureAwait(false);
+		var conversion = await CodeConverter.ConvertAsync(new CodeWithOptions(marked).WithTypeReferences(ConverterReferences(referencePaths)), cancellationToken).ConfigureAwait(false);
 		if (!conversion.Success) {
 			var message = conversion.GetExceptionsAsString();
 			return new DecompileResponse(
@@ -67,6 +69,35 @@ static partial class VisualBasicConversion {
 		return new DecompileResponse(csharp.Title, "visual-basic", text, Array.Empty<TextSpanDto>(), diagnostics) {
 			CodeStatements = statements.Count == 0 ? null : MapStatements(text, statements, placed, members, cancellationToken),
 		};
+	}
+
+	/// <summary>
+	/// What the converter binds against: the given assemblies and the Visual Basic runtime its helpers come from, or —
+	/// for no assemblies, or none that holds the core library — its own defaults.
+	/// </summary>
+	static IReadOnlyCollection<PortableExecutableReference>? ConverterReferences(IReadOnlyList<string>? referencePaths) {
+		if (referencePaths is null || referencePaths.Count == 0)
+			return null;
+		var references = new List<PortableExecutableReference>();
+		var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var path in referencePaths) {
+			if (!names.Add(Path.GetFileNameWithoutExtension(path)))
+				continue;
+			try {
+				references.Add(MetadataReference.CreateFromFile(path));
+			}
+			catch (Exception ex) when (ex is IOException or BadImageFormatException or UnauthorizedAccessException or ArgumentException) {
+			}
+		}
+		if (!names.Overlaps(["System.Runtime", "mscorlib", "netstandard", "System.Private.CoreLib"]))
+			return null;
+		var runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location);
+		foreach (var name in new[] { "Microsoft.VisualBasic.Core", "Microsoft.VisualBasic", "System.Runtime", "System.Private.CoreLib" }) {
+			var path = runtimeDirectory is null ? null : Path.Combine(runtimeDirectory, name + ".dll");
+			if (path is not null && File.Exists(path) && names.Add(name))
+				references.Add(MetadataReference.CreateFromFile(path));
+		}
+		return references;
 	}
 
 	/// <summary>The C# text with a marker comment in front of every statement's code, naming the statements that start there.</summary>

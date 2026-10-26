@@ -53,6 +53,45 @@ static class TargetFrameworkInfo {
 		return machine.ToString();
 	}
 
+	/// <summary>
+	/// The framework a project file names for the module (TargetFrameworkInfo.Create): the identifier
+	/// (".NETFramework"), the version ("4.5") and the profile, if any — the TargetFrameworkIdentifier,
+	/// TargetFrameworkVersion and TargetFrameworkProfile of a legacy project.
+	/// </summary>
+	public static (string Framework, string Version, string? Profile) Get(ModuleDef module) => Create(module);
+
+	/// <summary>TargetFrameworkInfo.GetTargetFrameworkMoniker: an SDK project's TargetFramework, or null for a
+	/// framework such a project cannot target.</summary>
+	public static string? Moniker(string framework, string version) {
+		switch (framework) {
+		case ".NETFramework":
+			return "net" + version.Replace(".", string.Empty, StringComparison.Ordinal);
+		case ".NETCoreApp":
+			// .NET Core 1.0-3.x, then .NET 5.0+
+			if (version.StartsWith("1.", StringComparison.Ordinal) || version.StartsWith("2.", StringComparison.Ordinal) || version.StartsWith("3.", StringComparison.Ordinal))
+				return "netcoreapp" + version;
+			return "net" + version;
+		case ".NETStandard":
+			return "netstandard" + version;
+		case "Silverlight":
+			return "sl" + version[0];
+		case ".NETCore":
+			return "netcore" + version.Replace(".", string.Empty, StringComparison.Ordinal);
+		case "WindowsPhone":
+			var builder = new System.Text.StringBuilder("wp");
+			foreach (var part in version.Split('.')) {
+				if (part == "0")
+					break;
+				builder.Append(part);
+			}
+			return builder.ToString();
+		case ".NETMicroFramework":
+			return "netmf";
+		default:
+			return null;
+		}
+	}
+
 	static (string Framework, string Version, string? Profile) Create(ModuleDef module) {
 		if (module.Assembly is { } assembly && module.IsManifestModule && FromAttribute(assembly) is { } info)
 			return info;

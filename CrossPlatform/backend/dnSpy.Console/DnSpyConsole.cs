@@ -4,7 +4,6 @@ using System.Text;
 using dnlib.DotNet;
 using dnSpy.Backend.Core;
 using dnSpy.Backend.Core.ProjectExport;
-using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.Metadata;
 
 namespace dnSpy.Cli;
@@ -15,7 +14,7 @@ namespace dnSpy.Cli;
 /// projects; the exit code is the WPF console's: 0 when nothing went wrong, 1 otherwise.
 /// </summary>
 sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefault) {
-	readonly ModuleContext moduleContext = ModuleDef.CreateModuleContext();
+	readonly ModuleContext moduleContext = CreateModuleContext();
 	readonly HashSet<string> addedPaths = new(StringComparer.OrdinalIgnoreCase);
 	int errors;
 
@@ -24,13 +23,26 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 
 	AssemblyResolver Resolver => (AssemblyResolver)moduleContext.AssemblyResolver;
 
+	/// <summary>The module context dnSpy.exe uses, which the console's is the same as.</summary>
+	static ModuleContext CreateModuleContext() {
+		var context = ModuleDef.CreateModuleContext();
+		var resolver = (AssemblyResolver)context.AssemblyResolver;
+		resolver.EnableFrameworkRedirect = false;
+		resolver.FindExactMatch = true;
+		resolver.EnableTypeDefCache = true;
+		return context;
+	}
+
 	public int Run(string[] args) {
+		// dnSpy's languages keep their settings in one shared instance, which is also what the help prints the
+		// options' values from: a command line that fails after it set some shows them set.
+		var options = new CommandLineOptions { ColorizeOutput = colorizeDefault };
 		try {
-			var options = CommandLineParser.Parse(args, colorizeDefault);
+			CommandLineParser.Parse(args, options);
 			Decompile(options);
 		}
 		catch (ConsoleErrorException ex) {
-			PrintHelp(output);
+			PrintHelp(output, options);
 			output.WriteLine();
 			output.WriteLine(ConsoleStrings.Error1, ex.Message);
 			return 1;
@@ -83,6 +95,11 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 		foreach (var (path, module) in moduleDefs) {
 			var file = new PEFile(path);
 			var resolver = CliAssemblyResolver.Create(path, searchPaths, options.UserGacPaths, options.UseGac);
+			// dnlib finds a WPF or WinForms module's framework base types — what tells a form or an application class —
+			// in the Windows Desktop runtime on Windows, and in its reference pack here.
+			if (module.GetAssemblyRefs().Any(reference => WindowsDesktopReferencePack.IsDesktopAssembly(reference.Name)) &&
+				WindowsDesktopReferencePack.Directory(resolver.TargetFramework) is { } desktopPack)
+				AddSearchPath(desktopPack);
 			var loadedModule = new LoadedModule(path, module, file, resolver);
 			loaded.Add(loadedModule);
 		}
@@ -278,9 +295,10 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 		if (member is not (TypeDef or MethodDef or FieldDef or PropertyDef or EventDef))
 			throw new ConsoleErrorException(ConsoleStrings.InvalidMemberToDecompile);
 
-		var writer = new ColorTextWriter(output, options.ColorizeOutput);
-		new DecompilerRunner(module, options).WriteTo(member, writer);
-		writer.Flush();
+		var runner = new DecompilerRunner(module, options);
+		var decompilerOutput = new ConsoleDecompilerOutput(output, options.ColorizeOutput, runner.IndentationString);
+		runner.WriteTo(member, decompilerOutput);
+		output.Flush();
 	}
 
 	void Export(CommandLineOptions options, List<LoadedModule> modules) {
@@ -288,8 +306,9 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 			throw new ConsoleErrorException(ConsoleStrings.MissingOutputDir);
 		if (options.Language.ProjectFileExtension is null)
 			throw new ConsoleErrorException(string.Format(CultureInfo.CurrentCulture, ConsoleStrings.LanguageXDoesNotSupportProjects, options.Language.Name));
-		// The export itself is the GUI's Export to Project (dnSpy.Backend.Core's ProjectExporter); the console only
-		// turns its switches into that export's options, as dnSpy.Console fills in ProjectCreatorOptions.
+		// The export itself is the GUI's Export to Project (dnSpy.Backend.Core's port of MSBuildProjectCreator); the
+		// console only turns its switches into that export's options, as dnSpy.Console fills in ProjectCreatorOptions.
+		var settings = options.EffectiveSettings();
 		var exportOptions = new ProjectExportOptions {
 			Directory = options.OutputDirectory,
 			SolutionFilename = options.CreateSolutionFile && !string.IsNullOrEmpty(options.SolutionName) ? options.SolutionName : null,
@@ -303,9 +322,10 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 			AddCorlibReference = options.AddCorlibReference,
 			NumberOfThreads = options.NumberOfThreads,
 			IndentationString = options.Spaces <= 0 ? "\t" : new string(' ', options.Spaces),
-			Settings = options.Settings,
+			UserGacPaths = options.UserGacPaths,
+			Settings = settings,
 		};
-		var exportModules = modules.Select(module => new ProjectExportModule(module.Path, module.File, module.Resolver, module.Resolver)).ToArray();
+		var exportModules = modules.Select(module => new ProjectExportModule(module.Path, module.File, module.Module, module.Resolver, module.Resolver)).ToArray();
 		new ProjectExporter(exportOptions, exportModules, Error).ExportAsync(CancellationToken.None).GetAwaiter().GetResult();
 	}
 
@@ -391,7 +411,7 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 		return index < 0 ? name : name[(index + 1)..];
 	}
 
-	internal static void PrintHelp(TextWriter writer) {
+	internal static void PrintHelp(TextWriter writer, CommandLineOptions options) {
 		var programName = GetProgramBaseName();
 		writer.WriteLine(programName + " " + ConsoleStrings.UsageHeader);
 		writer.WriteLine();
@@ -404,24 +424,23 @@ sealed class DnSpyConsole(TextWriter output, TextWriter error, bool colorizeDefa
 		foreach (var language in ConsoleLanguage.All)
 			writer.WriteLine("  {0} ({1})", language.Name, language.UniqueGuid.ToString("B"));
 
-		var groups = new (ConsoleLanguage[] Languages, Func<IReadOnlyList<LanguageOption>> Options)[] {
-			([ConsoleLanguage.CSharp, ConsoleLanguage.VisualBasic], () => LanguageOptions.ForCSharp(new DecompilerSettings())),
-			([ConsoleLanguage.IL, ConsoleLanguage.ILWithCSharp], () => LanguageOptions.ForIL(new IlDecompilerOptions())),
+		// GetLanguageOptions: the languages grouped by the settings they share, C# with Visual Basic, IL with IL with C#.
+		var groups = new (ConsoleLanguage[] Languages, IReadOnlyList<LanguageOption> Options)[] {
+			([ConsoleLanguage.CSharp, ConsoleLanguage.VisualBasic], LanguageOptions.ForCSharp(options.Settings)),
+			([ConsoleLanguage.IL, ConsoleLanguage.ILWithCSharp], LanguageOptions.ForIL(options.IlOptions)),
 		};
-		var hasOptions = groups.Any(group => group.Options().Count > 0);
-		if (hasOptions) {
+		if (groups.Any(group => group.Options.Count > 0)) {
 			writer.WriteLine();
 			writer.WriteLine(ConsoleStrings.LanguageOptions);
 			writer.WriteLine(ConsoleStrings.LanguageOptionsDesc);
-			foreach (var group in groups) {
-				var options = group.Options();
-				if (options.Count == 0)
+			foreach (var (languages, languageOptions) in groups) {
+				if (languageOptions.Count == 0)
 					continue;
 				writer.WriteLine();
-				foreach (var language in group.Languages)
+				foreach (var language in languages)
 					writer.WriteLine("  {0} ({1})", language.Name, language.UniqueGuid.ToString("B"));
-				foreach (var option in options)
-					writer.WriteLine("    --{0}\t({1} = {2}) {3}", option.Name, option.TypeName, option.DefaultValueText, option.Description);
+				foreach (var option in languageOptions)
+					writer.WriteLine("    {0}\t({1} = {2}) {3}", CommandLineParser.GetOptionName(option), option.Type.Name, option.ValueText, option.Description);
 			}
 		}
 

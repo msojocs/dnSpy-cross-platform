@@ -33,6 +33,11 @@ sealed class DnSpyDecompilerSettings : DecompilerSettings {
 	public bool SortSystemUsingStatementsFirst { get; set; } = true;
 	public bool FullyQualifyAllTypes { get; set; }
 	/// <summary>
+	/// With FullyQualifyAllTypes, whether the namespaces of the types are still imported — the fork's UsingDeclarations,
+	/// which the package's own switch of that name cannot be while it is what qualifies the types.
+	/// </summary>
+	public bool FullyQualifiedTypesKeepUsings { get; set; } = true;
+	/// <summary>
 	/// FullyQualifyAmbiguousTypeNames: whether a name that would be ambiguous in the using scope keeps its
 	/// namespace. The package always qualifies such a name (its IntroduceUsingDeclarations' last pass); when this is
 	/// off, <see cref="DnSpyCSharpTransform"/> puts the simple name back, as the fork's transform does by not
@@ -59,6 +64,31 @@ sealed class DnSpyDecompilerSettings : DecompilerSettings {
 	public bool ForceShowAllMembers { get; set; }
 	public bool RemoveEmptyDefaultConstructors { get; set; } = true;
 	public bool InsertParenthesesForReadability { get; set; } = true;
+	/// <summary>
+	/// AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject: a catch clause whose exception is not used
+	/// still names it (ex_XX, XX its handler's IL offset), as the fork's ILAstBuilder does, unless it catches object.
+	/// </summary>
+	public bool AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject { get; set; }
+	/// <summary>
+	/// MaxArrayElements: an array initializer of constants longer than this keeps this many elements, the last one
+	/// replaced by the fork's "Not showing all elements" string (InitializerPeepholeTransforms).
+	/// </summary>
+	public int MaxArrayElements { get; set; } = 10000;
+	/// <summary>MaxStringLength: a longer string literal is cut and ends with "[...string is too long...]".</summary>
+	public int MaxStringLength { get; set; } = DefaultMaxStringLength;
+	/// <summary>
+	/// RemoveNewDelegateClass: <c>new EventHandler(M)</c> written as <c>M</c>. The package writes the method group
+	/// wherever the conversion is implicit (UseImplicitMethodGroupConversion), which is the switch this one sets, and
+	/// <see cref="DnSpyCSharpTransform"/> where a handler is added or removed, as the fork does; off, every delegate
+	/// creation keeps its <c>new</c>, as the fork writes them with the option off.
+	/// </summary>
+	public bool RemoveNewDelegateClass {
+		get => UseImplicitMethodGroupConversion;
+		set => UseImplicitMethodGroupConversion = value;
+	}
+
+	/// <summary>The fork's DecompilerSettings.ConstMaxStringLength.</summary>
+	public const int DefaultMaxStringLength = 20000;
 	/// <summary>DecompilerSettings.DecompilationObjects: the order a type's members are written in, by kind.</summary>
 	public IReadOnlyList<string> DecompilationOrder { get; set; } = DefaultDecompilationOrder;
 
@@ -157,11 +187,18 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module, SimpleTypeCollector?
 		}
 		if (!settings.EmitCalliAsInvocationExpression)
 			WriteCalliAsInlineAssembly(rootNode);
+		if (settings.RemoveNewDelegateClass)
+			RemoveNewDelegateClass(rootNode);
+		if (settings.AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject)
+			NameUnusedExceptionVariables(rootNode);
+		TruncateArrayInitializers(rootNode, settings.MaxArrayElements);
+		if (settings.MaxStringLength > 0)
+			TruncateStrings(rootNode, settings.MaxStringLength);
 		if (!settings.FullyQualifyAmbiguousTypeNames && !settings.FullyQualifyAllTypes && simpleTypes is not null)
 			RemoveAmbiguousTypeQualifications(rootNode, simpleTypes);
 		if (settings.HexadecimalNumbers)
 			WriteNumbersInHex(rootNode);
-		if (settings.FullyQualifyAllTypes)
+		if (settings.FullyQualifyAllTypes && settings.FullyQualifiedTypesKeepUsings)
 			AddUsingsOfQualifiedTypes(rootNode);
 		SortUsings(rootNode, settings.SortSystemUsingStatementsFirst);
 	}
@@ -571,6 +608,84 @@ sealed partial class DnSpyCSharpTransform(ModuleDef module, SimpleTypeCollector?
 		if (declaringType is not null)
 			return DefinitionName(declaringType) + "." + definition.Name;
 		return string.IsNullOrEmpty(definition.Namespace) ? definition.Name : definition.Namespace + "." + definition.Name;
+	}
+
+	// ---------------------------------------------------------------- Delegates, catch variables, arrays and strings
+
+	/// <summary>
+	/// RemoveNewDelegateClass: DelegateConstruction writes the method group alone where a handler is added or removed —
+	/// <c>button.Click += Button_Click</c> — which the package keeps as <c>new EventHandler(Button_Click)</c>.
+	/// </summary>
+	static void RemoveNewDelegateClass(DecompilerAstNode root) {
+		foreach (var assignment in root.Descendants.OfType<AssignmentExpression>().ToArray()) {
+			if (assignment.Operator is not (AssignmentOperatorType.Add or AssignmentOperatorType.Subtract))
+				continue;
+			if (assignment.Right is not ObjectCreateExpression { Arguments.Count: 1 } creation)
+				continue;
+			if (creation.GetResolveResult() is not ConversionResolveResult { Conversion.IsMethodGroupConversion: true })
+				continue;
+			var method = creation.Arguments.Single();
+			method.Remove();
+			creation.ReplaceWith(method);
+		}
+	}
+
+	/// <summary>
+	/// AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject: ILAstBuilder.ConvertExceptionVariable names the
+	/// exception of a handler that only pops it <c>ex_XX</c>, XX the handler's IL offset in hex, when the clause catches
+	/// something other than object. The package leaves such a clause without a name.
+	/// </summary>
+	static void NameUnusedExceptionVariables(DecompilerAstNode root) {
+		foreach (var clause in root.Descendants.OfType<CatchClause>()) {
+			if (!string.IsNullOrEmpty(clause.VariableName) || clause.Type is null)
+				continue;
+			if (clause.Type is PrimitiveType { Keyword: "object" })
+				continue;
+			if (clause.Annotation<ICSharpCode.Decompiler.IL.TryCatchHandler>() is not { } handler)
+				continue;
+			var offset = handler.StartILOffset;
+			if (offset == 0 && handler.Body is { } body)
+				offset = body.StartILOffset;
+			clause.VariableName = "ex_" + offset.ToString("X2", CultureInfo.InvariantCulture);
+		}
+	}
+
+	/// <summary>
+	/// MaxArrayElements: InitializerPeepholeTransforms decodes at most that many elements of an array's initial data;
+	/// when there were more, the last one it keeps is the message that says so. The data arrays are the initializers
+	/// of constants, which is what this cuts.
+	/// </summary>
+	static void TruncateArrayInitializers(DecompilerAstNode root, int maxElements) {
+		var limit = Math.Max(0, maxElements);
+		foreach (var creation in root.Descendants.OfType<ArrayCreateExpression>().ToArray()) {
+			if (creation.Initializer is not { } initializer)
+				continue;
+			var elements = initializer.Elements;
+			if (elements.Count <= limit || !elements.All(IsConstant))
+				continue;
+			var count = elements.Count;
+			foreach (var element in elements.Skip(limit).ToArray())
+				element.Remove();
+			if (limit > 0)
+				elements.Last().ReplaceWith(new PrimitiveExpression(string.Format(CultureInfo.InvariantCulture, "Not showing all elements because this array is too big ({0} elements)", count)));
+		}
+
+		static bool IsConstant(Expression expression) => expression switch {
+			PrimitiveExpression => true,
+			UnaryOperatorExpression { Operator: UnaryOperatorType.Minus, Expression: PrimitiveExpression } => true,
+			_ => false,
+		};
+	}
+
+	/// <summary>
+	/// MaxStringLength: TextTokenWriter.WritePrimitiveValue writes a longer string's first characters and
+	/// "[...string is too long...]" after them (ConvertStringMaxLength).
+	/// </summary>
+	static void TruncateStrings(DecompilerAstNode root, int maxLength) {
+		foreach (var primitive in root.Descendants.OfType<PrimitiveExpression>()) {
+			if (primitive.Value is string text && text.Length > maxLength)
+				primitive.Value = text[..maxLength] + "[...string is too long...]";
+		}
 	}
 
 	// ---------------------------------------------------------------- Ambiguous type names

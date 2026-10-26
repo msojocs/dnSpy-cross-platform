@@ -110,7 +110,8 @@ public sealed partial class WorkspaceManager {
 
 		static readonly HashSet<string> coreLibraryNames = new(StringComparer.OrdinalIgnoreCase) { "mscorlib", "System.Runtime", "netstandard", "System.Private.CoreLib" };
 
-		static VisualBasicAnalysis AnalyzeVisualBasic(string text, IReadOnlyList<string> referencePaths, CancellationToken cancellationToken) {
+		/// <summary>The converted text compiled against <paramref name="referencePaths"/>, for its names to bind.</summary>
+		static (SyntaxTree Tree, SemanticModel Model) CompileVisualBasic(string text, IReadOnlyList<string> referencePaths, CancellationToken cancellationToken) {
 			var tree = VisualBasicSyntaxTree.ParseText(text, cancellationToken: cancellationToken);
 			var references = new List<RoslynMetadataReference>();
 			foreach (var path in referencePaths.Distinct(StringComparer.Ordinal)) {
@@ -125,7 +126,21 @@ public sealed partial class WorkspaceManager {
 				references.AddRange(runtimeReferences.Value);
 			var compilation = VisualBasicCompilation.Create(VisualBasicAssemblyName, [tree], references,
 				new VisualBasicCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-			var model = compilation.GetSemanticModel(tree);
+			return (tree, compilation.GetSemanticModel(tree));
+		}
+
+		/// <summary>
+		/// The colors of Visual Basic text, the way the Visual Basic document is colored: dnSpy's Roslyn classifier over
+		/// the text compiled against the module and the assemblies it references.
+		/// </summary>
+		internal static IReadOnlyList<ClassifiedSpanDto> ClassifyVisualBasic(string text, IReadOnlyList<string> referencePaths, CancellationToken cancellationToken) {
+			var (tree, model) = CompileVisualBasic(text, referencePaths, cancellationToken);
+			using var workspace = new RoslynWorkspace();
+			return RoslynClassifier.Classify(model, workspace, tree.GetRoot(cancellationToken).FullSpan, null, cancellationToken);
+		}
+
+		static VisualBasicAnalysis AnalyzeVisualBasic(string text, IReadOnlyList<string> referencePaths, CancellationToken cancellationToken) {
+			var (tree, model) = CompileVisualBasic(text, referencePaths, cancellationToken);
 			var root = tree.GetRoot(cancellationToken);
 
 			var colors = new Dictionary<int, string>();

@@ -587,6 +587,30 @@ public static partial class VisualBasicConverterFixes {
 		return lastCode;
 	}
 
+	/// <summary>
+	/// The converter indents four spaces a level; dnSpy writes its Visual Basic with the indentation its C# has — a tab,
+	/// or the console's <c>--spaces</c>. The spaces of a line past whole levels stay as they are.
+	/// </summary>
+	public static string Reindent(string text, string indentation) {
+		const int ConverterIndentation = 4;
+		if (indentation == new string(' ', ConverterIndentation))
+			return text;
+		var lines = text.Split('\n');
+		var builder = new System.Text.StringBuilder(text.Length);
+		for (var i = 0; i < lines.Length; i++) {
+			if (i > 0)
+				builder.Append('\n');
+			var line = lines[i];
+			var spaces = 0;
+			while (spaces < line.Length && line[spaces] == ' ')
+				spaces++;
+			for (var level = 0; level < spaces / ConverterIndentation; level++)
+				builder.Append(indentation);
+			builder.Append(' ', spaces % ConverterIndentation).Append(line, spaces, line.Length - spaces);
+		}
+		return builder.ToString();
+	}
+
 	/// <summary>Drops the calls the converter writes for a base constructor the metadata does not declare.</summary>
 	public static string PrepareConvertedVB(string text) {
 		var lines = CommentConversionErrors(text).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');

@@ -203,7 +203,7 @@ public sealed partial class WorkspaceManager {
 		/// as; when that does not decompile to it, MoveNext is decompiled by itself with the state machines left as
 		/// they are.
 		/// </summary>
-		static SourceStatementProvider CreateSourceStatementProvider(ICSharpCode.Decompiler.CSharp.CSharpDecompiler decompiler, ICSharpCode.Decompiler.DecompilerSettings settings, MethodDef method, CancellationToken cancellationToken) {
+		internal static SourceStatementProvider CreateSourceStatementProvider(ICSharpCode.Decompiler.CSharp.CSharpDecompiler decompiler, ICSharpCode.Decompiler.DecompilerSettings settings, MethodDef method, CancellationToken cancellationToken) {
 			if (!method.HasBody)
 				return default;
 			try {
@@ -287,7 +287,7 @@ public sealed partial class WorkspaceManager {
 		}
 
 		/// <summary>The summary the framework's reference documentation gives an id — what dnSpy reads out of mscorlib's.</summary>
-		static string? FrameworkDocumentation(string id) {
+		internal static string? FrameworkDocumentation(string id) {
 			foreach (var assembly in new[] { "System.Reflection.Primitives", "System.Runtime" }) {
 				if (ReferencePackDocumentation(assembly) is { } path && LoadXmlDocumentation(path) is { } document && SummaryOf(document, id) is { } summary)
 					return summary;
@@ -300,7 +300,7 @@ public sealed partial class WorkspaceManager {
 		// files through an XDocument, which drops the whitespace the /// lines are cut by.
 		static readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>?> rawXmlDocumentation = new(StringComparer.Ordinal);
 
-		static string? RawXmlDocumentation(ModuleDef module, string key) {
+		internal static string? RawXmlDocumentation(ModuleDef module, string key) {
 			if (string.IsNullOrEmpty(module.Location) || XmlDocumentationPath(module.Location) is not { } path)
 				return null;
 			var members = rawXmlDocumentation.GetOrAdd(path, static file => {

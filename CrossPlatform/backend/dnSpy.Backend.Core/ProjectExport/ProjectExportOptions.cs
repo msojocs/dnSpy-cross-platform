@@ -1,6 +1,7 @@
-using System.Reflection.Metadata;
+using dnlib.DotNet;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.Metadata;
+using IAssemblyResolver = ICSharpCode.Decompiler.Metadata.IAssemblyResolver;
 
 namespace dnSpy.Backend.Core.ProjectExport;
 
@@ -52,9 +53,15 @@ public sealed class ProjectExportOptions {
 	/// <summary>How many files are decompiled at once; 0 is one per processor.</summary>
 	public int NumberOfThreads { get; init; }
 	public string IndentationString { get; init; } = "\t";
+	/// <summary>
+	/// ProjectCreatorOptions.UserGACPaths: directories whose assemblies count as cache assemblies, so a reference
+	/// to one is written without a HintPath.
+	/// </summary>
+	public IReadOnlyList<string> UserGacPaths { get; init; } = [];
 	/// <summary>The C# decompiler's settings. The exporter works on a copy.</summary>
 	public DecompilerSettings Settings { get; init; } = new();
 
+	public string FileExtension => Language == ProjectExportLanguage.VisualBasic ? ".vb" : ".cs";
 	public string ProjectFileExtension => Language == ProjectExportLanguage.VisualBasic ? ".vbproj" : ".csproj";
 }
 
@@ -68,36 +75,18 @@ public interface IProjectExportProgress {
 }
 
 /// <summary>
-/// One module to export: the file ILSpy's project decompiler reads and the resolver its references are found with.
-/// The caller owns the file and disposes of it. The name, kind and references are read from the file's metadata,
-/// which is also what a snapshot of an edited module carries.
+/// One module to export — dnSpy's ProjectModuleOptions.Module: its dnlib model, which the project's files are found
+/// in (types, resources, the Win32 icon and manifest), and the file ICSharpCode.Decompiler reads the code from, with
+/// the resolver its references are found with. The model's assembly resolver is what tells a WinForms form or a
+/// settings class by its base types, as dnSpy's does. The caller owns the file and the model and disposes of them.
 /// </summary>
-public sealed class ProjectExportModule {
-	public ProjectExportModule(string path, PEFile file, IAssemblyResolver resolver, IAssemblyReferenceClassifier classifier) {
-		Path = path;
-		File = file;
-		Resolver = resolver;
-		Classifier = classifier;
-		var metadata = file.Metadata;
-		// dnSpy's FilenameCreator names a project after its assembly when the module is the manifest module, and after
-		// the module's file name otherwise.
-		AssemblyOrModuleName = metadata.IsAssembly
-			? metadata.GetString(metadata.GetAssemblyDefinition().Name)
-			: System.IO.Path.GetFileNameWithoutExtension(metadata.GetString(metadata.GetModuleDefinition().Name));
-		IsDll = file.Reader.PEHeaders.IsDll;
-		ReferencesWindowsForms = metadata.AssemblyReferences.Any(handle => metadata.StringComparer.Equals(metadata.GetAssemblyReference(handle).Name, "System.Windows.Forms"));
-	}
+public sealed class ProjectExportModule(string path, PEFile file, ModuleDef module, IAssemblyResolver resolver, IAssemblyReferenceClassifier classifier) {
+	public string Path { get; } = path;
+	public PEFile File { get; } = file;
+	public ModuleDef Module { get; } = module;
+	public IAssemblyResolver Resolver { get; } = resolver;
+	public IAssemblyReferenceClassifier Classifier { get; } = classifier;
 
-	public string Path { get; }
-	public PEFile File { get; }
-	public IAssemblyResolver Resolver { get; }
-	public IAssemblyReferenceClassifier Classifier { get; }
-	public string AssemblyOrModuleName { get; }
-	public bool IsDll { get; }
-	public bool ReferencesWindowsForms { get; }
-
-	// Filled in when an export starts.
-	internal string ProjectDirectoryName { get; set; } = string.Empty;
+	/// <summary>The project's guid, which the exporter assigns when it starts.</summary>
 	internal Guid ProjectGuid { get; set; }
-	internal string PlatformName { get; set; } = "AnyCPU";
 }

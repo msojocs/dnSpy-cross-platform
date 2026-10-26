@@ -12,6 +12,7 @@
     <Project Path="backend/tests/SearchTarget/SearchTarget.csproj" />
     <Project Path="backend/tests/StringTarget/StringTarget.csproj" />
     <Project Path="backend/tests/BamlTarget/BamlTarget.csproj" />
+    <Project Path="backend/tests/ProjectExportTarget/ProjectExportTarget.csproj" />
     <Project Path="backend/tests/DebugTarget/DebugTarget.csproj" />
     <Project Path="backend/tests/dnSpy.Backend.Tests/dnSpy.Backend.Tests.csproj" />
   </Folder>

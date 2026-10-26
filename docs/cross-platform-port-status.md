@@ -1,6 +1,6 @@
 # dnSpy 跨平台移植进度（对照 WPF 版）
 
-> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核，2026-10-25 再按 WPF 补齐 Visual Basic 的转换（记录/主构造函数/switch 表达式/集合表达式/模式/解构/using 声明/local function/大小写冲突）、C# 页最后四项选项、TIFF 资源预览与 BAML 悬停提示后第三次复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e；同日再补表达式求值的 ref/out 参数、位置模式与 stackalloc，Debug Program 的原始命令行与目标位数检查，以及调试列表的列宽/列序拖动后复核；Roslyn 语言服务（4.15）于 2026-10-26 接入 Edit Code 窗口的编辑器并按 WPF 补齐（Visual Basic、补全的图像/颜色/筛选按钮/提交规则、Roslyn 自己的签名帮助、Quick Info 图像、按记号的单词命令、Code Editor 选项页）后再次按实现与测试复核
+> 审计日期：2026-10-12；反编译与语言（4.4）于 2026-10-20 补齐后按实现与测试复核，2026-10-25 再按 WPF 补齐 Visual Basic 的转换（记录/主构造函数/switch 表达式/集合表达式/模式/解构/using 声明/local function/大小写冲突）、C# 页最后四项选项、TIFF 资源预览与 BAML 悬停提示后第三次复核；程序集树（4.3）于 2026-10-13 按实现与测试复核，2026-10-14 补齐剩余差距后再次复核；应用壳与通用 UI（4.1）于 2026-10-14 按实现与测试复核；字符串引用窗口（4.11）与 Roslyn 语言服务（4.15）于 2026-10-16 按实现与测试复核；分析器（4.10）于 2026-10-16 补齐剩余差距后按实现与测试复核；搜索窗口（4.9）于 2026-10-16 补齐剩余差距后按实现与测试复核；应用壳与通用 UI（4.1）于 2026-10-17 补齐剩余差距后按实现与测试复核；调试器（4.13）于 2026-10-17 补齐后按实现与测试复核；Hex 编辑器浏览（4.7）于 2026-10-18 按实现与测试复核；程序集编辑（4.12）于 2026-10-18 补齐后按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-18 补齐后按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-19 补齐后按实现与测试复核；程序集编辑（4.12）与元数据/PE 视图（4.8）于 2026-10-19 补齐剩余差距后再次按实现与测试复核；调试器（4.13）于 2026-10-20 补齐剩余差距（除 Mono/Unity）后再次按实现与测试复核，随之更新 4.8 的本机反汇编三行；字符串引用窗口（4.11）于 2026-10-20 补齐剩余差距后再次按实现与测试复核；代码编辑器与文档标签（4.5）于 2026-10-20 补上选择边距与行压缩后再次按实现与测试复核，同日补上虚拟空格与 Quick Info 的图标后第三次复核；Hex 编辑器浏览（4.7）于 2026-10-20 补齐结构模型、Quick Info、F12、搜索替换、选项与会话恢复后再次按实现与测试复核，同日补上完整 .NET 编码、Memory 结构服务与 HTML 剪贴板后完成复核；Hex 编辑器浏览（4.7）于 2026-10-22 按 WPF 逐项比对光标/选区/鼠标/命令、菜单/对话框/剪贴板/搜索、行格式/边距/选项，以及 AE 侧的上下文与标签模型后补齐剩余差距，再次按实现与测试复核（Memory 改为整个地址空间、可读区间、后端搜索，增量查找、拖动自动滚动、滚动条、标签按文件存活与会话恢复均按 WPF）；调试器（4.13）于 2026-10-25 按 WPF 补齐启动对话框（Timeout、环境变量编辑器、PE 可执行文件重置、Ctrl+F5 直接启动、重启语义）、四个调试列表的搜索/排序/多选/工具栏与快捷键、模块断点窗口的 XML 导入导出与卸载匹配、完整的 C# 过滤器与跟踪点地址/帧名/$MID、变量窗口的 Save/Refresh/Show in Memory/Object ID 与 Watch 持久化、对象/集合/匿名初始化器与 with/集合表达式/属性模式、动态模块的原地刷新、Output 着色与反汇编文档视图后再次按实现与测试复核，并补上 Pause 的 e2e；同日再补表达式求值的 ref/out 参数、位置模式与 stackalloc，Debug Program 的原始命令行与目标位数检查，以及调试列表的列宽/列序拖动后复核；Roslyn 语言服务（4.15）于 2026-10-26 接入 Edit Code 窗口的编辑器并按 WPF 补齐（Visual Basic、补全的图像/颜色/筛选按钮/提交规则、Roslyn 自己的签名帮助、Quick Info 图像、按记号的单词命令、Code Editor 选项页）后再次按实现与测试复核；命令行版 dnSpy.Console（4.17）于 2026-10-26 按 WPF 补齐（语言选项全集、stdout 改用 GUI 同款反编译器并按 WPF 的成员规则输出、项目导出改为 MSBuildProjectCreator 的移植，GUI 的 Export to Project 随之改用）后再次按实现与测试复核
 >
 > 代码基线：`linux` 分支，提交 `adeb8c1a9`
 >
@@ -53,12 +53,12 @@
 | Hex 编辑器（浏览） | 100% | 33 | 0 | 0 | 0 | 全部功能点对齐 WPF：行布局、光标选区与全部快捷键、右键菜单与对话框、查找/替换/增量查找、文件与 Memory 共用的结构 Quick Info/F12/Ctrl+F12/Edit Field、完整 .NET 编码与选项三页、纯文本与 HTML 复制、标签随会话恢复 |
 | Roslyn 语言服务 | 100% | 10 | 0 | 0 | 0 | 全部功能点对齐 WPF：Edit Code 窗口的编辑器是 C# 或 VB 的 Roslyn 文档（按模块的引用与编译器页设置），语义着色、带 dnSpy 图像/颜色/筛选按钮与提交规则的补全、带图像的 Quick Info、Roslyn 自己的签名帮助、智能缩进、按记号的单词命令与 Code Editor 选项页都生效；C# Interactive 的语义着色照旧 |
 | 字符串引用窗口 | 100% | 22 | 0 | 0 | 0 | 全部功能点对齐 WPF：三类来源、过滤与选项、WPF 的排序语义、列重排与列宽、右键菜单、自动刷新；来源列随工具栏语言经该反编译器的格式化器书写（VB 用自己的，IL 与 C# 同），C#/VB/IL 视图里跟随 ldstr 都定位到所在语句 |
-| dnSpy.Console 命令行 | ~92% | 11 | 2 | 0 | 0 | 跨平台 CLI 已就位：项目导出（SDK/传统工程、.sln/.slnx、GAC 与程序集解析、资源与 BAML 开关）、单个类型/成员输出（C#/VB/IL/IL with C#）、彩色与 `--spaces` 都对齐 WPF；语言选项是子集，VB 工程由 C# 转换而来 |
+| dnSpy.Console 命令行 | 100% | 14 | 0 | 0 | 0 | 全部功能点对齐 WPF：C#/VB 38 项与 IL 8 项语言选项全集（同名开关、默认值与帮助）、stdout 用 GUI 同款反编译器并按 WPF 的成员规则与颜色表输出、项目导出是 MSBuildProjectCreator 的移植（WinForms Designer 拆分、设置与资源类、卫星程序集、图标与清单、两种工程逐元素照写）；VB 仍是 C# 的转换 |
 | 扩展系统 | 不计 | 1 | 0 | 1 | 9 | 按计划首版不支持第三方扩展；内置功能直接编进程序 |
 | 其他杂项 | 不计 | 5 | 1 | 1 | 7 | 多为 WPF/Windows 基础设施；15 种语言与图标库已齐；更新检查缺失 |
 | 工程基础设施（新增） | ~83% | 8 | 4 | 0 | 0 | 协议、安全、三平台打包、CI 发布已就绪；CI 不跑前端单测 |
 
-**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 483 / 🟡 3 / ❌ 4 / ⛔ 31，完成度约 **99%**（2026-10-26 Roslyn 语言服务接入 Edit Code 编辑器并补齐，五个 🟡 转 ✅，另新增「Visual Basic 的语言服务」「宿主代码编辑器」两行 ✅（✅ +7、🟡 -5），此前为 ✅ 476 / 🟡 8 / ❌ 4 / ⛔ 31，约 98%；2026-10-25 反编译与语言把最后四个 🟡 转 ✅（✅ +4、🟡 -4）；同日调试器把表达式求值的最后一个 🟡 转 ✅（✅ +1、🟡 -1），除 Mono/Unity 与 Windows 专属项外 4.13 已达 100%；同日早些时候调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
+**整体**：除「工程基础设施」外，把上表各模块（含「不计」的两行）逐行相加，合计 ✅ 486 / 🟡 1 / ❌ 4 / ⛔ 31，完成度约 **99%**（2026-10-26 命令行版 dnSpy.Console 按 WPF 补齐，两个 🟡 转 ✅，另新增「工程内文件的种类与布局」一行 ✅（✅ +3、🟡 -2），此前为 ✅ 483 / 🟡 3 / ❌ 4 / ⛔ 31；同日 Roslyn 语言服务接入 Edit Code 编辑器并补齐，五个 🟡 转 ✅，另新增「Visual Basic 的语言服务」「宿主代码编辑器」两行 ✅（✅ +7、🟡 -5），此前为 ✅ 476 / 🟡 8 / ❌ 4 / ⛔ 31，约 98%；2026-10-25 反编译与语言把最后四个 🟡 转 ✅（✅ +4、🟡 -4）；同日调试器把表达式求值的最后一个 🟡 转 ✅（✅ +1、🟡 -1），除 Mono/Unity 与 Windows 专属项外 4.13 已达 100%；同日早些时候调试器把动态模块的 🟡 转 ✅（✅ +1），并新增一行把 ref/out 参数、位置模式与 stackalloc 记为 🟡（🟡 总数不变）；同日补齐 C# 交互窗口的 REPL 选项页，一个 🟡 转 ✅；2026-10-22 的 Hex 逐项补齐没有再改动任何状态格，总数不变；本轮 Hex 补齐前按当前总览表重算为 ✅ 468 / 🟡 15 / ❌ 4 / ⛔ 31，旧文中的 ✅ 460 / 🟡 18 / ❌ 7 未与表同步；2026-10-20 代码编辑器与文档标签补上虚拟空格前的历史记录为 ✅ 459 / 🟡 19 / ❌ 7 / ⛔ 31；补上选择边距与行压缩前为 ✅ 458 / 🟡 19 / ❌ 7 / ⛔ 31；2026-10-20 字符串引用窗口补齐前为 ✅ 456 / 🟡 21 / ❌ 7 / ⛔ 31，约 96%；2026-10-20 反编译与语言补齐前为 ✅ 440 / 🟡 28 / ❌ 16 / ⛔ 31，约 94%；2026-10-20 调试器补齐前为 ✅ 417 / 🟡 45 / ❌ 22 / ⛔ 31，约 91%；2026-10-19 程序集编辑与元数据/PE 视图补齐前为 ✅ 388 / 🟡 56 / ❌ 40 / ⛔ 31，约 86%；代码编辑器与文档标签补齐前为 ✅ 363 / 🟡 68 / ❌ 53 / ⛔ 30，约 82%；2026-10-18 命令行版补齐前按同一张表为 ✅ 352 / 🟡 66 / ❌ 53 / ⛔ 30；更早的审计记录曾写作 ✅ 334 / 🟡 75 / ❌ 74 / ⛔ 30，与当时的表不一致，本次按表重算）。这一行由上表直接求和，不再逐次增减维护。
 
 ### 1.2 按工作流看
 
@@ -72,7 +72,7 @@
 | 保存 | 日常可用 | 与 WPF 相同：Save Module 的五页写出选项，Save All 列出修改过的文档、有进度与取消；修改标记按保存点计算；新建的程序集与 NetModule 第一次保存时取得文件；退出时可「保存后退出」 |
 | 调试 .NET (CoreCLR) 程序 | 日常可用 | 断点（含完整条件，C#/VB/IL 视图都能下）、单步（含跨 await）、Set Next Statement、调用栈；Locals/Autos/Watch 可求值、展开、改值；Memory 与 Disassembly；可同时调多个 CoreCLR 进程；不支持 Mono/Unity |
 | 元数据表、Hex 修改 | 日常可用 | Hex 可滚动浏览、查找替换、复制、直接改字节并撤销，悬停显示 PE/元数据结构，F12 跳到代码或 PE 节点，非 .NET 文件也能改写与保存；PE 头与元数据表是可编辑的表单与表格，表可排序、复制粘贴行 |
-| 脚本、批处理导出 | 部分可用 | GUI 的 Export to Project 与独立的 `dnSpy.Console` 共用后端的导出实现（见 4.4、4.17）；REPL 仍不能操作已打开的程序集 |
+| 脚本、批处理导出 | 部分可用 | GUI 的 Export to Project 与独立的 `dnSpy.Console` 共用后端移植的 MSBuildProjectCreator（见 4.4、4.17），工程布局与 WPF 相同；REPL 仍不能操作已打开的程序集 |
 
 ## 2. 跨模块问题
 
@@ -274,7 +274,7 @@
 | 命名空间节点输出 | `DecompilerBase.DecompileNamespace` | 同上 | ✅ | C#/VB/IL 都只列出类型名，每个是引用 |
 | 其他非代码节点 | `Documents/Tabs/NodeDecompiler.cs` | `CommentDocumentLines`、`DecompileResourcesFolder`、`DecompilePEInfo` 等 | ✅ | 引用、基类型/派生类型文件夹、资源文件夹、PE/未知文件按 WPF 写注释 |
 | Save Code | `Documents/Tabs/NodeTabSaver.cs`、`BamlTabSaver.cs` | `saveCode` | ✅ | BAML 标签的命令名为 Save XAML.../Save BAML...，文件名照 `GetFilename` 换扩展名 |
-| Export to Project | `Documents/Tabs/Dialogs/ExportToProjectDlg.xaml` | `ExportToProjectDialog.tsx`、RPC `project/export`、`BE/ProjectExport/` | ✅ | 与 WPF 对话框字段一致；导出实现从 `dnSpy.Console` 移到后端与命令行共用，C# 页的分支独有选项与 BAML 页的排版同样作用于导出 |
+| Export to Project | `Documents/Tabs/Dialogs/ExportToProjectDlg.xaml` | `ExportToProjectDialog.tsx`、RPC `project/export`、`BE/ProjectExport/` | ✅ | 与 WPF 对话框字段一致；导出实现是 dnSpy `MSBuildProjectCreator` 的移植（2026-10-26，见 4.17），与命令行共用，C# 页的分支独有选项与 BAML 页的排版同样作用于导出 |
 | `.resources` 条目显示 | `Documents/TreeView/Resources/BuiltInResourceElementNodeImpl.cs` | `DecompileResourceEntry` | ✅ | 字符串显示文本，图片显示图片，文本数据按扩展名着色，其他写 `名称 = N bytes` 行 |
 | 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 后端附件 + `FE/document-attachments.ts` | ✅ | BMP/GIF/PNG/ICO/JPEG 与序列化 Bitmap/Icon、ImageListStreamer 可预览并保存；TIFF 等 Chromium 不解而 ImageSharp 能解的格式在后端转成 PNG；附件受 RPC 单条消息 32 MB 的约束（图片上限 16 MB，WPF 从内存读取没有上限），WMP/HEIF/EMF 这类只有 Windows 编解码器的格式在 Linux 上没有解码器（与 WPF 的 WIC 不同），行文本与 Save 按钮仍在 |
 | 嵌入资源文本识别 | `ResourceUtilities.cs` | `TextDocument`、`Search/ResourceTexts.cs` | ✅ | |
@@ -979,37 +979,43 @@ WPF 里这些能力分属两个宿主：C# Interactive 只用 `RoslynClassifier`
 
 ### 4.17 命令行版 dnSpy.Console
 
-完成度约 92%（✅ 11 / 🟡 2）。WPF 范围：`dnSpy/dnSpy.Console/Program.cs`。跨平台实现：`CrossPlatform/backend/dnSpy.Console/`（程序集名 `dnSpy.Console`，命名空间 `dnSpy.Cli`），`CrossPlatform/backend/tests/dnSpy.Backend.Tests/ConsoleTests.cs` 22 条测试；2026-10-18 按实现与本机测试复核（后端 506 条全绿）。
+完成度 100%（✅ 14 / 🟡 0）。WPF 范围：`dnSpy/dnSpy.Console/Program.cs`，以及它调用的 `dnSpy/dnSpy.Decompiler/MSBuild/`（MSBuildProjectCreator 全套）与 `Extensions/ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core/`（四种语言与两套设置）。跨平台实现：`CrossPlatform/backend/dnSpy.Console/`（程序集名 `dnSpy.Console`，命名空间 `dnSpy.Cli`）与 `BE/ProjectExport/`，`CrossPlatform/backend/tests/dnSpy.Backend.Tests/ConsoleTests.cs` 31 条测试，新夹具 `tests/ProjectExportTarget`（WinForms 窗体 + Designer、设置类、强类型资源类与德语卫星程序集、unsafe 代码、Win32 图标与清单、app.config）。2026-10-18 首轮复核；2026-10-26 按 WPF 补齐后再次按实现与本机测试复核（后端 721 条全绿，其中导出的 C#、WPF、WinForms 与 VB 工程都交给 `dotnet build` 实际编译）。
 
 CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/package-platform.mjs` 把它与 `dnSpy.Backend.Host` 一起发布到后端目录（两者共用同一份自包含运行时，先发布 Host 再发布 Console），所以安装包里的 `resources/backend/<rid>/dnSpy.Console` 可以直接运行。它不依赖 GUI，也不使用 stdio JSON-RPC。入口 `Program.cs` 只设置 UTF-8 输出，实际逻辑在 `DnSpyConsole` 里，测试可以进程内调用。
 
+2026-10-26 这一轮补齐的部分：
+
+- **语言选项是 WPF 的全集**：`ConsoleLanguages.cs` 按 `CSharpVBDecompilerSettings.CreateOptions` 与 `ILDecompilerSettings.CreateOptions` 逐项列出 C#/VB 的 38 个与 IL 的 8 个选项，guid、开关名、类型、描述与顺序都相同；默认值是分支 `DecompilerSettings` 的（成员顺序 `mpeft`：方法、属性、事件、字段、嵌套类型；块状命名空间）。布尔选项有 `--x`/`--no-x`/`--dont-x` 三种写法，Int32/String 选项取下一个参数；与命令行自身开关重名时改用 guid 作开关名（`GetOptionName`）；整数按 `SimpleTypeConverter` 解析（十进制、`0x`/`&H`、`_` 分隔、负号），错误文本也是它的。帮助按共享设置分组（C# 与 VB、IL 与 IL with C#），打印 `(类型 = 当前值) 描述`——当前值来自命令行已设置的共享设置，与 WPF 相同。分支独有而包里没有的四项补在 `DnSpyCSharpTransform` 上：`always-create-ex-var`（未使用的异常变量写成 `ex_XX`）、`max-array-elems`（常量数组截断并以提示字符串收尾）、`max-string-length`（`[...string is too long...]`）、`remove-new-delegate-class`（`+=`/`-=` 处去掉 `new EventHandler(...)`，关闭时所有委托创建保留 `new`）。
+- **stdout 用 GUI 同款的反编译器**：C# 是 `ICSharpCode.Decompiler` 加 `DnSpyCSharpTransform`（token 注释、成员顺序、修饰符、ShowAll 的第二遍合并等，与 C# 视图一致），按 `CSharpDecompiler` 的规则写：类型连同命名空间块与 using；成员先写一行 `// 声明类型`、不写 using；实例构造函数连同它初始化的字段（`SelectCtorTransform`），非常量字段连同初始化它的构造函数后只留该字段（`SelectFieldTransform`）。VB 是同一份 C# 经 VB 视图的转换，缩进换成 C# 的（Tab 或 `--spaces`），成员同样以 `' 声明类型` 开头。IL 与 IL with C# 是 `BE/IL/` 移植的分支反汇编器（IL 页 8 项全部生效，PDB 行号、指令字节、操作码注释、XML 文档都在）。着色按 WPF `ColorProvider` 的映射逐个文本颜色写到终端：C#/IL 的颜色来自写出它们的输出，VB 的颜色来自 Roslyn 分类器；`use-debug-syms` 读模块旁的 PDB 取局部变量名。
+- **项目导出是 `MSBuildProjectCreator` 的移植**（`BE/ProjectExport/`，GUI 的 Export to Project 与 CLI 共用，替换了原先基于 `WholeProjectDecompiler` 的实现）：`FilenameCreator`（去掉默认命名空间后按命名空间分目录、Windows 非法字符替换、长度截断、重名加 `.2`）、`DefaultNamespaceFinder`、`ResourceNameCreator`、`Project`、`DefaultProjectWriter`/`SdkProjectWriter`/`SolutionWriter` 与全部 `ProjectFile` 逐个移植；文件按 job 在 `--threads` 个线程上写，失败的文件按 WPF 文本记错并继续。工程内文件与 Visual Studio 的布局一致：`Properties`（VB 为 `My Project`）下的 AssemblyInfo（`AssemblyInfoTransform` 去掉编译器自己写的特性）；WinForms 窗体拆成 `Form.cs` 与 `Form.Designer.cs`（后者只含 InitializeComponent、Dispose 及其字段，全限定类型名、保留 `new System.EventHandler(this.X)`），`.resx` 依附在窗体上；强类型资源类写成 `X.Designer.cs`（AutoGen/DesignTime，`.resx` 带 ResXFileCodeGenerator 与 LastGenOutput）；`ApplicationSettingsBase` 类写出 `.settings` 与 `Settings.Designer.cs`（剩余为空时不写本体文件）；XAML 代码隐藏为 partial、去掉 InitializeComponent/Connect/_CreateDelegate 与其字段，缺 App.xaml 时按应用类重建；卫星程序集的资源折成 `X.de.resx`；SplashScreen、app.config、Win32 图标（`.ico` 重建）与清单（`app.manifest`）都进工程。`.resx` 由 `ResXResourceFileWriter` 的移植写出（WinForms 的 schema 与 resheader，类型名按模块自己引用的程序集版本）。BAML 经 `ICSharpCode.BamlDecompiler` 还原，引用到的程序集加进工程引用（`OnWrite`）。工程 XML 的元素与顺序照 `DefaultProjectWriter`/`SdkProjectWriter` 逐行写出（ToolsVersion、DefaultTargets、Microsoft.Common.props、Debug/Release 两组属性、AppDesigner、ProjectReference 的 guid 大小写、语言 targets、VB 的 NoWarn 列表、SDK 工程的 `GenerateAssemblyInfo`/`EnableDefaultItems`/`TargetFramework`/`UseWPF`/`UseWindowsForms`/`StartupObject`/`ApplicationIcon`/`ApplicationManifest` 等）；文件为 UTF-8 带 BOM，`.sln` 头与配置节照 `SolutionWriter`。
+
 | 功能点 | WPF 来源 | 状态 | 备注 |
 |---|---|---|---|
-| 批量导出为项目（`-o`） | `DnSpyDecompiler.Decompile`、`MSBuildProjectCreator` | ✅ | 每个模块一个目录与工程；工程文件由 `ICSharpCode.Decompiler` 的 `WholeProjectDecompiler` 生成，dnSpy 的开关在其子类里实现 |
+| 批量导出为项目（`-o`） | `DnSpyDecompiler.Decompile`、`MSBuildProjectCreator` | ✅ | 每个模块一个目录与工程；`MSBuildProjectCreator` 的移植（见上），GUI 的 Export to Project 同用 |
+| 工程内文件的种类与布局 | `Project`、`FilenameCreator`、`ResourceNameCreator`、各 `ProjectFile` | ✅ | AssemblyInfo、WinForms Designer 拆分、强类型资源类、设置文件、XAML 代码隐藏与 App.xaml、卫星程序集、SplashScreen、app.config、图标与清单；`ExportsAWinFormsApplicationTheWayVisualStudioLaysItOut` 逐项断言并实际编译 |
 | 递归与通配符（`-r`、`dir/*.dll`） | `GetDotNetFiles`、`DumpDir` | ✅ | 与 WPF 一样：显式文件不是 .NET 文件报错，目录扫描跳过；`-r` 才进子目录 |
 | 生成 .sln（`--sln-name`、`--no-sln`、`.slnx`） | `SolutionWriter` | ✅ | 逐字移植 VS2005–2022 的 solution 头与工程配置节；后缀为 `.slnx` 时写 XML 形式；工程按 exe 在前、文件名排序 |
-| 项目格式（`--sdk-project`、`--vs`、`--project-guid`） | `SdkProjectWriter`、`DefaultProjectWriter` | ✅ | `--vs` 写传统工程的 `ToolsVersion` 与 solution 头；`--project-guid` 按 WPF 的规则递增最后 8 位并写进每个工程与 .sln |
-| 语言选择（`-l`） | `GetLanguageOrNull` | 🟡 | 接受 `C#`、`Visual Basic`、`IL`、`IL with C#` 及各自的唯一/通用 GUID；IL 语言没有工程扩展名，导出时报「doesn't support creating project files」。VB 的工程导出不是真正的 VB 反编译（见下） |
-| 反编译器选项透传 | `IDecompiler.Settings.Options` | 🟡 | 开关名与 WPF 相同（`--xml-doc`、`--anon-methods`、`--async`、`--tokens`、`--bytes`、`--sort-members` 等），并支持 `no-`/`dont-` 前缀；只提供 `ICSharpCode.Decompiler 11.1` 里存在的选项，dnSpy fork 特有的 `member-order`、`max-string-length`、`show-all`、`hex`、`full-names` 等没有对应开关 |
-| 资源开关（`--no-resources`、`--no-resx`、`--no-baml`） | `Project.CreateEmbeddedResourceFiles`、`BamlResourceProjectFile` | ✅ | `--no-resources` 保留原始 `.resources`；`--no-resx` 不写 `.resx` 而保留 `.resources`；BAML 默认经 `ICSharpCode.BamlDecompiler` 还原成 `.xaml`（`Page`/`ApplicationDefinition`），`--no-baml` 保留 `.baml` 资源项 |
-| 程序集解析（`--asm-path`、`--user-gac`、`--no-gac`、`--no-stdlib`、`--gac-file`） | `AssemblyResolver`、`GetDotNetFiles` | ✅ | `--asm-path`/`--user-gac` 同时喂给 dnlib 与 ILSpy 解析器，用户 GAC 目录视为 GAC（不写 HintPath）；`--no-gac` 清空解析器的 GAC 搜索；`--no-stdlib` 从工程引用里去掉 mscorlib/System.Runtime 等；`--gac-file` 支持部分程序集名并回落到 `GacInfo` |
-| 单个类型/成员输出（`-t`、`--type`、`--md`） | `Decompile` 的 stdout 分支 | ✅ | 类型查找与 WPF 相同（全名、去泛型参数、仅类型名、大小写不敏感）；只允许一个文件；输出 C#/VB/IL/IL with C# 四种语言 |
-| 彩色输出（`--no-color`、重定向时自动关闭） | `ConsoleColorizerOutput`、`ColorProvider` | ✅ | 按 dnSpy 的颜色映射：关键字青、注释绿、字符串暗黄、类型/成员品红、方法暗黄、本地变量白、标签暗红；IL 的 opcode/引用同样着色 |
-| `--spaces` | `GetIndenter` | ✅ | 0 用制表符，1–100 用指定空格数；C#/VB/IL 的缩进都跟随 |
-| `--threads` | `ProjectCreatorOptions.NumberOfThreads` | ✅ | 传给 `WholeProjectDecompiler.MaxDegreeOfParallelism`；0 表示每核一个线程 |
+| 项目格式（`--sdk-project`、`--vs`、`--project-guid`） | `SdkProjectWriter`、`DefaultProjectWriter` | ✅ | 两种工程逐元素照 WPF 写；`--project-guid` 按 WPF 的规则在路径序上递增最后 8 位并写进每个工程与 .sln |
+| 语言选择（`-l`） | `GetLanguageOrNull` | ✅ | 接受 `C#`、`Visual Basic`、`IL`、`IL with C#` 及各自的唯一/通用 GUID；IL 语言导出时报「doesn't support creating project files」；VB 输出与 VB 工程走 VB 视图的同一转换（与 4.4 一致） |
+| 反编译器选项透传 | `IDecompiler.Settings.Options` | ✅ | C#/VB 38 项、IL 8 项全集，开关名、类型、默认值、描述与 WPF 相同；帮助打印当前值 |
+| 资源开关（`--no-resources`、`--no-resx`、`--no-baml`） | `Project.CreateEmbeddedResourceFiles`、`BamlResourceProjectFile` | ✅ | `--no-resources` 原样写出 `.resources`（按命名空间命名，无 LogicalName，与 WPF 相同）；`--no-resx` 同样原样写出；BAML 默认还原成 `.xaml`（`Page`/`ApplicationDefinition`，SubType Designer、Generator MSBuild:Compile），`--no-baml` 写成 `Resource` |
+| 程序集解析（`--asm-path`、`--user-gac`、`--no-gac`、`--no-stdlib`、`--gac-file`） | `AssemblyResolver`、`GetDotNetFiles` | ✅ | dnlib 解析器按 dnSpy.exe 设置（FindExactMatch、不做框架重定向、TypeDef 缓存）；`--asm-path`/`--user-gac` 同时喂给 dnlib 与 ILSpy 解析器，用户 GAC 目录视为 GAC（不写 HintPath）；`--no-gac` 清空解析器的 GAC 搜索；`--no-stdlib` 写 NoStdLib；`--gac-file` 支持部分程序集名 |
+| 单个类型/成员输出（`-t`、`--type`、`--md`） | `Decompile` 的 stdout 分支、`CSharpDecompiler`/`VBDecompiler`/`ILDecompiler`/`ILWithCSharpDecompiler` | ✅ | 类型查找与 WPF 相同（全名、去泛型参数、仅类型名、大小写不敏感）；只允许一个文件；各语言按 WPF 的成员规则写（见上） |
+| 彩色输出（`--no-color`、重定向时自动关闭） | `ConsoleColorizerOutput`、`ColorProvider` | ✅ | 按 dnSpy 的颜色表逐个文本颜色着色：关键字青、注释绿、XML 文档暗绿、字符串暗黄、命名空间黄、类型/成员品红、值类型绿、方法暗黄、局部变量/参数白、标签暗红、预处理蓝；IL 的操作码/指令同样着色 |
+| `--spaces` | `GetIndenter` | ✅ | 0 用制表符，1–100 用指定空格数；C#/VB/IL 的 stdout 与导出的代码文件都跟随 |
+| `--threads` | `ProjectCreatorOptions.NumberOfThreads` | ✅ | 文件 job 与工程文件按该并行度写；0 表示每核一个线程 |
 | 用法帮助 | `PrintHelp` | ✅ | 与 WPF 相同：无参数或参数错误时打印用法、语言、语言选项与示例；错误以 `ERROR: ...` 结尾 |
 
-与 WPF 的已知差异：
+与 WPF 的已知差异（引擎不同或为 Linux 所做，均不影响上表状态）：
 
-- 语言选项是子集（见上表 🟡），`--help` 里列出的也就是实际支持的选项；WPF 里按选项 GUID 兜底的写法没有移植。
-- Visual Basic 的工程导出是把 C# 文本交给 GUI 同款的 `ICSharpCode.CodeConverter` 再改写成 `.vbproj`，不是 WPF 那种真正的 VB 反编译器。普通类可以编译；record、C# 主构造函数、部分设计器代码会转换失败或生成不可编译的 VB。stdout 的 VB 视图同样受此限制。转换前会去掉 nullable 特性，并修正 `ParamArray` 与 `Optional` 同时出现的参数列表。
+- C# 文本由 `ICSharpCode.Decompiler 11.1` 生成（与 GUI 的 C# 视图相同，分支选项见 4.4），句法比分支新：导出的工程在需要时写 `LangVersion`（框架默认版本不够时），代码里的可空注解在没有 `<Nullable>` 的工程中只产生 CS8632 警告。
+- VB 仍是 C# 的转换（与 4.4 相同）。导出时为了能编译：VB 文件的命名空间写成 `Namespace Global.X`（工程照 WPF 写 RootNamespace，VB 会把它加在每个命名空间前面）；VB 的 Designer 等 partial 文件按带 using 的 C# 转换（转换器把全限定名写成相对 Imports 的形式）；转换器绑定时用模块及其引用的程序集。转换器仍有几处做不到的：另一个 partial 文件里的事件处理方法写不出 `AddressOf`、私有 `Sub Main` 不是 VB 的入口、unsafe/指针整段注释——普通类库的 VB 工程可编译（`ExportsAVisualBasicProject`），WinForms 应用的 VB 工程不保证。
+- 面向 .NET 5+ 的 WPF/WinForms 工程，`TargetFramework` 带平台后缀（`net10.0-windows7.0`）并按需写 `TargetPlatformMinVersion`，否则当前 SDK 拒绝构建；`.slnx` 的工程路径用 `/`。
+- Linux 上没有 Windows Desktop 运行时：CLI 的解析器在找不到 WPF/WinForms 程序集时回落到 SDK 用 EnableWindowsTargeting 下载的引用包（dotnet 的 `packs` 或 NuGet 缓存里的 `Microsoft.WindowsDesktop.App.Ref`），dnlib 也加上该目录，所以窗体与应用类的基类型能解析；SDK 工程里属于 Windows Desktop 运行时的引用按这份名单省略（WPF 由 DotNetPathProvider 在已装的运行时里查）；连引用包也没有时，`System.Windows.Forms` 的常见控件基类仍被认作 WinForms 控件。GUI 的解析器（`GacFallbackAssemblyResolver`）没有加这项回落。
 - `--no-gac` 通过清空 `UniversalAssemblyResolver` 的进程级 GAC 目录表实现（该库没有实例级开关）；CLI 一次进程只解析一遍参数，因此与 WPF 等价，进程内重复调用时会在下一次创建解析器时把表恢复。
-- dnSpy 的工程导出还会把卫星程序集折进主工程、把 WinForms 设计器拆成 `.Designer.cs`、生成 Settings/SplashScreen 等文件；这些没有单独移植，卫星程序集按普通模块导出，设计器与 Settings 类型按普通代码写进工程。
-- 工程文件的具体 XML 由 `WholeProjectDecompiler` 生成，属性顺序与 WPF 的 `SdkProjectWriter`/`DefaultProjectWriter` 不完全逐字节相同；`--project-guid`、`--vs`、`--no-stdlib`、工程引用替换、BAML→XAML 与资源开关都在生成后按 dnSpy 的规则改写。
-- 导出的 XAML code-behind 会按 dnSpy 的 `XamlTypeProjectFile` 规则改成 `partial` 并移除 `InitializeComponent`/`IComponentConnector.Connect`/`_CreateDelegate` 及其字段；`BamlTarget` 导出的工程在本机用 `dotnet build -p:EnableWindowsTargeting=true` 实测可编译。
-- 导出实现（`ProjectExporter`、VB 转换修正）已移到后端 `BE/ProjectExport/`，GUI 的「Export to Project」与 CLI 共用（见 4.4）。GUI 的导出还带上 C# 页的分支独有选项与 BAML 页的排版；CLI 的 stdout 输出仍用自己的语言选项子集，不写 token 注释等分支独有输出。
+- 2.0/3.0/3.5 的框架版本只按模块自己的引用判断，不像 WPF 再解析被引用程序集的引用。
 
-测试：`ConsoleTests.cs` 覆盖帮助与错误、C#/VB/IL/IL with C# 的 stdout（IL 默认带 PDB 的 sequence point）、`--spaces`、语言 GUID、语言选项的 `no-`/`dont-` 形式、非 .NET 文件、SDK 工程与 .sln、工程引用替换、`--no-sln`、`.slnx`、BAML→XAML、`--no-baml`、`--no-resources`、传统工程的 `ToolsVersion`/`ProjectGuid`、通配符，以及把导出的 C# 与 WPF 工程交给 `dotnet build` 实际编译。WPF 启动参数本体（`-e` 等）见 4.1。
+测试：`ConsoleTests.cs` 覆盖帮助（两组选项的全集、类型/当前值/描述、命令行设置后的值）与错误（未知类型、无效 token、`SimpleTypeConverter` 的整数错误、未知选项、IL 选项不属于 C#、非 .NET 文件、`--spaces`/`--sln-name`/`--vs` 的错误）、C# 的命名空间块与 token 注释、分支成员顺序与 `--member-order`、成员文档的声明类型行与构造函数/字段的初始化器、IL（字节、token、PDB 行、`--comments`、`--hex`、no-/dont- 前缀）、IL with C#、VB 类型与成员、C# 页选项（`--no-tokens`、`--hex`、`--max-string-length`、修饰符、`--full-names` 与 `--no-using-decl`）、`--spaces`、语言 GUID；导出侧覆盖 SDK 工程与 .sln 的元素与文件布局、BOM 与命名空间块、AssemblyInfoTransform、`.resx`/原始资源、WPF 的 Page 与代码隐藏、`--no-baml`/`--no-resources`/`--no-resx`、工程引用与 guid 递增、`.sln`/`.slnx`、传统工程（ToolsVersion、AppDesigner、targets、NoStdLib）、WinForms 夹具的全部文件种类、VB 工程（RootNamespace、NoWarn、My Project、`Namespace Global.`、传统 VB 工程），以及把导出的 C#、WPF、WinForms 与 VB 工程交给 `dotnet build` 实际编译。WPF 启动参数本体（`-e` 等）见 4.1。
 
 ### 4.18 其他杂项
 
@@ -1065,7 +1071,18 @@ CLI 是独立可执行文件，已加入 `dnSpy.CrossPlatform.slnx`；`scripts/p
 
 ## 6. 测试基线
 
-Roslyn 语言服务 4.15 收尾后的最新完整验证（2026-10-26）：后端真实构建 `dnSpy.Backend.Host`（含新加的 `Microsoft.CodeAnalysis.VisualBasic.Features`），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`。
+命令行版 dnSpy.Console 4.17 收尾后的最新完整验证（2026-10-26）：在仓库根执行 `pnpm build`（真实构建整个 `dnSpy.CrossPlatform.slnx`，含新夹具 `ProjectExportTarget`，再构建前端），之后跑后端、前端与 e2e，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`。
+
+| 套件 | 本轮结果 |
+|---|---|
+| 后端 `dotnet build` | 0 警告、0 错误 |
+| 后端 `dotnet test` | 721 通过、0 跳过、0 失败（`ConsoleTests` 从 22 条扩到 31 条）；第一遍有一条 `EvaluatesStackAllocations` 失败，单独重跑与整套重跑都通过，属于已知的调试器启动偶发超时 |
+| 前端 vitest | 140 个测试文件、1590 项全部通过（前端本轮未改） |
+| 完整 e2e（Playwright Electron） | 121 通过、3 跳过、0 失败 |
+
+后端这一轮改到了 GUI 也走的代码：Export to Project 换成 `MSBuildProjectCreator` 的移植（工程内文件的路径随之改为去掉默认命名空间的 Visual Studio 布局，`export-project.spec.ts` 只断言工程与解决方案的位置，未受影响）；`DnSpyCSharpTransform` 新增的四项分支选项按分支默认值生效，其中 `+=`/`-=` 处去掉 `new EventHandler(...)` 会改变 C# 视图里这类语句的写法，超过 20000 字符的字符串与超过 10000 项的常量数组按分支截断。`Protocol.cs` 未改，e2e 钉死的标记不变。打包安装包后的 CLI 没有在本轮重新验证。
+
+Roslyn 语言服务 4.15 收尾后的完整验证（2026-10-26）：后端真实构建 `dnSpy.Backend.Host`（含新加的 `Microsoft.CodeAnalysis.VisualBasic.Features`），前端执行 `pnpm build` 后再跑测试，e2e 使用 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`。
 
 | 套件 | 本轮结果 |
 |---|---|

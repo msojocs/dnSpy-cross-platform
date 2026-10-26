@@ -160,6 +160,7 @@ public sealed partial class WorkspaceManager {
 
 		public void Dispose() {
 			Module.File.Dispose();
+			Module.Module.Dispose();
 			owned?.Dispose();
 		}
 	}
@@ -255,13 +256,19 @@ public sealed partial class WorkspaceManager {
 				stream.Position = 0;
 			}
 			PEFile? file = null;
+			ModuleDefMD? module = null;
 			try {
+				// The project creator reads the types, resources and Win32 resources from dnlib's view of the same bytes,
+				// resolving base types and references the way the workspace's module does.
+				module = ModuleDefMD.Load(stream.ToArray(), entry.Module.Context);
+				module.Location = entry.Path;
 				file = new PEFile(entry.Path, stream, PEStreamOptions.PrefetchEntireImage);
 				var resolver = GacFallbackAssemblyResolver.Create(entry.Path, file, throwOnError: false);
-				return new ExportSnapshot(new ProjectExportModule(entry.Path, file, resolver, resolver), stream);
+				return new ExportSnapshot(new ProjectExportModule(entry.Path, file, module, resolver, resolver), stream);
 			}
 			catch {
 				file?.Dispose();
+				module?.Dispose();
 				stream.Dispose();
 				throw;
 			}

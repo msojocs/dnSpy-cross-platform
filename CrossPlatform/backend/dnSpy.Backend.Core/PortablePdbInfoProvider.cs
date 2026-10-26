@@ -3,12 +3,12 @@ using System.Reflection.Metadata.Ecma335;
 using ICSharpCode.Decompiler.DebugInfo;
 using DebugSequencePoint = ICSharpCode.Decompiler.DebugInfo.SequencePoint;
 
-namespace dnSpy.Cli;
+namespace dnSpy.Backend.Core;
 
 /// <summary>
-/// The portable PDB beside a module, read for the IL view's sequence points and local variable
-/// names — the data dnSpy's IL output shows by default (its ShowPdbInfo setting). When there is no
-/// PDB the IL is still written, only without the line information.
+/// The portable PDB beside a module, read for the local variable names dnSpy's C# writes with UseDebugSymbols (its
+/// default) — the names dnlib reads out of the same file for dnSpy's own decompiler. When there is no PDB the code is
+/// still written, with the names the decompiler makes up.
 /// </summary>
 sealed class PortablePdbInfoProvider : IDebugInfoProvider, IDisposable {
 	readonly MetadataReaderProvider provider;

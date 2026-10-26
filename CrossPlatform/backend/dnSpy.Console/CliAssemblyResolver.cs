@@ -12,16 +12,23 @@ namespace dnSpy.Cli;
 /// UniversalAssemblyResolver over the module's directory and every --asm-path, with dnSpy's GAC rules
 /// on top: --no-gac keeps the caches out, --user-gac directories count as caches (so a reference
 /// found in one gets no HintPath), and the cache lookup falls back the way dnSpy's own resolver does.
+/// A WPF or WinForms module of .NET finds the Windows Desktop assemblies in their reference pack where
+/// the Windows Desktop runtime dnSpy would find them in is not installed.
 /// </summary>
 sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifier {
 	readonly UniversalAssemblyResolver inner;
 	readonly IReadOnlyList<string> userGacPaths;
 	readonly bool useGac;
+	readonly string? targetFramework;
 
-	CliAssemblyResolver(UniversalAssemblyResolver inner, IReadOnlyList<string> userGacPaths, bool useGac) {
+	/// <summary>The framework the module targets, as ILSpy detects it: ".NETCoreApp,Version=v10.0".</summary>
+	public string? TargetFramework => targetFramework;
+
+	CliAssemblyResolver(UniversalAssemblyResolver inner, IReadOnlyList<string> userGacPaths, bool useGac, string? targetFramework) {
 		this.inner = inner;
 		this.userGacPaths = userGacPaths;
 		this.useGac = useGac;
+		this.targetFramework = targetFramework;
 	}
 
 	public static CliAssemblyResolver Create(string modulePath, IEnumerable<string> searchPaths, IEnumerable<string> userGacPaths, bool useGac) {
@@ -32,7 +39,7 @@ sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifi
 			if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
 				inner.AddSearchDirectory(directory);
 		}
-		return new CliAssemblyResolver(inner, [.. userGacPaths], useGac);
+		return new CliAssemblyResolver(inner, [.. userGacPaths], useGac, targetFramework);
 	}
 
 	static string? DetectTargetFramework(string modulePath) {
@@ -76,7 +83,7 @@ sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifi
 		catch (Exception) {
 			// A missing reference answers null below; the decompiler reports it as it always does.
 		}
-		return useGac ? ResolveFromGac(reference) : null;
+		return ResolveFromDesktopPack(reference) ?? (useGac ? ResolveFromGac(reference) : null);
 	}
 
 	public async Task<MetadataFile?> ResolveAsync(IAssemblyReference reference) {
@@ -86,7 +93,7 @@ sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifi
 		}
 		catch (Exception) {
 		}
-		return useGac ? ResolveFromGac(reference) : null;
+		return ResolveFromDesktopPack(reference) ?? (useGac ? ResolveFromGac(reference) : null);
 	}
 
 	public MetadataFile? ResolveModule(MetadataFile mainModule, string moduleName) => inner.ResolveModule(mainModule, moduleName);
@@ -103,11 +110,15 @@ sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifi
 	public bool IsSharedAssembly(IAssemblyReference reference, [NotNullWhen(true)] out string? runtimePack) {
 		runtimePack = null;
 		try {
-			return inner.IsSharedAssembly(reference, out runtimePack);
+			if (inner.IsSharedAssembly(reference, out runtimePack))
+				return true;
 		}
 		catch (Exception) {
-			return false;
 		}
+		if (WindowsDesktopReferencePack.Find(reference.Name, targetFramework) is null)
+			return false;
+		runtimePack = "Microsoft.WindowsDesktop.App";
+		return true;
 	}
 
 	public string? FindAssemblyFile(IAssemblyReference reference) {
@@ -117,7 +128,19 @@ sealed class CliAssemblyResolver : IAssemblyResolver, IAssemblyReferenceClassifi
 		}
 		catch (Exception) {
 		}
-		return useGac ? GacInfo.Resolve(new dnlib.DotNet.AssemblyNameInfo(reference.FullName)) : null;
+		return WindowsDesktopReferencePack.Find(reference.Name, targetFramework)
+			?? (useGac ? GacInfo.Resolve(new dnlib.DotNet.AssemblyNameInfo(reference.FullName)) : null);
+	}
+
+	MetadataFile? ResolveFromDesktopPack(IAssemblyReference reference) {
+		if (WindowsDesktopReferencePack.Find(reference.Name, targetFramework) is not { } path)
+			return null;
+		try {
+			return new PEFile(path, new MemoryStream(File.ReadAllBytes(path), writable: false), PEStreamOptions.PrefetchEntireImage);
+		}
+		catch (Exception ex) when (ex is BadImageFormatException or IOException or UnauthorizedAccessException or MetadataFileNotSupportedException) {
+			return null;
+		}
 	}
 
 	bool IsUnderUserGac(string file) {

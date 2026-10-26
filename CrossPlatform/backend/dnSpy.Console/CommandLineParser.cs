@@ -1,6 +1,6 @@
 using System.Globalization;
+using dnSpy.Backend.Core;
 using dnSpy.Backend.Core.ProjectExport;
-using ICSharpCode.Decompiler;
 
 namespace dnSpy.Cli;
 
@@ -30,8 +30,39 @@ internal sealed class CommandLineOptions {
 	public List<string> UserGacPaths { get; } = [];
 	public List<string> GacFiles { get; } = [];
 	public ConsoleLanguage Language { get; set; } = ConsoleLanguage.CSharp;
-	public DecompilerSettings Settings { get; } = new();
+	/// <summary>The C# and Visual Basic languages' settings: those of dnSpy's ILSpy fork, with its defaults.</summary>
+	public DnSpyDecompilerSettings Settings { get; } = CreateSettings();
 	public IlDecompilerOptions IlOptions { get; } = new();
+
+	/// <summary>
+	/// The C# settings as the decompiler takes them, which is how the GUI's mapper reads the C# page: showing all members
+	/// shows the automatic properties' and events' backing fields and the empty constructors too, and every type written
+	/// with its namespace is what the package's UsingDeclarations off does, the fork's using-decl kept apart.
+	/// </summary>
+	public DnSpyDecompilerSettings EffectiveSettings() {
+		var settings = (DnSpyDecompilerSettings)Settings.Clone();
+		if (settings.ForceShowAllMembers) {
+			settings.AutomaticProperties = false;
+			settings.AutomaticEvents = false;
+			settings.RemoveEmptyDefaultConstructors = false;
+		}
+		if (settings.FullyQualifyAllTypes) {
+			settings.FullyQualifiedTypesKeepUsings = settings.UsingDeclarations;
+			settings.UsingDeclarations = false;
+		}
+		return settings;
+	}
+
+	/// <summary>
+	/// A new CSharpVBDecompilerSettings — what DecompilerSettingsService gives the console: the fork's
+	/// DecompilerSettings defaults, whose decompilation order is methods, properties, events, fields, nested types, and
+	/// whose namespaces are blocks (it predates file-scoped ones).
+	/// </summary>
+	static DnSpyDecompilerSettings CreateSettings() => new() {
+		DecompilationOrder = ["methods", "properties", "events", "fields", "nestedTypes"],
+		FileScopedNamespaces = false,
+		ThrowOnAssemblyResolveErrors = false,
+	};
 }
 
 /// <summary>
@@ -43,13 +74,13 @@ static class CommandLineParser {
 	const string BOOLEAN_NO_PREFIX = "no-";
 	const string BOOLEAN_DONT_PREFIX = "dont-";
 
-	public static CommandLineOptions Parse(string[] args, bool defaultColorize) {
+	/// <summary>Fills in <paramref name="options"/>, which the help reads the options' values from if it fails.</summary>
+	public static void Parse(string[] args, CommandLineOptions options) {
 		if (args.Length == 0)
 			throw new ConsoleErrorException(ConsoleStrings.MissingOptions);
 
-		var options = new CommandLineOptions { ColorizeOutput = defaultColorize };
 		bool canParseCommands = true;
-		Dictionary<string, (LanguageOption Option, bool? BooleanValue)>? languageOptions = null;
+		Dictionary<string, (LanguageOption Option, Action<string> SetValue)>? languageOptions = null;
 		for (int i = 0; i < args.Length; i++) {
 			languageOptions ??= CreateLanguageOptions(options);
 			var arg = args[i];
@@ -196,68 +227,131 @@ static class CommandLineParser {
 				default:
 					if (!languageOptions.TryGetValue(arg, out var entry))
 						throw new ConsoleErrorException(string.Format(CultureInfo.CurrentCulture, ConsoleStrings.InvalidOption, arg));
-					if (entry.Option.Type == LanguageOptionType.Boolean) {
-						entry.Option.Set(entry.BooleanValue ?? true);
-						break;
-					}
-					if (next is null)
+					var hasArg = entry.Option.Type != typeof(bool);
+					if (hasArg && next is null)
 						throw new ConsoleErrorException(ConsoleStrings.MissingOptionArgument);
-					i++;
-					entry.Option.Set(entry.Option.Type switch {
-						LanguageOptionType.Int32 => ParseInt32(next),
-						_ => next,
-					});
+					if (hasArg)
+						i++;
+					entry.SetValue(next ?? string.Empty);
 					break;
 				}
 			}
 			else
 				options.Files.Add(arg);
 		}
-		return options;
 	}
 
-	static Dictionary<string, (LanguageOption Option, bool? BooleanValue)> CreateLanguageOptions(CommandLineOptions options) {
-		var dict = new Dictionary<string, (LanguageOption, bool?)>(StringComparer.Ordinal);
-		foreach (var option in LanguageOptions.For(options.Language, options.Settings, options.IlOptions)) {
-			var name = "--" + FixInvalidSwitchChars(option.Name);
-			if (option.Type == LanguageOptionType.Boolean) {
-				dict[name] = (option, true);
-				dict["--" + BOOLEAN_NO_PREFIX + FixInvalidSwitchChars(option.Name)] = (option, false);
-				dict["--" + BOOLEAN_DONT_PREFIX + FixInvalidSwitchChars(option.Name)] = (option, false);
+	/// <summary>
+	/// CreateDecompilerOptionsDictionary: a boolean option is three switches — the name sets it, no- and dont- clear
+	/// it — and an Int32 or String option one switch that takes the next argument.
+	/// </summary>
+	static Dictionary<string, (LanguageOption Option, Action<string> SetValue)> CreateLanguageOptions(CommandLineOptions options) {
+		var dict = new Dictionary<string, (LanguageOption, Action<string>)>(StringComparer.Ordinal);
+		foreach (var option in LanguageOptions.For(options.Language, options)) {
+			if (option.Type == typeof(bool)) {
+				dict[GetOptionName(option)] = (option, _ => option.Value = true);
+				dict[GetOptionName(option, BOOLEAN_NO_PREFIX)] = (option, _ => option.Value = false);
+				dict[GetOptionName(option, BOOLEAN_DONT_PREFIX)] = (option, _ => option.Value = false);
 			}
+			else if (option.Type == typeof(int))
+				dict[GetOptionName(option)] = (option, value => option.Value = ParseInt32(value));
 			else
-				dict[name] = (option, null);
+				dict[GetOptionName(option)] = (option, value => option.Value = value);
 		}
 		return dict;
 	}
 
-	static string FixInvalidSwitchChars(string value) => value.Replace(' ', '-');
-
-	static int ParseInt32(string value) {
-		if (TryParseInt32(value, out var result))
-			return result;
-		throw new ConsoleErrorException(string.Format(CultureInfo.CurrentCulture, "Invalid number: {0}", value));
+	/// <summary>
+	/// GetOptionName: the option's name as a switch, or its guid where the name is one of the console's own switches.
+	/// </summary>
+	public static string GetOptionName(LanguageOption option, string? extraPrefix = null) {
+		var prefix = "--" + extraPrefix;
+		var name = prefix + FixInvalidSwitchChars(option.Name);
+		if (reservedOptions.Contains(name))
+			name = prefix + FixInvalidSwitchChars(option.Guid.ToString());
+		return name;
 	}
 
-	/// <summary>Accepts what dnSpy's SimpleTypeConverter accepts: decimal, and 0x-prefixed hex.</summary>
-	static bool TryParseInt32(string value, out int result) {
-		if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
-			if (uint.TryParse(value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hex)) {
-				result = unchecked((int)hex);
-				return true;
-			}
+	static string FixInvalidSwitchChars(string value) => value.Replace(' ', '-');
+
+	// Don't include 'no-' and 'dont-'
+	static readonly string[] ourOptions = [
+		"recursive",
+		"output-dir",
+		"lang",
+		"sdk-project",
+		"asm-path",
+		"user-gac",
+		"gac",
+		"stdlib",
+		"sln",
+		"sln-name",
+		"threads",
+		"vs",
+		"resources",
+		"resx",
+		"baml",
+		"color",
+		"spaces",
+		"type",
+		"md",
+		"gac-file",
+		"project-guid",
+	];
+
+	static readonly HashSet<string> reservedOptions = CreateReservedOptions();
+
+	static HashSet<string> CreateReservedOptions() {
+		var hash = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var a in ourOptions) {
+			hash.Add("--" + a);
+			hash.Add("--" + BOOLEAN_NO_PREFIX + a);
+			hash.Add("--" + BOOLEAN_DONT_PREFIX + a);
 		}
-		else if (value.StartsWith("-0x", StringComparison.OrdinalIgnoreCase)) {
-			if (uint.TryParse(value[3..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hex)) {
-				result = unchecked(-(int)hex);
-				return true;
-			}
-		}
-		else if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result)) {
-			return true;
-		}
+		return hash;
+	}
+
+	/// <summary>dnSpy's SimpleTypeConverter.ParseInt32: decimal or 0x/&amp;H hex, '_' separators allowed, a leading '-'.</summary>
+	static int ParseInt32(string value) {
+		var error = TryParseInt32(value, out var result);
+		if (error is not null)
+			throw new ConsoleErrorException(error);
+		return result;
+	}
+
+	static string? TryParseInt32(string s, out int result) {
 		result = 0;
-		return false;
+		s = s.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
+		var isSigned = s.StartsWith('-');
+		if (isSigned)
+			s = s[1..];
+		bool isValid;
+		ulong value2 = 0;
+		if (s.Trim() != s)
+			isValid = false;
+		else if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.StartsWith("&H", StringComparison.OrdinalIgnoreCase)) {
+			var s2 = s[2..];
+			isValid = s2.Trim() == s2 && ulong.TryParse(s2, NumberStyles.HexNumber, CultureInfo.CurrentCulture, out value2);
+		}
+		else
+			isValid = ulong.TryParse(s, NumberStyles.Integer, CultureInfo.CurrentCulture, out value2);
+		if (!isValid)
+			return "The value is not a hexadecimal or decimal integer";
+		long value;
+		if (isSigned) {
+			if (value2 > (ulong)long.MaxValue + 1)
+				return "The value is too small";
+			value = unchecked(-(long)value2);
+		}
+		else {
+			if (value2 > long.MaxValue)
+				return "The value is too big";
+			value = (long)value2;
+		}
+		if (value < int.MinValue || value > int.MaxValue)
+			return string.Format(CultureInfo.CurrentCulture, "Value must be between {0} ({2}0x{0:X}) and {1} (0x{1:X}) inclusive", int.MinValue, int.MaxValue, "-");
+		result = (int)value;
+		return null;
 	}
 
 	static ProjectVersion ParseProjectVersion(string value) {

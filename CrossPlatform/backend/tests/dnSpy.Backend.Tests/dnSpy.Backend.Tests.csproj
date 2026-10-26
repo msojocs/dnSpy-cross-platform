@@ -30,5 +30,6 @@
 
   <Target Name="BuildBamlFixture" BeforeTargets="Build">
     <MSBuild Projects="..\BamlTarget\BamlTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+    <MSBuild Projects="..\ProjectExportTarget\ProjectExportTarget.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
   </Target>
 </Project>

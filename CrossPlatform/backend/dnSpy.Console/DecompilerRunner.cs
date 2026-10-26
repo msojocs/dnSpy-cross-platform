@@ -1,202 +1,293 @@
-using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
-using System.Text;
-using ICSharpCode.CodeConverter;
+using dnlib.DotNet;
+using dnSpy.Backend.Contracts;
+using dnSpy.Backend.Core;
+using dnSpy.Backend.Core.IL;
+using dnSpy.Backend.Core.Output;
+using dnSpy.Backend.Core.ProjectExport;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
-using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Syntax;
-using ICSharpCode.Decompiler.Disassembler;
-using ICSharpCode.Decompiler.IL;
-using ICSharpCode.Decompiler.Metadata;
-using dnlib.DotNet;
-using dnSpy.Backend.Core.ProjectExport;
+using ICSharpCode.Decompiler.CSharp.Transforms;
+using ICSharpCode.Decompiler.TypeSystem;
+using DecompilerAstNode = ICSharpCode.Decompiler.CSharp.Syntax.AstNode;
 
 namespace dnSpy.Cli;
 
 /// <summary>
-/// Writes one type or member to stdout in the selected language. The C# text is ILSpy's own output
-/// with the console's colours; Visual Basic is that text run through the same converter the GUI uses
-/// for its VB documents; IL is dnSpy's IL view (ICSharpCode.Decompiler's disassembler), and
-/// "IL with C#" interleaves the decompiled statements as comments the way the GUI's mixed view does.
+/// Writes one type or member to stdout the way the WPF console's languages write it, with the GUI's decompilers:
+/// C# is ICSharpCode.Decompiler's with the fork's options (token comments, member order, …) applied; Visual Basic is
+/// that C# converted the way the Visual Basic view converts it; IL and IL with C# are the port of dnSpy's
+/// disassembler. A member's document starts with its declaring type in a comment and, for a constructor or a field,
+/// shows the field initializers it runs, as dnSpy's CSharpDecompiler writes them.
 /// </summary>
 sealed class DecompilerRunner(LoadedModule module, CommandLineOptions options) {
-	readonly CliAssemblyResolver resolver = module.Resolver;
-	CSharpDecompiler? csharp;
-
 	public string IndentationString => options.Spaces <= 0 ? "\t" : new string(' ', options.Spaces);
 
-	public void WriteTo(IMDTokenProvider member, ColorTextWriter writer) {
-		var handle = ToHandle(member);
+	public void WriteTo(IMemberDef member, IDecompilerOutput output) {
 		switch (options.Language.Kind) {
 		case ConsoleLanguageKind.CSharp:
-			WriteCSharp(writer, handle);
+			WriteCSharp(member, output);
 			break;
 		case ConsoleLanguageKind.VisualBasic:
-			WriteVisualBasic(writer, handle);
+			WriteVisualBasic(member, output);
 			break;
 		case ConsoleLanguageKind.IL:
-			WriteIL(writer, handle, withCSharp: false);
+			WriteIL(member, output, withCSharp: false);
 			break;
 		case ConsoleLanguageKind.ILWithCSharp:
-			WriteIL(writer, handle, withCSharp: true);
+			WriteIL(member, output, withCSharp: true);
 			break;
 		default:
 			throw new InvalidOperationException($"Unknown language: {options.Language.Name}");
 		}
 	}
 
-	void WriteCSharp(ColorTextWriter writer, EntityHandle handle) {
-		var tree = CreateCSharpDecompiler().Decompile(new[] { handle });
-		var tokenWriter = new ConsoleTokenWriter(writer) {
-			IndentationString = IndentationString,
-		};
-		var located = TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter);
-		tree.AcceptVisitor(new CSharpOutputVisitor(located, options.Settings.CSharpFormattingOptions));
-		writer.Flush();
+	/// <summary>The settings the C# languages decompile with; Visual Basic's are converted from C# written with them.</summary>
+	DnSpyDecompilerSettings CSharpSettings(bool visualBasic) {
+		var settings = options.EffectiveSettings();
+		if (visualBasic)
+			settings.ToVisualBasicSettings();
+		settings.CSharpFormattingOptions.IndentationString = IndentationString;
+		return settings;
 	}
 
-	void WriteVisualBasic(ColorTextWriter writer, EntityHandle handle) {
-		var csharpText = VisualBasicConverterFixes.PrepareCSharp(RenderCSharp(handle, indentString: IndentationString));
-		var conversion = CodeConverter.ConvertAsync(
-			new CodeWithOptions(csharpText).WithTypeReferences(),
-			CancellationToken.None).GetAwaiter().GetResult();
-		if (!conversion.Success) {
-			writer.WriteLine("' Visual Basic conversion failed.");
-			foreach (var line in conversion.GetExceptionsAsString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
-				writer.WriteLine("' " + line);
-			return;
+	void WriteCSharp(IMemberDef member, IDecompilerOutput output) {
+		var settings = CSharpSettings(visualBasic: false);
+		if (member is not TypeDef)
+			WriteCommentLineDeclaringType(output, member, "// ", CSharpTypeName.Of(null, member.DeclaringType, CSharpTypeName.Options.IncludeNamespace));
+		var syntaxTree = DecompileCSharp(member, settings);
+		CSharpOutputWriter.Write(syntaxTree, output, settings);
+	}
+
+	void WriteVisualBasic(IMemberDef member, IDecompilerOutput output) {
+		var settings = CSharpSettings(visualBasic: true);
+		var csharp = new StringWriter();
+		var syntaxTree = DecompileCSharp(member, settings);
+		DnSpyCSharpTransform.AfterDecompile(syntaxTree, settings);
+		syntaxTree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
+			ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.Create(csharp, IndentationString), settings.CSharpFormattingOptions));
+		var converted = VisualBasicConversion.ConvertAsync(
+			new DecompileResponse(member.Name, "csharp", csharp.ToString(), [], []), memberOnly: member is not TypeDef, CancellationToken.None, ReferencePaths()).GetAwaiter().GetResult();
+
+		if (member is not TypeDef) {
+			var typeName = new TextPartsBuilder();
+			CSharpTypeName.WriteVisualBasic(typeName, null, member.DeclaringType, CSharpTypeName.Options.IncludeNamespace, null);
+			WriteCommentLineDeclaringType(output, member, "' ", typeName.ToString());
 		}
-		var vb = VisualBasicConverterFixes.PrepareVB(VisualBasicConverterFixes.PrepareConvertedVB(conversion.ConvertedCode));
-		new VisualBasicColorWriter(writer).Write(vb);
-		if (!vb.EndsWith('\n'))
-			writer.WriteLine();
+		WriteClassified(VisualBasicConverterFixes.Reindent(converted.Text.Replace("\r\n", "\n", StringComparison.Ordinal), IndentationString), output);
 	}
 
-	void WriteIL(ColorTextWriter writer, EntityHandle handle, bool withCSharp) {
-		using var debugInfo = options.IlOptions.ShowPdbInfo ? PortablePdbInfoProvider.TryCreate(module.Path) : null;
-		var output = new IlTextOutput(writer, IndentationString);
-		var disassembler = new ReflectionDisassembler(output, CancellationToken.None) {
-			DebugInfo = debugInfo,
-			ShowMetadataTokens = options.IlOptions.ShowTokenAndRvaComments,
-			ShowRawRVAOffsetAndBytes = options.IlOptions.ShowILBytes,
-			ShowSequencePoints = options.IlOptions.ShowPdbInfo,
-			EntityProcessor = options.IlOptions.SortMembers ? new SortByNameProcessor() : null,
+	/// <summary>DecompilerBase.WriteCommentLineDeclaringType: the line a member's document starts with.</summary>
+	static void WriteCommentLineDeclaringType(IDecompilerOutput output, IMemberDef member, string commentStart, string? typeName) {
+		output.Write(commentStart, BoxedTextColor.Comment);
+		output.Write(typeName ?? member.DeclaringType.FullName, member.DeclaringType, DecompilerReferenceFlags.None, BoxedTextColor.Comment);
+		output.WriteLine();
+	}
+
+	/// <summary>Visual Basic text in the colors the Visual Basic document is colored in.</summary>
+	void WriteClassified(string text, IDecompilerOutput output) {
+		text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+		IReadOnlyList<ClassifiedSpanDto> spans;
+		try {
+			spans = options.ColorizeOutput ? WorkspaceManager.SharedDecompilers.ClassifyVisualBasic(text, ReferencePaths(), CancellationToken.None) : [];
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException) {
+			spans = [];
+		}
+		var position = 0;
+		void WriteSpan(int end, string color) {
+			while (position < end) {
+				var newLine = text.IndexOf('\n', position, end - position);
+				if (newLine < 0) {
+					output.Write(text, position, end - position, color);
+					position = end;
+					break;
+				}
+				if (newLine > position)
+					output.Write(text, position, newLine - position, color);
+				output.WriteLine();
+				position = newLine + 1;
+			}
+		}
+		foreach (var span in spans.OrderBy(span => span.Start)) {
+			if (span.Start < position)
+				continue;
+			WriteSpan(span.Start, BoxedTextColor.Text);
+			WriteSpan(Math.Min(text.Length, span.Start + span.Length), span.Color);
+		}
+		WriteSpan(text.Length, BoxedTextColor.Text);
+		if (text.Length > 0 && text[^1] != '\n')
+			output.WriteLine();
+	}
+
+	/// <summary>The module and every assembly it references that resolves: what its Visual Basic is compiled against.</summary>
+	List<string> ReferencePaths() {
+		var paths = new List<string> { module.Path };
+		foreach (var reference in module.File.AssemblyReferences) {
+			if (module.Resolver.FindAssemblyFile(reference) is { } path)
+				paths.Add(path);
+		}
+		return paths;
+	}
+
+	CSharpDecompiler CreateCSharpDecompiler(DecompilerSettings settings, IAstTransform? select = null) {
+		var decompiler = new CSharpDecompiler(module.File, module.Resolver, settings) {
+			CancellationToken = CancellationToken.None,
+			DebugInfoProvider = settings.UseDebugSymbols ? module.DebugInfo : null,
 		};
+		if (select is not null)
+			decompiler.AstTransforms.Add(select);
+		DnSpyCSharpTransform.AddTo(decompiler, module.Module, settings);
+		return decompiler;
+	}
+
+	/// <summary>
+	/// dnSpy's CSharpDecompiler.Decompile for each kind: a type whole; a member alone, without using declarations;
+	/// an instance constructor of a class with the fields and the other constructors it shares initializers with,
+	/// then only it and the fields it initializes kept (SelectCtorTransform); a field that is not a constant with the
+	/// constructors that initialize it, then only it kept (SelectFieldTransform).
+	/// </summary>
+	SyntaxTree DecompileCSharp(IMemberDef member, DnSpyDecompilerSettings settings) {
+		if (member is TypeDef type) {
+			// AstBuilder.AddType: the type inside its namespace, with the using declarations it needs.
+			var handles = new[] { (System.Reflection.Metadata.TypeDefinitionHandle)Handle(type) };
+			var decompiler = CreateCSharpDecompiler(settings);
+			var syntaxTree = decompiler.DecompileTypes(handles);
+			if (settings.ForceShowAllMembers)
+				MergeHiddenMembers(syntaxTree, decompiler, handles, settings);
+			return syntaxTree;
+		}
+
+		var memberSettings = (DnSpyDecompilerSettings)settings.Clone();
+		memberSettings.UsingDeclarations = false;
+		memberSettings.FullyQualifiedTypesKeepUsings = false;
+		switch (member) {
+		case MethodDef { IsConstructor: true, IsStatic: false } constructor when !constructor.DeclaringType.IsValueType:
+			return CreateCSharpDecompiler(memberSettings, new SelectCtorTransform(module.Module, constructor))
+				.Decompile(FieldsAndConstructors(constructor.DeclaringType, isStatic: false));
+		case FieldDef { IsLiteral: true } literal:
+			return CreateCSharpDecompiler(memberSettings, new SelectFieldTransform(module.Module, literal)).Decompile([Handle(literal)]);
+		case FieldDef field:
+			return CreateCSharpDecompiler(memberSettings, new SelectFieldTransform(module.Module, field))
+				.Decompile(FieldsAndConstructors(field.DeclaringType, field.IsStatic));
+		default:
+			return CreateCSharpDecompiler(memberSettings).Decompile([Handle(member)]);
+		}
+	}
+
+	/// <summary>AddFieldsAndCtors: the type's fields, then its constructors, of the one kind — static or instance.</summary>
+	static System.Reflection.Metadata.EntityHandle[] FieldsAndConstructors(TypeDef type, bool isStatic) => [
+		.. type.Fields.Where(field => field.IsStatic == isStatic).Select(field => Handle(field)),
+		.. type.Methods.Where(method => method.IsConstructor && method.IsStatic == isStatic).Select(method => Handle(method)),
+	];
+
+	/// <summary>ForceShowAllMembers: the members a second decompilation with the hiding switches off adds to a type.</summary>
+	void MergeHiddenMembers(SyntaxTree syntaxTree, CSharpDecompiler decompiler, System.Reflection.Metadata.TypeDefinitionHandle[] handles, DnSpyDecompilerSettings settings) {
+		try {
+			var showAll = settings.ForShowAllMembers();
+			var second = new CSharpDecompiler(decompiler.TypeSystem, showAll) { CancellationToken = CancellationToken.None, DebugInfoProvider = decompiler.DebugInfoProvider };
+			DnSpyCSharpTransform.AddTo(second, module.Module, showAll);
+			HiddenMemberMerger.Merge(syntaxTree, second.DecompileTypes(handles), showAll.SortSystemUsingStatementsFirst);
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException) {
+			// The option only ever adds members.
+		}
+	}
+
+	void WriteIL(IMemberDef member, IDecompilerOutput output, bool withCSharp) {
+		CSharpDecompiler? csharp = null;
+		DecompilerSettings? csharpSettings = null;
 		if (withCSharp) {
-			var sources = new SourceComments(module, options);
-			output.SetSourceComments(sources.ForMethod);
+			// ILWithCSharpDecompiler: the C# settings, without using declarations since only the statements are shown.
+			csharpSettings = CSharpSettings(visualBasic: false);
+			csharpSettings.UsingDeclarations = false;
+			csharp = CreateCSharpDecompiler(csharpSettings);
 		}
-		switch (handle.Kind) {
-		case HandleKind.TypeDefinition:
-			disassembler.DisassembleType(module.File, (TypeDefinitionHandle)handle);
+		var context = new ILDecompilationContext {
+			CancellationToken = CancellationToken.None,
+			GetXmlDocumentation = WorkspaceManager.SharedDecompilers.RawXmlDocumentation,
+			GetFrameworkDocumentation = WorkspaceManager.SharedDecompilers.FrameworkDocumentation,
+			CreateSourceStatementProvider = csharp is null ? null : method => WorkspaceManager.SharedDecompilers.CreateSourceStatementProvider(csharp, csharpSettings!, method, CancellationToken.None),
+		};
+		var decompiler = new ILDecompiler(options.IlOptions.ToSettings(), context);
+		switch (member) {
+		case TypeDef type:
+			decompiler.Decompile(type, output);
 			break;
-		case HandleKind.MethodDefinition:
-			disassembler.DisassembleMethod(module.File, (MethodDefinitionHandle)handle);
+		case MethodDef method:
+			decompiler.Decompile(method, output);
 			break;
-		case HandleKind.FieldDefinition:
-			disassembler.DisassembleField(module.File, (FieldDefinitionHandle)handle);
+		case FieldDef field:
+			decompiler.Decompile(field, output);
 			break;
-		case HandleKind.PropertyDefinition:
-			disassembler.DisassembleProperty(module.File, (PropertyDefinitionHandle)handle);
+		case PropertyDef property:
+			decompiler.Decompile(property, output);
 			break;
-		case HandleKind.EventDefinition:
-			disassembler.DisassembleEvent(module.File, (EventDefinitionHandle)handle);
+		case EventDef @event:
+			decompiler.Decompile(@event, output);
 			break;
 		default:
 			throw new ConsoleErrorException(ConsoleStrings.InvalidMemberToDecompile);
 		}
 	}
 
-	CSharpDecompiler CreateCSharpDecompiler() =>
-		csharp ??= new CSharpDecompiler(module.File, resolver, options.Settings) { CancellationToken = CancellationToken.None };
-
-	static string RenderCSharp(LoadedModule module, CommandLineOptions options, EntityHandle handle, string indentString) {
-		var settings = DecompilerSettingsFactory.ForLanguage(options.Settings, options.Language.Kind);
-		settings.CSharpFormattingOptions.IndentationString = indentString;
-		var decompiler = new CSharpDecompiler(module.File, module.Resolver, settings) { CancellationToken = CancellationToken.None };
-		var tree = decompiler.Decompile(new[] { handle });
-		var writer = new StringWriter();
-		var tokenWriter = new TextWriterTokenWriter(writer) { IndentationString = indentString };
-		var located = TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter);
-		tree.AcceptVisitor(new CSharpOutputVisitor(located, settings.CSharpFormattingOptions));
-		return writer.ToString();
-	}
-
-	string RenderCSharp(EntityHandle handle, string indentString) => RenderCSharp(module, options, handle, indentString);
-
-	internal static EntityHandle ToHandle(IMDTokenProvider member) =>
+	static System.Reflection.Metadata.EntityHandle Handle(IMDTokenProvider member) =>
 		MetadataTokens.EntityHandle(unchecked((int)member.MDToken.Raw));
 }
 
 /// <summary>
-/// The decompiled statements of a method, by IL offset. They are what the GUI's mixed view prints in
-/// front of the instructions; the sequence points are ILSpy's, reduced to the visible statements.
+/// SelectCtorTransform: of the fields and constructors decompiled together, the constructor asked for and the fields
+/// it initializes; when it chains to another constructor with <c>this(...)</c>, no fields at all.
 /// </summary>
-sealed class SourceComments(LoadedModule module, CommandLineOptions options) {
-	public Func<int, IReadOnlyList<string>> ForMethod(MethodDefinitionHandle method) {
-		var map = Build(method);
-		return offset => map.TryGetValue(offset, out var lines) ? lines : Array.Empty<string>();
-	}
-
-	Dictionary<int, List<string>> Build(MethodDefinitionHandle method) {
-		var map = new Dictionary<int, List<string>>();
-		try {
-			var decompiler = new CSharpDecompiler(module.File, module.Resolver, options.Settings) { CancellationToken = CancellationToken.None };
-			var tree = decompiler.Decompile([method]);
-			var writer = new StringWriter();
-			var tokenWriter = new TextWriterTokenWriter(writer) { IndentationString = options.Spaces <= 0 ? "\t" : new string(' ', options.Spaces) };
-			var located = TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter);
-			tree.AcceptVisitor(new CSharpOutputVisitor(located, options.Settings.CSharpFormattingOptions));
-			var source = writer.ToString();
-			var methodToken = MetadataTokens.GetToken(method);
-			foreach (var (function, points) in decompiler.CreateSequencePoints(tree)) {
-				if (BodyToken(function) != methodToken)
-					continue;
-				foreach (var point in points) {
-					if (point.IsHidden || point.EndOffset <= point.Offset)
-						continue;
-					var text = ExtractSource(source, point.StartLine, point.StartColumn, point.EndLine, point.EndColumn);
-					if (string.IsNullOrWhiteSpace(text))
-						continue;
-					if (!map.TryGetValue(point.Offset, out var lines))
-						map[point.Offset] = lines = [];
-					foreach (var line in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n')) {
-						var trimmed = line.TrimEnd();
-						if (trimmed.Length > 0)
-							lines.Add(trimmed);
-					}
-				}
+sealed class SelectCtorTransform(ModuleDef module, MethodDef constructor) : IAstTransform {
+	public void Run(DecompilerAstNode rootNode, TransformContext context) {
+		ConstructorDeclaration? ctorDecl = null;
+		foreach (var node in rootNode.Children.ToArray()) {
+			switch (node) {
+			case ConstructorDeclaration ctor:
+				if (SelectedMembers.Resolve(module, ctor) == constructor)
+					ctorDecl = ctor;
+				else
+					ctor.Remove();
+				break;
+			// Remove any fields without initializers
+			case FieldDeclaration field when field.Variables.All(variable => variable.Initializer is null):
+				field.Remove();
+				break;
 			}
 		}
-		catch (Exception ex) when (ex is not OperationCanceledException) {
-			// No sources is a valid answer: the IL still shows, without the comments the GUI would add.
+		if (ctorDecl?.Initializer?.ConstructorInitializerType == ConstructorInitializerType.This) {
+			// remove all fields
+			foreach (var field in rootNode.Children.OfType<FieldDeclaration>().ToArray())
+				field.Remove();
 		}
-		return map;
 	}
+}
 
-	static int? BodyToken(ILFunction function) {
-		var method = function.MoveNextMethod ?? function.Method;
-		if (method is null || method.MetadataToken.IsNil)
+/// <summary>SelectFieldTransform: every declaration but the field's taken out.</summary>
+sealed class SelectFieldTransform(ModuleDef module, FieldDef field) : IAstTransform {
+	public void Run(DecompilerAstNode rootNode, TransformContext context) {
+		foreach (var entity in rootNode.Children.OfType<EntityDeclaration>().ToArray()) {
+			if (SelectedMembers.Resolve(module, entity) != field)
+				entity.Remove();
+		}
+	}
+}
+
+static class SelectedMembers {
+	/// <summary>The row of the module a top-level declaration declares.</summary>
+	public static IMemberDef? Resolve(ModuleDef module, EntityDeclaration declaration) {
+		var symbol = declaration.GetSymbol()
+			?? (declaration as FieldDeclaration)?.Variables.FirstOrDefault()?.GetSymbol()
+			?? (declaration as EventDeclaration)?.Variables.FirstOrDefault()?.GetSymbol();
+		if (symbol is not IEntity entity || entity.MetadataToken.IsNil)
 			return null;
-		return MetadataTokens.GetToken(method.MetadataToken);
-	}
-
-	static string ExtractSource(string source, int startLine, int startColumn, int endLine, int endColumn) {
-		var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
-		if (startLine <= 0 || endLine < startLine || startLine > lines.Length)
-			return string.Empty;
-		endLine = Math.Min(endLine, lines.Length);
-		var firstLine = startLine - 1;
-		var lastLine = endLine - 1;
-		var firstColumn = Math.Clamp(startColumn - 1, 0, lines[firstLine].Length);
-		var lastColumn = Math.Clamp(endColumn - 1, 0, lines[lastLine].Length);
-		if (firstLine == lastLine)
-			return lines[firstLine][firstColumn..Math.Max(firstColumn, lastColumn)].Trim();
-		var result = new List<string> { lines[firstLine][firstColumn..] };
-		for (var line = firstLine + 1; line < lastLine; line++)
-			result.Add(lines[line]);
-		result.Add(lines[lastLine][..lastColumn]);
-		return string.Join('\n', result).Trim();
+		try {
+			return module.ResolveToken(unchecked((uint)MetadataTokens.GetToken(entity.MetadataToken))) as IMemberDef;
+		}
+		catch (Exception) {
+			return null;
+		}
 	}
 }

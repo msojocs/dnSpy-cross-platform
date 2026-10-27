@@ -1,12 +1,10 @@
 using System.Globalization;
 using System.Text;
+using BitMiracle.LibTiff.Classic;
 using dnlib.DotNet;
 using dnlib.DotNet.Resources;
 using dnSpy.Backend.Contracts;
 using dnSpy.Backend.Core;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Tiff;
-using SixLabors.ImageSharp.PixelFormats;
 using Xunit;
 
 namespace dnSpy.Backend.Tests;
@@ -208,9 +206,18 @@ public sealed class WorkspaceResourceDocumentTests : IDisposable {
 	public async Task ShowsATiffImageSerializedInAResourceAsPng() {
 		// A serialized Bitmap keeps whatever format its file had; WPF's Image reads TIFF through WIC, a browser
 		// does not, so the document carries the picture converted to PNG.
-		using var tiff = new Image<L8>(2, 2);
-		using var tiffStream = new MemoryStream();
-		tiff.Save(tiffStream, new TiffEncoder());
+		var tiffStream = new MemoryStream();
+		using (var tiff = Tiff.ClientOpen("photo.tif", "w", tiffStream, new TiffStream())) {
+			tiff.SetField(TiffTag.IMAGEWIDTH, 2);
+			tiff.SetField(TiffTag.IMAGELENGTH, 2);
+			tiff.SetField(TiffTag.BITSPERSAMPLE, 8);
+			tiff.SetField(TiffTag.SAMPLESPERPIXEL, 1);
+			tiff.SetField(TiffTag.PHOTOMETRIC, Photometric.MINISBLACK);
+			tiff.SetField(TiffTag.PLANARCONFIG, PlanarConfig.CONTIG);
+			tiff.SetField(TiffTag.ROWSPERSTRIP, 2);
+			tiff.WriteScanline([0x00, 0xFF], 0);
+			tiff.WriteScanline([0x80, 0x40], 1);
+		}
 		var opened = await OpenAsync();
 		var resources = await FindResourcesFolderAsync(opened.WorkspaceId);
 		var created = await CreateResourcesFileAsync(opened.WorkspaceId, resources.Id, "tiff.resources");
@@ -228,6 +235,49 @@ public sealed class WorkspaceResourceDocumentTests : IDisposable {
 		Assert.Equal("image/png", image.MimeType);
 		var bytes = Convert.FromBase64String(image.Base64Data!);
 		Assert.Equal([0x89, 0x50, 0x4E, 0x47], bytes[..4]);
+		var (width, height, rows) = ReadPng(bytes);
+		Assert.Equal((2, 2), (width, height));
+		Assert.Equal(
+			[
+				0, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+				0, 0x80, 0x80, 0x80, 0xFF, 0x40, 0x40, 0x40, 0xFF,
+			],
+			rows);
+	}
+
+	/// <summary>An RGBA PNG's size and its filtered rows, every chunk's CRC checked.</summary>
+	static (int Width, int Height, byte[] Rows) ReadPng(byte[] png) {
+		var width = 0;
+		var height = 0;
+		using var data = new MemoryStream();
+		for (var offset = 8; offset < png.Length;) {
+			var length = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(offset));
+			var type = Encoding.ASCII.GetString(png, offset + 4, 4);
+			var body = png.AsSpan(offset + 8, length);
+			Assert.Equal(PngCrc(png.AsSpan(offset + 4, 4 + length)), System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(offset + 8 + length)));
+			if (type == "IHDR") {
+				width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(body);
+				height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(body[4..]);
+				Assert.Equal([8, 6], body[8..10].ToArray());
+			}
+			else if (type == "IDAT")
+				data.Write(body);
+			offset += 12 + length;
+		}
+		using var inflated = new MemoryStream();
+		using (var zlib = new System.IO.Compression.ZLibStream(new MemoryStream(data.ToArray()), System.IO.Compression.CompressionMode.Decompress))
+			zlib.CopyTo(inflated);
+		return (width, height, inflated.ToArray());
+	}
+
+	static uint PngCrc(ReadOnlySpan<byte> data) {
+		var crc = 0xFFFFFFFF;
+		foreach (var b in data) {
+			crc ^= b;
+			for (var k = 0; k < 8; k++)
+				crc = (crc & 1) != 0 ? 0xEDB88320 ^ (crc >> 1) : crc >> 1;
+		}
+		return crc ^ 0xFFFFFFFF;
 	}
 
 	[Fact]

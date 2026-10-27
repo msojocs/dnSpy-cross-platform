@@ -276,7 +276,7 @@
 | Save Code | `Documents/Tabs/NodeTabSaver.cs`、`BamlTabSaver.cs` | `saveCode` | ✅ | BAML 标签的命令名为 Save XAML.../Save BAML...，文件名照 `GetFilename` 换扩展名 |
 | Export to Project | `Documents/Tabs/Dialogs/ExportToProjectDlg.xaml` | `ExportToProjectDialog.tsx`、RPC `project/export`、`BE/ProjectExport/` | ✅ | 与 WPF 对话框字段一致；导出实现是 dnSpy `MSBuildProjectCreator` 的移植（2026-10-26，见 4.17），与命令行共用，C# 页的分支独有选项与 BAML 页的排版同样作用于导出 |
 | `.resources` 条目显示 | `Documents/TreeView/Resources/BuiltInResourceElementNodeImpl.cs` | `DecompileResourceEntry` | ✅ | 字符串显示文本，图片显示图片，文本数据按扩展名着色，其他写 `名称 = N bytes` 行 |
-| 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 后端附件 + `FE/document-attachments.ts` | ✅ | BMP/GIF/PNG/ICO/JPEG 与序列化 Bitmap/Icon、ImageListStreamer 可预览并保存；TIFF 等 Chromium 不解而 ImageSharp 能解的格式在后端转成 PNG；附件受 RPC 单条消息 32 MB 的约束（图片上限 16 MB，WPF 从内存读取没有上限），WMP/HEIF/EMF 这类只有 Windows 编解码器的格式在 Linux 上没有解码器（与 WPF 的 WIC 不同），行文本与 Save 按钮仍在 |
+| 图片资源预览 | `Resources/ImageResourceNode.cs` 等 | 后端附件 + `FE/document-attachments.ts` | ✅ | BMP/GIF/PNG/ICO/JPEG 与序列化 Bitmap/Icon、ImageListStreamer 可预览并保存；Chromium 不解的 TIFF 在后端经 LibTiff.NET 解码转成 PNG（超过 4096×4096 像素的不转）；附件受 RPC 单条消息 32 MB 的约束（图片上限 16 MB，WPF 从内存读取没有上限），WMP/HEIF/EMF 这类只有 Windows 编解码器的格式在 Linux 上没有解码器（与 WPF 的 WIC 不同），行文本与 Save 按钮仍在 |
 | 嵌入资源文本识别 | `ResourceUtilities.cs` | `TextDocument`、`Search/ResourceTexts.cs` | ✅ | |
 | 保存资源 | `AE/Resources/ResourceCommands.cs` | RPC `resource/getItems` | ✅ | 与 4.3 重复计入；BAML 条目按 BAML 页存为 `.xaml` 或反汇编的 `.baml` |
 | Go to Resource | `Documents/Tabs/ResourceCommands.cs` | 树右键、代码视图右键 | ✅ | 与 4.3 重复计入 |

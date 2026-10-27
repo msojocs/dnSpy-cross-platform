@@ -1,9 +1,11 @@
+using System.Buffers.Binary;
 using System.Formats.Nrbf;
+using System.IO.Compression;
 using System.Runtime.Serialization;
 using System.Text;
+using BitMiracle.LibTiff.Classic;
 using dnlib.DotNet;
 using dnlib.DotNet.Resources;
-using SixLabors.ImageSharp;
 
 namespace dnSpy.Backend.Core;
 
@@ -226,21 +228,102 @@ internal static class ImageResources {
 		return stream.ToArray();
 	}
 
+	/// <summary>Larger pictures are not converted: the decoded raster alone would be 64 MB.</summary>
+	const long MaxConvertedPixels = 4096 * 4096;
+
 	/// <summary>
 	/// A TIFF file as PNG. WPF's Image decodes TIFF through WIC; a browser does not, so the viewer gets the
-	/// picture converted. Null when the file is not one ImageSharp can read.
+	/// picture converted. Null when the file is not a TIFF LibTiff.NET can read.
 	/// </summary>
 	public static byte[]? TryConvertToPng(byte[] data) {
+		// "II" or "MM": the byte order every TIFF and BigTIFF header starts with.
+		if (data.Length < 8 || data[0] != data[1] || (data[0] != 'I' && data[0] != 'M'))
+			return null;
 		try {
 			using var input = new MemoryStream(data, writable: false);
-			using var image = SixLabors.ImageSharp.Image.Load(input);
-			using var output = new MemoryStream();
-			image.SaveAsPng(output);
-			return output.ToArray();
+			using var tiff = Tiff.ClientOpen("resource", "r", input, new TiffStream());
+			if (tiff is null)
+				return null;
+			var width = tiff.GetField(TiffTag.IMAGEWIDTH)?[0].ToInt() ?? 0;
+			var height = tiff.GetField(TiffTag.IMAGELENGTH)?[0].ToInt() ?? 0;
+			if (width <= 0 || height <= 0 || (long)width * height > MaxConvertedPixels)
+				return null;
+			// Each pixel is packed ABGR, whatever the file's photometric, bit depth and compression are.
+			var raster = new int[width * height];
+			if (!tiff.ReadRGBAImageOriented(width, height, raster, Orientation.TOPLEFT))
+				return null;
+			return EncodePng(width, height, raster);
 		}
 		catch (Exception ex) when (ex is not OutOfMemoryException) {
 			return null;
 		}
+	}
+
+	/// <summary>LibTiff.NET reports to the console by default; a picture that does not convert is just not shown.</summary>
+	sealed class SilentTiffErrorHandler : TiffErrorHandler {
+		public override void ErrorHandler(Tiff tif, string method, string format, params object[] args) { }
+		public override void ErrorHandlerExt(Tiff tif, object clientData, string method, string format, params object[] args) { }
+		public override void WarningHandler(Tiff tif, string method, string format, params object[] args) { }
+		public override void WarningHandlerExt(Tiff tif, object clientData, string method, string format, params object[] args) { }
+	}
+
+	static ImageResources() => Tiff.SetErrorHandler(new SilentTiffErrorHandler());
+
+	/// <summary>An 8-bit RGBA PNG of packed ABGR pixels, rows top to bottom, no filtering.</summary>
+	static byte[] EncodePng(int width, int height, int[] abgr) {
+		using var output = new MemoryStream();
+		output.Write([0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+		var header = new byte[13];
+		BinaryPrimitives.WriteInt32BigEndian(header, width);
+		BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(4), height);
+		header[8] = 8;	// bit depth
+		header[9] = 6;	// color type: truecolor with alpha
+		WritePngChunk(output, "IHDR", header);
+
+		using var pixels = new MemoryStream();
+		using (var zlib = new ZLibStream(pixels, CompressionLevel.Optimal, leaveOpen: true)) {
+			var row = new byte[1 + width * 4];
+			for (var y = 0; y < height; y++) {
+				for (var x = 0; x < width; x++) {
+					var pixel = abgr[y * width + x];
+					var i = 1 + x * 4;
+					row[i] = (byte)Tiff.GetR(pixel);
+					row[i + 1] = (byte)Tiff.GetG(pixel);
+					row[i + 2] = (byte)Tiff.GetB(pixel);
+					row[i + 3] = (byte)Tiff.GetA(pixel);
+				}
+				zlib.Write(row);
+			}
+		}
+		WritePngChunk(output, "IDAT", pixels.ToArray());
+		WritePngChunk(output, "IEND", []);
+		return output.ToArray();
+	}
+
+	static void WritePngChunk(Stream output, string type, byte[] data) {
+		Span<byte> buffer = stackalloc byte[4];
+		BinaryPrimitives.WriteInt32BigEndian(buffer, data.Length);
+		output.Write(buffer);
+		var typeBytes = Encoding.ASCII.GetBytes(type);
+		output.Write(typeBytes);
+		output.Write(data);
+		BinaryPrimitives.WriteUInt32BigEndian(buffer, Crc32(Crc32(0xFFFFFFFF, typeBytes), data) ^ 0xFFFFFFFF);
+		output.Write(buffer);
+	}
+
+	static readonly uint[] crcTable = Enumerable.Range(0, 256).Select(n => {
+		var c = (uint)n;
+		for (var k = 0; k < 8; k++)
+			c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+		return c;
+	}).ToArray();
+
+	/// <summary>The PNG specification's CRC-32 update, without the final inversion.</summary>
+	static uint Crc32(uint crc, ReadOnlySpan<byte> data) {
+		foreach (var b in data)
+			crc = crcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+		return crc;
 	}
 
 	static void WriteHeader(BinaryWriter writer, string assemblyName) {

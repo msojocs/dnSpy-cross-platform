@@ -943,19 +943,7 @@ public sealed class DebugSessionManagerTests {
 	static string Reason(DebugEventNotification notification) =>
 		notification.Body?.GetProperty("reason").GetString() ?? string.Empty;
 
-	/// <summary>
-	/// The session manager loads <c>libdbgshim.so</c> as it is constructed, so a machine without it cannot
-	/// run these tests at all — that is a missing dependency, not a failure of the engine.
-	/// </summary>
-	static CorDebugSessionManager CreateManager(IDebugSymbolResolver symbols) {
-		try {
-			return new CorDebugSessionManager(symbols);
-		}
-		catch (FileNotFoundException ex) {
-			Assert.Skip($"The dbgshim native library is not available: {ex.Message}");
-			throw;
-		}
-	}
+	static CorDebugSessionManager CreateManager(IDebugSymbolResolver symbols) => DebugTestEnvironment.CreateManager(symbols);
 
 	static string FindTarget() {
 		var path = Path.GetFullPath(Path.Combine(

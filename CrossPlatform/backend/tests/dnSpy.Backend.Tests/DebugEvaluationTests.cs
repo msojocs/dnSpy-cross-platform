@@ -420,7 +420,17 @@ public sealed class DebugEvaluationTests {
 
 /// <summary>What the debugger tests share: the manager, and the fixture's path.</summary>
 static class DebugTestEnvironment {
+	/// <summary>
+	/// The session manager loads <c>libdbgshim.so</c> as it is constructed, so a machine without it cannot
+	/// run these tests at all — that is a missing dependency, not a failure of the engine.
+	/// </summary>
+	/// <remarks>
+	/// The func-eval timeout is lengthened for every debugger test: the calls they make return in milliseconds,
+	/// but with the other test classes' debuggees and the frontend's workers on the same machine one of them
+	/// can still miss WPF's one second, and the evaluation then reports a timeout instead of its value.
+	/// </remarks>
 	public static CorDebugSessionManager CreateManager(IDebugSymbolResolver symbols) {
+		CorDebugSession.FuncEvalTimeout = TimeSpan.FromSeconds(10);
 		try {
 			return new CorDebugSessionManager(symbols);
 		}

@@ -42,8 +42,11 @@ internal sealed record FuncEvalResult(ICorDebugValue? Value, bool IsException, I
 /// </para>
 /// </remarks>
 internal sealed partial class CorDebugSession {
-	/// <summary>dnSpy's <c>DbgLanguage.DefaultFuncEvalTimeout</c>.</summary>
-	static readonly TimeSpan FuncEvalTimeout = TimeSpan.FromSeconds(1);
+	/// <summary>
+	/// dnSpy's <c>DbgLanguage.DefaultFuncEvalTimeout</c>. The debugger tests lengthen it: a call that takes a
+	/// few milliseconds can still miss one second on a runner busy with other test processes.
+	/// </summary>
+	internal static TimeSpan FuncEvalTimeout { get; set; } = TimeSpan.FromSeconds(1);
 	static readonly TimeSpan AbortTimeout = TimeSpan.FromSeconds(3);
 	static readonly TimeSpan RudeAbortTimeout = TimeSpan.FromSeconds(1);
 

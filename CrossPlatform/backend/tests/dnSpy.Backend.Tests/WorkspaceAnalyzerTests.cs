@@ -442,8 +442,16 @@ public sealed class WorkspaceAnalyzerTests : IDisposable {
 		Assert.NotNull(invoke.NodeId);
 		var target = Assert.Single(invoke.Source!.Targets);
 		Assert.Null(target.NodeId);
-		Assert.Equal(typeof(EventHandler).GetMethod(nameof(EventHandler.Invoke))!.MetadataToken, target.MetadataToken);
-		Assert.Equal(typeof(EventHandler).Assembly.Location, target.ModulePath);
+		// The decompiler's resolver takes the lowest installed patch of the fixture's net10.0, which is not the
+		// runtime this test runs on when a machine has several: the core library is that install's, and the
+		// token is the one its own copy of EventHandler.Invoke has.
+		Assert.Equal("System.Private.CoreLib.dll", Path.GetFileName(target.ModulePath));
+		var frameworkDirectory = Path.GetDirectoryName(target.ModulePath)!;
+		Assert.Equal("Microsoft.NETCore.App", Path.GetFileName(Path.GetDirectoryName(frameworkDirectory)));
+		var frameworkVersion = Version.Parse(Path.GetFileName(frameworkDirectory));
+		Assert.Equal((Environment.Version.Major, Environment.Version.Minor), (frameworkVersion.Major, frameworkVersion.Minor));
+		using var coreLib = dnlib.DotNet.ModuleDefMD.Load(target.ModulePath!);
+		Assert.Equal(coreLib.Find("System.EventHandler", isReflectionName: false)!.FindMethod("Invoke")!.MDToken.ToInt32(), target.MetadataToken);
 	}
 
 	[Fact]

@@ -14,6 +14,12 @@ const executable = process.env.DNSPY_PACKAGED_EXECUTABLE
 const contractsAssemblyPath = path.resolve(import.meta.dirname, '../../../backend/dnSpy.Backend.Contracts/bin/Debug/net10.0/dnSpy.Backend.Contracts.dll')
 const debugTargetPath = path.resolve(import.meta.dirname, '../../../backend/tests/DebugTarget/bin/Debug/net10.0/DebugTarget.dll')
 
+// One retry for these tests only. On the macOS runner a launch now and then fails with a bare
+// "Assertion error": Playwright's own invariant check, tripped while it handles the application's CDP
+// events, with no line of this file on the stack — the same commit passed on the next run. A package
+// that is really missing something fails both attempts; the failed attempt's trace is uploaded either way.
+test.describe.configure({ retries: 1 })
+
 // A package holds one backend, published under the name of the platform the package targets rather
 // than the one running the test — the same convention the main process resolves at startup, so these
 // names are what a mismatch between packaging and the shell would look like from the outside.

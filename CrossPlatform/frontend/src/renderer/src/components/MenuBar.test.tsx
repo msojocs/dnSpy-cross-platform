@@ -1083,42 +1083,38 @@ describe('MenuBar', () => {
     expect(screen.queryByRole('menuitem', { name: /^Find String References in Module/ })).not.toBeInTheDocument()
   })
 
-  it('runs the create and edit commands whose dialogs the port has built', () => {
-    const cases: { label: string, create: string, nested?: boolean }[] = [
-      { label: 'Create Type...', create: 'type' },
-      { label: 'Create Nested Type...', create: 'type', nested: true },
-      { label: 'Create Method...', create: 'method' },
-      { label: 'Create Field...', create: 'field' },
-      { label: 'Create Property...', create: 'property' },
-      { label: 'Create Event...', create: 'event' },
-    ]
-    for (const entry of cases) {
-      const onCreateMember = vi.fn()
-      renderMenuWith({ selectionKind: 'type', selectionLabel: 'HelloRequest', onCreateMember })
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-      fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(`^${entry.label.replace('.', '\\.')}`) }))
-      // The kind is what the dialog is for, and the nested flag is what tells the type's two commands
-      // apart — the other four leave it off, having only one form; which type it goes into is the
-      // selection's business.
-      expect(onCreateMember).toHaveBeenCalledWith(...(entry.nested === true ? [entry.create, true] : [entry.create]))
-      cleanup()
-    }
+  // One case per command: each renders the menu bar and opens the Edit menu, which is slow enough in jsdom
+  // that the eleven of them in one test ran past the timeout on CI.
+  it.each([
+    { label: 'Create Type...', create: 'type' },
+    { label: 'Create Nested Type...', create: 'type', nested: true },
+    { label: 'Create Method...', create: 'method' },
+    { label: 'Create Field...', create: 'field' },
+    { label: 'Create Property...', create: 'property' },
+    { label: 'Create Event...', create: 'event' },
+  ])('runs $label, whose dialog the port has built', entry => {
+    const onCreateMember = vi.fn()
+    renderMenuWith({ selectionKind: 'type', selectionLabel: 'HelloRequest', onCreateMember })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(`^${entry.label.replace('.', '\\.')}`) }))
+    // The kind is what the dialog is for, and the nested flag is what tells the type's two commands
+    // apart — the other four leave it off, having only one form; which type it goes into is the
+    // selection's business.
+    expect(onCreateMember).toHaveBeenCalledWith(...(entry.nested === true ? [entry.create, true] : [entry.create]))
+  })
 
-    const edits: { kind: string, label: string }[] = [
-      { kind: 'type', label: 'Edit Type...' },
-      { kind: 'method', label: 'Edit Method...' },
-      { kind: 'field', label: 'Edit Field...' },
-      { kind: 'property', label: 'Edit Property...' },
-      { kind: 'event', label: 'Edit Event...' },
-    ]
-    for (const entry of edits) {
-      const onEditNode = vi.fn()
-      renderMenuWith({ selectionKind: entry.kind, selectionLabel: 'Target', onEditNode })
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-      fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(`^${entry.label.replace('.', '\\.')}`) }))
-      expect(onEditNode, `for a selected ${entry.kind}`).toHaveBeenCalledTimes(1)
-      cleanup()
-    }
+  it.each([
+    { kind: 'type', label: 'Edit Type...' },
+    { kind: 'method', label: 'Edit Method...' },
+    { kind: 'field', label: 'Edit Field...' },
+    { kind: 'property', label: 'Edit Property...' },
+    { kind: 'event', label: 'Edit Event...' },
+  ])('runs $label for a selected $kind', entry => {
+    const onEditNode = vi.fn()
+    renderMenuWith({ selectionKind: entry.kind, selectionLabel: 'Target', onEditNode })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(`^${entry.label.replace('.', '\\.')}`) }))
+    expect(onEditNode).toHaveBeenCalledTimes(1)
   })
 
   it('runs Delete and the stub replacement for a selected method', () => {

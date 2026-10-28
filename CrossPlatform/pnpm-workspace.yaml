@@ -2,7 +2,7 @@ packages:
   - frontend
 
 overrides:
-  dompurify: 3.4.16
+  dompurify: 3.4.17
   sprintf-js: npm:@stdlib/string-format@^0.2.2
 
 allowBuilds:
@@ -11,5 +11,4 @@ allowBuilds:
   esbuild: true
 
 minimumReleaseAgeExclude:
-  - electron@44.5.1
   - lucide-react@1.49.0

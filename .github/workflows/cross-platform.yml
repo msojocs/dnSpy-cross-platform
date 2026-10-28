@@ -102,6 +102,16 @@ jobs:
           XDG_SESSION_TYPE: x11
         run: xvfb-run --auto-servernum --server-args="-screen 0 1600x1200x24" bash -c "openbox & sleep 1; pnpm --dir frontend exec playwright test tests/e2e/package.spec.ts"
 
+      - name: Upload packaged test results
+        # The trace, screenshot and error context of a failed or retried attempt: the only record of
+        # what the packaged application was doing, since the runner and its test-results go away.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: package-test-results-linux
+          path: CrossPlatform/frontend/test-results
+          if-no-files-found: ignore
+
       - name: Stage release assets
         # The bill of materials is per-platform (its native shim entry differs), so it is named after
         # the platform here and renamed with the version by the release job. Checksums are summed
@@ -163,6 +173,14 @@ jobs:
           DNSPY_PACKAGED_EXECUTABLE: ${{ github.workspace }}\CrossPlatform\artifacts\packages\win-unpacked\dnSpy.exe
         run: pnpm --dir frontend exec playwright test tests/e2e/package.spec.ts
 
+      - name: Upload packaged test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: package-test-results-windows
+          path: CrossPlatform/frontend/test-results
+          if-no-files-found: ignore
+
       - name: Stage release assets
         shell: bash
         run: cp artifacts/sbom/dnSpy.cdx.json artifacts/packages/dnSpy-windows-x64.cdx.json
@@ -219,6 +237,14 @@ jobs:
           DNSPY_PACKAGED_EXECUTABLE: ${{ github.workspace }}/CrossPlatform/artifacts/packages/mac-arm64/dnSpy.app/Contents/MacOS/dnSpy
         run: pnpm --dir frontend exec playwright test tests/e2e/package.spec.ts
 
+      - name: Upload packaged test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: package-test-results-macos
+          path: CrossPlatform/frontend/test-results
+          if-no-files-found: ignore
+
       - name: Stage release assets
         shell: bash
         run: cp artifacts/sbom/dnSpy.cdx.json artifacts/packages/dnSpy-macos-arm64.cdx.json
@@ -253,6 +279,8 @@ jobs:
       # flattens the directories that makes.
       - uses: actions/download-artifact@v8.0.2
         with:
+          # The packages only: the packaged tests' results are artifacts too, and are not release assets.
+          pattern: dnSpy-*
           path: assets
 
       - name: Assemble assets
@@ -328,6 +356,8 @@ jobs:
 
       - uses: actions/download-artifact@v8.0.2
         with:
+          # The packages only: the packaged tests' results are artifacts too, and are not release assets.
+          pattern: dnSpy-*
           path: assets
 
       - name: Assemble assets
